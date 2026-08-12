@@ -22,4 +22,13 @@ const (
 	// covers JSON escaping in the worst case, large user input, and record
 	// metadata without imposing a practical session-size limit.
 	MaxJournalRecordBytes = MaxModelRequestBytes
+
+	// MaxChildAgentPromptBytes bounds one delegated prompt independently of the
+	// provider completion ceiling. Child histories remain governed by the same
+	// request and journal limits as ordinary sessions.
+	MaxChildAgentPromptBytes = 1 << 20
+
+	// MaxChildAgentResultBytes bounds child replies copied into a parent tool
+	// result. The complete child trace remains available in its own journal.
+	MaxChildAgentResultBytes = 32 << 10
 )

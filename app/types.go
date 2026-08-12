@@ -59,6 +59,9 @@ type Config struct {
 	Profiles        map[string][]string
 	Profile         string
 	ProfileExplicit bool
+	// AgentModels adds model URIs which the opt-in agent tool may select for a
+	// child. Omitting a model always inherits the parent's current selection.
+	AgentModels     []string
 	Sandbox         string
 	SandboxExplicit bool
 	// ProtectedPaths adds model-inaccessible paths to those loaded from

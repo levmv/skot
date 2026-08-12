@@ -5,23 +5,23 @@ processes. It can be used as a persistent interactive assistant or as a
 one-shot command in scripts. Sessions, tool results, and job state are kept
 locally.
 
-The project is intentionally a concrete coding tool rather than a general
-agent framework or workflow engine. It is currently pre-v1 and supports Linux
-and macOS.
+## What it does
 
-## Highlights
-
-- A terminal UI with streaming replies, Markdown, compact tool output, queued
-  follow-up input, and normal terminal scrollback.
-- Local resumable sessions with replay and context compaction.
-- Workspace file tools, Bash, managed jobs, web fetch, and optional web search.
-- Durable supervision for explicitly background or detached work, including
-  recovery of output and results after an unexpected Skot restart.
-- Exact tool profiles and executable-backed custom tools for exposing narrower
-  operations than unrestricted Bash.
-- DeepSeek, OpenAI, OpenRouter, and local Ollama models.
-- Filesystem isolation for model-owned processes, enabled by default with an
-  explicit opt-out.
+- **Interactive** — streaming replies, Markdown, compact tool output, queued
+  input, and ordinary terminal scrollback.
+- **Or unattended** — a prompt from an argument or stdin, the answer on stdout,
+  `-json` for one versioned result, and exit codes a caller can branch on.
+- **Durable** — sessions and background jobs live on disk; resume a
+  conversation later, and unfinished work is picked up after a restart.
+- **Tools** — files, search, Bash, managed jobs, web fetch, and optional web
+  search.
+- **Bounded** — a profile names the exact tools a run may use, and model-owned
+  processes are filesystem-isolated by default.
+- **Narrow capabilities** — local executables can be exposed as typed tools
+  instead of unrestricted Bash.
+- **Delegation** — read-only child agents work in parallel without filling the
+  main conversation with their traces.
+- **Providers** — DeepSeek, OpenAI, OpenRouter, and Ollama.
 
 ## Install
 
@@ -107,6 +107,33 @@ bounded, and writes are atomic.
 All default profiles can fetch public web pages. Web search is enabled when a
 Tavily or Exa key is available. Select a profile with `-profile` or `/profile`;
 custom exact tool lists can be added under `profiles` in Skot's `config.json`.
+
+### Child agents
+
+Add the single `agent` capability to a custom profile when the model should be
+allowed to delegate independent work:
+
+```json
+{
+  "profiles": {
+    "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
+  },
+  "agent_models": ["openai/gpt-5-mini"]
+}
+```
+
+The parent can start, continue, inspect, wait for, or stop child agents through
+that one tool. Children use the same workspace and inherit the current model by
+default, but receive a fresh conversation and only the built-in read-only tool
+set; they cannot create more agents. `agent_models` is the allowlist for model
+overrides and may be omitted.
+
+Up to four children run concurrently. Their journals live under the parent
+session, stay out of the normal session picker, and remain available after the
+parent is resumed. A clean exit cancels unfinished child runs without discarding
+their history; it does not leave model calls detached in another process. A
+one-shot command which creates a child is retained automatically and prints its
+resume command.
 
 ### Custom program tools
 
@@ -216,20 +243,32 @@ that contains the protected path cannot receive broad create/list grants.
 Creating a new direct sibling at that ancestor, or listing it from model-owned
 Bash, may therefore be denied. Built-in file tools do not have this limitation.
 
-## Scripts and JSON output
+## Scripts and unattended runs
 
-`-json` writes one versioned result object to stdout; progress and diagnostics
-remain on stderr:
+A prompt is an argument, or stdin when no prompt argument is given. Most
+settings also read an `SK_*` environment variable, so a run is easy to pin down
+in a script:
 
 ```sh
-sk -json -save-session "fix the failing tests" > result.json
+SK_PROFILE=read-only sk -json "summarize what this project does" > result.json
 ```
 
-The result includes the reply, status, token usage, wall-clock duration, model,
-reasoning effort, tool profile, total model attempts, and run identifiers, plus
-an error or detached job IDs when applicable. Exit codes distinguish invalid
-or incomplete runs (`2`), provider failures (`3`), and interruption (`130`)
-from success (`0`) and other failures (`1`).
+`-json` writes one versioned result object to stdout, while progress and
+diagnostics remain on stderr. It includes the reply, status, token usage,
+wall-clock duration, model, reasoning effort, tool profile, total model
+attempts, and run identifiers, plus an error or detached job IDs when
+applicable. Exit codes distinguish invalid or incomplete runs (`2`), provider
+failures (`3`), and interruption (`130`) from success (`0`) and other failures
+(`1`).
+
+`-max-tool-iterations` and `-retry-budget` bound how far an unattended run may
+go on its own. A one-shot run is ephemeral, but `-save-session` keeps it, so a
+later step can continue the same conversation:
+
+```sh
+sk -save-session "start the migration"
+sk resume 01k2 "now update the tests"
+```
 
 Run `sk -help` for the full CLI reference.
 

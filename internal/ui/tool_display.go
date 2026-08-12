@@ -142,6 +142,34 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 			text += fmt.Sprintf(" · timeout %ds", args.TimeoutSeconds)
 		}
 		return compactToolCall{Text: strings.TrimSpace(text)}
+	case "agent":
+		var args struct {
+			Action string   `json:"action"`
+			ID     string   `json:"id"`
+			IDs    []string `json:"ids"`
+			Prompt string   `json:"prompt"`
+			Model  string   `json:"model"`
+			Wait   string   `json:"wait"`
+		}
+		if !decodeToolDisplayArgs(rawArguments, &args) || strings.TrimSpace(args.Action) == "" {
+			return fallback
+		}
+		text := "agent  " + compactSingleLine(args.Action, 16)
+		if args.ID != "" {
+			text += " " + compactSingleLine(args.ID, 40)
+		} else if len(args.IDs) != 0 {
+			text += " " + compactSingleLine(strings.Join(args.IDs, ", "), 80)
+		}
+		if args.Wait != "" && args.Wait != "none" {
+			text += " · wait " + compactSingleLine(args.Wait, 8)
+		}
+		if args.Model != "" {
+			text += " · " + compactSingleLine(args.Model, 80)
+		}
+		if args.Prompt != "" {
+			text += " · " + quoteToolValue(args.Prompt, 100)
+		}
+		return compactToolCall{Text: text}
 	case "web_search":
 		var args struct {
 			Query string `json:"query"`

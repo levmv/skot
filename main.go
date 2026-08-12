@@ -194,6 +194,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		emit = observer.emit
 	}
 	startedAt := time.Now()
+	sessionWasResumable := application.SessionID() != ""
 	result, runErr := application.Run(ctx, prompt, emit)
 	durationMillis := time.Since(startedAt).Milliseconds()
 	var usage agent.ModelUsage
@@ -228,7 +229,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintf(stderr, "[usage: prompt=%d cached=%d completion=%d total=%d]\n",
 			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.TotalTokens)
 	}
-	if (config.saveSession || len(result.DetachedJobs) != 0) && application.SessionID() != "" {
+	autoRetained := !sessionWasResumable && application.SessionID() != ""
+	if (config.saveSession || len(result.DetachedJobs) != 0 || autoRetained) && application.SessionID() != "" {
 		fmt.Fprintf(stderr, "Resume with: sk resume %s\n", application.ShortSessionID())
 	}
 	return runErr

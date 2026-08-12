@@ -101,7 +101,13 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
 	processes.HideModelEnvironment(credentialEnvironmentNames()...)
-	resources := &openResources{processes: processes}
+	children, err := newChildSupervisor(home, settings.AgentModels, config.AgentModels)
+	if err != nil {
+		_ = processes.Close()
+		return nil, agent.MarkInvalidRequest(err)
+	}
+	resources := &openResources{processes: processes, children: children}
+	catalog = append(catalog, children.tool())
 	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes)
 	if err != nil {
 		return resources.fail(agent.MarkInvalidRequest(err))
@@ -126,6 +132,18 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	if err := agent.Reconcile(ctx, journal); err != nil {
 		return cleanup(fmt.Errorf("reconcile session: %w", err))
+	}
+	runtimeSessionID := sessionID
+	if runtimeSessionID == "" {
+		records, err := journal.Records(ctx)
+		if err != nil {
+			return cleanup(fmt.Errorf("read session identity: %w", err))
+		}
+		replayed, err := agent.Replay(records)
+		if err != nil {
+			return cleanup(fmt.Errorf("replay session identity: %w", err))
+		}
+		runtimeSessionID = replayed.SessionID
 	}
 	if err := processes.AttachSession(sessionID); err != nil {
 		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
@@ -167,6 +185,15 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		awaitRequiredJobs: !config.Interactive,
 		sanitize:          masker.Redact,
 	}
+	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort); err != nil {
+		return cleanup(agent.MarkInvalidRequest(err))
+	}
+	if err := children.Preload(ctx, runtimeSessionID); err != nil {
+		return cleanup(fmt.Errorf("load child agents: %w", err))
+	}
+	builder.externalWork = applicationExternalWork{
+		processes: processExternalWork{processes: processes, await: !config.Interactive}, agents: children,
+	}
 	runtime, err := builder.build(runtimeBuildParams{
 		journal:         journal,
 		sessionID:       sessionID,
@@ -204,6 +231,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		state: applicationState{
 			session:          currentSession,
 			processes:        processes,
+			children:         children,
 			profile:          config.Profile,
 			requestedSandbox: config.Sandbox,
 			security:         security,

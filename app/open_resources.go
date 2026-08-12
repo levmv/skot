@@ -12,6 +12,7 @@ import (
 
 type openResources struct {
 	processes *workspacetools.ProcessManager
+	children  *childSupervisor
 	session   *liveSession
 }
 
@@ -19,6 +20,9 @@ func (resources *openResources) fail(cause error) (*Application, error) {
 	var cleanupErr error
 	if resources.session != nil {
 		cleanupErr = errors.Join(cleanupErr, resources.session.close())
+	}
+	if resources.children != nil {
+		cleanupErr = errors.Join(cleanupErr, resources.children.Close())
 	}
 	if resources.processes != nil {
 		cleanupErr = errors.Join(cleanupErr, resources.processes.Close())

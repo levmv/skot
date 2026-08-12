@@ -10,7 +10,7 @@ import (
 
 func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"profiles":{"review":["read","grep"]},"protected_paths":[".env","~/private"]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"profiles":{"review":["read","grep"]},"agent_models":["openai/gpt-5-mini"],"protected_paths":[".env","~/private"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(home)
@@ -49,6 +49,9 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	}
 	if got := strings.Join(settings.ProtectedPaths, ","); got != ".env,~/private" {
 		t.Fatalf("protected paths = %#v", settings.ProtectedPaths)
+	}
+	if got := strings.Join(settings.AgentModels, ","); got != "openai/gpt-5-mini" {
+		t.Fatalf("agent models = %#v", settings.AgentModels)
 	}
 	if window, ok, err := reopened.ModelContext("openrouter/example/model"); err != nil || !ok || window != 256_000 {
 		t.Fatalf("model context = %d, %v, %v", window, ok, err)

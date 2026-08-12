@@ -56,6 +56,7 @@ type applicationConfig struct {
 type applicationState struct {
 	session          *liveSession
 	processes        *workspacetools.ProcessManager
+	children         *childSupervisor
 	profile          string
 	requestedSandbox string
 	security         securityState
@@ -85,7 +86,12 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 		}
 	}
 	result, runErr := runtime.Run(ctx, input, emit)
-	if len(result.DetachedJobs) != 0 {
+	application.mu.RLock()
+	current := application.state.session
+	children := application.state.children
+	application.mu.RUnlock()
+	retainedChildren := current != nil && current.runtime == runtime && children != nil && children.HasChildren(current.id)
+	if len(result.DetachedJobs) != 0 || retainedChildren {
 		application.mu.Lock()
 		if current := application.state.session; current != nil && current.runtime == runtime {
 			current.provisional = false
@@ -115,6 +121,12 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	}
 	if err := runtime.SwitchModel(ctx, model); err != nil {
 		return err
+	}
+	application.mu.RLock()
+	children := application.state.children
+	application.mu.RUnlock()
+	if children != nil {
+		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort())
 	}
 	if err := application.config.settings.SetDefaultModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort()); err != nil {
 		return fmt.Errorf("save model selection: %w", err)
@@ -533,6 +545,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	awaitRequiredJobs := application.config.awaitRequiredJobs
 	application.mu.RLock()
 	processes := application.state.processes
+	children := application.state.children
 	security := application.state.security
 	profile := application.state.profile
 	currentSession := application.state.session
@@ -564,6 +577,9 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		sandbox:           security.snapshot(),
 		awaitRequiredJobs: awaitRequiredJobs,
 		sanitize:          masker.Redact,
+		externalWork: applicationExternalWork{
+			processes: processExternalWork{processes: processes, await: awaitRequiredJobs}, agents: children,
+		},
 	}
 	runtime, err := builder.build(runtimeBuildParams{
 		journal: journal, sessionID: id, modelURI: modelURI, reasoningEffort: reasoningEffort, instructions: instructions,
@@ -572,18 +588,35 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		return err
 	}
 	nextSession := newLiveSession(id, runtime, journal, true)
+	if children != nil {
+		if err := children.PreloadSession(ctx, id, instructions, security.snapshot()); err != nil {
+			return fmt.Errorf("load child agents: %w", err)
+		}
+	}
 	if err := processes.CloseSession(currentSession.id); err != nil {
+		if children != nil {
+			_ = children.ReleaseParent(id)
+		}
 		return fmt.Errorf("stop previous session jobs: %w", err)
 	}
 
 	application.mu.Lock()
 	if application.state.session != currentSession {
 		application.mu.Unlock()
+		if children != nil {
+			_ = children.ReleaseParent(id)
+		}
 		return errors.New("runtime changed while switching session")
 	}
 	application.state.session = nextSession
 	application.state.startupNotices = append(application.state.startupNotices, attachNotices...)
+	if children != nil {
+		children.setSessionDefaults(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), instructions, security.snapshot())
+	}
 	application.mu.Unlock()
+	if children != nil {
+		_ = children.ReleaseParent(currentSession.id)
+	}
 	_ = currentSession.close()
 	return nil
 }
@@ -592,15 +625,18 @@ func (application *Application) Close() error {
 	application.mu.Lock()
 	currentSession := application.state.session
 	processes := application.state.processes
+	children := application.state.children
 	application.state.session = nil
 	application.state.processes = nil
+	application.state.children = nil
 	application.mu.Unlock()
+	childErr := children.Close()
 	sessionErr := currentSession.close()
 	var processErr error
 	if processes != nil {
 		processErr = processes.Close()
 	}
-	return errors.Join(sessionErr, processErr)
+	return errors.Join(childErr, sessionErr, processErr)
 }
 
 func (application *Application) requireRuntime() (*agent.Runtime, error) {
@@ -684,7 +720,16 @@ func (application *Application) SwitchSandbox(ctx context.Context, value string)
 		return fmt.Errorf("save sandbox policy: %w", err)
 	}
 	if err := processes.SetSandboxAfter(security.EffectivePolicy, func() error {
-		return runtime.SetSandboxSnapshot(ctx, security.snapshot())
+		previous := application.state.security.snapshot()
+		if err := runtime.SetSandboxSnapshot(ctx, security.snapshot()); err != nil {
+			return err
+		}
+		if children := application.state.children; children != nil {
+			if err := children.setSandboxSnapshot(ctx, security.snapshot()); err != nil {
+				return errors.Join(err, runtime.SetSandboxSnapshot(context.WithoutCancel(ctx), previous))
+			}
+		}
+		return nil
 	}); err != nil {
 		settingsErr := settings.SetDefaultSandbox(oldPolicy)
 		return errors.Join(err, settingsErr)

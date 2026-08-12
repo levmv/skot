@@ -22,6 +22,8 @@ func TestDescribeToolCallUsesWorkspaceArguments(t *testing.T) {
 		{name: "write", tool: "write", args: `{"path":"skot/new.go","content":"package main"}`, want: "write  skot/new.go"},
 		{name: "job list", tool: "job", args: `{"action":"list"}`, want: "job  list"},
 		{name: "job wait", tool: "job", args: `{"action":"wait","job_id":"job-123","timeout":30}`, want: "job  wait job-123 · timeout 30s"},
+		{name: "agent start", tool: "agent", args: `{"action":"start","prompt":"inspect parser behavior","model":"openai/gpt-5-mini"}`, want: `agent  start · openai/gpt-5-mini · "inspect parser behavior"`},
+		{name: "agent check", tool: "agent", args: `{"action":"check","ids":["agent_1234","agent_5678"],"wait":"any"}`, want: "agent  check agent_1234, agent_5678 · wait any"},
 	}
 
 	for _, test := range tests {

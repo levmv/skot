@@ -403,6 +403,72 @@ func TestRunOrdinaryOneShotDoesNotCreateManagedSession(t *testing.T) {
 	}
 }
 
+func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	settings := `{"profiles":{"full":["read","grep","glob","edit","write","bash","job","agent"]}}`
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var parentRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body chatRequestForTest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		prompt := ""
+		for _, message := range body.Messages {
+			if message.Role == "user" {
+				prompt = message.Content
+			}
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if prompt == "child work" {
+			<-request.Context().Done()
+			return
+		}
+		parentRequests++
+		if parentRequests == 1 {
+			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
+				"index": 0,
+				"delta": map[string]any{"tool_calls": []any{map[string]any{
+					"index": 0, "id": "provider_agent", "type": "function",
+					"function": map[string]any{"name": "agent", "arguments": `{"action":"start","prompt":"child work"}`},
+				}}},
+				"finish_reason": "tool_calls",
+			}}})
+		} else {
+			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{"content": "delegated"}, "finish_reason": "stop",
+			}}})
+		}
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	clearMainWebCredentials(t)
+
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), []string{
+		"-model", "deepseek/local-model", "-base-url", server.URL,
+		"-home", home, "-root", root, "-sandbox", "off", "delegate work",
+	}, bytes.NewReader(nil), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "delegated\n" {
+		t.Fatalf("output = %q", stdout.String())
+	}
+	summaries, err := session.List(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].Title != "delegate work" {
+		t.Fatalf("saved child-agent session = %#v", summaries)
+	}
+	if !strings.Contains(stderr.String(), "Resume with: sk resume "+session.ShortID(summaries[0].ID)) {
+		t.Fatalf("resume hint = %q", stderr.String())
+	}
+}
+
 func TestRunKeepsOneShotSessionForDetachedJob(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()

@@ -32,6 +32,7 @@ type runtimeBuilder struct {
 	sandbox           agent.SandboxSnapshot
 	awaitRequiredJobs bool
 	sanitize          func(string) string
+	externalWork      agent.ExternalWork
 }
 
 type runtimeBuildParams struct {
@@ -55,6 +56,10 @@ func (builder runtimeBuilder) build(params runtimeBuildParams) (*agent.Runtime, 
 	if err != nil {
 		return nil, fmt.Errorf("select profile tools: %w", err)
 	}
+	externalWork := builder.externalWork
+	if externalWork == nil {
+		externalWork = processExternalWork{processes: builder.processes, await: builder.awaitRequiredJobs}
+	}
 	runtime, err := agent.New(agent.Config{
 		Model:             model,
 		Journal:           params.journal,
@@ -65,7 +70,7 @@ func (builder runtimeBuilder) build(params runtimeBuildParams) (*agent.Runtime, 
 		RequestPolicy:     builder.requestPolicy,
 		MaxToolIterations: builder.maxToolIterations,
 		UserShell:         builder.processes.RunShell,
-		ExternalWork:      processExternalWork{processes: builder.processes, await: builder.awaitRequiredJobs},
+		ExternalWork:      externalWork,
 		Sanitize:          builder.sanitize,
 		Metadata: agent.ConfigurationMetadata{
 			ToolProfile: builder.profile, Sandbox: builder.sandbox, AwaitRequiredJobs: builder.awaitRequiredJobs,

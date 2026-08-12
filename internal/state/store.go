@@ -20,6 +20,7 @@ type Settings struct {
 	RecentModels    []string            `json:"recent_models,omitempty"`
 	Profile         string              `json:"profile,omitempty"`
 	Profiles        map[string][]string `json:"profiles,omitempty"`
+	AgentModels     []string            `json:"agent_models,omitempty"`
 	Sandbox         string              `json:"sandbox,omitempty"`
 	ProtectedPaths  []string            `json:"protected_paths,omitempty"`
 	ModelContexts   map[string]int      `json:"model_contexts,omitempty"`

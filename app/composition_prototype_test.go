@@ -18,10 +18,10 @@ import (
 	"github.com/levmv/skot/app"
 )
 
-// TestCompositionPrototypeRunsIndependentApplications is an intentionally
-// small architecture probe, not a built-in subagent implementation. It tests
-// whether several ordinary Applications already provide the lifecycle needed
-// by a trusted host-mediated child-run adapter.
+// TestCompositionPrototypeRunsIndependentApplications preserves the original
+// public composition probe behind the built-in child supervisor: independent
+// Applications must still run, cancel, close, and replay without sharing
+// mutable session state.
 func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
 	const childCount = 3
 

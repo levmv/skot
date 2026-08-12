@@ -24,7 +24,6 @@ type Store struct {
 	records        []agent.Record
 	failed         error
 	maxRecordBytes int
-	syncOnClose    bool
 	dirty          bool
 	tailRepaired   bool
 }
@@ -34,18 +33,6 @@ var ErrLocked = errors.New("session is already open")
 const initialJournalBufferBytes = 4 * 1024
 
 func Open(path string) (*Store, error) {
-	return open(path, true)
-}
-
-// OpenTransient opens a journal whose backing file will be discarded when the
-// owning operation ends. Records are still written directly and remain
-// observable through Records, but closing does not force them to stable
-// storage first.
-func OpenTransient(path string) (*Store, error) {
-	return open(path, false)
-}
-
-func open(path string, syncOnClose bool) (*Store, error) {
 	path = filepath.Clean(path)
 	if path == "." {
 		return nil, errors.New("journal path is required")
@@ -81,7 +68,8 @@ func open(path string, syncOnClose bool) (*Store, error) {
 	return &Store{
 		file: file, path: path, records: records,
 		maxRecordBytes: productlimits.MaxJournalRecordBytes,
-		syncOnClose:    syncOnClose, dirty: tailRepaired, tailRepaired: tailRepaired,
+		dirty:          tailRepaired,
+		tailRepaired:   tailRepaired,
 	}, nil
 }
 
@@ -158,7 +146,7 @@ func (store *Store) Close() error {
 	if store.file == nil {
 		return nil
 	}
-	return store.closeLocked(store.syncOnClose)
+	return store.closeLocked(true)
 }
 
 func (store *Store) TailRepaired() bool {
@@ -177,7 +165,7 @@ func (store *Store) ClosePruningEmpty() error {
 	}
 	prune := len(store.records) == 0 && store.failed == nil
 	path := store.path
-	err := store.closeLocked(store.syncOnClose && !prune)
+	err := store.closeLocked(!prune)
 	if err != nil || !prune {
 		return err
 	}
@@ -186,6 +174,28 @@ func (store *Store) ClosePruningEmpty() error {
 	}
 	if removeErr := os.Remove(filepath.Dir(path)); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return fmt.Errorf("remove empty session directory: %w", removeErr)
+	}
+	return nil
+}
+
+// CloseDiscarding closes a provisional managed session and removes its
+// journal regardless of whether records were written. The containing session
+// directory is removed only when it is otherwise empty.
+func (store *Store) CloseDiscarding() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.file == nil {
+		return nil
+	}
+	path := store.path
+	if err := store.closeLocked(false); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove provisional session journal: %w", err)
+	}
+	if err := os.Remove(filepath.Dir(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove provisional session directory: %w", err)
 	}
 	return nil
 }

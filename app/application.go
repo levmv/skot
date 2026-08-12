@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +60,6 @@ type applicationState struct {
 	requestedSandbox string
 	security         securityState
 	startupNotices   []string
-	temporaryDir     string
 }
 
 func (application *Application) Run(ctx context.Context, input string, emit agent.EmitFunc) (agent.RunResult, error) {
@@ -86,7 +84,15 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 			return agent.RunResult{}, agent.MarkInvalidRequest(missingProviderCredentialError(provider, uri))
 		}
 	}
-	return runtime.Run(ctx, input, emit)
+	result, runErr := runtime.Run(ctx, input, emit)
+	if len(result.DetachedJobs) != 0 {
+		application.mu.Lock()
+		if current := application.state.session; current != nil && current.runtime == runtime {
+			current.provisional = false
+		}
+		application.mu.Unlock()
+	}
+	return result, runErr
 }
 
 func (application *Application) SwitchModel(ctx context.Context, uri, effort string) error {
@@ -437,7 +443,7 @@ func restoreStoredCredential(store *state.Store, provider, token string, existed
 func (application *Application) SessionID() string {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
-	if application.state.session == nil {
+	if application.state.session == nil || application.state.session.provisional {
 		return ""
 	}
 	return application.state.session.id
@@ -585,21 +591,16 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 func (application *Application) Close() error {
 	application.mu.Lock()
 	currentSession := application.state.session
-	processes, temporaryDir := application.state.processes, application.state.temporaryDir
+	processes := application.state.processes
 	application.state.session = nil
 	application.state.processes = nil
-	application.state.temporaryDir = ""
 	application.mu.Unlock()
 	sessionErr := currentSession.close()
 	var processErr error
 	if processes != nil {
 		processErr = processes.Close()
 	}
-	var temporaryErr error
-	if temporaryDir != "" {
-		temporaryErr = os.RemoveAll(temporaryDir)
-	}
-	return errors.Join(sessionErr, processErr, temporaryErr)
+	return errors.Join(sessionErr, processErr)
 }
 
 func (application *Application) requireRuntime() (*agent.Runtime, error) {

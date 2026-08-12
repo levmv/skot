@@ -9,10 +9,11 @@ import (
 // Application services such as settings, tools, credentials, and process
 // policy remain outside it and may eventually be shared by several sessions.
 type liveSession struct {
-	id      string
-	runtime *agent.Runtime
-	journal *session.Store
-	managed bool
+	id          string
+	runtime     *agent.Runtime
+	journal     *session.Store
+	managed     bool
+	provisional bool
 }
 
 func newLiveSession(id string, runtime *agent.Runtime, journal *session.Store, managed bool) *liveSession {
@@ -22,6 +23,9 @@ func newLiveSession(id string, runtime *agent.Runtime, journal *session.Store, m
 func (current *liveSession) close() error {
 	if current == nil || current.journal == nil {
 		return nil
+	}
+	if current.provisional {
+		return current.journal.CloseDiscarding()
 	}
 	if current.managed {
 		return current.journal.ClosePruningEmpty()

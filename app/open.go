@@ -112,15 +112,14 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	config.Profile = builtCatalog.profile
 
 	opened, err := openInitialSession(config, home, root)
-	resources.temporaryDir = opened.temporaryDir
 	resources.session = newLiveSession(opened.id, nil, opened.journal, opened.managed)
+	resources.session.provisional = opened.provisional
 	if err != nil {
 		return resources.fail(err)
 	}
 	currentSession := resources.session
 	journal := opened.journal
 	sessionID := opened.id
-	temporaryDir := opened.temporaryDir
 	cleanup := resources.fail
 	if journal.TailRepaired() {
 		notices = append(notices, "repaired an incomplete journal tail; the interrupted final record was discarded")
@@ -209,7 +208,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			requestedSandbox: config.Sandbox,
 			security:         security,
 			startupNotices:   notices,
-			temporaryDir:     temporaryDir,
 		},
 	}, nil
 }

@@ -403,6 +403,91 @@ func TestRunOrdinaryOneShotDoesNotCreateManagedSession(t *testing.T) {
 	}
 }
 
+func TestRunKeepsOneShotSessionForDetachedJob(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	gate := filepath.Join(root, "release")
+	done := filepath.Join(root, "done")
+	t.Cleanup(func() { _ = os.WriteFile(gate, nil, 0o600) })
+	toolsDocument := fmt.Sprintf(`{"tools":[{
+	  "name":"detached_worker","description":"run detached work",
+	  "command":["sh","-c",%q,"worker",%q,%q],
+	  "background":"always","detach":true,
+	  "parameters":{"type":"object","additionalProperties":false}
+	}]}`, `while [ ! -f "$1" ]; do sleep 0.05; done; printf done > "$2"`, gate, done)
+	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"profiles":{"full":["read","grep","glob","edit","write","bash","job","detached_worker"]}}`
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
+				"index": 0,
+				"delta": map[string]any{"tool_calls": []any{map[string]any{
+					"index": 0, "id": "provider_detached", "type": "function",
+					"function": map[string]any{"name": "detached_worker", "arguments": `{}`},
+				}}},
+				"finish_reason": "tool_calls",
+			}}})
+		} else {
+			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{"content": "detached started"}, "finish_reason": "stop",
+			}}})
+		}
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	clearMainWebCredentials(t)
+
+	var stdout, stderr bytes.Buffer
+	if err := run(context.Background(), []string{
+		"-model", "deepseek/local-model", "-base-url", server.URL,
+		"-home", home, "-root", root, "-sandbox", "off", "-json", "start detached work",
+	}, bytes.NewReader(nil), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var result jsonResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode result: %v; output=%q", err, stdout.String())
+	}
+	if result.SessionID == "" || len(result.DetachedJobs) != 1 {
+		t.Fatalf("detached result = %#v", result)
+	}
+	if !strings.Contains(stderr.String(), "Resume with: sk resume "+session.ShortID(result.SessionID)) {
+		t.Fatalf("resume hint = %q", stderr.String())
+	}
+	summaries, err := session.List(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].ID != result.SessionID || summaries[0].Title != "start detached work" {
+		t.Fatalf("saved detached session = %#v", summaries)
+	}
+
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(done); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("detached worker did not finish")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestRunCustomBaseURLDoesNotRequireProviderCredential(t *testing.T) {
 	var authorization string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

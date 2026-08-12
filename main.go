@@ -216,7 +216,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			Profile:         application.CurrentProfile(),
 			ModelAttempts:   int(observer.modelAttempts.Load()),
 		}
-		if err := writeJSONResult(stdout, result, usage, resumableSessionID(config, invocation, application), metadata, runErr); err != nil {
+		if err := writeJSONResult(stdout, result, usage, application.SessionID(), metadata, runErr); err != nil {
 			return errors.Join(runErr, fmt.Errorf("write JSON result: %w", err))
 		}
 	} else if runErr == nil || result.Answer != "" {
@@ -228,17 +228,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintf(stderr, "[usage: prompt=%d cached=%d completion=%d total=%d]\n",
 			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.TotalTokens)
 	}
-	if config.saveSession && application.SessionID() != "" {
+	if (config.saveSession || len(result.DetachedJobs) != 0) && application.SessionID() != "" {
 		fmt.Fprintf(stderr, "Resume with: sk resume %s\n", application.ShortSessionID())
 	}
 	return runErr
-}
-
-func resumableSessionID(config cliConfig, invocation cliInvocation, application *app.Application) string {
-	if !config.saveSession && !invocation.resume && strings.TrimSpace(config.journalPath) == "" {
-		return ""
-	}
-	return application.SessionID()
 }
 
 func subtractUsage(total, previous agent.ModelUsage) agent.ModelUsage {

@@ -67,7 +67,8 @@ OpenAI-compatible endpoint. `/model` lists and switches models interactively.
 ## Sessions and interactive use
 
 Running `sk` without a prompt starts a persistent session. A one-shot run is
-ephemeral unless `-save-session` or `-journal` is used.
+ephemeral unless `-save-session` or `-journal` is used, or it leaves detached
+work running.
 
 ```sh
 sk -save-session "fix the failing tests"
@@ -145,6 +146,8 @@ Explicit background Bash and background or detached custom tools use a separate
 worker that owns their timeout, bounded log, and final result. If the main Skot
 process disappears unexpectedly, resuming the session can adopt that work. A
 clean exit stops non-detached jobs; detached custom tools continue across it.
+If a one-shot run leaves detached work running, Skot keeps that session
+automatically and prints the command needed to resume it.
 
 Job supervision is not a container boundary. It manages ordinary Unix process
 groups, so stronger whole-subtree containment remains the responsibility of an

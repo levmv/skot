@@ -169,32 +169,6 @@ func TestStoreDoesNotRepairCompleteMalformedRecord(t *testing.T) {
 	}
 }
 
-func TestTransientStorePersistsRecordsWithoutStableStorageCheckpoint(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	store, err := OpenTransient(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Append(context.Background(), agent.PendingRecord{
-		Kind: agent.RecordRunStarted,
-		Data: json.RawMessage(`{"run_id":"run_1"}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	records, err := reopened.Records(context.Background())
-	if err != nil || len(records) != 1 {
-		t.Fatalf("transient records = %#v, %v", records, err)
-	}
-}
-
 func TestStoreRejectsConcurrentWriter(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	first, err := Open(path)
@@ -274,5 +248,25 @@ func TestClosePruningEmptyRemovesOnlyEmptyManagedSession(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "sessions", nonemptyID, journalName)); err != nil {
 		t.Fatalf("nonempty session was removed: %v", err)
+	}
+}
+
+func TestCloseDiscardingRemovesNonemptyProvisionalSession(t *testing.T) {
+	home := t.TempDir()
+	store, id, err := Create(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append(context.Background(), agent.PendingRecord{
+		Kind: agent.RecordSessionStarted,
+		Data: json.RawMessage(`{"schema_version":1,"session_id":"provisional"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CloseDiscarding(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "sessions", id)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("provisional session still exists: %v", err)
 	}
 }

@@ -138,6 +138,9 @@ func (tool *ProgramTool) normalize() error {
 	if tool.Timeout < 0 {
 		return errors.New("timeout cannot be negative")
 	}
+	if tool.Timeout > int(maxProgramTimeout/time.Second) {
+		return fmt.Errorf("timeout cannot exceed %d seconds", int(maxProgramTimeout/time.Second))
+	}
 	tool.Workdir = strings.TrimSpace(tool.Workdir)
 	if filepath.IsAbs(tool.Workdir) {
 		return fmt.Errorf("workdir %q must be relative to the workspace root", tool.Workdir)
@@ -235,8 +238,7 @@ func (tool ProgramTool) timeout() time.Duration {
 	if tool.Timeout <= 0 {
 		return defaultProgramTimeout
 	}
-	seconds := min(tool.Timeout, int(maxProgramTimeout/time.Second))
-	return time.Duration(seconds) * time.Second
+	return time.Duration(tool.Timeout) * time.Second
 }
 
 func (tool ProgramTool) schema() json.RawMessage {

@@ -45,7 +45,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	settingsStore, err := state.Open(home)
 	if err != nil {
-		return nil, fmt.Errorf("initialize settings: %w", err)
+		return nil, fmt.Errorf("initialize local state: %w", err)
 	}
 	settings, err := settingsStore.Settings()
 	if err != nil {

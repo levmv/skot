@@ -76,6 +76,8 @@ sk resume 01k2                    # ID or unambiguous prefix
 sk resume 01k2 "continue the fix"
 ```
 
+Session journals contain conversation and workspace data; treat them as private.
+
 Use `/help` inside the UI for commands and keyboard shortcuts. The most useful
 commands are `/resume`, `/model`, `/profile`, `/sandbox`, `/context`,
 `/compact`, and `/exit` (`/quit` and `/q` also work).
@@ -130,7 +132,8 @@ its state directory, or another file selected with `-tools`:
 The program receives its arguments as JSON on stdin and returns its model-facing
 result on stdout. A configured tool must also be named by the active profile.
 Declarations can set a working directory, environment overlay, timeout,
-parallel safety, background behavior, yield time, and detach behavior.
+parallel safety, background behavior, yield time, and detach behavior. Integer
+`timeout` and `yield` values are seconds.
 
 ## Processes and jobs
 

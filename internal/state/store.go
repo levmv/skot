@@ -1,9 +1,11 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,10 +61,10 @@ func Open(home string) (*Store, error) {
 		return nil, fmt.Errorf("restrict Skot home: %w", err)
 	}
 	store := &Store{dir: dir, path: filepath.Join(dir, "config.json"), authPath: filepath.Join(dir, "auth.json")}
-	if err := inspectStoreFile(store.path, "settings"); err != nil {
+	if err := inspectStoreFile(store.path, "config file"); err != nil {
 		return nil, err
 	}
-	if err := inspectStoreFile(store.authPath, "credentials"); err != nil {
+	if err := inspectStoreFile(store.authPath, "credential store"); err != nil {
 		return nil, err
 	}
 	if _, err := store.Settings(); err != nil {
@@ -208,10 +210,15 @@ func (store *Store) load() (Settings, error) {
 		return settings, nil
 	}
 	if err != nil {
-		return Settings{}, fmt.Errorf("read settings: %w", err)
+		return Settings{}, fmt.Errorf("read config: %w", err)
 	}
-	if err := json.Unmarshal(raw, &settings); err != nil {
-		return Settings{}, fmt.Errorf("decode settings: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&settings); err != nil {
+		return Settings{}, fmt.Errorf("decode config: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return Settings{}, errors.New("decode config: multiple JSON values")
 	}
 	return settings, nil
 }
@@ -241,7 +248,7 @@ func (store *Store) loadCredentialsLocked() (credentialData, error) {
 }
 
 func (store *Store) save(settings Settings) error {
-	return store.saveJSON(store.path, "settings", settings)
+	return store.saveJSON(store.path, "config", settings)
 }
 
 func (store *Store) saveJSON(path, label string, value any) error {
@@ -286,7 +293,7 @@ func inspectStoreFile(path, label string) error {
 		return fmt.Errorf("inspect %s: %w", label, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("%s store must be a regular file", label)
+		return fmt.Errorf("%s must be a regular file", label)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		return fmt.Errorf("restrict %s: %w", label, err)

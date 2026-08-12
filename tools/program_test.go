@@ -34,7 +34,7 @@ func TestLoadProgramToolsNormalizesSchemaModesAndResolvedDefaults(t *testing.T) 
 	  "name":"lookup","description":" look up ","command":["sh","-c","true"],
 	  "parameters":{"properties":{"query":{"type":"string"}}},
 	  "parallel_safe":true,"background":"auto","yield":2,"detach":true,
-	  "env":{"LOOKUP_TOKEN":"secret"},"timeout":99999
+	  "env":{"LOOKUP_TOKEN":"secret"},"timeout":3600
 	}]}`)
 	config, err := LoadProgramTools(path)
 	if err != nil {
@@ -332,6 +332,7 @@ func TestProgramToolValidationRejectsAmbiguousOrUnsafeDeclarations(t *testing.T)
 		"always yield":    `{"tools":[{"name":"bad","description":"d","command":["true"],"background":"always","yield":1}]}`,
 		"late yield":      `{"tools":[{"name":"bad","description":"d","command":["true"],"timeout":1,"yield":1}]}`,
 		"orphan detach":   `{"tools":[{"name":"bad","description":"d","command":["true"],"detach":true}]}`,
+		"long timeout":    `{"tools":[{"name":"bad","description":"d","command":["true"],"timeout":3601}]}`,
 		"managed env":     `{"tools":[{"name":"bad","description":"d","command":["true"],"env":{"HOME":"elsewhere"}}]}`,
 		"multiple values": `{"tools":[]} {"tools":[]}`,
 	} {

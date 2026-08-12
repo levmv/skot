@@ -62,7 +62,7 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsSymlinkedSettings(t *testing.T) {
+func TestStoreRejectsSymlinkedConfigFile(t *testing.T) {
 	home := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.json")
 	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
@@ -72,7 +72,17 @@ func TestStoreRejectsSymlinkedSettings(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if _, err := Open(home); err == nil {
-		t.Fatal("symlinked settings were accepted")
+		t.Fatal("symlinked config file was accepted")
+	}
+}
+
+func TestStoreRejectsUnknownConfigFields(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"protected_path":[".env"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(home); err == nil || !strings.Contains(err.Error(), `unknown field "protected_path"`) {
+		t.Fatalf("error = %v", err)
 	}
 }
 

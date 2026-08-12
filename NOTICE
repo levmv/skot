@@ -1,0 +1,215 @@
+SKOT THIRD-PARTY SOFTWARE NOTICES
+
+This file covers third-party software included in Skot release binaries. The
+component list is the union of the supported Linux and macOS release targets.
+Skot itself is licensed separately under the repository's LICENSE file.
+
+===============================================================================
+MIT-LICENSED COMPONENTS
+===============================================================================
+
+The following components are licensed under the MIT License reproduced below:
+
+- charm.land/bubbles/v2 v2.1.1
+  Copyright (c) 2020-2026 Charmbracelet, Inc.
+- charm.land/bubbletea/v2 v2.0.8
+  Copyright (c) 2020-2026 Charmbracelet, Inc.
+- charm.land/lipgloss/v2 v2.0.6
+  Copyright (c) 2021-2026 Charmbracelet, Inc.
+- github.com/charmbracelet/colorprofile v0.4.3
+  Copyright (c) 2020-2024 Charmbracelet, Inc
+- github.com/charmbracelet/ultraviolet 006e29f97886
+  Copyright (c) 2025 Charmbracelet, Inc
+- github.com/charmbracelet/x/ansi v0.11.8
+  Copyright (c) 2023 Charmbracelet, Inc.
+- github.com/charmbracelet/x/term v0.2.2
+  Copyright (c) 2023 Charmbracelet, Inc.
+- github.com/charmbracelet/x/termios v0.1.1
+  Copyright (c) 2023 Charmbracelet, Inc.
+- github.com/charmbracelet/x/windows v0.2.2
+  Copyright (c) 2023 Charmbracelet, Inc.
+- github.com/clipperhouse/displaywidth v0.11.0
+  Copyright (c) 2025 Matt Sherman
+- github.com/clipperhouse/uax29/v2 v2.7.0
+  Copyright (c) 2020 Matt Sherman
+- github.com/landlock-lsm/go-landlock v0.9.0
+  Copyright (c) 2021 Günther Noack
+- github.com/lucasb-eyer/go-colorful v1.4.1
+  Copyright (c) 2013 Lucas Beyer
+- github.com/mattn/go-runewidth v0.0.24
+  Copyright (c) 2016 Yasuhiro Matsumoto
+- github.com/muesli/cancelreader v0.2.2
+  Copyright (c) 2022 Erik Geiser and Christian Muehlhaeuser
+- github.com/rivo/uniseg v0.4.7
+  Copyright (c) 2019 Oliver Kuederle
+- github.com/xo/terminfo abceb7e1c41e
+  Copyright (c) 2016 Anmol Sethi
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+GITHUB.COM/ATOTTO/CLIPBOARD -- BSD 3-CLAUSE
+===============================================================================
+
+github.com/atotto/clipboard v0.1.4
+
+Copyright (c) 2013 Ato Araki. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+   * Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+   * Neither the name of @atotto. nor the names of its contributors may be
+     used to endorse or promote products derived from this software without
+     specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+===============================================================================
+GO SOFTWARE -- BSD 3-CLAUSE
+===============================================================================
+
+This notice covers the Go standard library and these modules:
+
+- golang.org/x/net v0.57.0
+- golang.org/x/sync v0.22.0
+- golang.org/x/sys v0.47.0
+
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+   * Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+   * Neither the name of Google LLC nor the names of its contributors may be
+     used to endorse or promote products derived from this software without
+     specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+===============================================================================
+LIBCAP/PSX -- BSD 3-CLAUSE OPTION
+===============================================================================
+
+kernel.org/pub/linux/libs/security/libcap/psx v1.2.77
+
+Copyright (c) 2019,20,24 Andrew G. Morgan <morgan@kernel.org>
+
+The libcap/psx package is offered under BSD-3-Clause OR GPL-2.0-only. Skot
+distributes it under the following BSD-3-Clause option:
+
+Redistribution and use in source and binary forms of libcap/psx, with or
+without modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain any existing copyright notice,
+   and this entire permission notice in its entirety, including the disclaimer
+   of warranties.
+
+2. Redistributions in binary form must reproduce all prior and current
+   copyright notices, this list of conditions, and the following disclaimer in
+   the documentation and/or other materials provided with the distribution.
+
+3. The name of any author may not be used to endorse or promote products
+   derived from this software without their specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+AUTHOR(S) BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+===============================================================================
+UNICODE DATA FILES -- UNICODE LICENSE V3
+===============================================================================
+
+Unicode character data is included through github.com/rivo/uniseg,
+github.com/mattn/go-runewidth, github.com/clipperhouse/displaywidth, and
+github.com/clipperhouse/uax29/v2.
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY DOWNLOADING,
+INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR SOFTWARE, YOU
+UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE TERMS AND
+CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT DOWNLOAD, INSTALL,
+COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of data files and any associated documentation (the "Data Files") or software
+and any associated documentation (the "Software") to deal in the Data Files
+or Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, and/or sell copies of the Data
+Files or Software, and to permit persons to whom the Data Files or Software
+are furnished to do so, provided that either (a) this copyright and permission
+notice appear with all copies of the Data Files or Software, or (b) this
+copyright and permission notice appear in associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF THIRD
+PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE BE
+LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES, OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall not
+be used in advertising or otherwise to promote the sale, use or other dealings
+in these Data Files or Software without prior written authorization of the
+copyright holder.

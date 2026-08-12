@@ -1,0 +1,10 @@
+{
+	"name": "skot",
+	"image": "mcr.microsoft.com/devcontainers/go:1.26-bookworm",
+	"runArgs": [
+		"--network=host",
+		"--tz=local"
+	],
+	"containerUser": "vscode",
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends curl gawk git openssh-client jq ripgrep fd-find less tree unzip file procps lsof && sudo ln -sf /usr/bin/fdfind /usr/local/bin/fd && go mod download"
+}

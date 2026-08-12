@@ -1,0 +1,87 @@
+package app
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	workspacetools "github.com/levmv/skot/tools"
+)
+
+func TestLoadInstructionsUsesCurrentHierarchy(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(original) }()
+
+	root := t.TempDir()
+	nested := filepath.Join(root, "pkg", "feature")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("root rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "AGENTS.md"), []byte("nested rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(nested); err != nil {
+		t.Fatal(err)
+	}
+	prompts, err := loadInstructions(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 2 || !strings.Contains(prompts[0], "root rules") || !strings.Contains(prompts[1], "pkg/AGENTS.md") || !strings.Contains(prompts[1], "nested rules") {
+		t.Fatalf("prompts = %#v", prompts)
+	}
+	if got := effectiveInstructions("custom", prompts); !strings.HasPrefix(got, "custom\n\n") || !strings.Contains(got, "root rules") {
+		t.Fatalf("effective instructions = %q", got)
+	}
+}
+
+func TestLoadInstructionsRejectsSymlinkOutsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := loadInstructions(root); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("load error = %v", err)
+	}
+}
+
+func TestLoadInstructionsSkipsProtectedDirectPathAndAlias(t *testing.T) {
+	root := t.TempDir()
+	protected := filepath.Join(root, "private")
+	if err := os.Mkdir(protected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(protected, "AGENTS.md"), []byte("private rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(protected, "AGENTS.md"), filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	policy, err := workspacetools.NewProtectedPathPolicy(root, []string{"private"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts, err := loadInstructions(root, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 0 {
+		t.Fatalf("protected instructions = %#v", prompts)
+	}
+	policy.SetEnabled(false)
+	prompts, err = loadInstructions(root, policy)
+	if err != nil || len(prompts) != 1 || !strings.Contains(prompts[0], "private rules") {
+		t.Fatalf("off instructions/error = %#v / %v", prompts, err)
+	}
+}

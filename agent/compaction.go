@@ -95,7 +95,7 @@ func planCompaction(state State, keepVerbatimBlocks int) (compactionPlan, error)
 	if state.SessionID == "" {
 		return compactionPlan{}, errors.New("session is not initialized")
 	}
-	if len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 {
+	if state.hasUnfinishedWork() {
 		return compactionPlan{}, errors.New("cannot compact unfinished work")
 	}
 	if keepVerbatimBlocks < 1 {
@@ -166,7 +166,7 @@ func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan,
 		Summary:                summary,
 		Usage:                  usage,
 	}
-	if err := validateCompactionBoundary(state, payload, state.LastSequence+1, len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0); err != nil {
+	if err := validateCompactionBoundary(state, payload, state.LastSequence+1, state.hasUnfinishedWork()); err != nil {
 		return ContextCompactedRecord{}, Record{}, err
 	}
 	record, err := appendRecord(ctx, journal, RecordContextCompacted, payload)

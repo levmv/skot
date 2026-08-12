@@ -34,7 +34,7 @@ func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pe
 	if prunedReport.Window == 0 || prunedReport.TotalInputTokens > prunedReport.InputLimit || prunedReport.TotalInputTokens >= report.TotalInputTokens {
 		return state, prunedReport, 0, nil
 	}
-	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1, len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0); err != nil {
+	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1, state.hasUnfinishedWork()); err != nil {
 		return state, report, 0, err
 	}
 	record, err := appendRecord(ctx, runtime.journal, RecordToolResultsPruned, payload)

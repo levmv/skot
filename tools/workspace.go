@@ -20,6 +20,11 @@ type workspace struct {
 	protection *ProtectedPathPolicy
 }
 
+const (
+	parallelSafe = true
+	serialTool   = false
+)
+
 // NewWorkspaceTools builds the initial file tools and returns their canonical,
 // symlink-free workspace root.
 func NewWorkspaceTools(root string) ([]agent.Tool, string, error) {
@@ -38,42 +43,42 @@ func NewWorkspaceToolsWithProtection(root string, protection *ProtectedPathPolic
 			"read",
 			"Read a UTF-8 text file with stable line numbers. Use offset and limit to continue large files.",
 			`{"type":"object","properties":{"path":{"type":"string","description":"File path relative to the workspace root."},"offset":{"type":"integer","minimum":1,"description":"One-based first line to return. Defaults to 1."},"limit":{"type":"integer","minimum":1,"maximum":2000,"default":200,"description":"Maximum lines to return."}},"required":["path"],"additionalProperties":false}`,
-			true,
+			parallelSafe,
 			workspace.read,
 		),
 		workspace.tool(
 			"ls",
 			"List one directory without ignore filtering or recursion. Includes hidden and .git entries, reports file/directory/symlink types and raw symlink targets, and does not follow listed entries.",
 			`{"type":"object","properties":{"path":{"type":"string","description":"Directory relative to the workspace root. Defaults to the root."},"offset":{"type":"integer","minimum":1,"description":"One-based first entry to return. Defaults to 1."},"limit":{"type":"integer","minimum":1,"maximum":1000,"default":200,"description":"Maximum entries to return."}},"additionalProperties":false}`,
-			true,
+			parallelSafe,
 			workspace.ls,
 		),
 		workspace.tool(
 			"grep",
 			"Regex-search UTF-8 repository files, including hidden files. Honors ignores; skips .git, binary/invalid UTF-8, discovered symlinks, and oversized lines. Results are capped.",
 			`{"type":"object","properties":{"pattern":{"type":"string","description":"Regular expression to search for."},"path":{"type":"string","description":"File or directory relative to the workspace root. Defaults to the root."},"include":{"type":"string","description":"Optional file glob such as *.go or **/*_test.go."}},"required":["pattern"],"additionalProperties":false}`,
-			true,
+			parallelSafe,
 			workspace.grep,
 		),
 		workspace.tool(
 			"glob",
 			"Find regular repository files by glob, including hidden files. A positive glob may explicitly select repository-ignored paths; .git and discovered symlinks are always skipped. Results are capped.",
 			`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob such as **/*.go."},"path":{"type":"string","description":"Directory relative to the workspace root. Defaults to the root."}},"required":["pattern"],"additionalProperties":false}`,
-			true,
+			parallelSafe,
 			workspace.glob,
 		),
 		workspace.tool(
 			"edit",
 			"Replace one exact, unique text occurrence in a UTF-8 file atomically. Fails on ambiguous matches.",
 			`{"type":"object","properties":{"path":{"type":"string","description":"File path relative to the workspace root."},"old_text":{"type":"string","description":"Exact text that must occur exactly once."},"new_text":{"type":"string","description":"Replacement text; may be empty."}},"required":["path","old_text","new_text"],"additionalProperties":false}`,
-			false,
+			serialTool,
 			workspace.edit,
 		),
 		workspace.tool(
 			"write",
 			"Create or replace one complete UTF-8 file atomically. To avoid overwriting a concurrent change, pass the sha256 returned by read or edit as expected_sha256.",
 			`{"type":"object","properties":{"path":{"type":"string","description":"File path relative to the workspace root."},"content":{"type":"string","description":"Complete new file content."},"expected_sha256":{"type":"string","description":"Optional sha256 returned by read or edit for the existing file; the write fails if it is stale."}},"required":["path","content"],"additionalProperties":false}`,
-			false,
+			serialTool,
 			workspace.write,
 		),
 	}

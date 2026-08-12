@@ -481,11 +481,11 @@ func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolO
 	if job == nil || job.sessionID != sessionID {
 		return agent.ToolOutput{}, fmt.Errorf("job %q not found", args.JobID)
 	}
-	switch action {
-	case "output":
+	if action == "output" {
 		content, truncated := manager.jobOutput(job, maxJobReadBytes)
 		return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
-	case "wait":
+	}
+	if action == "wait" {
 		if args.TimeoutSeconds < 0 || args.TimeoutSeconds > int(maxBashTimeout/time.Second) {
 			return agent.ToolOutput{}, fmt.Errorf("timeout must be between 1 and %d seconds", int(maxBashTimeout/time.Second))
 		}
@@ -494,15 +494,13 @@ func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolO
 		}
 		content, truncated := manager.jobOutput(job, maxJobReadBytes)
 		return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
-	case "stop":
-		job, err := manager.stop(ctx, job.id, "stopped by job tool")
-		if err != nil {
-			return agent.ToolOutput{}, err
-		}
-		content, truncated := manager.jobOutput(job, defaultCommandPreview)
-		return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
 	}
-	return agent.ToolOutput{}, errors.New("action must be one of: list, output, wait, stop")
+	job, err := manager.stop(ctx, job.id, "stopped by job tool")
+	if err != nil {
+		return agent.ToolOutput{}, err
+	}
+	content, truncated := manager.jobOutput(job, defaultCommandPreview)
+	return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
 }
 
 func waitForJob(ctx context.Context, job *processJob, timeoutSeconds int) error {
@@ -695,7 +693,7 @@ func (manager *ProcessManager) Status(jobID string) (ProcessResult, bool) {
 	if job == nil {
 		return ProcessResult{}, false
 	}
-	if job.supervised {
+	if job.snapshot().supervised {
 		_ = manager.refreshSupervisedJob(job)
 	}
 	return manager.processResult(job, true), true

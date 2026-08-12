@@ -429,11 +429,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 		}
 		response, callErr := runtime.complete(ctx, runID, live.state, emit)
 		if callErr != nil {
-			status := RunFailed
-			if ctx.Err() != nil {
-				status = RunCancelled
-				callErr = ctx.Err()
-			}
+			status, callErr := runFailure(ctx, callErr)
 			return runtime.finish(ctx, live, emit, runID, "", status, callErr)
 		}
 		if ctx.Err() != nil {
@@ -456,11 +452,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 			if runtime.externalWork != nil {
 				continueRun, waitErr := runtime.externalWork.Await(ctx, live.state.SessionID)
 				if waitErr != nil {
-					status := RunFailed
-					if ctx.Err() != nil {
-						status = RunCancelled
-						waitErr = ctx.Err()
-					}
+					status, waitErr := runFailure(ctx, waitErr)
 					return runtime.finish(ctx, live, emit, runID, "", status, waitErr)
 				}
 				if continueRun {
@@ -542,11 +534,7 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 	request.Items = append(request.Items, Item{Kind: ItemUserText, Text: live.state.Configured.ModelContext.ToolLimitInstructions})
 	response, callErr := runtime.completeRequest(ctx, runID, request, emit)
 	if callErr != nil {
-		status := RunFailed
-		if ctx.Err() != nil {
-			status = RunCancelled
-			callErr = ctx.Err()
-		}
+		status, callErr := runFailure(ctx, callErr)
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, callErr)
 	}
 	if ctx.Err() != nil {
@@ -959,6 +947,13 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 
 func (runtime *Runtime) finish(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error) (RunResult, error) {
 	return runtime.finishRun(ctx, reducer, emit, runID, answer, status, cause, false)
+}
+
+func runFailure(ctx context.Context, cause error) (RunStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return RunCancelled, err
+	}
+	return RunFailed, cause
 }
 
 func (runtime *Runtime) finishToolLimited(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error) (RunResult, error) {

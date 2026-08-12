@@ -34,7 +34,7 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		}
 		m.quitting = true
 		return m, tea.Quit
-	case keyString == "ctrl+d" || keyIsCtrl(msg, 'd'):
+	case keyIsCtrl(msg, 'd'):
 		if !m.operation.isTurn() && strings.TrimSpace(m.composer.value()) == "" {
 			m.quitting = true
 			return m, tea.Quit

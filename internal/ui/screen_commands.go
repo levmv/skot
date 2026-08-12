@@ -407,10 +407,10 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 	case isDownKey(message):
 		m.picker.index = min(len(m.picker.items)-1, m.picker.index+1)
 		return m, nil
-	case m.picker.kind == pickerModel && (key.Code == tea.KeyLeft || key.Code == tea.KeyKpLeft || message.String() == "left"):
+	case m.picker.kind == pickerModel && (key.Code == tea.KeyLeft || key.Code == tea.KeyKpLeft):
 		m.cycleModelEffort(-1)
 		return m, nil
-	case m.picker.kind == pickerModel && (key.Code == tea.KeyRight || key.Code == tea.KeyKpRight || message.String() == "right"):
+	case m.picker.kind == pickerModel && (key.Code == tea.KeyRight || key.Code == tea.KeyKpRight):
 		m.cycleModelEffort(1)
 		return m, nil
 	case isEnterKey(message):

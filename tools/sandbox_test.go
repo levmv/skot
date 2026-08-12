@@ -47,7 +47,11 @@ func TestCanonicalSandboxPathResolvesExistingSymlinkPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := canonicalSandboxPath(filepath.Join(alias, "skot", "tool-home"))
-	want := filepath.Join(real, "skot", "tool-home")
+	resolvedReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(resolvedReal, "skot", "tool-home")
 	if got != want {
 		t.Fatalf("canonical path = %q; want %q", got, want)
 	}

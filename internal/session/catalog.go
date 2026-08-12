@@ -109,6 +109,7 @@ func List(home, workspace string) ([]Summary, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspace = canonicalWorkspace(workspace)
 	entries, err := os.ReadDir(filepath.Join(home, "sessions"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -186,7 +187,7 @@ func summarize(id, path, workspace string) (Summary, bool) {
 	}
 	var started agent.SessionStartedRecord
 	if json.Unmarshal(record.Data, &started) != nil || started.SchemaVersion != agent.JournalSchemaVersion ||
-		started.SessionID != id || started.Workspace != workspace {
+		started.SessionID != id || canonicalWorkspace(started.Workspace) != workspace {
 		return Summary{}, false
 	}
 	for scanner.Scan() {
@@ -206,6 +207,34 @@ func summarize(id, path, workspace string) (Summary, bool) {
 		}
 	}
 	return Summary{}, false
+}
+
+func canonicalWorkspace(workspace string) string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return ""
+	}
+	if absolute, err := filepath.Abs(workspace); err == nil {
+		workspace = absolute
+	}
+	workspace = filepath.Clean(workspace)
+	current := workspace
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return workspace
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func sessionTitle(value string) string {

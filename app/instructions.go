@@ -24,6 +24,10 @@ func loadInstructions(root string, protections ...*workspacetools.ProtectedPathP
 	if len(protections) > 0 {
 		protection = protections[0]
 	}
+	root, err := workspacetools.ResolveWorkspaceRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve instruction root: %w", err)
+	}
 	candidates, err := instructionCandidates(root)
 	if err != nil {
 		return nil, err
@@ -64,6 +68,10 @@ func instructionCandidates(root string) ([]string, error) {
 	working, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("resolve working directory for instructions: %w", err)
+	}
+	working, err = filepath.EvalSymlinks(working)
+	if err != nil {
+		return nil, fmt.Errorf("resolve working directory symlinks for instructions: %w", err)
 	}
 	relative, err := filepath.Rel(root, working)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {

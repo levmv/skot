@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,6 +57,28 @@ func TestCatalogRejectsCrossWorkspaceAndAmbiguousPrefix(t *testing.T) {
 	}
 	if _, err := Resolve(home, t.TempDir(), firstID); err == nil || !strings.Contains(err.Error(), "no session") {
 		t.Fatalf("cross-workspace Resolve() error = %v", err)
+	}
+}
+
+func TestCatalogMatchesCanonicalWorkspaceAlias(t *testing.T) {
+	home := t.TempDir()
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	id := createCatalogSession(t, home, real, "aliased workspace")
+
+	summaries, err := List(home, alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].ID != id {
+		t.Fatalf("summaries = %#v", summaries)
 	}
 }
 

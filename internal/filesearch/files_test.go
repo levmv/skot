@@ -625,7 +625,7 @@ func TestFilesPinsValidatedExplicitDirectorySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []walkedFile{{
-		abs:  filepath.Join(root, "real", "inside.go"),
+		abs:  filepath.Join(searcher.Root(), "real", "inside.go"),
 		path: "alias/inside.go",
 	}}
 	if !reflect.DeepEqual(files, want) {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -30,21 +29,11 @@ type Summary struct {
 func ResolveHome(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		if runtime.GOOS == "darwin" {
-			base, err := os.UserConfigDir()
-			if err != nil {
-				return "", fmt.Errorf("resolve user config directory: %w", err)
-			}
-			value = filepath.Join(base, "skot")
-		} else if stateHome := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); stateHome != "" {
-			value = filepath.Join(stateHome, "skot")
-		} else {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", fmt.Errorf("resolve user home: %w", err)
-			}
-			value = filepath.Join(home, ".local", "state", "skot")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home: %w", err)
 		}
+		value = filepath.Join(home, ".skot")
 	}
 	abs, err := filepath.Abs(value)
 	if err != nil {

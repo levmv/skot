@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 )
@@ -11,13 +12,24 @@ const (
 	defaultPrunedToolTailBytes = 2 * 1024
 )
 
-func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pendingInput string) (State, ContextReport, uint64, error) {
-	report := runtime.contextReport(state, pendingInput)
+func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pendingInput string, includeTools bool) (State, ContextReport, uint64, error) {
+	report := runtime.contextReportForRequest(state, includeTools, pendingInput)
 	if len(state.Blocks) < 2 {
 		return state, report, 0, nil
 	}
+	boundaryIndex := len(state.Blocks) - 2
+	if state.hasUnfinishedWork() {
+		unfinishedStart, ok := state.firstUnfinishedBlock()
+		if !ok {
+			return state, report, 0, errors.New("cannot locate unfinished conversation block")
+		}
+		boundaryIndex = min(boundaryIndex, unfinishedStart-1)
+	}
+	if boundaryIndex < 0 {
+		return state, report, 0, nil
+	}
 	payload := ToolResultsPrunedRecord{
-		ThroughSequence: state.Blocks[len(state.Blocks)-2].EndSequence,
+		ThroughSequence: state.Blocks[boundaryIndex].EndSequence,
 		HeadBytes:       defaultPrunedToolHeadBytes,
 		TailBytes:       defaultPrunedToolTailBytes,
 	}
@@ -30,7 +42,7 @@ func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pe
 	}
 	projected := state
 	projected.ToolPruning = &payload
-	prunedReport := runtime.contextReport(projected, pendingInput)
+	prunedReport := runtime.contextReportForRequest(projected, includeTools, pendingInput)
 	if prunedReport.Window == 0 || prunedReport.TotalInputTokens > prunedReport.InputLimit || prunedReport.TotalInputTokens >= report.TotalInputTokens {
 		return state, prunedReport, 0, nil
 	}
@@ -51,7 +63,7 @@ func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, r
 	if payload.ThroughSequence == 0 || payload.ThroughSequence >= recordSequence || payload.HeadBytes <= 0 || payload.TailBytes <= 0 {
 		return fmt.Errorf("invalid tool-result pruning at sequence %d", recordSequence)
 	}
-	if unfinished {
+	if unfinished && !boundaryPrecedesUnfinishedWork(state, payload.ThroughSequence) {
 		return fmt.Errorf("tool results pruned while work was unfinished at sequence %d", recordSequence)
 	}
 	boundaryIndex := -1

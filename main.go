@@ -72,14 +72,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if resolved, err := app.ResolveHome(defaultHome); err == nil {
 		// Resolution is best-effort until flags are parsed so `sk -version` does
 		// not depend on a usable home directory. app.Open validates it for every
-		// invocation that actually needs local state.
+		// invocation that actually needs local data.
 		defaultHome = resolved
 	}
 	flags := flag.NewFlagSet("sk", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	config := cliConfig{}
 	flags.StringVar(&config.modelURI, "model", envOr("SK_MODEL", app.DefaultModelURI), "model in provider/model form")
-	flags.StringVar(&config.reasoningEffort, "reasoning-effort", strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")), "model reasoning effort: default or high")
+	flags.StringVar(&config.reasoningEffort, "reasoning-effort", strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")), "model reasoning effort; the accepted values depend on the route, for example default, off, high, or max")
 	flags.StringVar(&config.modelAPI, "model-api", strings.TrimSpace(os.Getenv("SK_MODEL_API")), "override model API for every selected model (implemented: chat_completions, responses, anthropic_messages)")
 	flags.StringVar(&config.baseURL, "base-url", strings.TrimSpace(os.Getenv("SK_BASE_URL")), "override provider API base URL")
 	flags.IntVar(&config.contextWindow, "context-window", 0, "override model context window in tokens (0 uses model metadata)")
@@ -88,8 +88,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.maxToolIterations, "max-tool-iterations", strings.TrimSpace(os.Getenv("SK_MAX_TOOL_ITERATIONS")), fmt.Sprintf("maximum completed model-to-tool cycles per run, or unlimited (default %d)", agent.DefaultMaxToolIterations))
 	flags.StringVar(&config.systemPrompt, "system-prompt", os.Getenv("SK_SYSTEM_PROMPT"), "system instructions")
 	flags.StringVar(&config.systemPromptFile, "system-prompt-file", strings.TrimSpace(os.Getenv("SK_SYSTEM_PROMPT_FILE")), "system instructions from a file")
-	flags.StringVar(&config.toolsFile, "tools", strings.TrimSpace(os.Getenv("SK_TOOLS")), "external program tool catalog (default: $SK_HOME/tools.json)")
-	flags.StringVar(&config.home, "home", defaultHome, "local state directory")
+	flags.StringVar(&config.toolsFile, "tools", strings.TrimSpace(os.Getenv("SK_TOOLS")), "external program tool catalog (default: tools.json in the Skot data directory)")
+	flags.StringVar(&config.home, "home", defaultHome, "Skot data directory for settings, credentials, sessions, and tools")
 	flags.StringVar(&config.journalPath, "journal", "", "JSONL session journal to keep and resume")
 	flags.StringVar(&config.root, "root", envOr("SK_ROOT", "."), "workspace root for file tools")
 	flags.StringVar(&config.profile, "profile", envOr("SK_PROFILE", app.ProfileFull), "model tool profile name")
@@ -228,8 +228,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 	}
 	if config.verbose && !config.jsonOutput && runErr == nil {
-		fmt.Fprintf(stderr, "[usage: prompt=%d cached=%d completion=%d total=%d]\n",
-			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.TotalTokens)
+		fmt.Fprintf(stderr, "[usage: prompt=%d cached=%d completion=%d reasoning=%d total=%d]\n",
+			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.TotalTokens)
 	}
 	autoRetained := !sessionWasResumable && application.SessionID() != ""
 	if (config.saveSession || len(result.DetachedJobs) != 0 || autoRetained) && application.SessionID() != "" {
@@ -243,6 +243,7 @@ func subtractUsage(total, previous agent.ModelUsage) agent.ModelUsage {
 		InputTokens:       max(0, total.InputTokens-previous.InputTokens),
 		CachedInputTokens: max(0, total.CachedInputTokens-previous.CachedInputTokens),
 		OutputTokens:      max(0, total.OutputTokens-previous.OutputTokens),
+		ReasoningTokens:   max(0, total.ReasoningTokens-previous.ReasoningTokens),
 		TotalTokens:       max(0, total.TotalTokens-previous.TotalTokens),
 	}
 }

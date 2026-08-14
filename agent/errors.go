@@ -36,7 +36,10 @@ type ProviderError struct {
 	Kind       ProviderErrorKind
 	// Code is the provider's structured error code when one was present in the
 	// response. Callers must not infer billing or quota values from Cause text.
-	Code       string
+	Code string
+	// Type is the provider's structured error type when the wire distinguishes it
+	// from Code. Classification may use either exact field, never Cause prose.
+	Type       string
 	Retryable  bool
 	RetryAfter time.Duration
 }

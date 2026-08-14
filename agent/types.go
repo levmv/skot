@@ -160,7 +160,10 @@ type ModelUsage struct {
 	InputTokens       int `json:"input_tokens,omitempty"`
 	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
 	OutputTokens      int `json:"output_tokens,omitempty"`
-	TotalTokens       int `json:"total_tokens,omitempty"`
+	// ReasoningTokens is the reported reasoning subset of OutputTokens, not an
+	// additional token count.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	TotalTokens     int `json:"total_tokens,omitempty"`
 }
 
 func (usage ModelUsage) Add(other ModelUsage) ModelUsage {
@@ -168,6 +171,7 @@ func (usage ModelUsage) Add(other ModelUsage) ModelUsage {
 		InputTokens:       usage.InputTokens + other.InputTokens,
 		CachedInputTokens: usage.CachedInputTokens + other.CachedInputTokens,
 		OutputTokens:      usage.OutputTokens + other.OutputTokens,
+		ReasoningTokens:   usage.ReasoningTokens + other.ReasoningTokens,
 		TotalTokens:       usage.TotalTokens + other.TotalTokens,
 	}
 }
@@ -180,6 +184,11 @@ type ModelStreamEvent struct {
 type Model interface {
 	Info() ModelInfo
 	Complete(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
+	// ProjectModelItems applies adapter replay policy after runtime ownership
+	// filtering. It may filter reasoning items in place, but must preserve order
+	// and every other item, and must not retain the slice. Runtime uses the result
+	// for both request serialization and context estimates.
+	ProjectModelItems([]Item) []Item
 }
 
 type EventKind string
@@ -257,9 +266,12 @@ func (err RunIncompleteError) Error() string {
 
 func (RunIncompleteError) Unwrap() error { return ErrRunIncomplete }
 
-func isIncompleteStopReason(reason string) bool {
+// IsIncompleteStopReason reports whether a normalized adapter stop reason
+// represents a partial response. Adapters reject unknown provider reasons.
+func IsIncompleteStopReason(reason string) bool {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "length", "max_tokens", "max_output_tokens", "content_filter", "refusal", "pause_turn", "model_context_window_exceeded", StopReasonOutputLimit:
+	case "length", "max_tokens", "max_output_tokens", "content_filter", "refusal", "pause_turn",
+		"model_context_window_exceeded", "incomplete", "insufficient_system_resource", StopReasonOutputLimit:
 		return true
 	default:
 		return false

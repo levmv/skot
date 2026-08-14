@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelhttp"
 )
 
 // ReasoningEffortEncoding selects the explicitly supported wire field for a
@@ -15,7 +17,12 @@ type ReasoningEffortEncoding string
 const (
 	ReasoningEffortTopLevel ReasoningEffortEncoding = "reasoning_effort"
 	ReasoningEffortNested   ReasoningEffortEncoding = "reasoning"
+	// ReasoningEffortThinking uses DeepSeek's thinking switch. Enabled requests
+	// also carry reasoning_effort; disabled requests do not.
+	ReasoningEffortThinking ReasoningEffortEncoding = "thinking"
 )
+
+const reasoningEffortOff = "off"
 
 // ReasoningReplayPolicy controls which provider-owned reasoning summaries may
 // be returned on later requests. The zero value replays none.
@@ -36,9 +43,12 @@ type RouteTraits struct {
 
 func (traits RouteTraits) validate(reasoningEffort string) error {
 	switch traits.ReasoningEffort {
-	case "", ReasoningEffortTopLevel, ReasoningEffortNested:
+	case "", ReasoningEffortTopLevel, ReasoningEffortNested, ReasoningEffortThinking:
 	default:
 		return fmt.Errorf("unsupported reasoning effort encoding %q", traits.ReasoningEffort)
+	}
+	if reasoningEffort == reasoningEffortOff && traits.ReasoningEffort != ReasoningEffortThinking {
+		return fmt.Errorf("reasoning effort %q needs the %q encoding", reasoningEffortOff, ReasoningEffortThinking)
 	}
 	switch traits.ReasoningReplay {
 	case "", ReasoningReplayCurrentTurn, ReasoningReplayToolTurns:
@@ -52,10 +62,17 @@ func (traits RouteTraits) validate(reasoningEffort string) error {
 }
 
 func (traits RouteTraits) ProviderStateContract() agent.ProviderStateContract {
-	if traits.ReasoningReplay == "" {
+	switch traits.ReasoningReplay {
+	case ReasoningReplayToolTurns:
+		// v2 narrowed source selection from "every owned reasoning item" to the
+		// assistant turns that actually made tool calls, so a session saved
+		// under v1 must start a new epoch instead of replaying the old set.
+		return "chat_completions.reasoning_replay.tool_turns.v2"
+	case ReasoningReplayCurrentTurn:
+		return "chat_completions.reasoning_replay.current_turn.v1"
+	default:
 		return ""
 	}
-	return agent.ProviderStateContract("chat_completions.reasoning_replay." + traits.ReasoningReplay + ".v1")
 }
 
 type chatRequest struct {
@@ -67,10 +84,15 @@ type chatRequest struct {
 	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"`
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 	Reasoning       *reasoningConfig `json:"reasoning,omitempty"`
+	Thinking        *thinkingControl `json:"thinking,omitempty"`
 }
 
 type reasoningConfig struct {
 	Effort string `json:"effort"`
+}
+
+type thinkingControl struct {
+	Type string `json:"type"`
 }
 
 type streamOptions struct {
@@ -115,15 +137,20 @@ type streamChunk struct {
 }
 
 type wireUsage struct {
-	PromptTokens         int                 `json:"prompt_tokens"`
-	CompletionTokens     int                 `json:"completion_tokens"`
-	TotalTokens          int                 `json:"total_tokens"`
-	PromptCacheHitTokens *int                `json:"prompt_cache_hit_tokens,omitempty"`
-	PromptTokensDetails  *promptTokenDetails `json:"prompt_tokens_details,omitempty"`
+	PromptTokens            int                     `json:"prompt_tokens"`
+	CompletionTokens        int                     `json:"completion_tokens"`
+	TotalTokens             int                     `json:"total_tokens"`
+	PromptCacheHitTokens    *int                    `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptTokensDetails     *promptTokenDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *completionTokenDetails `json:"completion_tokens_details,omitempty"`
 }
 
 type promptTokenDetails struct {
 	CachedTokens int `json:"cached_tokens"`
+}
+
+type completionTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 func (usage wireUsage) modelUsage() agent.ModelUsage {
@@ -133,10 +160,15 @@ func (usage wireUsage) modelUsage() agent.ModelUsage {
 	} else if usage.PromptTokensDetails != nil {
 		cached = usage.PromptTokensDetails.CachedTokens
 	}
+	reasoning := 0
+	if usage.CompletionTokensDetails != nil {
+		reasoning = usage.CompletionTokensDetails.ReasoningTokens
+	}
 	return agent.ModelUsage{
 		InputTokens:       usage.PromptTokens,
 		CachedInputTokens: cached,
 		OutputTokens:      usage.CompletionTokens,
+		ReasoningTokens:   reasoning,
 		TotalTokens:       usage.TotalTokens,
 	}
 }
@@ -189,6 +221,8 @@ func (e *apiError) message() string {
 }
 
 func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, error) {
+	// Complete can be called directly, so reapply the idempotent policy to a copy.
+	request.Items = backend.ProjectModelItems(append([]agent.Item(nil), request.Items...))
 	messages, err := backend.buildMessages(request)
 	if err != nil {
 		return chatRequest{}, err
@@ -223,6 +257,13 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, e
 			wireRequest.Reasoning = &reasoningConfig{Effort: backend.reasoningEffort}
 		case ReasoningEffortTopLevel:
 			wireRequest.ReasoningEffort = backend.reasoningEffort
+		case ReasoningEffortThinking:
+			if backend.reasoningEffort == reasoningEffortOff {
+				wireRequest.Thinking = &thinkingControl{Type: "disabled"}
+				break
+			}
+			wireRequest.Thinking = &thinkingControl{Type: "enabled"}
+			wireRequest.ReasoningEffort = backend.reasoningEffort
 		}
 	}
 	if backend.traits.PromptCacheKey {
@@ -238,12 +279,6 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 	}
 	if request.Summary != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: "Conversation summary:\n" + request.Summary})
-	}
-	lastUser := -1
-	for index, item := range request.Items {
-		if item.Kind == agent.ItemUserText {
-			lastUser = index
-		}
 	}
 	callIDs := make(map[string]string)
 	for index := 0; index < len(request.Items); {
@@ -269,7 +304,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 				case agent.ItemAssistantText:
 					message.Content += part.Text
 				case agent.ItemReasoning:
-					if backend.matchesProviderContext(part.ProviderContext, request.ProviderEpoch) && backend.replaysReasoning(index, lastUser) {
+					if backend.matchesProviderContext(part.ProviderContext, request.ProviderEpoch) {
 						message.ReasoningContent += part.Text
 					}
 				case agent.ItemToolCall:
@@ -315,15 +350,75 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 	return messages, nil
 }
 
-func (backend *Backend) replaysReasoning(index, lastUser int) bool {
+// finishReasons is closed: unknown values are rejected. Gateway aliases
+// normalize to agent reasons, while incomplete provider values remain visible.
+// Anthropic-shaped aliases support gateways proxying those models through Chat
+// Completions.
+var finishReasons = map[string]string{
+	"stop":                          "stop",
+	"end_turn":                      "stop",
+	"stop_sequence":                 "stop",
+	"tool_calls":                    "tool_calls",
+	"function_call":                 "tool_calls",
+	"tool_use":                      "tool_calls",
+	"length":                        "length",
+	"max_tokens":                    "max_tokens",
+	"max_output_tokens":             "max_output_tokens",
+	"model_context_window_exceeded": "model_context_window_exceeded",
+	"content_filter":                "content_filter",
+	"refusal":                       "refusal",
+	"pause_turn":                    "pause_turn",
+	"insufficient_system_resource":  "insufficient_system_resource",
+}
+
+func (backend *Backend) normalizeFinishReason(reason string) (string, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(reason))
+	normalized, known := finishReasons[trimmed]
+	if !known {
+		return "", modelhttp.UnsupportedCompletionReasonError(backend.provider, reason)
+	}
+	return normalized, nil
+}
+
+// ProjectModelItems applies the route's reasoning replay policy. Tool-turn
+// replay keeps reasoning only for assistant turns with tool calls; current-turn
+// replay keeps reasoning after the last user message; the zero policy drops it.
+func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
+	toolTurns := map[string]bool(nil)
+	lastUser := -1
 	switch backend.traits.ReasoningReplay {
 	case ReasoningReplayToolTurns:
-		return true
+		toolTurns = make(map[string]bool)
+		for _, item := range items {
+			if item.Kind == agent.ItemToolCall && item.ResponseID != "" {
+				toolTurns[item.ResponseID] = true
+			}
+		}
 	case ReasoningReplayCurrentTurn:
-		return index > lastUser
-	default:
-		return false
+		for index, item := range items {
+			if item.Kind == agent.ItemUserText {
+				lastUser = index
+			}
+		}
 	}
+
+	projected := items[:0]
+	for index, item := range items {
+		if item.Kind == agent.ItemReasoning {
+			keep := false
+			switch backend.traits.ReasoningReplay {
+			case ReasoningReplayToolTurns:
+				keep = toolTurns[item.ResponseID]
+			case ReasoningReplayCurrentTurn:
+				keep = index > lastUser
+			}
+			if !keep {
+				continue
+			}
+		}
+		projected = append(projected, item)
+	}
+	return projected
 }
 
 func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string {

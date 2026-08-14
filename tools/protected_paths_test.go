@@ -162,3 +162,32 @@ func TestProtectedPathPolicyRejectsPathContainingWorkspace(t *testing.T) {
 		t.Fatalf("NewProcessManager error = %v", err)
 	}
 }
+
+// A protected path may itself be a symlink, for example a `.env` linked into a
+// shared secrets directory. The policy resolves it and protects the target, so
+// every name for that file is protected, not just the configured one.
+func TestProtectedSymlinkProtectsItsTargetUnderEveryName(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "real.txt"), "credential\n")
+	mustWriteFile(t, filepath.Join(root, "ordinary.txt"), "ordinary contents\n")
+	if err := os.Symlink("real.txt", filepath.Join(root, "secret.env")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	policy, err := NewProtectedPathPolicy(root, []string{"secret.env"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithProtection(root, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"secret.env", "real.txt"} {
+		args := `{"path":"` + path + `"}`
+		if _, err := runTool(tools, "read", args); err == nil || !strings.Contains(err.Error(), "protected") {
+			t.Fatalf("read(%s) = %v", path, err)
+		}
+	}
+	if _, err := runTool(tools, "read", `{"path":"ordinary.txt"}`); err != nil {
+		t.Fatalf("unrelated file became unreadable: %v", err)
+	}
+}

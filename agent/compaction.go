@@ -59,7 +59,7 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, keepVerb
 	if state.Configured == nil {
 		return ContextCompactedRecord{}, Record{}, errors.New("session has no effective configuration")
 	}
-	plan, err := planCompaction(state, keepVerbatimBlocks)
+	plan, err := planCompactionForModelBoundary(state, keepVerbatimBlocks)
 	if err != nil {
 		return ContextCompactedRecord{}, Record{}, err
 	}
@@ -68,12 +68,12 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, keepVerb
 		ProviderEpoch: state.Selection.Epoch,
 		Instructions:  state.Configured.ModelContext.CompactionInstructions,
 		Items:         []Item{{Kind: ItemUserText, Text: plan.Input}},
-	}, emit)
+	}, withoutStreamedModelContent(emit))
 	if err != nil {
 		return ContextCompactedRecord{}, Record{}, fmt.Errorf("summarize context: %w", sanitizeError(err, runtime.sanitize))
 	}
 	response = runtime.sanitizeModelResponse(response)
-	if isIncompleteStopReason(response.StopReason) {
+	if IsIncompleteStopReason(response.StopReason) {
 		return ContextCompactedRecord{}, Record{}, fmt.Errorf("compaction model returned an incomplete summary: stop reason %s", response.StopReason)
 	}
 	for _, item := range response.Items {
@@ -88,15 +88,40 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, keepVerb
 	return commitCompaction(ctx, runtime.journal, plan, summary, response.Usage)
 }
 
+// Automatic compaction is an internal model call. Its attempt and retry events
+// remain observable, but its draft summary must never appear as the assistant's
+// answer in a CLI/TUI transcript.
+func withoutStreamedModelContent(emit EmitFunc) EmitFunc {
+	if emit == nil {
+		return nil
+	}
+	return func(event Event) {
+		switch event.Kind {
+		case EventTextDelta, EventReasoningSummaryDelta:
+			return
+		default:
+			emit(event)
+		}
+	}
+}
+
 // planCompaction selects the oldest complete blocks while retaining at least
 // keepVerbatimBlocks recent blocks verbatim. It never splits a block merely to
 // make the summarizer input fit.
 func planCompaction(state State, keepVerbatimBlocks int) (compactionPlan, error) {
-	if state.SessionID == "" {
-		return compactionPlan{}, errors.New("session is not initialized")
-	}
 	if state.hasUnfinishedWork() {
 		return compactionPlan{}, errors.New("cannot compact unfinished work")
+	}
+	return planCompactionForModelBoundary(state, keepVerbatimBlocks)
+}
+
+// planCompactionForModelBoundary also supports an active run, but only by
+// compacting a completed prefix which ends before that run's oldest block.
+// This lets a newly delivered tool result, boundary event, or queued input
+// trigger maintenance without changing the active transcript.
+func planCompactionForModelBoundary(state State, keepVerbatimBlocks int) (compactionPlan, error) {
+	if state.SessionID == "" {
+		return compactionPlan{}, errors.New("session is not initialized")
 	}
 	if keepVerbatimBlocks < 1 {
 		return compactionPlan{}, errors.New("at least one verbatim block is required")
@@ -115,6 +140,13 @@ func planCompaction(state State, keepVerbatimBlocks int) (compactionPlan, error)
 		input.WriteString("Conversation blocks to summarize:\n")
 	}
 	targetEnd := len(state.Blocks) - keepVerbatimBlocks
+	if state.hasUnfinishedWork() {
+		unfinishedStart, ok := state.firstUnfinishedBlock()
+		if !ok {
+			return compactionPlan{}, errors.New("cannot locate unfinished conversation block")
+		}
+		targetEnd = min(targetEnd, unfinishedStart)
+	}
 	if targetEnd <= activeStart {
 		return compactionPlan{}, errNoCompactionBoundary
 	}

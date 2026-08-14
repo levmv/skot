@@ -79,6 +79,9 @@ sk resume 01k2 "continue the fix"
 
 Session journals contain conversation and workspace data; treat them as private.
 
+Skot uses `~/.skot` as its default data directory. Set `SK_HOME` or pass
+`-home` to use another directory.
+
 Use `/help` inside the UI for commands and keyboard shortcuts. The most useful
 commands are `/resume`, `/model`, `/profile`, `/sandbox`, `/context`,
 `/compact`, and `/exit` (`/quit` and `/q` also work).
@@ -138,7 +141,7 @@ resume command.
 ### Custom program tools
 
 Skot can expose local executables as typed model tools through `tools.json` in
-its state directory, or another file selected with `-tools`:
+its data directory, or another file selected with `-tools`:
 
 ```json
 {

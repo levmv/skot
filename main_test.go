@@ -74,7 +74,7 @@ func TestRunVerbosePrintsRunUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
-		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4}}}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4},\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -93,7 +93,9 @@ func TestRunVerbosePrintsRunUsage(t *testing.T) {
 		if stdout.String() != "done\n" {
 			t.Fatalf("%s stdout = %q", prompt, stdout.String())
 		}
-		if !strings.Contains(stderr.String(), "[usage: prompt=12 cached=4 completion=5 total=17]\n") {
+		// The reasoning share is part of completion, not an extra cost; a route
+		// which reports it must carry it through to the run summary.
+		if !strings.Contains(stderr.String(), "[usage: prompt=12 cached=4 completion=5 reasoning=3 total=17]\n") {
 			t.Fatalf("%s stderr = %q", prompt, stderr.String())
 		}
 	}
@@ -103,7 +105,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
-		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4}}}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4},\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -132,7 +134,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 		t.Fatalf("JSON result = %#v", result)
 	}
 	if result.Usage.InputTokens != 12 || result.Usage.CachedInputTokens != 4 ||
-		result.Usage.OutputTokens != 5 || result.Usage.TotalTokens != 17 {
+		result.Usage.OutputTokens != 5 || result.Usage.ReasoningTokens != 3 || result.Usage.TotalTokens != 17 {
 		t.Fatalf("JSON usage = %#v", result.Usage)
 	}
 }

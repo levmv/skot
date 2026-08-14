@@ -124,6 +124,12 @@ func New(config Config) (*Backend, error) {
 	}, nil
 }
 
+// ProjectModelItems keeps all runtime-owned items because signed thinking stays
+// replayable for the whole provider epoch.
+func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
+	return items
+}
+
 func (backend *Backend) Info() agent.ModelInfo {
 	return agent.ModelInfo{
 		Backend: backend.backendID(), Provider: backend.provider, Model: backend.model,
@@ -182,17 +188,8 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, decodeHTTPError(backend.provider, backend.model, response)
 	}
 
-	readCtx, stopReading := context.WithCancel(ctx)
-	defer stopReading()
-	reader := newSSEReader(response.Body)
-	readResults := readSSE(readCtx, reader)
-	var idleTimer *time.Timer
-	var idle <-chan time.Time
-	if request.StreamIdleTimeout > 0 {
-		idleTimer = time.NewTimer(request.StreamIdleTimeout)
-		idle = idleTimer.C
-		defer idleTimer.Stop()
-	}
+	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
+	defer stream.Close()
 	blocks := make(map[int]*streamBlock)
 	var usage usageAccumulator
 	var stopReason string
@@ -200,35 +197,11 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	limited := false
 	terminal := false
 	for !terminal {
-		var read sseReadResult
-		select {
-		case value, ok := <-readResults:
-			if !ok {
-				if ctx.Err() != nil {
-					return agent.ModelResponse{}, ctx.Err()
-				}
-				return agent.ModelResponse{}, errors.New("provider stream reader stopped without a result")
-			}
-			read = value
-			if idleTimer != nil {
-				if !idleTimer.Stop() {
-					select {
-					case <-idleTimer.C:
-					default:
-					}
-				}
-				idleTimer.Reset(request.StreamIdleTimeout)
-			}
-		case <-idle:
-			return agent.ModelResponse{}, fmt.Errorf("%w after %s", agent.ErrModelStreamIdle, request.StreamIdleTimeout)
-		case <-ctx.Done():
-			return agent.ModelResponse{}, ctx.Err()
-		}
-		payload, readErr := read.payload, read.err
+		payload, readErr := stream.Next()
 		if errors.Is(readErr, io.EOF) {
 			return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages stream ended before message_stop", backend.provider)
 		}
-		if errors.Is(readErr, errSSETokenTooLarge) {
+		if errors.Is(readErr, modelhttp.ErrEventTooLarge) {
 			limited = true
 			break
 		}
@@ -322,15 +295,42 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		stopReason = agent.StopReasonOutputLimit
 	} else if strings.TrimSpace(stopReason) == "" {
 		return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages stream ended without a stop reason", backend.provider)
+	} else {
+		normalized, err := backend.normalizeStopReason(stopReason)
+		if err != nil {
+			return agent.ModelResponse{}, err
+		}
+		stopReason = normalized
 	}
 	items, err := backend.responseItems(blocks, limited)
 	if err != nil {
 		return agent.ModelResponse{}, err
 	}
-	if len(items) == 0 && !limited && !strings.EqualFold(strings.TrimSpace(stopReason), "refusal") {
+	if len(items) == 0 && !limited && !agent.IsIncompleteStopReason(stopReason) {
 		return agent.ModelResponse{}, errors.New("messages response returned no output items")
 	}
 	return agent.ModelResponse{Items: items, Usage: usage.modelUsage(), StopReason: stopReason}, nil
+}
+
+// stopReasons is the closed set of Anthropic Messages stop reasons Skot
+// interprets. A finished turn collapses to one value, while a truncated or
+// blocked turn keeps the provider word the user is shown.
+var stopReasons = map[string]string{
+	"end_turn":                      "stop",
+	"stop_sequence":                 "stop",
+	"tool_use":                      "tool_calls",
+	"max_tokens":                    "max_tokens",
+	"model_context_window_exceeded": "model_context_window_exceeded",
+	"pause_turn":                    "pause_turn",
+	"refusal":                       "refusal",
+}
+
+func (backend *Backend) normalizeStopReason(reason string) (string, error) {
+	normalized, known := stopReasons[strings.ToLower(strings.TrimSpace(reason))]
+	if !known {
+		return "", modelhttp.UnsupportedCompletionReasonError(backend.provider, reason)
+	}
+	return normalized, nil
 }
 
 func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool) ([]agent.Item, error) {
@@ -421,10 +421,10 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	var envelope struct {
 		Error *apiError `json:"error"`
 	}
-	message, code := "", ""
+	message, errorType := "", ""
 	if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
 		message = strings.TrimSpace(envelope.Error.Message)
-		code = strings.TrimSpace(envelope.Error.Type)
+		errorType = strings.TrimSpace(envelope.Error.Type)
 	}
 	if message == "" {
 		message = strings.TrimSpace(string(body))
@@ -434,7 +434,7 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	}
 	return modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
 		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
-		Message: message, Code: code, RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		Message: message, Type: errorType, RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
 	})
 }
 

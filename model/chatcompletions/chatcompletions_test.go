@@ -37,7 +37,7 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"checking \"},\"finish_reason\":null}]}\r\n\r\n")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hel\"},\"finish_reason\":null}]}\r\n\r\n")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\r\n\r\n")
-		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4}}}\r\n\r\n")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4},\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\r\n\r\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\r\n\r\n")
 	}))
 	defer server.Close()
@@ -69,7 +69,9 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 	if response.StopReason != "stop" {
 		t.Fatalf("stop reason = %q", response.StopReason)
 	}
-	if response.Usage != (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, TotalTokens: 17}) {
+	if response.Usage != (agent.ModelUsage{
+		InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17,
+	}) {
 		t.Fatalf("usage = %#v", response.Usage)
 	}
 	if got := response.Items; !reflect.DeepEqual(got, []agent.Item{
@@ -288,19 +290,22 @@ func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	owned := &agent.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}
+	items := []agent.Item{
+		{Kind: agent.ItemUserText, Text: "first"},
+		{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool reasoning"},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+			ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`,
+		}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+		{Kind: agent.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain reasoning"},
+		{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
+		{Kind: agent.ItemUserText, Text: "second"},
+	}
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_deepseek",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "first"},
-			{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: &agent.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}, Text: "tool reasoning"},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
-				ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`,
-			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
-			{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
-			{Kind: agent.ItemUserText, Text: "second"},
-		},
-		Tools: []agent.ToolSpec{{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Items:         items,
+		Tools:         []agent.ToolSpec{{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -308,8 +313,11 @@ func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
 	if len(request.Messages) != 5 {
 		t.Fatalf("messages = %#v", request.Messages)
 	}
-	if request.Messages[1].ReasoningContent != "tool reasoning" {
-		t.Fatalf("deepseek reasoning was stripped: %#v", request.Messages[1])
+	if request.Messages[1].ReasoningContent != "tool reasoning" || request.Messages[3].ReasoningContent != "" {
+		t.Fatalf("deepseek reasoning projection = %#v", request.Messages)
+	}
+	if len(items) != 7 || items[4].Kind != agent.ItemReasoning || items[4].Text != "plain reasoning" {
+		t.Fatalf("caller items were mutated: %#v", items)
 	}
 }
 
@@ -363,16 +371,21 @@ func TestBuildRequestDoesNotInferOptionalFieldsFromProviderName(t *testing.T) {
 func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 	for _, test := range []struct {
 		name         string
+		effort       string
 		encoding     ReasoningEffortEncoding
 		wantTopLevel string
 		wantNested   string
+		wantThinking string
 	}{
-		{name: "top-level", encoding: ReasoningEffortTopLevel, wantTopLevel: "high"},
-		{name: "nested", encoding: ReasoningEffortNested, wantNested: "high"},
+		{name: "top-level", effort: "high", encoding: ReasoningEffortTopLevel, wantTopLevel: "high"},
+		{name: "nested", effort: "high", encoding: ReasoningEffortNested, wantNested: "high"},
+		{name: "thinking off", effort: "off", encoding: ReasoningEffortThinking, wantThinking: "disabled"},
+		{name: "thinking high", effort: "high", encoding: ReasoningEffortThinking, wantTopLevel: "high", wantThinking: "enabled"},
+		{name: "thinking max", effort: "max", encoding: ReasoningEffortThinking, wantTopLevel: "max", wantThinking: "enabled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			backend, err := New(Config{
-				Provider: "test", Model: "model", ReasoningEffort: " HIGH ", Traits: RouteTraits{ReasoningEffort: test.encoding},
+				Provider: "test", Model: "model", ReasoningEffort: " " + strings.ToUpper(test.effort) + " ", Traits: RouteTraits{ReasoningEffort: test.encoding},
 				BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
 			})
 			if err != nil {
@@ -392,7 +405,14 @@ func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 			if gotNested != test.wantNested {
 				t.Fatalf("nested effort = %q", gotNested)
 			}
-			if backend.Info().ReasoningEffort != "high" {
+			gotThinking := ""
+			if request.Thinking != nil {
+				gotThinking = request.Thinking.Type
+			}
+			if gotThinking != test.wantThinking {
+				t.Fatalf("thinking = %q", gotThinking)
+			}
+			if backend.Info().ReasoningEffort != test.effort {
 				t.Fatalf("model info = %#v", backend.Info())
 			}
 		})
@@ -509,8 +529,32 @@ func TestCompleteReturnsProviderHTTPError(t *testing.T) {
 	}
 	var providerErr *agent.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRateLimit ||
-		providerErr.Code != "" || !providerErr.Retryable || providerErr.RetryAfter != 7*time.Second {
+		providerErr.Code != "" || providerErr.Type != "rate_limit" || !providerErr.Retryable || providerErr.RetryAfter != 7*time.Second {
 		t.Fatalf("429 provider metadata = %#v", providerErr)
+	}
+}
+
+func TestCompleteClassifiesDeepSeekQuotaCodeBeforeHTTP429(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(writer, `{"error":{"message":"billing detail","type":"rate_limit_error","code":"insufficient_quota"}}`)
+	}))
+	defer server.Close()
+
+	backend, err := New(Config{
+		Provider: "deepseek", Model: "deepseek-v4-flash", BaseURL: server.URL,
+		Authorizer: BearerToken("secret"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = backend.Complete(context.Background(), agent.ModelRequest{
+		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	}, nil)
+	var providerErr *agent.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable ||
+		providerErr.Code != "insufficient_quota" || providerErr.Type != "rate_limit_error" {
+		t.Fatalf("quota provider metadata = %#v (%v)", providerErr, err)
 	}
 }
 
@@ -545,6 +589,43 @@ func TestCompleteTimesOutIdleStream(t *testing.T) {
 	}, nil)
 	if !errors.Is(err, agent.ErrModelStreamIdle) || !errors.Is(err, agent.ErrProviderFailure) {
 		t.Fatalf("idle stream error = %v", err)
+	}
+}
+
+// Gateways such as OpenRouter answer a slow model with comment keep-alives
+// only. They are stream activity, so the idle deadline must not fire while
+// they arrive.
+func TestCompleteKeepsStreamAliveThroughComments(t *testing.T) {
+	interval := 10 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		flusher := writer.(http.Flusher)
+		flusher.Flush()
+		for range 6 {
+			select {
+			case <-time.After(interval):
+			case <-request.Context().Done():
+				return
+			}
+			_, _ = io.WriteString(writer, ": OPENROUTER PROCESSING\n\n")
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	backend := newTestBackend(t, server.URL)
+	response, err := backend.Complete(context.Background(), agent.ModelRequest{
+		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 3 * interval,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 1 || response.Items[0].Text != "hi" || response.StopReason != "stop" {
+		t.Fatalf("response = %#v", response)
 	}
 }
 
@@ -584,4 +665,204 @@ func newTestBackend(t *testing.T, baseURL string) *Backend {
 		t.Fatal(err)
 	}
 	return backend
+}
+
+func projectionTestBackend(t *testing.T, policy ReasoningReplayPolicy) *Backend {
+	t.Helper()
+	backend, err := New(Config{
+		Provider:   "deepseek",
+		Model:      "deepseek-v4-flash",
+		BaseURL:    "http://example.invalid/v1",
+		Authorizer: BearerToken("unused"),
+		Traits:     RouteTraits{ReasoningReplay: policy},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return backend
+}
+
+func projectionTestHistory() []agent.Item {
+	owned := &agent.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}
+	return []agent.Item{
+		{Kind: agent.ItemUserText, Text: "first"},
+		{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool thinking"},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{}`}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+		{Kind: agent.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain thinking"},
+		{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
+		{Kind: agent.ItemUserText, Text: "second"},
+		{Kind: agent.ItemReasoning, ResponseID: "response_3", ProviderContext: owned, Text: "current thinking"},
+		{Kind: agent.ItemAssistantText, ResponseID: "response_3", Text: "answer"},
+	}
+}
+
+func TestProjectModelItemsAppliesRouteReplayPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy ReasoningReplayPolicy
+		want   []string
+	}{
+		{name: "tool turns keep reasoning of tool-call turns only", policy: ReasoningReplayToolTurns, want: []string{"tool thinking"}},
+		{name: "current turn keeps reasoning after the last user message", policy: ReasoningReplayCurrentTurn, want: []string{"current thinking"}},
+		{name: "zero policy replays no reasoning", policy: "", want: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			history := projectionTestHistory()
+			projected := projectionTestBackend(t, test.policy).ProjectModelItems(append([]agent.Item(nil), history...))
+			var got []string
+			for _, item := range projected {
+				if item.Kind == agent.ItemReasoning {
+					got = append(got, item.Text)
+				}
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("replayed reasoning = %q, want %q", got, test.want)
+			}
+			for index := range got {
+				if got[index] != test.want[index] {
+					t.Fatalf("replayed reasoning = %q, want %q", got, test.want)
+				}
+			}
+			if len(projected) != len(history)-(3-len(test.want)) {
+				t.Fatalf("projected %d of %d items", len(projected), len(history))
+			}
+		})
+	}
+}
+
+func TestProviderStateContractVersionsEachReplayPolicy(t *testing.T) {
+	tests := []struct {
+		policy ReasoningReplayPolicy
+		want   agent.ProviderStateContract
+	}{
+		{policy: ReasoningReplayToolTurns, want: "chat_completions.reasoning_replay.tool_turns.v2"},
+		{policy: ReasoningReplayCurrentTurn, want: "chat_completions.reasoning_replay.current_turn.v1"},
+		{policy: "", want: ""},
+	}
+	for _, test := range tests {
+		if got := (RouteTraits{ReasoningReplay: test.policy}).ProviderStateContract(); got != test.want {
+			t.Fatalf("contract for %q = %q, want %q", test.policy, got, test.want)
+		}
+	}
+}
+
+// An uninterpretable completion reason must not pass for a finished answer. A
+// retry would only fetch the same uninterpretable value.
+func TestCompleteRejectsUnknownFinishReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"guardrail_intervened\"}]}\n\n")
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend := newTestBackend(t, server.URL)
+	_, err := backend.Complete(context.Background(), agent.ModelRequest{
+		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	}, nil)
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable {
+		t.Fatalf("unknown finish reason error = %v / %#v", err, providerErr)
+	}
+	if !strings.Contains(err.Error(), "guardrail_intervened") {
+		t.Fatalf("error does not name the reason: %v", err)
+	}
+}
+
+func TestCompleteNormalizesDoneOnlyTerminalToStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n")
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend := newTestBackend(t, server.URL)
+	response, err := backend.Complete(context.Background(), agent.ModelRequest{
+		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != "stop" || len(response.Items) != 1 || response.Items[0].Text != "done" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestNormalizeFinishReasonCollapsesKnownSynonyms(t *testing.T) {
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	tests := []struct{ raw, want string }{
+		{raw: "stop", want: "stop"},
+		{raw: "end_turn", want: "stop"},
+		{raw: "TOOL_CALLS", want: "tool_calls"},
+		{raw: "function_call", want: "tool_calls"},
+		{raw: "length", want: "length"},
+		{raw: "insufficient_system_resource", want: "insufficient_system_resource"},
+	}
+	for _, test := range tests {
+		got, err := backend.normalizeFinishReason(test.raw)
+		if err != nil || got != test.want {
+			t.Fatalf("normalize(%q) = %q, %v; want %q", test.raw, got, err, test.want)
+		}
+	}
+}
+
+// A filtered or interrupted answer legitimately carries no content. Rejecting
+// it would turn a deliberate incomplete result into a retried request failure.
+func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {
+	for _, reason := range []string{"content_filter", "insufficient_system_resource", "length"} {
+		t.Run(reason, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprintf(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":%q}]}\n\n", reason)
+				_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			backend := newTestBackend(t, server.URL)
+			response, err := backend.Complete(context.Background(), agent.ModelRequest{
+				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+			}, nil)
+			if err != nil {
+				t.Fatalf("empty %s response = %v", reason, err)
+			}
+			if len(response.Items) != 0 || response.StopReason != reason {
+				t.Fatalf("response = %#v", response)
+			}
+			if !agent.IsIncompleteStopReason(response.StopReason) {
+				t.Fatalf("%q is not an incomplete stop reason", response.StopReason)
+			}
+		})
+	}
+}
+
+func TestCompleteRejectsEmptyFinishedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	backend := newTestBackend(t, server.URL)
+	if _, err := backend.Complete(context.Background(), agent.ModelRequest{
+		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	}, nil); err == nil || !strings.Contains(err.Error(), "no output items") {
+		t.Fatalf("empty finished response error = %v", err)
+	}
+}
+
+// A declaration that offers "off" must also pick an encoding able to express
+// it, otherwise the value would be sent as an effort the provider never defined.
+func TestNewRejectsOffWithoutTheThinkingEncoding(t *testing.T) {
+	_, err := New(Config{
+		Provider: "deepseek", Model: "deepseek-v4-flash", BaseURL: "http://example.invalid/v1",
+		Authorizer: BearerToken("unused"), ReasoningEffort: "off",
+		Traits: RouteTraits{ReasoningEffort: ReasoningEffortTopLevel},
+	})
+	if err == nil || !strings.Contains(err.Error(), "thinking") {
+		t.Fatalf("error = %v", err)
+	}
 }

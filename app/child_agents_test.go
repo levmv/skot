@@ -359,11 +359,22 @@ func TestChildRunsFromJournalUsesTheFinalModelResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 1 || runs[0].Answer != "" || runs[0].Usage.TotalTokens != 12 {
+	if len(runs) != 1 || runs[0].Answer != "" || runs[0].Usage.TotalTokens != 12 || runs[0].Usage.ReasoningTokens != 5 {
 		t.Fatalf("replayed child runs = %#v", runs)
 	}
 	if reply := assistantReply([]agent.Item{{Kind: agent.ItemAssistantText, Text: "first"}, {Kind: agent.ItemAssistantText, Text: "second"}}); reply != "first\nsecond" {
 		t.Fatalf("multi-part assistant reply = %q", reply)
+	}
+}
+
+func TestSubtractModelUsageIncludesReasoningTokens(t *testing.T) {
+	got := subtractModelUsage(
+		agent.ModelUsage{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 12, ReasoningTokens: 7, TotalTokens: 32},
+		agent.ModelUsage{InputTokens: 8, CachedInputTokens: 2, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 13},
+	)
+	want := (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 3, OutputTokens: 7, ReasoningTokens: 4, TotalTokens: 19})
+	if got != want {
+		t.Fatalf("usage delta = %#v, want %#v", got, want)
 	}
 }
 
@@ -518,12 +529,12 @@ func (model *childReplayModel) Complete(context.Context, agent.ModelRequest, fun
 				{Kind: agent.ItemAssistantText, Text: "draft"},
 				{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "read", RawArguments: `{}`}},
 			},
-			Usage: agent.ModelUsage{TotalTokens: 5},
+			Usage: agent.ModelUsage{ReasoningTokens: 2, TotalTokens: 5},
 		}, nil
 	}
 	return agent.ModelResponse{
 		Items: []agent.Item{{Kind: agent.ItemAssistantText}},
-		Usage: agent.ModelUsage{TotalTokens: 7},
+		Usage: agent.ModelUsage{ReasoningTokens: 3, TotalTokens: 7},
 	}, nil
 }
 
@@ -676,3 +687,5 @@ func containsChildTestName(values []string, name string) bool {
 	}
 	return false
 }
+
+func (model *childReplayModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }

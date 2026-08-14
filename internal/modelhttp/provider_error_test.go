@@ -36,7 +36,7 @@ func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.
 			if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) {
 				t.Fatalf("error = %v", err)
 			}
-			if providerErr.Kind != test.wantKind || providerErr.Code != "route_code" ||
+			if providerErr.Kind != test.wantKind || providerErr.Code != "route_code" || providerErr.Type != "" ||
 				providerErr.Retryable != test.retryable || providerErr.RetryAfter != 3*time.Second {
 				t.Fatalf("metadata = %#v", providerErr)
 			}
@@ -59,18 +59,34 @@ func TestErrorCodeAcceptsOnlyScalarWireCodes(t *testing.T) {
 	}
 }
 
-func TestProviderCodeRefinementCanTurnHTTP429QuotaIntoNonRetryableFailure(t *testing.T) {
-	original := providerErrorKindsByCode
-	providerErrorKindsByCode = map[string]map[string]agent.ProviderErrorKind{
-		"test": {"quota_exhausted": agent.ProviderErrorQuota},
+func TestDeepSeekStructuredQuotaSignalRefinesHTTP429(t *testing.T) {
+	for _, test := range []struct {
+		name, code, errorType string
+	}{
+		{name: "code", code: "insufficient_quota"},
+		{name: "type", errorType: "INSUFFICIENT_QUOTA"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := NewProviderError(ProviderErrorDetails{
+				Provider: "deepseek", Model: "deepseek-v4-flash", StatusCode: http.StatusTooManyRequests,
+				Code: test.code, Type: test.errorType, Message: "opaque provider detail",
+			})
+			var providerErr *agent.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable ||
+				providerErr.Code != strings.ToLower(test.code) || providerErr.Type != strings.ToLower(test.errorType) {
+				t.Fatalf("metadata = %#v", providerErr)
+			}
+		})
 	}
-	t.Cleanup(func() { providerErrorKindsByCode = original })
+}
+
+func TestDeepSeekUnknownHTTP429SignalRemainsRetryableRateLimit(t *testing.T) {
 	err := NewProviderError(ProviderErrorDetails{
-		Provider: "test", Model: "model", StatusCode: http.StatusTooManyRequests,
-		Code: "quota_exhausted", Message: "limit reached",
+		Provider: "deepseek", Model: "deepseek-v4-flash", StatusCode: http.StatusTooManyRequests,
+		Code: "requests_too_fast", Type: "rate_limit_error", Message: "opaque provider detail",
 	})
 	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable {
+	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRateLimit || !providerErr.Retryable {
 		t.Fatalf("metadata = %#v", providerErr)
 	}
 }

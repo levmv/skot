@@ -62,8 +62,8 @@ func SandboxedBashCommand(command, workdir string, sandbox Sandbox) (*exec.Cmd, 
 }
 
 // DefaultToolHomeRoot returns the disposable payload-data root. It is kept
-// outside Skot's state directory so workspace isolation can grant it without
-// exposing supervisor-owned state.
+// outside Skot's private data directory so workspace isolation can grant it
+// without exposing supervisor-owned state.
 func DefaultToolHomeRoot() (string, error) {
 	root, err := os.UserCacheDir()
 	if err != nil {

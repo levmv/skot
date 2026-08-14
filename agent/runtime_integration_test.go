@@ -101,3 +101,5 @@ func (journal *memoryJournal) snapshot() []agent.Record {
 	}
 	return records
 }
+
+func (echoModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }

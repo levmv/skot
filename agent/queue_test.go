@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -89,6 +90,85 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 		t.Fatalf("delivered events = %d", delivered)
 	}
 	assertAuthoritativeEvents(t, capturedEvents, journal.snapshot())
+}
+
+func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
+	journal := &memoryJournal{}
+	seedModel := &scriptedModel{steps: []modelStep{
+		directModelResponse("old answer"),
+		directModelResponse("recent answer"),
+	}}
+	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal})
+	oldInput := strings.Repeat("old context ", 1_800)
+	recentInput := strings.Repeat("recent context ", 900)
+	if _, err := seedRuntime.Run(context.Background(), oldInput, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seedRuntime.Run(context.Background(), recentInput, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	queuedInput := strings.Repeat("queued context ", 1_200)
+	normalizedQueuedInput := strings.TrimSpace(queuedInput)
+	model := &scriptedModel{
+		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		steps: []modelStep{
+			func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				close(firstStarted)
+				<-releaseFirst
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+			},
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				if request.Instructions != compactionSystemInstructions || !strings.Contains(request.Items[0].Text, "old context") ||
+					!strings.Contains(request.Items[0].Text, "recent context") || strings.Contains(request.Items[0].Text, "current work") ||
+					strings.Contains(request.Items[0].Text, "queued context") {
+					t.Fatalf("model-boundary compaction request = %#v", request)
+				}
+				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
+			},
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				if request.Summary != "older work summarized" {
+					t.Fatalf("summary = %q", request.Summary)
+				}
+				if len(request.Items) < 2 || request.Items[0].Text != "current work" || request.Items[len(request.Items)-1].Text != normalizedQueuedInput {
+					t.Fatalf("post-compaction request = %#v", request.Items)
+				}
+				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "steered answer"}}, StopReason: "stop"}, nil
+			},
+		},
+	}
+	runtime := newTestRuntime(t, Config{
+		Model: model, Journal: journal,
+		Tools: []Tool{{
+			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+		}},
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.Run(context.Background(), "current work", nil)
+		done <- err
+	}()
+	waitForSignal(t, firstStarted, "first model request")
+	if err := runtime.QueueInput(queuedInput); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseFirst)
+	if err := waitForError(t, done); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CompactionCount != 1 || state.Compaction == nil || len(state.ActiveRuns) != 0 {
+		t.Fatalf("replayed state = %#v", state)
+	}
+	if model.next != 3 {
+		t.Fatalf("model requests = %d, want initial request, compaction, and steered request", model.next)
+	}
 }
 
 func TestQueuedInputAfterFinalBoundaryRemainsClaimable(t *testing.T) {

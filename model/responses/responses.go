@@ -110,6 +110,12 @@ func New(config Config) (*Backend, error) {
 	}, nil
 }
 
+// ProjectModelItems keeps all runtime-owned items because Responses replays all
+// encrypted reasoning in the current provider epoch.
+func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
+	return items
+}
+
 func (backend *Backend) Info() agent.ModelInfo {
 	return agent.ModelInfo{
 		Backend: backend.backendID(), Provider: backend.provider, Model: backend.model,
@@ -163,50 +169,16 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, decodeHTTPError(backend.provider, backend.model, response)
 	}
 
-	readCtx, stopReading := context.WithCancel(ctx)
-	defer stopReading()
-	reader := newSSEReader(response.Body)
-	readResults := readSSE(readCtx, reader)
-	var idleTimer *time.Timer
-	var idle <-chan time.Time
-	if request.StreamIdleTimeout > 0 {
-		idleTimer = time.NewTimer(request.StreamIdleTimeout)
-		idle = idleTimer.C
-		defer idleTimer.Stop()
-	}
+	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
+	defer stream.Close()
 	var text, reasoning strings.Builder
 	completionBytes := 0
 	for {
-		var read sseReadResult
-		select {
-		case value, ok := <-readResults:
-			if !ok {
-				if ctx.Err() != nil {
-					return agent.ModelResponse{}, ctx.Err()
-				}
-				return agent.ModelResponse{}, errors.New("provider stream reader stopped without a result")
-			}
-			read = value
-			if idleTimer != nil {
-				if !idleTimer.Stop() {
-					select {
-					case <-idleTimer.C:
-					default:
-					}
-				}
-				idleTimer.Reset(request.StreamIdleTimeout)
-			}
-		case <-idle:
-			return agent.ModelResponse{}, fmt.Errorf("%w after %s", agent.ErrModelStreamIdle, request.StreamIdleTimeout)
-		case <-ctx.Done():
-			return agent.ModelResponse{}, ctx.Err()
-		}
-
-		payload, readErr := read.payload, read.err
+		payload, readErr := stream.Next()
 		if errors.Is(readErr, io.EOF) {
 			return agent.ModelResponse{}, fmt.Errorf("%s Responses stream ended before a terminal event", backend.provider)
 		}
-		if errors.Is(readErr, errSSETokenTooLarge) || len(payload) > backend.maxCompletionBytes-completionBytes {
+		if errors.Is(readErr, modelhttp.ErrEventTooLarge) || len(payload) > backend.maxCompletionBytes-completionBytes {
 			return partialStreamResponse(text.String(), reasoning.String()), nil
 		}
 		if readErr != nil {
@@ -228,8 +200,14 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			if event.Response == nil {
 				return agent.ModelResponse{}, fmt.Errorf("%s Responses terminal event has no response", backend.provider)
 			}
+			eventStatus := strings.TrimPrefix(event.Type, "response.")
 			if event.Response.Status == "" {
-				event.Response.Status = strings.TrimPrefix(event.Type, "response.")
+				event.Response.Status = eventStatus
+			} else if event.Response.Status != eventStatus {
+				return agent.ModelResponse{}, fmt.Errorf(
+					"%s Responses terminal event %q carries status %q",
+					backend.provider, event.Type, event.Response.Status,
+				)
 			}
 			return backend.parseResponse(*event.Response)
 		case "response.failed":
@@ -278,11 +256,11 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	var envelope struct {
 		Error *apiError `json:"error"`
 	}
-	message := ""
-	code := ""
+	message, code, errorType := "", "", ""
 	if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
 		message = envelope.Error.message()
 		code = modelhttp.ErrorCode(envelope.Error.Code)
+		errorType = strings.TrimSpace(envelope.Error.Type)
 	}
 	if message == "" {
 		message = strings.TrimSpace(string(body))
@@ -292,7 +270,7 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	}
 	return modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
 		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
-		Message: message, Code: code,
+		Message: message, Code: code, Type: errorType,
 		RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
 	})
 }

@@ -160,26 +160,29 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	model := &scriptedModel{
 		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 				if request.Instructions != compactionSystemInstructions || len(request.Tools) != 0 || len(request.Items) != 1 {
 					t.Fatalf("automatic compaction request = %#v", request)
 				}
 				if !strings.Contains(request.Items[0].Text, "old context") || strings.Contains(request.Items[0].Text, "recent question") {
 					t.Fatalf("automatic compaction input = %q", request.Items[0].Text)
 				}
+				emit(ModelStreamEvent{Kind: EventReasoningSummaryDelta, Text: "internal reasoning"})
+				emit(ModelStreamEvent{Kind: EventTextDelta, Text: "Old work was summarized."})
 				return ModelResponse{
 					Items:      []Item{{Kind: ItemAssistantText, Text: "Old work was summarized."}},
 					Usage:      ModelUsage{InputTokens: 8_000, OutputTokens: 20, TotalTokens: 8_020},
 					StopReason: "stop",
 				}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 				if request.Summary != "Old work was summarized." {
 					t.Fatalf("summary = %q", request.Summary)
 				}
 				if len(request.Items) != 3 || request.Items[0].Text != "recent question" || request.Items[2].Text != "new question" {
 					t.Fatalf("post-compaction items = %#v", request.Items)
 				}
+				emit(ModelStreamEvent{Kind: EventTextDelta, Text: "final answer"})
 				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
 			},
 		},
@@ -204,6 +207,18 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	}
 	if modelAttempts != 2 {
 		t.Fatalf("model attempts = %d, want compaction plus final request; events=%#v", modelAttempts, events)
+	}
+	textDeltas := make([]string, 0, 1)
+	for _, event := range events {
+		if event.Kind == EventTextDelta {
+			textDeltas = append(textDeltas, event.Text)
+		}
+		if event.Kind == EventReasoningSummaryDelta {
+			t.Fatalf("compaction reasoning leaked into run events: %#v", events)
+		}
+	}
+	if len(textDeltas) != 1 || textDeltas[0] != "final answer" {
+		t.Fatalf("streamed answer deltas = %q", textDeltas)
 	}
 	assertAuthoritativeEvents(t, events, journal.snapshot())
 	state, err := Replay(journal.snapshot())
@@ -374,6 +389,40 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	}
 	if _, err := planCompaction(unfinishedState, 1); err == nil || !strings.Contains(err.Error(), "unfinished") {
 		t.Fatalf("unfinished plan error = %v", err)
+	}
+}
+
+func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
+	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, journal, RecordRunStarted, RunStartedRecord{RunID: "run-active"})
+	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: "run-active", Text: "active input"})
+	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: "run-active", Text: "active steering"})
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planCompactionForModelBoundary(state, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.CoveredThroughSequence != state.Blocks[1].EndSequence || plan.FirstVerbatimSequence != state.Blocks[2].StartSequence {
+		t.Fatalf("active-boundary plan = %#v", plan)
+	}
+	unsafe := ContextCompactedRecord{
+		CoveredThroughSequence: state.Blocks[2].EndSequence,
+		FirstVerbatimSequence:  state.Blocks[3].StartSequence,
+		Summary:                "would swallow active input",
+	}
+	if err := validateCompactionBoundary(state, unsafe, state.LastSequence+1, true); err == nil || !strings.Contains(err.Error(), "unfinished") {
+		t.Fatalf("active block compaction error = %v", err)
 	}
 }
 

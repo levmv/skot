@@ -1086,3 +1086,13 @@ func (model applicationDeepseekModel) Info() agent.ModelInfo {
 func (applicationDeepseekModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	return agent.ModelResponse{}, errors.New("unused")
 }
+
+func (applicationModelInfoModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+
+func (model profileCaptureModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+
+func (applicationTestModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+
+func (applicationReplyModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+
+func (applicationDeepseekModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }

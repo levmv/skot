@@ -134,3 +134,5 @@ func (model configurationModel) Info() ModelInfo { return model.info }
 func (model configurationModel) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 	return model.complete(ctx, request, emit)
 }
+
+func (model configurationModel) ProjectModelItems(items []Item) []Item { return items }

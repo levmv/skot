@@ -53,6 +53,38 @@ func (state State) hasUnfinishedWork() bool {
 	return len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0
 }
 
+// firstUnfinishedBlock returns the oldest block owned by an active run. Model
+// boundary maintenance may rewrite the projection of older completed blocks,
+// but it must never summarize or prune any part of the run in progress.
+func (state State) firstUnfinishedBlock() (int, bool) {
+	if len(state.ActiveRuns) == 0 {
+		return 0, false
+	}
+	active := make(map[string]struct{}, len(state.ActiveRuns))
+	for _, runID := range state.ActiveRuns {
+		active[runID] = struct{}{}
+	}
+	for index, block := range state.Blocks {
+		if _, unfinished := active[block.RunID]; unfinished {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func boundaryPrecedesUnfinishedWork(state State, throughSequence uint64) bool {
+	if !state.hasUnfinishedWork() {
+		return true
+	}
+	first, ok := state.firstUnfinishedBlock()
+	if !ok {
+		// An active run without an input block is not a boundary at which context
+		// maintenance can prove that it leaves unfinished work untouched.
+		return false
+	}
+	return throughSequence < state.Blocks[first].StartSequence
+}
+
 func (state State) VerbatimItems() []Item {
 	return state.verbatimItems(true)
 }
@@ -89,7 +121,7 @@ func validateCompactionBoundary(state State, payload ContextCompactedRecord, rec
 	if strings.TrimSpace(payload.Summary) == "" || payload.CoveredThroughSequence == 0 || payload.FirstVerbatimSequence == 0 || payload.CoveredThroughSequence >= payload.FirstVerbatimSequence || payload.FirstVerbatimSequence >= recordSequence {
 		return fmt.Errorf("invalid context compaction at sequence %d", recordSequence)
 	}
-	if unfinished {
+	if unfinished && !boundaryPrecedesUnfinishedWork(state, payload.CoveredThroughSequence) {
 		return fmt.Errorf("context compacted while work was unfinished at sequence %d", recordSequence)
 	}
 	firstIndex := -1

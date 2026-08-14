@@ -438,6 +438,12 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 		if boundaryErr != nil {
 			return runtime.finish(ctx, live, emit, runID, "", RunFailed, boundaryErr)
 		}
+		state, _, contextErr := runtime.prepareContext(ctx, live.state, "", emit)
+		if contextErr != nil {
+			status, contextErr := runFailure(ctx, contextErr)
+			return runtime.finish(ctx, live, emit, runID, "", status, contextErr)
+		}
+		live = reducerFromState(state)
 		response, callErr := runtime.complete(ctx, runID, live.state, emit)
 		if callErr != nil {
 			status, callErr := runFailure(ctx, callErr)
@@ -537,12 +543,19 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunCancelled, ctx.Err())
 	}
 
+	toolLimitInstructions := live.state.Configured.ModelContext.ToolLimitInstructions
+	state, _, contextErr := runtime.prepareContextForRequest(ctx, live.state, toolLimitInstructions, false, emit)
+	if contextErr != nil {
+		status, contextErr := runFailure(ctx, contextErr)
+		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, contextErr)
+	}
+	live = reducerFromState(state)
 	request, err := runtime.modelRequest(live.state)
 	if err != nil {
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunFailed, err)
 	}
 	request.Tools = nil
-	request.Items = append(request.Items, Item{Kind: ItemUserText, Text: live.state.Configured.ModelContext.ToolLimitInstructions})
+	request.Items = append(request.Items, Item{Kind: ItemUserText, Text: toolLimitInstructions})
 	response, callErr := runtime.completeRequest(ctx, runID, request, emit)
 	if callErr != nil {
 		status, callErr := runFailure(ctx, callErr)
@@ -591,7 +604,7 @@ func (err *responseAcceptanceError) Error() string { return err.err.Error() }
 func (err *responseAcceptanceError) Unwrap() error { return err.err }
 
 func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *stateReducer, runID string, response ModelResponse, options responseCommitOptions) (committedModelResponse, error) {
-	incomplete := isIncompleteStopReason(response.StopReason)
+	incomplete := IsIncompleteStopReason(response.StopReason)
 	if incomplete || options.stripToolCalls {
 		response.Items = partialResponseItems(response.Items)
 	}
@@ -826,7 +839,7 @@ func (runtime *Runtime) modelRequest(state State) (ModelRequest, error) {
 		ProviderEpoch: state.Selection.Epoch,
 		Instructions:  state.Configured.ModelContext.Instructions,
 		Summary:       summary,
-		Items: projectOwnedModelItems(state.verbatimModelItems(), ProviderContext{
+		Items: runtime.projectModelItems(state.verbatimModelItems(), ProviderContext{
 			Backend: state.Selection.Backend,
 			Epoch:   state.Selection.Epoch,
 		}),
@@ -834,12 +847,14 @@ func (runtime *Runtime) modelRequest(state State) (ModelRequest, error) {
 	}, nil
 }
 
-func projectModelItems(items []Item, providerContext ProviderContext) []Item {
-	return projectOwnedModelItems(cloneItems(items), providerContext)
+// projectModelItems applies runtime ownership filtering before the adapter's
+// replay policy. Requests and context estimates share this projection.
+func (runtime *Runtime) projectModelItems(items []Item, providerContext ProviderContext) []Item {
+	return runtime.model.ProjectModelItems(projectOwnedModelItems(items, providerContext))
 }
 
-// projectOwnedModelItems consumes an already-owned item snapshot. Callers that
-// need to retain or share items must use projectModelItems instead.
+// projectOwnedModelItems consumes an already-owned item snapshot. Callers must
+// pass a disposable projection source (as the runtime does) or clone it first.
 func projectOwnedModelItems(items []Item, providerContext ProviderContext) []Item {
 	projected := items[:0]
 	for _, item := range items {

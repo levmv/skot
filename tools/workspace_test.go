@@ -272,3 +272,5 @@ func (inertJournal) Append(context.Context, agent.PendingRecord) (agent.Record, 
 }
 
 func (inertJournal) Records(context.Context) ([]agent.Record, error) { return nil, nil }
+
+func (inertModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }

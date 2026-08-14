@@ -59,3 +59,7 @@ func TestSupportedRouteDoesNotWrapItsBackend(t *testing.T) {
 		t.Fatal("supported route was wrapped with an unverified-route diagnostic")
 	}
 }
+
+func (model routeDiagnosticTestModel) ProjectModelItems(items []agent.Item) []agent.Item {
+	return items
+}

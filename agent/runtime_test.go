@@ -23,7 +23,7 @@ func TestRuntimeDirectResponse(t *testing.T) {
 			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "hel"})
 			return ModelResponse{
 				Items:      []Item{{Kind: ItemAssistantText, Text: "hello"}},
-				Usage:      ModelUsage{InputTokens: 9, OutputTokens: 2, TotalTokens: 11},
+				Usage:      ModelUsage{InputTokens: 9, OutputTokens: 2, ReasoningTokens: 1, TotalTokens: 11},
 				StopReason: "stop",
 			}, nil
 		},
@@ -56,7 +56,7 @@ func TestRuntimeDirectResponse(t *testing.T) {
 	if len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 {
 		t.Fatalf("replayed unfinished state = %#v", state)
 	}
-	if state.Usage.TotalTokens != 11 || state.Usage.InputTokens != 9 || state.Usage.OutputTokens != 2 {
+	if state.Usage.TotalTokens != 11 || state.Usage.InputTokens != 9 || state.Usage.OutputTokens != 2 || state.Usage.ReasoningTokens != 1 {
 		t.Fatalf("replayed usage = %#v", state.Usage)
 	}
 	if !hasEvent(events, EventTextDelta) || events[len(events)-1].Kind != EventRunFinished {
@@ -165,6 +165,109 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 		t.Fatalf("events = %#v", events)
 	}
 	assertAuthoritativeEvents(t, events, records)
+}
+
+func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
+	journal := &memoryJournal{}
+	seedModel := &scriptedModel{steps: []modelStep{directModelResponse("old answer")}}
+	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal})
+	oldInput := strings.Repeat("old context ", 2_400)
+	if _, err := seedRuntime.Run(context.Background(), oldInput, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`
+	model := &scriptedModel{
+		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		steps: []modelStep{
+			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+			},
+			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
+			},
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				if request.Instructions != compactionSystemInstructions || !strings.Contains(request.Items[0].Text, "old context") {
+					t.Fatalf("tool-limit compaction request = %#v", request)
+				}
+				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
+			},
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				if request.Summary != "older work summarized" || len(request.Tools) != 0 ||
+					request.Items[len(request.Items)-1].Text != toolLimitInstructions {
+					t.Fatalf("tool-limit final request = %#v", request)
+				}
+				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "best effort"}}, StopReason: "stop"}, nil
+			},
+		},
+	}
+	runtime := newTestRuntime(t, Config{
+		Model: model, Journal: journal, MaxToolIterations: 1,
+		Tools: []Tool{{
+			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+		}},
+	})
+	result, err := runtime.Run(context.Background(), "current work", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "best effort" || !result.ToolLimitReached || model.next != 4 {
+		t.Fatalf("result/model requests = %#v/%d", result, model.next)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CompactionCount != 1 || state.Compaction == nil {
+		t.Fatalf("compaction state = %#v", state)
+	}
+}
+
+func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
+	journal := &memoryJournal{}
+	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`
+	model := &scriptedModel{
+		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		steps: []modelStep{
+			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+			},
+			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
+			},
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				if len(request.Tools) != 0 || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
+					t.Fatalf("tool-limit final request = %#v", request)
+				}
+				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "fits without schemas"}}, StopReason: "stop"}, nil
+			},
+		},
+	}
+	runtime := newTestRuntime(t, Config{
+		Model: model, Journal: journal, MaxToolIterations: 1,
+		Tools: []Tool{{
+			Spec: ToolSpec{
+				Name: "inspect", Description: strings.Repeat("detailed tool documentation ", 1_200),
+				InputSchema: json.RawMessage(`{"type":"object"}`),
+			},
+			Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+		}},
+	})
+	result, err := runtime.Run(context.Background(), "inspect the current state", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "fits without schemas" || !result.ToolLimitReached || model.next != 3 {
+		t.Fatalf("result/model requests = %#v/%d", result, model.next)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CompactionCount != 0 {
+		t.Fatalf("tool-only overestimate triggered compaction: %#v", state.Compaction)
+	}
 }
 
 func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
@@ -289,10 +392,20 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	}
 }
 
-func TestIncompleteStopReasonsIncludeAnthropicContinuationReasons(t *testing.T) {
-	for _, reason := range []string{"refusal", "pause_turn", "model_context_window_exceeded"} {
-		if !isIncompleteStopReason(reason) {
+func TestIncompleteStopReasonsCoverTheNormalizedAdapterSet(t *testing.T) {
+	for _, reason := range []string{
+		"refusal", "pause_turn", "model_context_window_exceeded",
+		// A Responses answer may report an incomplete status with no documented
+		// cause, and DeepSeek reports its own inability to finish.
+		"incomplete", "insufficient_system_resource",
+	} {
+		if !IsIncompleteStopReason(reason) {
 			t.Errorf("stop reason %q is not incomplete", reason)
+		}
+	}
+	for _, reason := range []string{"stop", "tool_calls"} {
+		if IsIncompleteStopReason(reason) {
+			t.Errorf("stop reason %q is incomplete", reason)
 		}
 	}
 }
@@ -947,7 +1060,7 @@ func TestProjectModelItemsKeepsOnlyCurrentProviderReferences(t *testing.T) {
 			{Kind: "call_id", Backend: "backend.b", Epoch: "epoch_b", Data: json.RawMessage(`"b"`)},
 		}},
 	}}
-	projected := projectModelItems(items, ProviderContext{Backend: "backend.b", Epoch: "epoch_b"})
+	projected := projectOwnedModelItems(cloneItems(items), ProviderContext{Backend: "backend.b", Epoch: "epoch_b"})
 	if len(projected) != 1 || len(projected[0].ToolCall.ProviderReferences) != 1 || string(projected[0].ToolCall.ProviderReferences[0].Data) != `"b"` {
 		t.Fatalf("projected items = %#v", projected)
 	}
@@ -1340,3 +1453,7 @@ func authoritativeEventRecordKind(kind EventKind) (RecordKind, bool) {
 		return "", false
 	}
 }
+
+func (model *scriptedModel) ProjectModelItems(items []Item) []Item { return items }
+
+func (function modelFunc) ProjectModelItems(items []Item) []Item { return items }

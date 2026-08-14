@@ -72,8 +72,26 @@ type resolvedModelRoute struct {
 }
 
 var modelCatalog = []modelSpec{
-	{URI: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash", ContextWindow: 1_000_000, Compatibility: modelCompatibilitySupported},
-	{URI: "deepseek/deepseek-v4-pro", Name: "DeepSeek V4 Pro", ContextWindow: 1_000_000, Compatibility: modelCompatibilitySupported},
+	// Native DeepSeek V4 exposes off/high/max. The thinking switch expresses off;
+	// enabled requests pair it with reasoning_effort. Low/medium collapse to high.
+	{
+		URI: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "off", "high", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
+			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+		},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "deepseek/deepseek-v4-pro", Name: "DeepSeek V4 Pro", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "off", "high", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
+			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+		},
+		Compatibility: modelCompatibilitySupported,
+	},
 	{URI: "openrouter/free", Name: "OpenRouter Free", Compatibility: modelCompatibilitySupported},
 	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest", Compatibility: modelCompatibilitySupported},
 	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest", Compatibility: modelCompatibilitySupported},
@@ -230,6 +248,7 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	if declaration.API != "" {
 		api = declaration.API
 	}
+	declaredAPI := api
 	compatibility := modelCompatibilityUnverified
 	if declared && declaration.Compatibility != "" {
 		compatibility = declaration.Compatibility
@@ -238,8 +257,9 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		if !knownModelAPI(overrides.API) {
 			return resolvedModelRoute{}, fmt.Errorf("unsupported model API %q", overrides.API)
 		}
-		// An explicit protocol bypasses the reviewed route declaration even when
-		// it happens to select the same adapter today.
+		// An explicit protocol makes compatibility unverified. Protocol-specific
+		// route facts below are retained only when it still matches the reviewed
+		// adapter.
 		compatibility = modelCompatibilityUnverified
 		api = overrides.API
 	} else if compatibility == modelCompatibilityUnsupported {
@@ -249,13 +269,13 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		return resolvedModelRoute{}, fmt.Errorf("unsupported model API %q", api)
 	}
 
+	usesReviewedProtocol := declared && api == declaredAPI
 	reasoningEfforts := defaults.ReasoningEfforts
-	if declaration.ReasoningEfforts != nil {
+	if usesReviewedProtocol && declaration.ReasoningEfforts != nil {
 		reasoningEfforts = declaration.ReasoningEfforts
 	}
-	if api == modelAPIAnthropicMessages && (declaration.API != modelAPIAnthropicMessages || overrides.API != "") {
-		// This adapter does not yet send optional thinking controls. An explicit
-		// protocol override must not inherit another adapter's effort choices.
+	if api == modelAPIAnthropicMessages {
+		// This adapter does not yet send optional thinking controls.
 		reasoningEfforts = []string{defaultReasoningEffort}
 	}
 	reasoningEfforts = append([]string(nil), reasoningEfforts...)
@@ -265,11 +285,11 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	}
 
 	traits := *defaults.ChatTraits
-	if declaration.ChatTraits != nil {
+	if usesReviewedProtocol && declaration.ChatTraits != nil {
 		traits = *declaration.ChatTraits
 	}
 	responsesTraits := *defaults.ResponsesTraits
-	if declaration.ResponsesTraits != nil {
+	if usesReviewedProtocol && declaration.ResponsesTraits != nil {
 		responsesTraits = *declaration.ResponsesTraits
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(providerDescription.baseURL), "/")
@@ -347,6 +367,8 @@ func defaultModelSpec(provider string) modelSpec {
 		ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 		ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
 	}
+	// Undeclared routes expose only the conservative default/high vocabulary;
+	// route-specific values require a reviewed declaration.
 	efforts := []string{defaultReasoningEffort, "high"}
 	switch provider {
 	case "deepseek":

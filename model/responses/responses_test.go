@@ -48,7 +48,8 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 			ID: "resp_1", Status: "completed", Output: []json.RawMessage{reasoningRaw, messageRaw},
 			Usage: &responseUsage{
 				InputTokens: 12, InputTokenDetails: &inputTokenDetails{CachedTokens: 4},
-				OutputTokens: 5, TotalTokens: 17,
+				OutputTokens: 5, OutputTokenDetails: &outputTokenDetails{ReasoningTokens: 3},
+				TotalTokens: 17,
 			},
 		}})
 	}))
@@ -74,7 +75,9 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	if err := json.Unmarshal(received.Input[0], &user); err != nil || user.Role != "user" || user.Content != "hi" {
 		t.Fatalf("user input = %#v, %v", user, err)
 	}
-	if response.StopReason != "stop" || response.Usage != (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, TotalTokens: 17}) {
+	if response.StopReason != "stop" || response.Usage != (agent.ModelUsage{
+		InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17,
+	}) {
 		t.Fatalf("response metadata = %#v", response)
 	}
 	if len(response.Items) != 2 || response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking " ||
@@ -233,6 +236,32 @@ func TestParseResponseMapsIncompleteStatusAndUsage(t *testing.T) {
 	}
 }
 
+func TestParseResponseAcceptsDocumentedIncompleteReasonAlias(t *testing.T) {
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	response, err := backend.parseResponse(wireResponse{
+		Status: "incomplete", IncompleteDetails: &incompleteDetail{Reason: "max_tokens"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != "max_tokens" || !agent.IsIncompleteStopReason(response.StopReason) {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestCompleteRejectsMismatchedTerminalEventStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, writer, streamEvent{Type: "response.completed", Response: &wireResponse{Status: "incomplete"}})
+	}))
+	defer server.Close()
+	backend := newTestBackend(t, server.URL)
+	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+	if err == nil || !strings.Contains(err.Error(), `terminal event "response.completed" carries status "incomplete"`) {
+		t.Fatalf("terminal mismatch error = %v", err)
+	}
+}
+
 func TestParseResponseRequiresEncryptedReasoningState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	_, err := backend.parseResponse(wireResponse{
@@ -328,7 +357,7 @@ func TestCompleteReturnsStructuredProviderHTTPError(t *testing.T) {
 	var providerErr *agent.ProviderError
 	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
 		providerErr.Kind != agent.ProviderErrorRateLimit || !providerErr.Retryable ||
-		providerErr.RetryAfter != 7*time.Second || !strings.Contains(err.Error(), "slow down") {
+		providerErr.Type != "rate_limit" || providerErr.RetryAfter != 7*time.Second || !strings.Contains(err.Error(), "slow down") {
 		t.Fatalf("error = %v / %#v", err, providerErr)
 	}
 }
@@ -463,4 +492,31 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+func TestParseResponseKeepsIncompleteStatusWithoutDetails(t *testing.T) {
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	response, err := backend.parseResponse(wireResponse{
+		Status: "incomplete",
+		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != "incomplete" {
+		t.Fatalf("stop reason = %q", response.StopReason)
+	}
+}
+
+func TestParseResponseRejectsUnknownIncompleteReason(t *testing.T) {
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	_, err := backend.parseResponse(wireResponse{
+		Status: "incomplete", IncompleteDetails: &incompleteDetail{Reason: "guardrail_intervened"},
+		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
+	})
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||
+		!strings.Contains(err.Error(), "guardrail_intervened") {
+		t.Fatalf("unknown incomplete reason error = %v / %#v", err, providerErr)
+	}
 }

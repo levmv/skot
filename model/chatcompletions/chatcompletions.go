@@ -183,17 +183,8 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, decodeHTTPError(backend.provider, backend.model, response)
 	}
 
-	readCtx, stopReading := context.WithCancel(ctx)
-	defer stopReading()
-	reader := newSSEReader(response.Body)
-	readResults := readSSE(readCtx, reader)
-	var idleTimer *time.Timer
-	var idle <-chan time.Time
-	if request.StreamIdleTimeout > 0 {
-		idleTimer = time.NewTimer(request.StreamIdleTimeout)
-		idle = idleTimer.C
-		defer idleTimer.Stop()
-	}
+	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
+	defer stream.Close()
 	var text, reasoning strings.Builder
 	var calls toolCallAccumulator
 	var usage agent.ModelUsage
@@ -201,38 +192,20 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	completionBytes := 0
 	limited := false
 	for {
-		var read sseReadResult
-		select {
-		case value, ok := <-readResults:
-			if !ok {
-				if ctx.Err() != nil {
-					return agent.ModelResponse{}, ctx.Err()
-				}
-				return agent.ModelResponse{}, errors.New("provider stream reader stopped without a result")
-			}
-			read = value
-			if idleTimer != nil {
-				if !idleTimer.Stop() {
-					select {
-					case <-idleTimer.C:
-					default:
-					}
-				}
-				idleTimer.Reset(request.StreamIdleTimeout)
-			}
-		case <-idle:
-			return agent.ModelResponse{}, fmt.Errorf("%w after %s", agent.ErrModelStreamIdle, request.StreamIdleTimeout)
-		case <-ctx.Done():
-			return agent.ModelResponse{}, ctx.Err()
-		}
-		payload, err := read.payload, read.err
+		payload, err := stream.Next()
 		if errors.Is(err, io.EOF) {
-			if stopReason == "" && !reader.done {
-				return agent.ModelResponse{}, fmt.Errorf("%s stream ended before a finish reason", backend.provider)
+			if stopReason == "" {
+				if !stream.SawDone() {
+					return agent.ModelResponse{}, fmt.Errorf("%s stream ended before a finish reason", backend.provider)
+				}
+				// Some compatible gateways use the legacy sentinel as their only
+				// terminal signal. Keep accepting it, but do not let an empty value
+				// escape the adapter's closed completion-reason vocabulary.
+				stopReason = "stop"
 			}
 			break
 		}
-		if errors.Is(err, errSSETokenTooLarge) {
+		if errors.Is(err, modelhttp.ErrEventTooLarge) {
 			limited = true
 			break
 		}
@@ -277,6 +250,12 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 
 	if limited {
 		stopReason = agent.StopReasonOutputLimit
+	} else {
+		normalized, err := backend.normalizeFinishReason(stopReason)
+		if err != nil {
+			return agent.ModelResponse{}, err
+		}
+		stopReason = normalized
 	}
 	items := make([]agent.Item, 0, 2+len(calls.calls))
 	if reasoning.Len() != 0 {
@@ -303,7 +282,9 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &toolCall})
 		}
 	}
-	if len(items) == 0 && !limited {
+	// Empty output is valid for an incomplete provider stop, which the runtime
+	// reports as an incomplete run rather than a transport failure.
+	if len(items) == 0 && !limited && !agent.IsIncompleteStopReason(stopReason) {
 		return agent.ModelResponse{}, errors.New("chat completion returned no output items")
 	}
 	return agent.ModelResponse{Items: items, Usage: usage, StopReason: stopReason}, nil
@@ -330,11 +311,11 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	var envelope struct {
 		Error *apiError `json:"error"`
 	}
-	message := ""
-	code := ""
+	message, code, errorType := "", "", ""
 	if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
 		message = envelope.Error.message()
 		code = modelhttp.ErrorCode(envelope.Error.Code)
+		errorType = strings.TrimSpace(envelope.Error.Type)
 	}
 	if message == "" {
 		message = strings.TrimSpace(string(body))
@@ -344,7 +325,7 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	}
 	return modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
 		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
-		Message: message, Code: code,
+		Message: message, Code: code, Type: errorType,
 		RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
 	})
 }

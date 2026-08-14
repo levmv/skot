@@ -113,7 +113,8 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 		}
 	})
 	t.Run("response", func(t *testing.T) {
-		if response.StopReason != "tool_use" || response.Usage != (agent.ModelUsage{
+		// Messages says tool_use; the agent sees the normalized reason.
+		if response.StopReason != "tool_calls" || response.Usage != (agent.ModelUsage{
 			InputTokens: 19, CachedInputTokens: 4, OutputTokens: 9, TotalTokens: 28,
 		}) {
 			t.Fatalf("stop/usage = %q/%#v", response.StopReason, response.Usage)
@@ -383,7 +384,8 @@ func TestCompleteDecodesStructuredHTTPError(t *testing.T) {
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	var providerErr *agent.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorAuthentication ||
-		providerErr.Code != "authentication_error" || providerErr.StatusCode != http.StatusUnauthorized || providerErr.RetryAfter != 2*time.Second {
+		providerErr.Code != "" || providerErr.Type != "authentication_error" ||
+		providerErr.StatusCode != http.StatusUnauthorized || providerErr.RetryAfter != 2*time.Second {
 		t.Fatalf("error = %#v (%v)", providerErr, err)
 	}
 }
@@ -649,4 +651,24 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// Messages may add stop reasons under its versioning contract. An unknown one
+// cannot be read as a finished answer.
+func TestCompleteRejectsUnknownStopReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "message_delta", "delta": map[string]any{"stop_reason": "handed_off"},
+		})
+		writeSSEEvent(t, writer, map[string]any{"type": "message_stop"})
+	}))
+	defer server.Close()
+	backend := newTestBackend(t, server.URL)
+	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||
+		!strings.Contains(err.Error(), "handed_off") {
+		t.Fatalf("unknown stop reason error = %v / %#v", err, providerErr)
+	}
 }

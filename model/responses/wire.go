@@ -7,7 +7,29 @@ import (
 	"strings"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelhttp"
 )
+
+// incompleteReasons is the closed set of documented Responses incomplete
+// reasons. An unknown value must not fall through as a complete answer.
+var incompleteReasons = map[string]string{
+	"max_tokens":        "max_tokens",
+	"max_output_tokens": "max_output_tokens",
+	"content_filter":    "content_filter",
+}
+
+func (backend *Backend) normalizeIncompleteReason(details *incompleteDetail) (string, error) {
+	if details == nil || strings.TrimSpace(details.Reason) == "" {
+		// The status alone still proves the response is incomplete.
+		return "incomplete", nil
+	}
+	reason := strings.TrimSpace(details.Reason)
+	normalized, known := incompleteReasons[strings.ToLower(reason)]
+	if !known {
+		return "", modelhttp.UnsupportedCompletionReasonError(backend.provider, reason)
+	}
+	return normalized, nil
+}
 
 const reasoningItemDataKind = "responses.reasoning_item"
 
@@ -142,14 +164,19 @@ type incompleteDetail struct {
 }
 
 type responseUsage struct {
-	InputTokens       int                `json:"input_tokens"`
-	InputTokenDetails *inputTokenDetails `json:"input_tokens_details,omitempty"`
-	OutputTokens      int                `json:"output_tokens"`
-	TotalTokens       int                `json:"total_tokens"`
+	InputTokens        int                 `json:"input_tokens"`
+	InputTokenDetails  *inputTokenDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokens       int                 `json:"output_tokens"`
+	OutputTokenDetails *outputTokenDetails `json:"output_tokens_details,omitempty"`
+	TotalTokens        int                 `json:"total_tokens"`
 }
 
 type inputTokenDetails struct {
 	CachedTokens int `json:"cached_tokens"`
+}
+
+type outputTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 func (usage responseUsage) modelUsage() agent.ModelUsage {
@@ -157,9 +184,14 @@ func (usage responseUsage) modelUsage() agent.ModelUsage {
 	if usage.InputTokenDetails != nil {
 		cached = usage.InputTokenDetails.CachedTokens
 	}
+	reasoning := 0
+	if usage.OutputTokenDetails != nil {
+		reasoning = usage.OutputTokenDetails.ReasoningTokens
+	}
 	return agent.ModelUsage{
 		InputTokens: usage.InputTokens, CachedInputTokens: cached,
-		OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
+		OutputTokens: usage.OutputTokens, ReasoningTokens: reasoning,
+		TotalTokens: usage.TotalTokens,
 	}
 }
 
@@ -443,10 +475,11 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 		stopReason = "tool_calls"
 	}
 	if response.Status == "incomplete" {
-		stopReason = "incomplete"
-		if response.IncompleteDetails != nil && strings.TrimSpace(response.IncompleteDetails.Reason) != "" {
-			stopReason = strings.TrimSpace(response.IncompleteDetails.Reason)
+		reason, err := backend.normalizeIncompleteReason(response.IncompleteDetails)
+		if err != nil {
+			return agent.ModelResponse{}, err
 		}
+		stopReason = reason
 	}
 	if len(items) == 0 && response.Status != "incomplete" {
 		return agent.ModelResponse{}, fmt.Errorf("%s response returned no output items", backend.provider)

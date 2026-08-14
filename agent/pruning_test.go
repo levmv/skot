@@ -175,6 +175,33 @@ func TestReplayRejectsToolPruningInsideConversationBlock(t *testing.T) {
 	}
 }
 
+func TestToolPruningCannotAdvanceIntoActiveRun(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
+	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, journal, RecordRunStarted, RunStartedRecord{RunID: "run-active"})
+	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: "run-active", Text: "active input"})
+	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: "run-active", Text: "active steering"})
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	safe := ToolResultsPrunedRecord{ThroughSequence: state.Blocks[1].EndSequence, HeadBytes: 10, TailBytes: 10}
+	if err := validateToolPruningBoundary(state, safe, state.LastSequence+1, true); err != nil {
+		t.Fatalf("completed-prefix pruning: %v", err)
+	}
+	unsafe := ToolResultsPrunedRecord{ThroughSequence: state.Blocks[2].EndSequence, HeadBytes: 10, TailBytes: 10}
+	if err := validateToolPruningBoundary(state, unsafe, state.LastSequence+1, true); err == nil || !strings.Contains(err.Error(), "unfinished") {
+		t.Fatalf("active block pruning error = %v", err)
+	}
+}
+
 func hasStatusEvent(events []Event, text string) bool {
 	for _, event := range events {
 		if event.Kind == EventStatus && event.Text == text {

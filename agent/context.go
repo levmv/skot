@@ -48,11 +48,15 @@ func (runtime *Runtime) ContextReport(ctx context.Context) (ContextReport, error
 }
 
 func (runtime *Runtime) prepareContext(ctx context.Context, state State, pendingInput string, emit EmitFunc) (State, ContextReport, error) {
-	report := runtime.contextReport(state, pendingInput)
+	return runtime.prepareContextForRequest(ctx, state, pendingInput, true, emit)
+}
+
+func (runtime *Runtime) prepareContextForRequest(ctx context.Context, state State, pendingInput string, includeTools bool, emit EmitFunc) (State, ContextReport, error) {
+	report := runtime.contextReportForRequest(state, includeTools, pendingInput)
 	if report.Window == 0 || report.TotalInputTokens <= report.InputLimit {
 		return state, report, nil
 	}
-	prunedState, prunedReport, pruningSequence, err := runtime.tryPruneToolResults(ctx, state, pendingInput)
+	prunedState, prunedReport, pruningSequence, err := runtime.tryPruneToolResults(ctx, state, pendingInput, includeTools)
 	if err != nil {
 		return state, report, fmt.Errorf("prune old tool results: %w", err)
 	}
@@ -71,7 +75,7 @@ func (runtime *Runtime) prepareContext(ctx context.Context, state State, pending
 		return State{}, ContextReport{}, err
 	}
 	state = live.state
-	report = runtime.contextReport(state, pendingInput)
+	report = runtime.contextReportForRequest(state, includeTools, pendingInput)
 	if report.TotalInputTokens > report.InputLimit {
 		return state, report, fmt.Errorf("estimated model input remains %d tokens after compaction (limit %d, window %d)", report.TotalInputTokens, report.InputLimit, report.Window)
 	}
@@ -79,6 +83,10 @@ func (runtime *Runtime) prepareContext(ctx context.Context, state State, pending
 }
 
 func (runtime *Runtime) contextReport(state State, pendingInputs ...string) ContextReport {
+	return runtime.contextReportForRequest(state, true, pendingInputs...)
+}
+
+func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, pendingInputs ...string) ContextReport {
 	report := ContextReport{
 		Window:           runtime.modelInfo.ContextWindow,
 		CompactionCount:  state.CompactionCount,
@@ -92,22 +100,32 @@ func (runtime *Runtime) contextReport(state State, pendingInputs ...string) Cont
 	if runtime.instructions != "" {
 		report.InstructionTokens += perMessageTokens
 	}
-	for _, tool := range runtime.tools {
-		report.ToolTokens += estimateTextTokens(tool.Spec.Name) + estimateTextTokens(tool.Spec.Description) + estimateTextTokens(string(tool.Spec.InputSchema)) + perToolDefinitionTokens
+	if includeTools {
+		for _, tool := range runtime.tools {
+			report.ToolTokens += estimateTextTokens(tool.Spec.Name) + estimateTextTokens(tool.Spec.Description) + estimateTextTokens(string(tool.Spec.InputSchema)) + perToolDefinitionTokens
+		}
 	}
 	if state.Compaction != nil {
 		report.SummaryTokens = estimateTextTokens("Conversation summary:\n"+state.Compaction.Summary) + perMessageTokens
 	}
-	items := projectOwnedModelItems(state.verbatimModelItems(), ProviderContext{
+	// Project pending input with its history: current-turn routes drop the
+	// previous turn's reasoning once the next user message is appended.
+	items := state.verbatimModelItems()
+	pending := 0
+	for _, pendingInput := range pendingInputs {
+		if pendingInput != "" {
+			items = append(items, Item{Kind: ItemUserText, Text: pendingInput})
+			pending++
+		}
+	}
+	projected := runtime.projectModelItems(items, ProviderContext{
 		Backend: runtime.modelInfo.Backend,
 		Epoch:   state.Selection.Epoch,
 	})
-	report.HistoryTokens = estimateItemsTokens(items)
-	for _, pendingInput := range pendingInputs {
-		if pendingInput != "" {
-			report.PendingTokens += estimateTextTokens(pendingInput) + perMessageTokens
-		}
-	}
+	// Projection may remove reasoning only, so pending users remain the suffix.
+	boundary := max(0, len(projected)-pending)
+	report.HistoryTokens = estimateItemsTokens(projected[:boundary])
+	report.PendingTokens = estimateItemsTokens(projected[boundary:])
 	report.TotalInputTokens = report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens
 	if report.Window > 0 {
 		report.AvailableInputTokens = max(0, report.InputLimit-report.TotalInputTokens)

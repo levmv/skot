@@ -20,12 +20,23 @@ type ProviderErrorDetails struct {
 	StatusCode int
 	Message    string
 	Code       string
+	Type       string
 	RetryAfter time.Duration
 }
 
+// UnsupportedCompletionReasonError reports a non-retryable protocol mismatch.
+// Its empty provider-error kind lets diagnostics add a compatibility hint for
+// unverified routes.
+func UnsupportedCompletionReasonError(provider, reason string) error {
+	return &agent.ProviderError{
+		Cause: agent.MarkProviderFailure(fmt.Errorf(
+			"%s reported unsupported completion reason %q", strings.TrimSpace(provider), reason)),
+	}
+}
+
 // NewProviderError classifies a decoded provider response without scraping its
-// prose. Exact provider codes may refine the conservative status mapping after
-// a live baseline establishes their meaning.
+// prose. Exact provider code/type values may refine the conservative status
+// mapping after a live baseline establishes their meaning.
 func NewProviderError(details ProviderErrorDetails) error {
 	provider := strings.TrimSpace(details.Provider)
 	model := strings.TrimSpace(details.Model)
@@ -38,7 +49,8 @@ func NewProviderError(details ProviderErrorDetails) error {
 		message = http.StatusText(details.StatusCode)
 	}
 	code := strings.ToLower(strings.TrimSpace(details.Code))
-	kind := classifyProviderError(provider, details.StatusCode, code)
+	errorType := strings.ToLower(strings.TrimSpace(details.Type))
+	kind := classifyProviderError(provider, details.StatusCode, code, errorType)
 	cause := agent.MarkProviderFailure(fmt.Errorf(
 		"%s (HTTP %s): %s",
 		providerErrorSummary(provider, model, kind), status, message,
@@ -46,19 +58,18 @@ func NewProviderError(details ProviderErrorDetails) error {
 	retryable := details.StatusCode == http.StatusRequestTimeout ||
 		kind == agent.ProviderErrorRateLimit || kind == agent.ProviderErrorUnavailable
 	return &agent.ProviderError{
-		Cause: cause, StatusCode: details.StatusCode, Kind: kind, Code: code,
+		Cause: cause, StatusCode: details.StatusCode, Kind: kind, Code: code, Type: errorType,
 		Retryable: retryable, RetryAfter: details.RetryAfter,
 	}
 }
 
-func classifyProviderError(provider string, status int, code string) agent.ProviderErrorKind {
-	// Add reviewed provider-code refinements here. In particular, a live
-	// OpenCode Go response may distinguish an exhausted quota from a temporary
-	// 429 without relying on its human-readable message.
-	if kinds := providerErrorKindsByCode[strings.ToLower(strings.TrimSpace(provider))]; kinds != nil {
-		if kind := kinds[strings.ToLower(strings.TrimSpace(code))]; kind != "" {
-			return kind
-		}
+func classifyProviderError(provider string, status int, code, errorType string) agent.ProviderErrorKind {
+	// DeepSeek's stable quota signal wins over HTTP 429, which otherwise means
+	// a temporary rate limit. Do not add message fragments here: prose is not a
+	// routing contract.
+	if strings.EqualFold(strings.TrimSpace(provider), "deepseek") &&
+		(code == "insufficient_quota" || errorType == "insufficient_quota") {
+		return agent.ProviderErrorQuota
 	}
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
@@ -78,8 +89,6 @@ func classifyProviderError(provider string, status int, code string) agent.Provi
 		return ""
 	}
 }
-
-var providerErrorKindsByCode = map[string]map[string]agent.ProviderErrorKind{}
 
 func providerErrorSummary(provider, model string, kind agent.ProviderErrorKind) string {
 	target := provider

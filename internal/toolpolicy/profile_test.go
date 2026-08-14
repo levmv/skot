@@ -61,6 +61,18 @@ func TestConfiguredProfilesReplaceDefaultsAndAddNames(t *testing.T) {
 	if got := strings.Join(profiles.Names(), ","); got != "read-only,edit,full,empty,review" {
 		t.Fatalf("profile names = %q", got)
 	}
+	if got := strings.Join(profiles.ToolNames(ProfileFull), ","); got != "custom" {
+		t.Fatalf("full tool names = %q", got)
+	}
+	if names := profiles.ToolNames(ProfileFull); len(names) != 0 {
+		names[0] = "read"
+	}
+	if got := strings.Join(profiles.ToolNames(ProfileFull), ","); got != "custom" {
+		t.Fatalf("profile tool names were aliased: %q", got)
+	}
+	if got := profiles.ToolNames("missing"); got != nil {
+		t.Fatalf("unknown profile tool names = %#v", got)
+	}
 	if got, err := profiles.Normalize(" REVIEW "); err != nil || got != "review" {
 		t.Fatalf("normalized profile = %q, %v", got, err)
 	}

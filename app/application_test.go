@@ -55,7 +55,7 @@ func TestApplicationSwitchesAndPersistsRequestedSandbox(t *testing.T) {
 	if err := application.SwitchSandbox(context.Background(), workspacetools.SandboxOff); err != nil {
 		t.Fatal(err)
 	}
-	if application.CurrentSandbox() != workspacetools.SandboxOff || application.SecuritySummary() != "sandbox: off · network: inherited" {
+	if application.CurrentSandbox() != workspacetools.SandboxOff || application.SecuritySummary() != "sandbox: off" {
 		t.Fatalf("sandbox = %q, security = %q", application.CurrentSandbox(), application.SecuritySummary())
 	}
 	stored, err := settings.Settings()
@@ -382,6 +382,9 @@ func TestOpenLoadsCustomProfilesAndLetsConfigReplaceBuiltIns(t *testing.T) {
 	configuredProfiles[toolpolicy.ProfileFull][0] = "read"
 	if got := strings.Join(application.Profiles(), ","); got != "read-only,edit,full,review" {
 		t.Fatalf("profiles = %q", got)
+	}
+	if got := strings.Join(application.ProfileTools(toolpolicy.ProfileFull), ","); got != "custom" {
+		t.Fatalf("full profile tools = %q", got)
 	}
 
 	if _, err := application.RunShell(context.Background(), "true"); err != nil {

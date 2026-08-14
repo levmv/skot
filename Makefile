@@ -5,7 +5,7 @@ VERSION ?= dev
 
 export BINARY DIST_DIR VERSION
 
-.PHONY: build test vet race check release
+.PHONY: build test vet race format-check mod-check staticcheck check release
 
 build:
 	$(GO) build -o "$$BINARY" .
@@ -19,7 +19,21 @@ vet:
 race:
 	$(GO) test -race ./...
 
-check: test vet
+format-check:
+	@unformatted="$$(gofmt -l $$(git ls-files '*.go'))"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "The following Go files are not formatted:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+mod-check:
+	$(GO) mod tidy -diff
+
+staticcheck:
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+
+check: test vet format-check mod-check staticcheck race
 
 release: check
 	@set -eu; \

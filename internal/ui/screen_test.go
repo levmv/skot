@@ -25,6 +25,7 @@ type fakeAgent struct {
 	statusFound      bool
 	profile          string
 	profiles         []string
+	profileTools     map[string][]string
 	profileErr       error
 	model            string
 	reasoningEffort  string
@@ -123,6 +124,10 @@ func (fake *fakeAgent) Profiles() []string {
 	return []string{toolpolicy.ProfileReadOnly, toolpolicy.ProfileEdit, toolpolicy.ProfileFull}
 }
 
+func (fake *fakeAgent) ProfileTools(profile string) []string {
+	return append([]string(nil), fake.profileTools[profile]...)
+}
+
 func (fake *fakeAgent) SwitchProfile(_ context.Context, profile string) error {
 	if fake.profileErr != nil {
 		return fake.profileErr
@@ -191,7 +196,7 @@ func (fake *fakeAgent) SwitchSandbox(_ context.Context, policy string) error {
 		effective = "workspace"
 		detail = " (auto)"
 	}
-	fake.security = "sandbox: " + effective + detail + " · network: inherited"
+	fake.security = "sandbox: " + effective + detail
 	return nil
 }
 
@@ -334,12 +339,20 @@ func TestWorkingCommandsAreNotQueued(t *testing.T) {
 func TestProfileCommandShowsAndSwitchesProfile(t *testing.T) {
 	fake := &fakeAgent{profile: toolpolicy.ProfileEdit, profiles: []string{
 		toolpolicy.ProfileReadOnly, toolpolicy.ProfileEdit, toolpolicy.ProfileFull, "review",
+	}, profileTools: map[string][]string{
+		toolpolicy.ProfileReadOnly: {"read", "grep"},
+		toolpolicy.ProfileEdit:     {"bash", "job"},
+		toolpolicy.ProfileFull:     {"read", "write", "bash", "job"},
+		"review":                   {"read", "custom"},
 	}}
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/profile")
 	model, _ = model.submitInput()
 	if model.picker.kind != pickerProfile || len(model.picker.items) != 4 || model.picker.items[3].value != "review" || model.picker.index != 1 || !model.picker.items[1].current {
 		t.Fatalf("profile picker = %#v", model.picker)
+	}
+	if got := model.picker.items[1].description; got != "tools: bash, job" {
+		t.Fatalf("customized edit description = %q", got)
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyUp, BaseCode: tea.KeyUp})
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
@@ -423,7 +436,7 @@ func TestDiscardedAttemptRemovesPartialAssistant(t *testing.T) {
 			t.Fatalf("partial assistant block survived: %#v", block)
 		}
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "discarded partial model attempt" {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "interrupted response removed" {
 		t.Fatalf("status = %q", got)
 	}
 }

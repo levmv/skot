@@ -40,7 +40,7 @@ func TestCompactCommandRunsAsCancellableMaintenance(t *testing.T) {
 	if model.operation.kind != operationNone {
 		t.Fatalf("operation = %#v", model.operation)
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "sequence 42") || !strings.Contains(got, "900 estimated") {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; strings.Contains(got, "sequence 42") || !strings.Contains(got, "context compacted") || !strings.Contains(got, "900 estimated") {
 		t.Fatalf("compaction result = %q", got)
 	}
 }

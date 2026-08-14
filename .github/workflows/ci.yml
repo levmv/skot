@@ -30,7 +30,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run tests and vet
-        run: make check
+        run: make test vet
 
   hygiene:
     name: Hygiene
@@ -45,21 +45,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Check formatting
-        shell: bash
-        run: |
-          unformatted="$(gofmt -l $(git ls-files '*.go'))"
-          if [[ -n "$unformatted" ]]; then
-            echo "The following Go files are not formatted:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Check module files
-        run: go mod tidy -diff
-
-      - name: Run staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+      - name: Run hygiene checks
+        run: make format-check mod-check staticcheck
 
   race:
     name: Race detector

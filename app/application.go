@@ -252,6 +252,10 @@ func (application *Application) Profiles() []string {
 	return application.config.profiles.Names()
 }
 
+func (application *Application) ProfileTools(profile string) []string {
+	return application.config.profiles.ToolNames(profile)
+}
+
 func (application *Application) SwitchProfile(ctx context.Context, value string) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {

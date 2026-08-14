@@ -106,6 +106,13 @@ func (profiles Profiles) Names() []string {
 	return append([]string(nil), profiles.names...)
 }
 
+// ToolNames returns an owned copy of a profile's exact configured tool names.
+// Unknown profiles return nil; callers presenting Names results never observe
+// that case.
+func (profiles Profiles) ToolNames(profile string) []string {
+	return append([]string(nil), profiles.definitions[profile]...)
+}
+
 // Tools returns a profile's exact ordered tool list. The catalog may be
 // rebuilt after Profiles was created, so mismatches are reported at this
 // boundary instead of leaking a zero-value tool into the runtime.

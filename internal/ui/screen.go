@@ -52,6 +52,7 @@ type ShellAgent interface {
 type ConfigurationAgent interface {
 	CurrentProfile() string
 	Profiles() []string
+	ProfileTools(string) []string
 	SwitchProfile(context.Context, string) error
 	CurrentModel() string
 	ModelChoices() []app.ModelChoice

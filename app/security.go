@@ -159,7 +159,7 @@ func (state securityState) Summary() string {
 	if len(detail) != 0 {
 		text += " (" + strings.Join(detail, ", ") + ")"
 	}
-	return text + " · network: inherited"
+	return text
 }
 
 func canonicalSecurityPath(path string) string {

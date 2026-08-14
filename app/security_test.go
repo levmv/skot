@@ -16,7 +16,7 @@ func TestSecuritySummaryMakesEffectiveBoundaryVisible(t *testing.T) {
 		EffectivePolicy: workspacetools.SandboxWorkspace,
 		Backend:         "landlock",
 	}
-	if got := host.Summary(); got != "sandbox: workspace (auto) · network: inherited" {
+	if got := host.Summary(); got != "sandbox: workspace (auto)" {
 		t.Fatalf("host summary = %q", got)
 	}
 	container := securityState{
@@ -25,7 +25,7 @@ func TestSecuritySummaryMakesEffectiveBoundaryVisible(t *testing.T) {
 		Backend:         "landlock",
 		Container:       "docker",
 	}
-	if got := container.Summary(); got != "sandbox: masked (auto, docker) · network: inherited" {
+	if got := container.Summary(); got != "sandbox: masked (auto, docker)" {
 		t.Fatalf("container summary = %q", got)
 	}
 }

@@ -30,8 +30,7 @@ func (m *screenModel) finishCompaction(message compactionDoneMsg) {
 		return
 	}
 	m.addBlock(screenBlockSystem, fmt.Sprintf(
-		"context compacted through journal sequence %d\n%s",
-		message.record.CoveredThroughSequence,
+		"context compacted\n%s",
 		formatContextReport(message.report),
 	))
 }

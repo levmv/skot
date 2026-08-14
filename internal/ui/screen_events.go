@@ -66,7 +66,7 @@ func (m *screenModel) applyAgentEvent(event agent.Event) {
 		m.transcript.appendAssistant(event.AttemptID, event.Text)
 	case agent.EventModelAttemptDiscarded:
 		m.transcript.discardAttempt(event.AttemptID)
-		m.addBlock(screenBlockSystem, "discarded partial model attempt")
+		m.addBlock(screenBlockSystem, "interrupted response removed")
 	case agent.EventModelRetryScheduled:
 		text := event.Text
 		if text == "" {

@@ -436,22 +436,16 @@ func (m *screenModel) openProfilePicker() {
 	profiles := m.agent.Profiles()
 	items := make([]pickerItem, 0, len(profiles))
 	for _, profile := range profiles {
-		items = append(items, pickerItem{value: profile, label: profile, description: profileDescription(profile)})
+		items = append(items, pickerItem{value: profile, label: profile, description: profileDescription(m.agent.ProfileTools(profile))})
 	}
 	m.openPicker(pickerProfile, items, markCurrentPickerItem(items, m.agent.CurrentProfile()))
 }
 
-func profileDescription(profile string) string {
-	switch profile {
-	case "read-only":
-		return "read and search only"
-	case "edit":
-		return "read and write, no process execution"
-	case "full":
-		return "files and process execution"
-	default:
-		return "custom tool profile"
+func profileDescription(tools []string) string {
+	if len(tools) == 0 {
+		return "no model tools"
 	}
+	return "tools: " + strings.Join(tools, ", ")
 }
 
 func (m *screenModel) openSandboxPicker() {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestSandboxCommandRunsAsCancellableMaintenance(t *testing.T) {
-	fake := &fakeAgent{sandbox: "off", security: "sandbox: off · network: inherited"}
+	fake := &fakeAgent{sandbox: "off", security: "sandbox: off"}
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/sandbox auto")
 	model, cmd := model.submitInput()
@@ -18,7 +18,7 @@ func TestSandboxCommandRunsAsCancellableMaintenance(t *testing.T) {
 		t.Fatalf("message = %T", cmd())
 	}
 	model.finishSandboxSwitch(message)
-	if model.operation.kind != operationNone || model.sandbox.pending || fake.sandbox != "auto" || fake.security != "sandbox: workspace (auto) · network: inherited" {
+	if model.operation.kind != operationNone || model.sandbox.pending || fake.sandbox != "auto" || fake.security != "sandbox: workspace (auto)" {
 		t.Fatalf("operation=%#v state=%#v sandbox=%q security=%q", model.operation, model.sandbox, fake.sandbox, fake.security)
 	}
 	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "sandbox policy: auto") {
@@ -27,7 +27,7 @@ func TestSandboxCommandRunsAsCancellableMaintenance(t *testing.T) {
 }
 
 func TestSandboxCommandCanSwitchPolicyDuringTurn(t *testing.T) {
-	fake := &fakeAgent{sandbox: "off", security: "sandbox: off · network: inherited"}
+	fake := &fakeAgent{sandbox: "off", security: "sandbox: off"}
 	model := testScreenModel(t, fake)
 	model.operation = activeOperation{kind: operationTurn}
 	model.composer.setValue("/sandbox workspace")
@@ -49,7 +49,7 @@ func TestSandboxCommandCanSwitchPolicyDuringTurn(t *testing.T) {
 }
 
 func TestSandboxCommandShowsCurrentEffectiveBoundary(t *testing.T) {
-	fake := &fakeAgent{sandbox: "auto", security: "sandbox: masked (auto, docker) · network: inherited"}
+	fake := &fakeAgent{sandbox: "auto", security: "sandbox: masked (auto, docker)"}
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/sandbox")
 	model, _ = model.submitInput()
@@ -68,7 +68,7 @@ func TestSystemSecuritySummaryHighlightsOnlySandboxOff(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	rendered := strings.Join(model.renderBlockLines(screenBlock{
 		kind: screenBlockSystem,
-		text: "sandbox: off · sandbox probe failed · network: inherited",
+		text: "sandbox: off · sandbox probe failed",
 	}), "\n")
 	styledOff := model.errorStyle.Render("off")
 	if styledOff == "off" {

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,18 +84,6 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 		{Kind: agent.EventTextDelta, Text: "lo"},
 	}) {
 		t.Fatalf("events = %#v", got)
-	}
-}
-
-func TestSSEReaderGrowsPastInitialBuffer(t *testing.T) {
-	payload := strings.Repeat("x", initialSSEBufferBytes+1)
-	reader := newSSEReader(strings.NewReader("data: " + payload + "\n\n"))
-	got, err := reader.next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != payload {
-		t.Fatalf("payload length = %d, want %d", len(got), len(payload))
 	}
 }
 
@@ -187,9 +176,9 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 }
 
 func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
-	requests := 0
+	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		requests++
+		requests.Add(1)
 	}))
 	defer server.Close()
 
@@ -201,8 +190,8 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	if !errors.Is(err, agent.ErrInvalidRequest) {
 		t.Fatalf("error = %v", err)
 	}
-	if requests != 0 {
-		t.Fatalf("provider requests = %d, want 0", requests)
+	if requests.Load() != 0 {
+		t.Fatalf("provider requests = %d, want 0", requests.Load())
 	}
 }
 

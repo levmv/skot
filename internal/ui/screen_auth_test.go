@@ -152,7 +152,7 @@ func TestModelPickerShowsCuratedRouteFacts(t *testing.T) {
 			{URI: "deepseek/model"},
 			{
 				URI: "opencode-go/gpt-5.6-luna", Name: "GPT 5.6 Luna", Protocol: "responses",
-				Compatibility: "unverified", ContextWindow: 922_000,
+				ContextWindow: 922_000,
 			},
 		},
 		providers: []ProviderStatus{
@@ -166,19 +166,18 @@ func TestModelPickerShowsCuratedRouteFacts(t *testing.T) {
 	item := model.picker.items[1]
 	if item.label != "GPT 5.6 Luna" || !strings.Contains(item.description, "opencode-go/gpt-5.6-luna") ||
 		!strings.Contains(item.description, "922K context") || !strings.Contains(item.description, "login required") ||
-		strings.Contains(item.description, "~922K") || strings.Contains(item.description, "responses") ||
-		strings.Contains(item.description, "unverified") {
+		strings.Contains(item.description, "~922K") || strings.Contains(item.description, "responses") {
 		t.Fatalf("OpenCode choice = %#v", item)
 	}
 }
 
-func TestModelPickerMarksEstimatedFallbackWithoutRepeatingProtocolOrCompatibility(t *testing.T) {
+func TestModelPickerMarksEstimatedFallbackWithoutRepeatingProtocol(t *testing.T) {
 	description := modelChoiceDescription(ModelChoice{
-		Protocol: "chat_completions", Compatibility: "supported",
+		Protocol:      "chat_completions",
 		ContextWindow: 128 * 1024, ContextWindowEstimated: true,
 	})
-	if description != "~131K context" || strings.Contains(description, "chat completions") || strings.Contains(description, "supported") {
-		t.Fatalf("estimated supported description = %q", description)
+	if description != "~131K context" || strings.Contains(description, "chat completions") {
+		t.Fatalf("estimated description = %q", description)
 	}
 }
 
@@ -189,7 +188,7 @@ func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
 			{URI: "deepseek/model"},
 			{
 				URI: "opencode-go/minimax-m3", Name: "MiniMax M3", Protocol: "anthropic_messages",
-				Compatibility: "unsupported", Unavailable: true,
+				Unavailable: true,
 			},
 		},
 		providers: []ProviderStatus{
@@ -207,7 +206,7 @@ func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	details := strings.Join(model.transcript.lines, "\n")
 	if !strings.Contains(details, "MiniMax M3 (opencode-go/minimax-m3)") ||
-		!strings.Contains(details, "anthropic messages") || strings.Contains(details, " · unsupported") || fake.model != "deepseek/model" {
+		!strings.Contains(details, "anthropic messages") || fake.model != "deepseek/model" {
 		t.Fatalf("unavailable details = %q, model = %q", details, fake.model)
 	}
 }

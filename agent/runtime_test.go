@@ -289,6 +289,38 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	}
 }
 
+func TestIncompleteStopReasonsIncludeAnthropicContinuationReasons(t *testing.T) {
+	for _, reason := range []string{"refusal", "pause_turn", "model_context_window_exceeded"} {
+		if !isIncompleteStopReason(reason) {
+			t.Errorf("stop reason %q is not incomplete", reason)
+		}
+	}
+}
+
+func TestRuntimePersistsEmptyRefusalAsIncomplete(t *testing.T) {
+	journal := &memoryJournal{}
+	runtime := newTestRuntime(t, Config{
+		Model: &scriptedModel{steps: []modelStep{
+			func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				return ModelResponse{StopReason: "refusal"}, nil
+			},
+		}},
+		Journal: journal,
+	})
+	result, err := runtime.Run(context.Background(), "start", nil)
+	if !errors.Is(err, ErrRunIncomplete) || result.Status != RunIncomplete || result.Answer != "" {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	records := journal.snapshot()
+	response, err := decodeRecord[ModelResponseRecord](records[5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StopReason != "refusal" || len(response.Items) != 0 {
+		t.Fatalf("journaled refusal = %#v", response)
+	}
+}
+
 func TestRuntimeDoesNotOwnApplicationInstructions(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
 		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {

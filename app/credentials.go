@@ -45,18 +45,38 @@ type storedBearerAuthorizer struct {
 }
 
 func (authorizer storedBearerAuthorizer) Authorize(_ context.Context, request *http.Request) error {
-	token, _, err := credentialForProvider(authorizer.store, authorizer.provider)
+	token, err := storedRequestCredential(authorizer.store, authorizer.provider, authorizer.modelURI, authorizer.allowMissing)
 	if err != nil {
 		return err
 	}
-	if token == "" {
-		if authorizer.allowMissing {
-			return nil
-		}
-		return missingProviderCredentialError(authorizer.provider, authorizer.modelURI)
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
 	return nil
+}
+
+type storedAPIKeyAuthorizer storedBearerAuthorizer
+
+func (authorizer storedAPIKeyAuthorizer) Authorize(_ context.Context, request *http.Request) error {
+	token, err := storedRequestCredential(authorizer.store, authorizer.provider, authorizer.modelURI, authorizer.allowMissing)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		request.Header.Set("x-api-key", token)
+	}
+	return nil
+}
+
+func storedRequestCredential(store *state.Store, provider, modelURI string, allowMissing bool) (string, error) {
+	token, _, err := credentialForProvider(store, provider)
+	if err != nil {
+		return "", err
+	}
+	if token == "" && !allowMissing {
+		return "", missingProviderCredentialError(provider, modelURI)
+	}
+	return token, nil
 }
 
 func credentialForProvider(store *state.Store, provider string) (token, source string, err error) {

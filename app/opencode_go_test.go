@@ -96,6 +96,30 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				}
 			},
 		},
+		{
+			name: "anthropic messages", uri: "opencode-go/minimax-m3",
+			path: "/zen/go/v1/messages", protocol: modelAPIAnthropicMessages,
+			request: agent.ModelRequest{
+				Instructions: "be brief", Items: []agent.Item{{Kind: agent.ItemUserText, Text: "reply ok"}},
+			},
+			writeBody: func(writer io.Writer) {
+				fmt.Fprint(writer, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n")
+				fmt.Fprint(writer, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+				fmt.Fprint(writer, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+				fmt.Fprint(writer, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+				fmt.Fprint(writer, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+				fmt.Fprint(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			},
+			checkBody: func(t *testing.T, body map[string]json.RawMessage) {
+				t.Helper()
+				if string(body["max_tokens"]) != "131072" || string(body["stream"]) != "true" || string(body["system"]) != `"be brief"` {
+					t.Errorf("Anthropic controls = max_tokens:%s stream:%s system:%s", body["max_tokens"], body["stream"], body["system"])
+				}
+				if _, exists := body["reasoning_effort"]; exists {
+					t.Error("Anthropic request contains Chat Completions reasoning_effort")
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -104,7 +128,14 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				if request.URL.Path != test.path {
 					t.Errorf("server path = %q", request.URL.Path)
 				}
-				if authorization := request.Header.Get("Authorization"); authorization != "Bearer subscription-secret" {
+				if test.protocol == modelAPIAnthropicMessages {
+					if key := request.Header.Get("x-api-key"); key != "subscription-secret" {
+						t.Errorf("x-api-key = %q", key)
+					}
+					if authorization := request.Header.Get("Authorization"); authorization != "" {
+						t.Errorf("unexpected authorization = %q", authorization)
+					}
+				} else if authorization := request.Header.Get("Authorization"); authorization != "Bearer subscription-secret" {
 					t.Errorf("authorization = %q", authorization)
 				}
 				var body map[string]json.RawMessage

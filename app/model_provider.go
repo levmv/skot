@@ -78,5 +78,10 @@ func knownModelAPI(api modelAPI) bool {
 }
 
 func implementedModelAPI(api modelAPI) bool {
-	return api == modelAPIChatCompletions || api == modelAPIResponses
+	switch api {
+	case modelAPIChatCompletions, modelAPIResponses, modelAPIAnthropicMessages:
+		return true
+	default:
+		return false
+	}
 }

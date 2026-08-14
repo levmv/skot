@@ -12,6 +12,7 @@ import (
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
+	"github.com/levmv/skot/model/anthropic"
 	"github.com/levmv/skot/model/chatcompletions"
 	responsemodel "github.com/levmv/skot/model/responses"
 	workspacetools "github.com/levmv/skot/tools"
@@ -323,12 +324,7 @@ func (application *Application) CurrentSandbox() string {
 
 func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Model, error) {
 	if !implementedModelAPI(route.API) {
-		switch route.API {
-		case modelAPIAnthropicMessages:
-			return nil, agent.MarkInvalidRequest(fmt.Errorf("model API %q is not implemented", route.API))
-		default:
-			return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
-		}
+		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
 	}
 	if options.requireCredential && !route.CustomEndpoint && !route.Credentialless {
 		token, _, err := credentialForProvider(credentials, route.Provider)
@@ -363,6 +359,19 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 			ReasoningEffort: route.ReasoningEffort, Traits: route.ResponsesTraits,
 			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
+		})
+	case modelAPIAnthropicMessages:
+		var apiKeyAuthorizer anthropic.Authorizer = storedAPIKeyAuthorizer{
+			store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
+		}
+		if route.Credentialless {
+			apiKeyAuthorizer = anthropic.APIKey(route.Provider)
+		}
+		backend, err = anthropic.New(anthropic.Config{
+			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
+			MaxTokens:     route.MaxOutputTokens,
+			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
+			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: apiKeyAuthorizer, Header: route.Header,
 		})
 	default:
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))

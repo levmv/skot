@@ -182,10 +182,11 @@ func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
 	}
 }
 
-func TestModelChoicesExposeRunnableRouteFactsAndMarkUnsupportedRoutesUnavailable(t *testing.T) {
+func TestModelChoicesExposeRunnableRouteFactsAndMarkDeprecatedRoutesUnavailable(t *testing.T) {
 	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", modelRouteOverrides{})
 	var luna *ModelChoice
 	var minimax *ModelChoice
+	var deprecatedMiniMax *ModelChoice
 	for index := range choices {
 		choice := &choices[index]
 		if choice.URI == "opencode-go/gpt-5.6-luna" {
@@ -194,9 +195,12 @@ func TestModelChoicesExposeRunnableRouteFactsAndMarkUnsupportedRoutesUnavailable
 		if choice.URI == "opencode-go/minimax-m3" {
 			minimax = choice
 		}
+		if choice.URI == "opencode-go/minimax-m2.5" {
+			deprecatedMiniMax = choice
+		}
 	}
 	if luna == nil || luna.Name != "OpenCode Go · GPT 5.6 Luna" || luna.Protocol != "responses" ||
-		luna.Compatibility != "supported" || luna.ContextWindow != 922_000 || luna.ContextWindowEstimated ||
+		luna.ContextWindow != 922_000 || luna.ContextWindowEstimated ||
 		!slices.Equal(luna.ReasoningEfforts, []string{"", "none", "low", "medium", "high", "xhigh", "max"}) {
 		t.Fatalf("Luna choice = %#v", luna)
 	}
@@ -218,25 +222,50 @@ func TestModelChoicesExposeRunnableRouteFactsAndMarkUnsupportedRoutesUnavailable
 		if choiceIndex < 0 {
 			t.Fatalf("supported OpenCode Go choice %q is missing", uri)
 		}
-		if choices[choiceIndex].Compatibility != "supported" || choices[choiceIndex].Unavailable {
+		if choices[choiceIndex].Unavailable {
 			t.Fatalf("supported OpenCode Go choice %q = %#v", uri, choices[choiceIndex])
 		}
 	}
+	for uri, protocol := range map[string]string{
+		"opencode-go/grok-4.5":       "responses",
+		"opencode-go/glm-5.3":        "chat_completions",
+		"opencode-go/glm-5.1":        "chat_completions",
+		"opencode-go/kimi-k2.7-code": "chat_completions",
+		"opencode-go/kimi-k2.6":      "chat_completions",
+		"opencode-go/mimo-v2.5":      "chat_completions",
+		"opencode-go/mimo-v2.5-pro":  "chat_completions",
+		"opencode-go/hy3":            "chat_completions",
+	} {
+		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == uri })
+		if choiceIndex < 0 {
+			t.Fatalf("OpenCode Go choice %q is missing", uri)
+		}
+		choice := choices[choiceIndex]
+		if choice.Protocol != protocol || choice.Unavailable ||
+			!slices.Equal(choice.ReasoningEfforts, []string{""}) {
+			t.Fatalf("OpenCode Go choice %q = %#v", uri, choice)
+		}
+	}
 	if minimax == nil || minimax.Name != "OpenCode Go · MiniMax M3" || minimax.Protocol != "anthropic_messages" ||
-		minimax.Compatibility != "unsupported" || !minimax.Unavailable {
+		minimax.Unavailable || minimax.ContextWindow != 1_000_000 || minimax.ContextWindowEstimated ||
+		!slices.Equal(minimax.ReasoningEfforts, []string{""}) {
 		t.Fatalf("MiniMax choice = %#v", minimax)
+	}
+	if deprecatedMiniMax == nil || deprecatedMiniMax.Protocol != "anthropic_messages" ||
+		!deprecatedMiniMax.Unavailable {
+		t.Fatalf("deprecated MiniMax choice = %#v", deprecatedMiniMax)
 	}
 }
 
 func TestModelChoicesSurfaceRecentRoutesWhichNoLongerResolve(t *testing.T) {
 	choices := modelChoices(nil, "opencode-go/removed-model", modelRouteOverrides{})
-	if len(choices) == 0 || choices[0].URI != "opencode-go/removed-model" || !choices[0].Unavailable || choices[0].Compatibility != "" ||
+	if len(choices) == 0 || choices[0].URI != "opencode-go/removed-model" || !choices[0].Unavailable ||
 		!strings.Contains(choices[0].UnavailableReason, "no reviewed protocol declaration") {
 		t.Fatalf("removed recent choice = %#v", choices)
 	}
 }
 
-func TestModelChoicesApplyGlobalProtocolOverrideHonestly(t *testing.T) {
+func TestModelChoicesApplyGlobalProtocolOverride(t *testing.T) {
 	choices := modelChoices(nil, "", modelRouteOverrides{API: modelAPIResponses})
 	wanted := map[string]bool{
 		"deepseek/deepseek-v4-flash": false,
@@ -246,7 +275,7 @@ func TestModelChoicesApplyGlobalProtocolOverrideHonestly(t *testing.T) {
 		if _, exists := wanted[choice.URI]; !exists {
 			continue
 		}
-		if choice.Protocol != "responses" || choice.Compatibility != "unverified" || choice.Unavailable {
+		if choice.Protocol != "responses" || choice.Unavailable {
 			t.Fatalf("overridden choice = %#v", choice)
 		}
 		wanted[choice.URI] = true

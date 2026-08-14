@@ -63,6 +63,21 @@ func TestOpenCodeGoCredentialUsesSubscriptionEnvironmentAndLoginURL(t *testing.T
 	t.Fatal("OpenCode Go credential status is missing")
 }
 
+func TestStoredAPIKeyAuthorizerUsesNativeMessagesHeader(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "subscription-key")
+	request, _ := http.NewRequest(http.MethodPost, "https://example.test/messages", nil)
+	authorizer := storedAPIKeyAuthorizer{provider: "opencode-go", modelURI: "opencode-go/minimax-m3"}
+	if err := authorizer.Authorize(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get("x-api-key"); got != "subscription-key" {
+		t.Fatalf("x-api-key = %q", got)
+	}
+	if got := request.Header.Get("Authorization"); got != "" {
+		t.Fatalf("unexpected Authorization = %q", got)
+	}
+}
+
 func TestModelCanBeBuiltWithoutCredentialForInteractiveLogin(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {

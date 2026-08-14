@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,17 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(cache)
 	os.Exit(code)
+}
+
+func TestHelpListsAnthropicMessagesAsImplemented(t *testing.T) {
+	var stderr bytes.Buffer
+	err := run(context.Background(), []string{"-help"}, bytes.NewReader(nil), io.Discard, &stderr)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(stderr.String(), "implemented: chat_completions, responses, anthropic_messages") {
+		t.Fatalf("help = %q", stderr.String())
+	}
 }
 
 func TestVerboseEmitterReportsDurableStatusEvents(t *testing.T) {
@@ -274,23 +286,47 @@ func TestRunClassifiesInvalidConfigurationAndProviderFailure(t *testing.T) {
 	})
 }
 
-func TestRunAcceptsKnownModelAPIOverrideButRejectsUnknownOrUnavailableAdapters(t *testing.T) {
-	for _, test := range []struct {
-		api  string
-		want string
-	}{
-		{api: "anthropic_messages", want: `model API "anthropic_messages" is not implemented`},
-		{api: "future", want: `unsupported model API "future"`},
-	} {
-		t.Run(test.api, func(t *testing.T) {
-			err := run(context.Background(), []string{
-				"-model", "deepseek/deepseek-v4-flash", "-model-api", test.api,
-				"-base-url", "http://127.0.0.1:1", "-home", t.TempDir(), "-root", t.TempDir(), "task",
-			}, bytes.NewReader(nil), io.Discard, io.Discard)
-			if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want invalid request containing %q", err, test.want)
-			}
-		})
+func TestRunRejectsUnknownModelAPI(t *testing.T) {
+	err := run(context.Background(), []string{
+		"-model", "deepseek/deepseek-v4-flash", "-model-api", "future",
+		"-base-url", "http://127.0.0.1:1", "-home", t.TempDir(), "-root", t.TempDir(), "task",
+	}, bytes.NewReader(nil), io.Discard, io.Discard)
+	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unsupported model API "future"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunUsesAnthropicAdapterWithoutAProactiveCompatibilityWarning(t *testing.T) {
+	var received map[string]json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/messages" {
+			t.Errorf("path = %q", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{
+		"-model", "deepseek/deepseek-v4-flash", "-model-api", "anthropic_messages",
+		"-base-url", server.URL,
+		"-sandbox", "off", "-home", t.TempDir(), "-root", t.TempDir(), "task",
+	}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "done\n" || string(received["max_tokens"]) != "65536" || string(received["stream"]) != "true" {
+		t.Fatalf("stdout/request = %q / %#v", stdout.String(), received)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 

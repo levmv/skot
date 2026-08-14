@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -302,16 +303,16 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 }
 
 func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
 	defer server.Close()
 	backend := newTestBackend(t, server.URL)
 	backend.maxRequestBytes = 64
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) || requests != 0 {
-		t.Fatalf("error/requests = %v/%d", err, requests)
+	if !errors.Is(err, agent.ErrInvalidRequest) || requests.Load() != 0 {
+		t.Fatalf("error/requests = %v/%d", err, requests.Load())
 	}
 }
 

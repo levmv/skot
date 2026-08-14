@@ -7,6 +7,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/state"
+	"github.com/levmv/skot/model/anthropic"
 	"github.com/levmv/skot/model/chatcompletions"
 	responsemodel "github.com/levmv/skot/model/responses"
 )
@@ -29,6 +30,7 @@ type modelSpec struct {
 	API              modelAPI
 	APIModel         string
 	ContextWindow    int
+	MaxOutputTokens  int
 	ReasoningEfforts []string
 	ChatTraits       *chatcompletions.RouteTraits
 	ResponsesTraits  *responsemodel.RouteTraits
@@ -60,6 +62,7 @@ type resolvedModelRoute struct {
 	CustomEndpoint         bool
 	ContextWindow          int
 	ContextWindowEstimated bool
+	MaxOutputTokens        int
 	ReasoningEffort        string
 	ReasoningEfforts       []string
 	ChatTraits             chatcompletions.RouteTraits
@@ -75,11 +78,6 @@ var modelCatalog = []modelSpec{
 	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest", Compatibility: modelCompatibilitySupported},
 	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest", Compatibility: modelCompatibilitySupported},
 	{URI: "openrouter/~google/gemini-pro-latest", Name: "Gemini Pro Latest", Compatibility: modelCompatibilitySupported},
-	// OpenCode Go routes are a local snapshot researched against the provider's
-	// route table and Models.dev on 2026-08-13. Their protocol, state, tools,
-	// reasoning choices, errors, and optional fields passed the live subscription
-	// gateway baseline on 2026-08-14. Context limits follow the provider's
-	// published route metadata.
 	{
 		URI: "opencode-go/gpt-5.6-luna", Name: "OpenCode Go · GPT 5.6 Luna", API: modelAPIResponses,
 		ContextWindow:    922_000,
@@ -123,16 +121,85 @@ var modelCatalog = []modelSpec{
 		},
 		Compatibility: modelCompatibilitySupported,
 	},
-	// These current OpenCode Go routes require Anthropic Messages. Recording
-	// them prevents the provider's Chat Completions default from silently
-	// selecting the wrong adapter, while keeping them out of runnable choices.
-	{URI: "opencode-go/minimax-m3", Name: "OpenCode Go · MiniMax M3", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
-	{URI: "opencode-go/minimax-m2.7", Name: "OpenCode Go · MiniMax M2.7", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
-	{URI: "opencode-go/minimax-m2.5", Name: "OpenCode Go · MiniMax M2.5", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
-	{URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
-	{URI: "opencode-go/qwen3.7-max", Name: "OpenCode Go · Qwen3.7 Max", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
-	{URI: "opencode-go/qwen3.7-plus", Name: "OpenCode Go · Qwen3.7 Plus", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
-	{URI: "opencode-go/qwen3.6-plus", Name: "OpenCode Go · Qwen3.6 Plus", API: modelAPIAnthropicMessages, Compatibility: modelCompatibilityUnsupported},
+	// Optional reasoning controls and Chat reasoning replay stay disabled because
+	// the routes do not declare them.
+	{
+		URI: "opencode-go/grok-4.5", Name: "OpenCode Go · Grok 4.5", API: modelAPIResponses,
+		ContextWindow: 500_000, ReasoningEfforts: []string{""}, ResponsesTraits: &responsemodel.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/glm-5.3", Name: "OpenCode Go · GLM-5.3", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/glm-5.1", Name: "OpenCode Go · GLM-5.1", ContextWindow: 202_752,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/kimi-k2.7-code", Name: "OpenCode Go · Kimi K2.7 Code", ContextWindow: 262_144,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/kimi-k2.6", Name: "OpenCode Go · Kimi K2.6", ContextWindow: 262_144,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/mimo-v2.5", Name: "OpenCode Go · MiMo V2.5", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/mimo-v2.5-pro", Name: "OpenCode Go · MiMo V2.5 Pro", ContextWindow: 1_048_576,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/hy3", Name: "OpenCode Go · Hy3", ContextWindow: 256_000,
+		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/minimax-m3", Name: "OpenCode Go · MiniMax M3", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/minimax-m2.7", Name: "OpenCode Go · MiniMax M2.7", API: modelAPIAnthropicMessages,
+		ContextWindow: 204_800, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
+	// MiniMax M2.5 remains declared so saved sessions fail explicitly instead
+	// of falling back to Chat Completions, but the provider marks it deprecated.
+	{
+		URI: "opencode-go/minimax-m2.5", Name: "OpenCode Go · MiniMax M2.5", API: modelAPIAnthropicMessages,
+		ContextWindow: 204_800, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilityUnsupported,
+	},
+	{
+		URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/qwen3.7-max", Name: "OpenCode Go · Qwen3.7 Max", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/qwen3.7-plus", Name: "OpenCode Go · Qwen3.7 Plus", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/qwen3.6-plus", Name: "OpenCode Go · Qwen3.6 Plus", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
 }
 
 func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverrides, enrichment modelRouteEnrichment) (resolvedModelRoute, error) {
@@ -186,6 +253,11 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	if declaration.ReasoningEfforts != nil {
 		reasoningEfforts = declaration.ReasoningEfforts
 	}
+	if api == modelAPIAnthropicMessages && (declaration.API != modelAPIAnthropicMessages || overrides.API != "") {
+		// This adapter does not yet send optional thinking controls. An explicit
+		// protocol override must not inherit another adapter's effort choices.
+		reasoningEfforts = []string{defaultReasoningEffort}
+	}
 	reasoningEfforts = append([]string(nil), reasoningEfforts...)
 	reasoningEffort, err = normalizeReasoningEffortForRoute(uri, reasoningEffort, reasoningEfforts)
 	if err != nil {
@@ -212,6 +284,10 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		traits.PromptCacheKey = false
 		traits.ReasoningReplay = ""
 		responsesTraits = responsemodel.RouteTraits{}
+	}
+	maxOutputTokens := 0
+	if api == modelAPIAnthropicMessages && !customEndpoint && declaration.API == modelAPIAnthropicMessages {
+		maxOutputTokens = declaration.MaxOutputTokens
 	}
 
 	contextWindow, contextEstimated := 0, false
@@ -242,11 +318,14 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		stateContract = traits.ProviderStateContract()
 	case modelAPIResponses:
 		stateContract = responsesTraits.ProviderStateContract()
+	case modelAPIAnthropicMessages:
+		stateContract = anthropic.ProviderStateContract
 	}
 	return resolvedModelRoute{
 		URI: provider + "/" + model, Provider: provider, Model: model, APIModel: apiModel, API: api,
 		BaseURL: baseURL, Header: header, Credentialless: providerDescription.credentialless,
 		CustomEndpoint: customEndpoint, ContextWindow: contextWindow, ContextWindowEstimated: contextEstimated,
+		MaxOutputTokens: maxOutputTokens,
 		ReasoningEffort: reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,
 		Compatibility: compatibility, ProviderStateContract: stateContract,
@@ -345,7 +424,7 @@ func knownModelURIs(store *state.Store, current string) []string {
 func modelChoices(store *state.Store, current string, overrides modelRouteOverrides) []ModelChoice {
 	choices := make([]ModelChoice, 0, len(modelCatalog)+4)
 	for _, uri := range knownModelURIs(store, current) {
-		declaration, declared := catalogModelSpec(uri)
+		declaration, _ := catalogModelSpec(uri)
 		route, err := resolveModelRoute(uri, "", overrides, modelRouteEnrichment{})
 		if err != nil {
 			api := declaration.API
@@ -356,13 +435,9 @@ func modelChoices(store *state.Store, current string, overrides modelRouteOverri
 					}
 				}
 			}
-			compatibility := modelCompatibility("")
-			if declared && declaration.Compatibility != "" {
-				compatibility = declaration.Compatibility
-			}
 			contextEstimated := declaration.ContextWindow <= 0
 			choices = append(choices, ModelChoice{
-				URI: uri, Name: declaration.Name, Protocol: string(api), Compatibility: string(compatibility),
+				URI: uri, Name: declaration.Name, Protocol: string(api),
 				ContextWindow: declaration.ContextWindow, ContextWindowEstimated: contextEstimated,
 				ReasoningEfforts: append([]string(nil), declaration.ReasoningEfforts...),
 				Unavailable:      true, UnavailableReason: err.Error(),
@@ -371,7 +446,7 @@ func modelChoices(store *state.Store, current string, overrides modelRouteOverri
 		}
 		if !implementedModelAPI(route.API) {
 			choices = append(choices, ModelChoice{
-				URI: uri, Name: declaration.Name, Protocol: string(route.API), Compatibility: string(route.Compatibility),
+				URI: uri, Name: declaration.Name, Protocol: string(route.API),
 				ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 				ReasoningEfforts: append([]string(nil), route.ReasoningEfforts...), Unavailable: true,
 				UnavailableReason: fmt.Sprintf("model API %q is not implemented", route.API),
@@ -379,7 +454,7 @@ func modelChoices(store *state.Store, current string, overrides modelRouteOverri
 			continue
 		}
 		choices = append(choices, ModelChoice{
-			URI: uri, Name: declaration.Name, Protocol: string(route.API), Compatibility: string(route.Compatibility),
+			URI: uri, Name: declaration.Name, Protocol: string(route.API),
 			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			ReasoningEfforts: append([]string(nil), route.ReasoningEfforts...),
 		})

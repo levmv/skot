@@ -20,7 +20,7 @@ func (model routeDiagnosticModel) Complete(ctx context.Context, request agent.Mo
 		return response, err
 	}
 	return response, fmt.Errorf(
-		"%w; route %q has not passed its live compatibility baseline, so its %s protocol or optional fields may need correction",
+		"%w; route %q is unverified, so the request may not match its %s protocol",
 		err, model.uri, model.api,
 	)
 }

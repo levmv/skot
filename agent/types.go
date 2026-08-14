@@ -259,7 +259,7 @@ func (RunIncompleteError) Unwrap() error { return ErrRunIncomplete }
 
 func isIncompleteStopReason(reason string) bool {
 	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "length", "max_tokens", "max_output_tokens", "content_filter", StopReasonOutputLimit:
+	case "length", "max_tokens", "max_output_tokens", "content_filter", "refusal", "pause_turn", "model_context_window_exceeded", StopReasonOutputLimit:
 		return true
 	default:
 		return false

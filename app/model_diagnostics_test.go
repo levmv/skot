@@ -19,14 +19,14 @@ func (model routeDiagnosticTestModel) Complete(context.Context, agent.ModelReque
 	return agent.ModelResponse{}, model.err
 }
 
-func TestUnverifiedRouteAddsBaselineContextOnlyAfterAProviderFailure(t *testing.T) {
+func TestUnverifiedRouteAddsProtocolContextOnlyAfterAProviderFailure(t *testing.T) {
 	providerErr := agent.MarkProviderFailure(errors.New("upstream rejected field"))
 	model := addRouteDiagnostics(routeDiagnosticTestModel{err: providerErr}, resolvedModelRoute{
 		URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: modelCompatibilityUnverified,
 	})
 	_, err := model.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "has not passed its live compatibility baseline") ||
-		!strings.Contains(err.Error(), "responses protocol or optional fields") {
+	if !errors.Is(err, agent.ErrProviderFailure) ||
+		!strings.Contains(err.Error(), `route "opencode-go/candidate" is unverified, so the request may not match its responses protocol`) {
 		t.Fatalf("provider error = %v", err)
 	}
 
@@ -35,7 +35,7 @@ func TestUnverifiedRouteAddsBaselineContextOnlyAfterAProviderFailure(t *testing.
 		URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: modelCompatibilityUnverified,
 	})
 	_, err = model.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if strings.Contains(err.Error(), "compatibility baseline") {
+	if strings.Contains(err.Error(), `route "opencode-go/candidate" is unverified`) {
 		t.Fatalf("local error received route diagnostic: %v", err)
 	}
 
@@ -47,7 +47,7 @@ func TestUnverifiedRouteAddsBaselineContextOnlyAfterAProviderFailure(t *testing.
 		URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: modelCompatibilityUnverified,
 	})
 	_, err = model.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if strings.Contains(err.Error(), "compatibility baseline") {
+	if strings.Contains(err.Error(), `route "opencode-go/candidate" is unverified`) {
 		t.Fatalf("authentication error received irrelevant route diagnostic: %v", err)
 	}
 }

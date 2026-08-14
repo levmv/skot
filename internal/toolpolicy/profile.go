@@ -107,8 +107,7 @@ func (profiles Profiles) Names() []string {
 }
 
 // ToolNames returns an owned copy of a profile's exact configured tool names.
-// Unknown profiles return nil; callers presenting Names results never observe
-// that case.
+// Unknown profiles return nil.
 func (profiles Profiles) ToolNames(profile string) []string {
 	return append([]string(nil), profiles.definitions[profile]...)
 }

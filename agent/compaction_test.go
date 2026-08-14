@@ -158,7 +158,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Model: "test", ContextWindow: 16 * 1024},
+		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				if request.Instructions != compactionSystemInstructions || len(request.Tools) != 0 || len(request.Items) != 1 {
@@ -289,7 +289,9 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
 		func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{
-				{Kind: ItemReasoning, Text: "provider-private reasoning"},
+				{Kind: ItemReasoning, Text: "provider-private reasoning", ProviderData: []ProviderData{{
+					Kind: "responses.reasoning_item", Data: json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
+				}}},
 				{Kind: ItemToolCall, ToolCall: &ToolCall{
 					Name: "echo", RawArguments: `{"text":"hello"}`,
 					ProviderReferences: []ProviderReference{{Kind: "call_id", Data: providerID}},
@@ -323,7 +325,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	if !strings.Contains(plan.Input, `[tool_call] echo args={"text":"hello"}`) || !strings.Contains(plan.Input, "echo result") {
 		t.Fatalf("tool block missing from input: %q", plan.Input)
 	}
-	if strings.Contains(plan.Input, "provider-private reasoning") || strings.Contains(plan.Input, "provider_call") {
+	if strings.Contains(plan.Input, "provider-private reasoning") || strings.Contains(plan.Input, "provider_call") || strings.Contains(plan.Input, "opaque-secret") {
 		t.Fatalf("provider-owned data leaked into summary input: %q", plan.Input)
 	}
 	invalid := ContextCompactedRecord{
@@ -363,7 +365,7 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 
 	unfinished := &memoryJournal{}
 	mustAppend(t, unfinished, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"})
-	mustAppend(t, unfinished, RecordModelSelected, ModelSelectedRecord{Backend: "test", Model: "test", Epoch: "epoch"})
+	mustAppend(t, unfinished, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch"})
 	mustAppend(t, unfinished, RecordRunStarted, RunStartedRecord{RunID: "run"})
 	mustAppend(t, unfinished, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "unfinished"})
 	unfinishedState, err := Replay(unfinished.snapshot())

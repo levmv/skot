@@ -258,7 +258,7 @@ func mustWriteFile(t *testing.T, path, content string) {
 type inertModel struct{}
 
 func (inertModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Model: "test"}
+	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "test"}
 }
 
 func (inertModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {

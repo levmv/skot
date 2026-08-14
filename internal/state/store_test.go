@@ -29,10 +29,6 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err := store.SetDefaultSandbox("off"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetModelContext(" OpenRouter/Example/Model ", 256_000); err != nil {
-		t.Fatal(err)
-	}
-
 	reopened, err := Open(home)
 	if err != nil {
 		t.Fatal(err)
@@ -52,9 +48,6 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	}
 	if got := strings.Join(settings.AgentModels, ","); got != "openai/gpt-5-mini" {
 		t.Fatalf("agent models = %#v", settings.AgentModels)
-	}
-	if window, ok, err := reopened.ModelContext("openrouter/example/model"); err != nil || !ok || window != 256_000 {
-		t.Fatalf("model context = %d, %v, %v", window, ok, err)
 	}
 	info, err := os.Stat(filepath.Join(home, "config.json"))
 	if err != nil {

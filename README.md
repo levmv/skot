@@ -16,12 +16,13 @@ locally.
 - **Tools** — files, search, Bash, managed jobs, web fetch, and optional web
   search.
 - **Bounded** — a profile names the exact tools a run may use, and model-owned
-  processes are filesystem-isolated by default.
+  processes are filesystem-isolated by default. This contains mistakes rather
+  than a determined model; see the [security model](#security-model).
 - **Narrow capabilities** — local executables can be exposed as typed tools
   instead of unrestricted Bash.
 - **Delegation** — read-only child agents work in parallel without filling the
   main conversation with their traces.
-- **Providers** — DeepSeek, OpenAI, OpenRouter, and Ollama.
+- **Providers** — DeepSeek, OpenAI, OpenRouter, OpenCode Go, and Ollama.
 
 ## Install
 
@@ -54,15 +55,14 @@ sk "inspect the workspace and run the tests"
 Models use `provider/model` names:
 
 ```sh
-sk -model openai/gpt-5 "review the current diff"
-
 ollama pull qwen3:8b
 sk -model ollama/qwen3:8b "inspect this project"
 ```
 
-DeepSeek, OpenAI, and OpenRouter use `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, and
-`OPENROUTER_API_KEY` respectively. Ollama needs no key and defaults to its local
-OpenAI-compatible endpoint. `/model` lists and switches models interactively.
+DeepSeek, OpenAI, OpenRouter, and OpenCode Go use `DEEPSEEK_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, and `OPENCODE_API_KEY` respectively.
+Ollama needs no key and defaults to its local OpenAI-compatible endpoint.
+`/model` lists and switches models interactively.
 
 ## Sessions and interactive use
 
@@ -118,7 +118,7 @@ allowed to delegate independent work:
   "profiles": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
-  "agent_models": ["openai/gpt-5-mini"]
+  "agent_models": ["deepseek/deepseek-v4-flash"]
 }
 ```
 
@@ -176,45 +176,62 @@ clean exit stops non-detached jobs; detached custom tools continue across it.
 If a one-shot run leaves detached work running, Skot keeps that session
 automatically and prints the command needed to resume it.
 
-Job supervision is not a container boundary. It manages ordinary Unix process
-groups, so stronger whole-subtree containment remains the responsibility of an
-outer container or another system-level mechanism. On a timeout or explicit
-stop, structured results report how many live processes Skot observed in the
-managed group; this count cannot include descendants which previously left the
-group.
+Job supervision uses ordinary Unix process groups, not a container boundary. A
+descendant that leaves its group may escape later observation and stopping; use
+an outer container when whole-process-tree containment matters.
 
-## Sandbox
+## Security model
 
-`-sandbox auto` is the default and resolves to one concrete policy. On a host it
-selects `workspace`: Landlock on Linux or Seatbelt on macOS limits model-owned
-processes to the workspace, system runtime files, and a disposable synthetic
-home. Inside a detected container it selects `masked`: the container remains
-the main boundary, while selected paths are inaccessible to model-owned tools.
-`off` is never selected automatically; it must be requested explicitly.
+Skot's boundaries are designed to contain accidental damage, not an agent
+deliberately trying to escape. Use a container or virtual machine when the
+model or the code it runs is untrusted.
 
-The same values are available interactively through `/sandbox`:
+Within that threat model, three rules describe the boundary:
 
-- `auto` — `workspace` on a host, `masked` in a detected container;
-- `workspace` — workspace-oriented filesystem isolation plus protected paths;
-- `masked` — ambient filesystem authority except for protected paths;
-- `off` — ambient filesystem authority, selected explicitly.
+- a **profile** decides which tools the model has at all;
+- **file tools** always work inside the workspace root, and this cannot be
+  turned off;
+- **model-owned processes** run under the selected sandbox policy.
+
+### What this does not cover
+
+- **Network access.** Model-owned processes inherit it; Skot does not filter
+  egress.
+- **Sandbox escapes.** Races, kernel bugs, and a determined adversary are
+  outside the threat model.
+- **Explicit bypasses.** `-sandbox off` and user `!` shell commands run with
+  your normal filesystem permissions.
+- **Workspace contents.** The agent may change anything inside the root except
+  explicitly protected paths.
+
+### Sandbox policies
+
+- `auto` (the default) — `workspace` on a host, `masked` in a detected
+  container;
+- `workspace` — model-owned processes can access the workspace, required
+  system runtime files, and a disposable synthetic home;
+- `masked` — the container remains the main boundary; processes retain its
+  filesystem access except for protected paths;
+- `off` — processes retain your filesystem access and protected paths are
+  disabled. It is never selected automatically.
+
+The same policies are available interactively through `/sandbox`.
 
 If the selected boundary cannot be installed or fails its
 read/truncate/remove probe, Skot stops instead of silently falling back to
 `off`. The startup header shows the effective policy, for example
 `sandbox: workspace (auto)` or `sandbox: masked (auto, docker)`.
 
-On Linux, `workspace` and `masked` require a kernel exposing Landlock ABI V3 so file
-truncation is part of the boundary. If Landlock is unavailable or disabled,
-the default fails closed and the error explains how to select `off`
-explicitly.
+On Linux, `workspace` and `masked` require Landlock ABI V3 so truncation is part
+of the boundary. If it is unavailable, the default fails closed.
 
-`workspace` uses a per-workspace synthetic `HOME` under the platform user cache
-and keeps `TMPDIR` inside it. `masked` and `off` preserve the ordinary `HOME`.
-All policies inherit network access. Skot also removes its settings and known
-provider keys from model-owned process environments, but environment filtering
-alone is not a security boundary. Explicit user `!` shell commands retain the
-user's normal permissions.
+`workspace` uses a per-workspace synthetic `HOME` and keeps `TMPDIR` inside it;
+`masked` and `off` preserve the ordinary `HOME`. Skot removes its settings and
+known provider keys from model-owned process environments, but environment
+filtering is not a security boundary. User `!` commands are not model-owned and
+retain the user's normal environment and permissions.
+
+### Protected paths
 
 Skot's state home is always protected in `workspace` and `masked`. Additional
 paths can be added in Skot's `config.json`:
@@ -234,14 +251,14 @@ inside the workspace is valid). Protection applies consistently to `read`,
 tools; symlink aliases do not bypass it. Protected entries are omitted by
 listing and search tools, and protected `AGENTS.md` files are not added to model
 instructions.
+
 Selecting `off` disables this protection, while the ordinary workspace boundary
 of the built-in file tools still remains.
 
-Landlock has no deny rules. On Linux, if a protected path is inside a writable
-tree, existing unprotected sibling subtrees remain writable, but an ancestor
-that contains the protected path cannot receive broad create/list grants.
-Creating a new direct sibling at that ancestor, or listing it from model-owned
-Bash, may therefore be denied. Built-in file tools do not have this limitation.
+Landlock is allow-list based. On Linux, protecting a child of a writable
+directory can therefore prevent model-owned processes from listing that parent
+or creating new siblings there. Built-in file tools do not have this
+limitation.
 
 ## Scripts and unattended runs
 

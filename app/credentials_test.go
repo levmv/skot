@@ -42,19 +42,40 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 	}
 }
 
+func TestOpenCodeGoCredentialUsesSubscriptionEnvironmentAndLoginURL(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "subscription-key")
+	token, source, err := credentialForProvider(nil, "opencode-go")
+	if err != nil || token != "subscription-key" || source != "environment override" {
+		t.Fatalf("credential = %q/%q, %v", token, source, err)
+	}
+	statuses, err := providerStatuses(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range statuses {
+		if status.Name == "opencode-go" {
+			if status.Source != "environment override" || status.Description != "OpenCode Go subscription" || status.CredentialURL != "https://opencode.ai/auth" {
+				t.Fatalf("OpenCode Go status = %#v", status)
+			}
+			return
+		}
+	}
+	t.Fatal("OpenCode Go credential status is missing")
+}
+
 func TestModelCanBeBuiltWithoutCredentialForInteractiveLogin(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("DEEPSEEK_API_KEY", "")
-	if _, err := buildModelBackend("deepseek/test", "", "", 0, store, modelBackendOptions{}); err != nil {
+	if _, err := buildModelBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelBackendOptions{}); err != nil {
 		t.Fatalf("interactive model build: %v", err)
 	}
-	if _, err := buildModelBackend("deepseek/test", "", "", 0, store, modelBackendOptions{requireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login deepseek") || !errors.Is(err, agent.ErrInvalidRequest) {
+	if _, err := buildModelBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelBackendOptions{requireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login deepseek") || !errors.Is(err, agent.ErrInvalidRequest) {
 		t.Fatalf("one-shot missing credential error = %v", err)
 	}
-	if _, err := buildModelBackend("deepseek/test", "", "https://gateway.example/v1", 0, store, modelBackendOptions{requireCredential: true}); err != nil {
+	if _, err := buildModelBackend(testResolvedRoute(t, "deepseek/test", "", "https://gateway.example/v1", 0), store, modelBackendOptions{requireCredential: true}); err != nil {
 		t.Fatalf("custom endpoint model build: %v", err)
 	}
 }
@@ -64,7 +85,7 @@ func TestOllamaModelNeverRequiresStoredCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := buildModelBackend("ollama/qwen3:8b", "", "", 0, store, modelBackendOptions{requireCredential: true})
+	backend, err := buildModelBackend(testResolvedRoute(t, "ollama/qwen3:8b", "", "", 0), store, modelBackendOptions{requireCredential: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,27 +100,39 @@ func TestBuildModelBackendUsesAutomaticContextUnlessOverridden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	automatic, err := buildModelBackend("deepseek/deepseek-v4-flash", "", "", 0, store, modelBackendOptions{})
+	automatic, err := buildModelBackend(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "", 0), store, modelBackendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := automatic.Info().ContextWindow; got != 1_000_000 {
 		t.Fatalf("automatic context window = %d", got)
 	}
-	overridden, err := buildModelBackend("deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 64_000, store, modelBackendOptions{})
+	if automatic.Info().ProviderStateContract == "" {
+		t.Fatalf("automatic model info = %#v", automatic.Info())
+	}
+	overridden, err := buildModelBackend(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 64_000), store, modelBackendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := overridden.Info().ContextWindow; got != 64_000 {
 		t.Fatalf("overridden context window = %d", got)
 	}
-	custom, err := buildModelBackend("deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 0, store, modelBackendOptions{})
+	custom, err := buildModelBackend(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 0), store, modelBackendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := custom.Info().ContextWindow; got != unknownModelContextWindow {
 		t.Fatalf("custom endpoint fallback window = %d", got)
 	}
+}
+
+func testResolvedRoute(t *testing.T, uri, effort, baseURL string, contextWindow int) resolvedModelRoute {
+	t.Helper()
+	route, err := resolveModelRoute(uri, effort, modelRouteOverrides{BaseURL: baseURL, ContextWindow: contextWindow}, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return route
 }
 
 func TestOptionalStoredAuthorizerSendsConfiguredKeyButAllowsNone(t *testing.T) {

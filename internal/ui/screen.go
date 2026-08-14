@@ -54,10 +54,9 @@ type ConfigurationAgent interface {
 	Profiles() []string
 	SwitchProfile(context.Context, string) error
 	CurrentModel() string
-	KnownModels() []string
+	ModelChoices() []app.ModelChoice
 	SwitchModel(context.Context, string, string) error
 	CurrentReasoningEffort() string
-	ReasoningEfforts(string) []string
 	CurrentSandbox() string
 	SecuritySummary() string
 	SwitchSandbox(context.Context, string) error
@@ -89,6 +88,8 @@ type Agent interface {
 }
 
 type ProviderStatus = app.ProviderStatus
+
+type ModelChoice = app.ModelChoice
 
 type SessionSummary = app.SessionSummary
 
@@ -124,6 +125,7 @@ type pickerItem struct {
 	modelURI      string
 	efforts       []string
 	effortIndex   int
+	details       string
 }
 
 type pickerState struct {
@@ -177,7 +179,7 @@ type screenModel struct {
 	picker     pickerState
 	transcript transcriptState
 
-	knownModels   []string
+	modelChoices  []ModelChoice
 	providers     []ProviderStatus
 	loginProvider string
 	loginModel    string
@@ -305,7 +307,7 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 		darkTheme:    darkTheme,
 		useStyle:     useStyle,
 		markdown:     markdownRenderer{useStyle: useStyle},
-		knownModels:  runtime.KnownModels(),
+		modelChoices: runtime.ModelChoices(),
 	}
 	m.applyTerminalTheme(darkTheme)
 	m.syncCommandSuggestions()

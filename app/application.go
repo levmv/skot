@@ -13,6 +13,7 @@ import (
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
 	"github.com/levmv/skot/model/chatcompletions"
+	responsemodel "github.com/levmv/skot/model/responses"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -43,7 +44,9 @@ type applicationConfig struct {
 	protectedPaths    []string
 	protection        *workspacetools.ProtectedPathPolicy
 	baseURL           string
+	modelAPI          modelAPI
 	contextWindow     int
+	metadataLookup    modelContextLookup
 	retryBudget       time.Duration
 	streamIdleTimeout time.Duration
 	maxToolIterations int
@@ -102,20 +105,17 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 }
 
 func (application *Application) SwitchModel(ctx context.Context, uri, effort string) error {
-	baseURL := application.config.baseURL
-	contextWindow := application.config.contextWindow
-	effort, err := normalizeReasoningEffort(uri, effort)
-	if err != nil {
-		return agent.MarkInvalidRequest(err)
-	}
-	model, err := buildModelBackend(uri, effort, baseURL, contextWindow, application.config.settings, modelBackendOptions{
-		requireCredential: true,
-		refreshContext:    true,
-	})
+	runtime, err := application.requireRuntime()
 	if err != nil {
 		return err
 	}
-	runtime, err := application.requireRuntime()
+	route, err := activateModelRoute(ctx, uri, effort, modelRouteOverrides{
+		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
+	}, savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
+	if err != nil {
+		return agent.MarkInvalidRequest(err)
+	}
+	model, err := buildModelBackend(route, application.config.settings, modelBackendOptions{requireCredential: true})
 	if err != nil {
 		return err
 	}
@@ -142,12 +142,24 @@ func (application *Application) CurrentReasoningEffort() string {
 	return runtime.CurrentReasoningEffort()
 }
 
-func (application *Application) ReasoningEfforts(uri string) []string {
-	return reasoningEffortsForModel(uri)
-}
-
-func (application *Application) KnownModels() []string {
-	return knownModels(application.config.settings, application.CurrentModel())
+func (application *Application) ModelChoices() []ModelChoice {
+	current := application.CurrentModel()
+	choices := modelChoices(application.config.settings, current, modelRouteOverrides{
+		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
+	})
+	runtime := application.runtimeOrNil()
+	if runtime == nil {
+		return choices
+	}
+	info := runtime.CurrentModelInfo()
+	for index := range choices {
+		if strings.EqualFold(choices[index].URI, current) {
+			choices[index].ContextWindow = info.ContextWindow
+			choices[index].ContextWindowEstimated = info.ContextWindowEstimated
+			break
+		}
+	}
+	return choices
 }
 
 func (application *Application) CurrentModel() string {
@@ -305,70 +317,56 @@ func (application *Application) CurrentSandbox() string {
 	return application.state.requestedSandbox
 }
 
-func buildModelBackend(uri, reasoningEffort, baseURL string, contextWindow int, credentials *state.Store, options modelBackendOptions) (agent.Model, error) {
-	provider, model, err := parseModelURI(uri)
-	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
+func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Model, error) {
+	if !implementedModelAPI(route.API) {
+		switch route.API {
+		case modelAPIAnthropicMessages:
+			return nil, agent.MarkInvalidRequest(fmt.Errorf("model API %q is not implemented", route.API))
+		default:
+			return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
+		}
 	}
-	spec, err := modelProviderSpec(provider)
-	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
-	}
-	baseURL = strings.TrimSpace(baseURL)
-	customEndpoint := baseURL != ""
-	if customEndpoint {
-		spec.baseURL = baseURL
-	}
-	if options.requireCredential && !customEndpoint && !spec.credentialless {
-		token, _, err := credentialForProvider(credentials, provider)
+	if options.requireCredential && !route.CustomEndpoint && !route.Credentialless {
+		token, _, err := credentialForProvider(credentials, route.Provider)
 		if err != nil {
 			return nil, err
 		}
 		if token == "" {
-			return nil, agent.MarkInvalidRequest(missingProviderCredentialError(provider, uri))
+			return nil, agent.MarkInvalidRequest(missingProviderCredentialError(route.Provider, route.URI))
 		}
-	}
-	contextWindowEstimated := false
-	if contextWindow == 0 {
-		if customEndpoint {
-			// A compatible endpoint may serve a model with the same URI but a
-			// different limit. Do not mistake public-provider metadata for a
-			// guarantee; -context-window remains the explicit override.
-			contextWindow = unknownModelContextWindow
-			contextWindowEstimated = true
-		} else {
-			modelSpec := resolveModelSpec(uri, credentials, options.refreshContext)
-			contextWindow = modelSpec.ContextWindow
-			contextWindowEstimated = modelSpec.Estimated
-		}
-	}
-	apiModel := model
-	if provider == "openrouter" {
-		apiModel = canonicalOpenRouterModelID(model)
 	}
 	var authorizer chatcompletions.Authorizer = storedBearerAuthorizer{
-		store: credentials, provider: provider, modelURI: uri, allowMissing: customEndpoint,
+		store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
 	}
-	if spec.credentialless {
+	if route.Credentialless {
 		// Ollama ignores the token, while OpenAI-compatible clients conventionally
 		// send a non-empty placeholder.
-		authorizer = chatcompletions.BearerToken(provider)
+		authorizer = chatcompletions.BearerToken(route.Provider)
 	}
-	backend, err := chatcompletions.New(chatcompletions.Config{
-		Provider:               provider,
-		Model:                  model,
-		APIModel:               apiModel,
-		ReasoningEffort:        reasoningEffort,
-		ContextWindow:          contextWindow,
-		ContextWindowEstimated: contextWindowEstimated,
-		BaseURL:                spec.baseURL,
-		Authorizer:             authorizer,
-		Header:                 spec.header,
-	})
+	var backend agent.Model
+	var err error
+	switch route.API {
+	case modelAPIChatCompletions:
+		backend, err = chatcompletions.New(chatcompletions.Config{
+			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
+			ReasoningEffort: route.ReasoningEffort, Traits: route.ChatTraits,
+			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
+			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
+		})
+	case modelAPIResponses:
+		backend, err = responsemodel.New(responsemodel.Config{
+			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
+			ReasoningEffort: route.ReasoningEffort, Traits: route.ResponsesTraits,
+			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
+			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
+		})
+	default:
+		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("initialize model: %w", err)
 	}
-	return backend, nil
+	return addRouteDiagnostics(backend, route), nil
 }
 
 func (application *Application) ProviderStatuses() ([]ProviderStatus, error) {
@@ -482,7 +480,7 @@ func (application *Application) ClearSession(ctx context.Context) (string, error
 	if err != nil {
 		return "", err
 	}
-	if err := application.installSession(ctx, journal, id, application.CurrentModel(), application.CurrentReasoningEffort()); err != nil {
+	if err := application.installSession(ctx, journal, id, application.CurrentModel(), application.CurrentReasoningEffort(), nil); err != nil {
 		_ = journal.ClosePruningEmpty()
 		return "", err
 	}
@@ -516,21 +514,17 @@ func (application *Application) ResumeSession(ctx context.Context, idOrPrefix st
 	modelURI := application.CurrentModel()
 	reasoningEffort := application.CurrentReasoningEffort()
 	if replayed.Selection.Model != "" {
-		provider := replayed.Selection.Provider
-		if provider == "" {
-			provider = replayed.Selection.Backend
-		}
-		modelURI = provider + "/" + replayed.Selection.Model
+		modelURI = replayed.Selection.Provider + "/" + replayed.Selection.Model
 		reasoningEffort = replayed.Selection.ReasoningEffort
 	}
-	if err := application.installSession(ctx, journal, summary.ID, modelURI, reasoningEffort); err != nil {
+	if err := application.installSession(ctx, journal, summary.ID, modelURI, reasoningEffort, &replayed); err != nil {
 		_ = journal.Close()
 		return "", err
 	}
 	return summary.ID, nil
 }
 
-func (application *Application) installSession(ctx context.Context, journal *session.Store, id, modelURI, reasoningEffort string) error {
+func (application *Application) installSession(ctx context.Context, journal *session.Store, id, modelURI, reasoningEffort string, resumedState *agent.State) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -564,8 +558,10 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	attachNotices := processes.AttachSessionNotices(id)
 	builder := runtimeBuilder{
 		baseURL:           baseURL,
+		modelAPI:          application.config.modelAPI,
 		contextWindow:     contextWindow,
 		credentials:       settings,
+		metadataLookup:    application.config.metadataLookup,
 		tools:             tools,
 		programTools:      programTools,
 		profiles:          profiles,
@@ -581,8 +577,9 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 			processes: processExternalWork{processes: processes, await: awaitRequiredJobs}, agents: children,
 		},
 	}
-	runtime, err := builder.build(runtimeBuildParams{
+	runtime, _, err := builder.buildWithRoute(ctx, runtimeBuildParams{
 		journal: journal, sessionID: id, modelURI: modelURI, reasoningEffort: reasoningEffort, instructions: instructions,
+		resumedState: resumedState,
 	})
 	if err != nil {
 		return err

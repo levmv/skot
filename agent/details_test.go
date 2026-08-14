@@ -31,7 +31,7 @@ func TestNormalizeDetailsRejectsInvalidAndOversizedData(t *testing.T) {
 func TestReplayRejectsInvalidJournaledDetail(t *testing.T) {
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
-		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "test", Model: "model", Epoch: "epoch"}),
+		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"}),
 		recordForTest(t, 3, RecordRunStarted, RunStartedRecord{RunID: "run"}),
 		recordForTest(t, 4, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "hello"}),
 		recordForTest(t, 5, RecordModelResponse, ModelResponseRecord{

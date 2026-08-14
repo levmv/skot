@@ -35,6 +35,7 @@ type Config struct {
 	Root                    string
 	ModelURI                string
 	ReasoningEffort         string
+	ModelAPI                string
 	ModelExplicit           bool
 	ReasoningEffortExplicit bool
 	BaseURL                 string
@@ -83,6 +84,23 @@ type ProviderStatus struct {
 	Source        string
 	Description   string
 	CredentialURL string
+}
+
+// ModelChoice is one locally known route presented to frontends. Unavailable
+// choices are descriptive only and must not appear as ordinary selections.
+// Protocol and compatibility are retained for diagnostics; ordinary picker
+// rows should emphasize actionable availability, credentials, and context
+// confidence instead of adapter internals.
+type ModelChoice struct {
+	URI                    string
+	Name                   string
+	Protocol               string
+	Compatibility          string
+	ContextWindow          int
+	ContextWindowEstimated bool
+	ReasoningEfforts       []string
+	Unavailable            bool
+	UnavailableReason      string
 }
 
 type SessionSummary struct {

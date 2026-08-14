@@ -292,6 +292,9 @@ func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
 		Model:      "deepseek-v4-flash",
 		BaseURL:    "http://example.invalid/v1",
 		Authorizer: BearerToken("unused"),
+		Traits: RouteTraits{
+			ReasoningReplay: ReasoningReplayToolTurns,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -327,6 +330,7 @@ func TestBuildRequestUsesSessionAsOpenAIPromptCacheKey(t *testing.T) {
 		Model:      "gpt-test",
 		BaseURL:    "http://example.invalid/v1",
 		Authorizer: BearerToken("unused"),
+		Traits:     RouteTraits{PromptCacheKey: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -343,19 +347,43 @@ func TestBuildRequestUsesSessionAsOpenAIPromptCacheKey(t *testing.T) {
 	}
 }
 
-func TestBuildRequestMapsReasoningEffortByProvider(t *testing.T) {
+func TestBuildRequestDoesNotInferOptionalFieldsFromProviderName(t *testing.T) {
+	backend, err := New(Config{
+		Provider: "openai", Model: "gpt-test", BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := backend.buildRequest(agent.ModelRequest{
+		SessionID: "session_stable", Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.PromptCacheKey != "" {
+		t.Fatalf("undeclared prompt cache key = %q", request.PromptCacheKey)
+	}
+	if _, err := New(Config{
+		Provider: "openrouter", Model: "model", ReasoningEffort: "high",
+		BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+	}); !errors.Is(err, agent.ErrInvalidRequest) {
+		t.Fatalf("undeclared reasoning effort error = %v", err)
+	}
+}
+
+func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 	for _, test := range []struct {
-		provider     string
+		name         string
+		encoding     ReasoningEffortEncoding
 		wantTopLevel string
 		wantNested   string
 	}{
-		{provider: "deepseek", wantTopLevel: "high"},
-		{provider: "openai", wantTopLevel: "high"},
-		{provider: "openrouter", wantNested: "high"},
+		{name: "top-level", encoding: ReasoningEffortTopLevel, wantTopLevel: "high"},
+		{name: "nested", encoding: ReasoningEffortNested, wantNested: "high"},
 	} {
-		t.Run(test.provider, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			backend, err := New(Config{
-				Provider: test.provider, Model: "model", ReasoningEffort: " HIGH ",
+				Provider: "test", Model: "model", ReasoningEffort: " HIGH ", Traits: RouteTraits{ReasoningEffort: test.encoding},
 				BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
 			})
 			if err != nil {
@@ -426,6 +454,9 @@ func TestModelInfoReportsSecretFreeEffectiveEndpoint(t *testing.T) {
 	if info.Endpoint != "https://example.test/v1" || info.ContextWindow != 64_000 || !info.ContextWindowEstimated {
 		t.Fatalf("model info = %#v", info)
 	}
+	if endpoint := PublicEndpoint("  https://other:secret@example.test/v1/?token=secret#fragment  "); endpoint != "https://example.test/v1/" {
+		t.Fatalf("public endpoint = %q", endpoint)
+	}
 }
 
 func TestBuildRequestPlacesSummaryBeforeVerbatimMessages(t *testing.T) {
@@ -488,7 +519,8 @@ func TestCompleteReturnsProviderHTTPError(t *testing.T) {
 		t.Fatalf("429 class = %v", err)
 	}
 	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) || !providerErr.Retryable || providerErr.RetryAfter != 7*time.Second {
+	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRateLimit ||
+		providerErr.Code != "" || !providerErr.Retryable || providerErr.RetryAfter != 7*time.Second {
 		t.Fatalf("429 provider metadata = %#v", providerErr)
 	}
 }
@@ -503,7 +535,8 @@ func TestCompleteClassifiesPaymentRequiredAsNonRetryableProviderFailure(t *testi
 	backend := newTestBackend(t, server.URL)
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
 	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || errors.Is(err, agent.ErrInvalidRequest) || !errors.As(err, &providerErr) || providerErr.Retryable {
+	if !errors.Is(err, agent.ErrProviderFailure) || errors.Is(err, agent.ErrInvalidRequest) ||
+		!errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable {
 		t.Fatalf("402 class/metadata = %v / %#v", err, providerErr)
 	}
 }
@@ -553,6 +586,10 @@ func newTestBackend(t *testing.T, baseURL string) *Backend {
 		BaseURL:    baseURL,
 		Authorizer: BearerToken("secret"),
 		Header:     header,
+		Traits: RouteTraits{
+			ReasoningEffort: ReasoningEffortTopLevel,
+			ReasoningReplay: ReasoningReplayCurrentTurn,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

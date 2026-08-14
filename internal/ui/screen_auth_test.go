@@ -145,6 +145,73 @@ func TestModelPickerShowsCredentialStateAndDefersMissingLogin(t *testing.T) {
 	}
 }
 
+func TestModelPickerShowsCuratedRouteFacts(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/model",
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/model"},
+			{
+				URI: "opencode-go/gpt-5.6-luna", Name: "GPT 5.6 Luna", Protocol: "responses",
+				Compatibility: "unverified", ContextWindow: 922_000,
+			},
+		},
+		providers: []ProviderStatus{
+			{Name: "deepseek", Source: "auth store", Description: "model provider"},
+			{Name: "opencode-go", Source: "none", Description: "OpenCode Go subscription"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	item := model.picker.items[1]
+	if item.label != "GPT 5.6 Luna" || !strings.Contains(item.description, "opencode-go/gpt-5.6-luna") ||
+		!strings.Contains(item.description, "922K context") || !strings.Contains(item.description, "login required") ||
+		strings.Contains(item.description, "~922K") || strings.Contains(item.description, "responses") ||
+		strings.Contains(item.description, "unverified") {
+		t.Fatalf("OpenCode choice = %#v", item)
+	}
+}
+
+func TestModelPickerMarksEstimatedFallbackWithoutRepeatingProtocolOrCompatibility(t *testing.T) {
+	description := modelChoiceDescription(ModelChoice{
+		Protocol: "chat_completions", Compatibility: "supported",
+		ContextWindow: 128 * 1024, ContextWindowEstimated: true,
+	})
+	if description != "~131K context" || strings.Contains(description, "chat completions") || strings.Contains(description, "supported") {
+		t.Fatalf("estimated supported description = %q", description)
+	}
+}
+
+func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/model",
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/model"},
+			{
+				URI: "opencode-go/minimax-m3", Name: "MiniMax M3", Protocol: "anthropic_messages",
+				Compatibility: "unsupported", Unavailable: true,
+			},
+		},
+		providers: []ProviderStatus{
+			{Name: "deepseek", Source: "auth store", Description: "model provider"},
+			{Name: "opencode-go", Source: "auth store", Description: "OpenCode Go subscription"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	if len(model.picker.items) != 3 || model.picker.items[1].label != "Unavailable routes…" || model.picker.items[1].value != "" {
+		t.Fatalf("model picker = %#v", model.picker)
+	}
+	model.picker.index = 1
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	details := strings.Join(model.transcript.lines, "\n")
+	if !strings.Contains(details, "MiniMax M3 (opencode-go/minimax-m3)") ||
+		!strings.Contains(details, "anthropic messages") || strings.Contains(details, " · unsupported") || fake.model != "deepseek/model" {
+		t.Fatalf("unavailable details = %q, model = %q", details, fake.model)
+	}
+}
+
 func TestModelPickerCyclesAndPersistsReasoningEffort(t *testing.T) {
 	uri := "deepseek/model"
 	fake := &fakeAgent{

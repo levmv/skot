@@ -8,6 +8,56 @@ import (
 	"github.com/levmv/skot/agent"
 )
 
+// ReasoningEffortEncoding selects the explicitly supported wire field for a
+// route. The zero value sends no reasoning control.
+type ReasoningEffortEncoding string
+
+const (
+	ReasoningEffortTopLevel ReasoningEffortEncoding = "reasoning_effort"
+	ReasoningEffortNested   ReasoningEffortEncoding = "reasoning"
+)
+
+// ReasoningReplayPolicy controls which provider-owned reasoning summaries may
+// be returned on later requests. The zero value replays none.
+type ReasoningReplayPolicy string
+
+const (
+	ReasoningReplayCurrentTurn ReasoningReplayPolicy = "current_turn"
+	ReasoningReplayToolTurns   ReasoningReplayPolicy = "tool_turns"
+)
+
+// RouteTraits contains only demonstrated Chat Completions route differences.
+// Optional request extensions stay disabled in the zero value.
+type RouteTraits struct {
+	ReasoningEffort ReasoningEffortEncoding
+	ReasoningReplay ReasoningReplayPolicy
+	PromptCacheKey  bool
+}
+
+func (traits RouteTraits) validate(reasoningEffort string) error {
+	switch traits.ReasoningEffort {
+	case "", ReasoningEffortTopLevel, ReasoningEffortNested:
+	default:
+		return fmt.Errorf("unsupported reasoning effort encoding %q", traits.ReasoningEffort)
+	}
+	switch traits.ReasoningReplay {
+	case "", ReasoningReplayCurrentTurn, ReasoningReplayToolTurns:
+	default:
+		return fmt.Errorf("unsupported reasoning replay policy %q", traits.ReasoningReplay)
+	}
+	if reasoningEffort != "" && traits.ReasoningEffort == "" {
+		return errors.New("reasoning effort is not supported by this route")
+	}
+	return nil
+}
+
+func (traits RouteTraits) ProviderStateContract() agent.ProviderStateContract {
+	if traits.ReasoningReplay == "" {
+		return ""
+	}
+	return agent.ProviderStateContract("chat_completions.reasoning_replay." + traits.ReasoningReplay + ".v1")
+}
+
 type chatRequest struct {
 	Model           string           `json:"model"`
 	Messages        []chatMessage    `json:"messages"`
@@ -168,13 +218,14 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, e
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
 	if backend.reasoningEffort != "" {
-		if backend.provider == "openrouter" {
+		switch backend.traits.ReasoningEffort {
+		case ReasoningEffortNested:
 			wireRequest.Reasoning = &reasoningConfig{Effort: backend.reasoningEffort}
-		} else {
+		case ReasoningEffortTopLevel:
 			wireRequest.ReasoningEffort = backend.reasoningEffort
 		}
 	}
-	if backend.provider == "openai" {
+	if backend.traits.PromptCacheKey {
 		wireRequest.PromptCacheKey = request.SessionID
 	}
 	return wireRequest, nil
@@ -218,11 +269,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 				case agent.ItemAssistantText:
 					message.Content += part.Text
 				case agent.ItemReasoning:
-					// Current DeepSeek thinking-mode rules require reasoning
-					// from tool-call turns in later user turns too. Other
-					// compatible backends retain Cy's narrower current-turn
-					// behavior until they declare their own replay rule.
-					if backend.matchesProviderContext(part.ProviderContext, request.ProviderEpoch) && (backend.provider == "deepseek" || index > lastUser) {
+					if backend.matchesProviderContext(part.ProviderContext, request.ProviderEpoch) && backend.replaysReasoning(index, lastUser) {
 						message.ReasoningContent += part.Text
 					}
 				case agent.ItemToolCall:
@@ -266,6 +313,17 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 		}
 	}
 	return messages, nil
+}
+
+func (backend *Backend) replaysReasoning(index, lastUser int) bool {
+	switch backend.traits.ReasoningReplay {
+	case ReasoningReplayToolTurns:
+		return true
+	case ReasoningReplayCurrentTurn:
+		return index > lastUser
+	default:
+		return false
+	}
 }
 
 func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string {

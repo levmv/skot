@@ -24,6 +24,7 @@ import (
 type cliConfig struct {
 	modelURI          string
 	reasoningEffort   string
+	modelAPI          string
 	baseURL           string
 	contextWindow     int
 	retryBudget       string
@@ -79,6 +80,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	config := cliConfig{}
 	flags.StringVar(&config.modelURI, "model", envOr("SK_MODEL", app.DefaultModelURI), "model in provider/model form")
 	flags.StringVar(&config.reasoningEffort, "reasoning-effort", strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")), "model reasoning effort: default or high")
+	flags.StringVar(&config.modelAPI, "model-api", strings.TrimSpace(os.Getenv("SK_MODEL_API")), "override model API for every selected model (implemented: chat_completions, responses; planned: anthropic_messages)")
 	flags.StringVar(&config.baseURL, "base-url", strings.TrimSpace(os.Getenv("SK_BASE_URL")), "override provider API base URL")
 	flags.IntVar(&config.contextWindow, "context-window", 0, "override model context window in tokens (0 uses model metadata)")
 	flags.StringVar(&config.retryBudget, "retry-budget", strings.TrimSpace(os.Getenv("SK_RETRY_BUDGET")), fmt.Sprintf("wall-clock budget for one logical model request, attempts included (default %s)", app.DefaultRetryBudget))
@@ -151,7 +153,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 	application, err := app.Open(ctx, app.Config{
 		Home: config.home, Root: config.root,
-		ModelURI: config.modelURI, ReasoningEffort: config.reasoningEffort,
+		ModelURI: config.modelURI, ReasoningEffort: config.reasoningEffort, ModelAPI: config.modelAPI,
 		ModelExplicit: modelExplicit, ReasoningEffortExplicit: reasoningEffortExplicit,
 		BaseURL: config.baseURL, ContextWindow: config.contextWindow,
 		RetryBudget: retryBudget, StreamIdleTimeout: streamIdleTimeout, MaxToolIterations: maxToolIterations, SystemPrompt: config.systemPrompt,

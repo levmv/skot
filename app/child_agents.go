@@ -521,7 +521,7 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 		_ = os.Remove(stagingDir)
 		return nil, fmt.Errorf("open child agent journal: %w", err)
 	}
-	runtime, err := supervisor.builder.build(runtimeBuildParams{
+	runtime, err := supervisor.builder.build(ctx, runtimeBuildParams{
 		journal: journal, sessionID: sessionID, modelURI: model, reasoningEffort: effort,
 		instructions: supervisor.instructions, modelOptions: modelBackendOptions{requireCredential: true},
 	})
@@ -886,9 +886,17 @@ func (supervisor *childSupervisor) openChildLocked(ctx context.Context, dir, par
 	if err := agent.Reconcile(ctx, journal); err != nil {
 		return fail(fmt.Errorf("reconcile journal: %w", err))
 	}
-	runtime, err := builder.build(runtimeBuildParams{
+	records, err := journal.Records(ctx)
+	if err != nil {
+		return fail(fmt.Errorf("read journal: %w", err))
+	}
+	replayed, err := agent.Replay(records)
+	if err != nil {
+		return fail(fmt.Errorf("replay journal: %w", err))
+	}
+	runtime, err := builder.build(ctx, runtimeBuildParams{
 		journal: journal, sessionID: metadata.SessionID, modelURI: metadata.Model,
-		reasoningEffort: metadata.ReasoningEffort, instructions: instructions,
+		reasoningEffort: metadata.ReasoningEffort, instructions: instructions, resumedState: &replayed,
 	})
 	if err != nil {
 		return fail(err)

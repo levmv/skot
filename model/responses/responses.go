@@ -1,6 +1,6 @@
-// Package chatcompletions adapts the OpenAI-compatible Chat Completions
-// protocol to Skot's product-native model items.
-package chatcompletions
+// Package responses adapts the OpenAI Responses protocol to Skot's
+// product-native model items while keeping conversation history stateless.
+package responses
 
 import (
 	"bytes"
@@ -19,16 +19,14 @@ import (
 	"github.com/levmv/skot/internal/modelhttp"
 )
 
-// Authorizer applies provider-owned authorization to a request. Implementations
-// may refresh credentials and must be safe for concurrent use.
 type Authorizer interface {
 	Authorize(context.Context, *http.Request) error
 }
 
 type AuthorizerFunc func(context.Context, *http.Request) error
 
-func (fn AuthorizerFunc) Authorize(ctx context.Context, request *http.Request) error {
-	return fn(ctx, request)
+func (function AuthorizerFunc) Authorize(ctx context.Context, request *http.Request) error {
+	return function(ctx, request)
 }
 
 func BearerToken(token string) Authorizer {
@@ -45,8 +43,8 @@ type Config struct {
 	ReasoningEffort string
 	Traits          RouteTraits
 	ContextWindow   int
-	// ContextWindowEstimated distinguishes a discovered/defaulted value from an
-	// explicit or provider-declared limit in durable runtime diagnostics.
+	// ContextWindowEstimated distinguishes discovered/defaulted values from a
+	// reviewed or explicit limit in durable runtime diagnostics.
 	ContextWindowEstimated bool
 	BaseURL                string
 	HTTPClient             *http.Client
@@ -71,32 +69,6 @@ type Backend struct {
 	maxCompletionBytes int
 }
 
-func (backend *Backend) Info() agent.ModelInfo {
-	return agent.ModelInfo{
-		Backend:                backend.backendID(),
-		Provider:               backend.provider,
-		Model:                  backend.model,
-		ReasoningEffort:        backend.reasoningEffort,
-		ProviderStateContract:  backend.traits.ProviderStateContract(),
-		ContextWindow:          backend.contextWindow,
-		ContextWindowEstimated: backend.contextEstimated,
-		MaxRequestBytes:        backend.maxRequestBytes,
-		MaxCompletionBytes:     backend.maxCompletionBytes,
-		Endpoint:               PublicEndpoint(backend.baseURL),
-	}
-}
-
-// PublicEndpoint returns the canonical secret-free endpoint reported in model
-// diagnostics. Route activation uses the same value when deciding whether
-// saved effective metadata still belongs to this adapter endpoint.
-func PublicEndpoint(value string) string {
-	return modelhttp.PublicEndpoint(value)
-}
-
-func (backend *Backend) backendID() string {
-	return "chat_completions." + backend.provider
-}
-
 func New(config Config) (*Backend, error) {
 	provider := strings.TrimSpace(config.Provider)
 	model := strings.TrimSpace(config.Model)
@@ -118,7 +90,7 @@ func New(config Config) (*Backend, error) {
 	if config.ContextWindow < 0 {
 		return nil, agent.MarkInvalidRequest(errors.New("context window cannot be negative"))
 	}
-	if err := config.Traits.validate(reasoningEffort); err != nil {
+	if err := config.Traits.validate(); err != nil {
 		return nil, agent.MarkInvalidRequest(err)
 	}
 	if config.Authorizer == nil {
@@ -129,21 +101,29 @@ func New(config Config) (*Backend, error) {
 		client = modelhttp.DefaultClient()
 	}
 	return &Backend{
-		provider:           provider,
-		model:              model,
-		apiModel:           apiModel,
-		reasoningEffort:    reasoningEffort,
-		traits:             config.Traits,
-		contextWindow:      config.ContextWindow,
-		contextEstimated:   config.ContextWindowEstimated,
-		baseURL:            baseURL,
-		endpoint:           baseURL + "/chat/completions",
-		client:             client,
-		authorizer:         config.Authorizer,
-		header:             config.Header.Clone(),
-		maxRequestBytes:    productlimits.MaxModelRequestBytes,
-		maxCompletionBytes: productlimits.MaxModelCompletionBytes,
+		provider: provider, model: model, apiModel: apiModel,
+		reasoningEffort: reasoningEffort, traits: config.Traits,
+		contextWindow: config.ContextWindow, contextEstimated: config.ContextWindowEstimated,
+		baseURL: baseURL, endpoint: baseURL + "/responses", client: client,
+		authorizer: config.Authorizer, header: config.Header.Clone(),
+		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
+}
+
+func (backend *Backend) Info() agent.ModelInfo {
+	return agent.ModelInfo{
+		Backend: backend.backendID(), Provider: backend.provider, Model: backend.model,
+		ReasoningEffort: backend.reasoningEffort, ProviderStateContract: backend.traits.ProviderStateContract(),
+		ContextWindow: backend.contextWindow, ContextWindowEstimated: backend.contextEstimated,
+		MaxRequestBytes: backend.maxRequestBytes, MaxCompletionBytes: backend.maxCompletionBytes,
+		Endpoint: modelhttp.PublicEndpoint(backend.baseURL),
+	}
+}
+
+func (backend *Backend) backendID() string { return "responses." + backend.provider }
+
+func (backend *Backend) callReferenceKind() string {
+	return "responses." + backend.provider + ".function_call"
 }
 
 func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
@@ -153,14 +133,14 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	}
 	body, err := json.Marshal(wireRequest)
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode chat completion request: %w", err))
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode Responses request: %w", err))
 	}
 	if len(body) > backend.maxRequestBytes {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("chat completion request is %d bytes, limit is %d", len(body), backend.maxRequestBytes))
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("responses request is %d bytes, limit is %d", len(body), backend.maxRequestBytes))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("create chat completion request: %w", err))
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("create Responses request: %w", err))
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "text/event-stream")
@@ -176,7 +156,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 
 	response, err := backend.client.Do(httpRequest)
 	if err != nil {
-		return agent.ModelResponse{}, fmt.Errorf("%s chat completion: %w", backend.provider, err)
+		return agent.ModelResponse{}, fmt.Errorf("%s Responses request: %w", backend.provider, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -195,11 +175,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		defer idleTimer.Stop()
 	}
 	var text, reasoning strings.Builder
-	var calls toolCallAccumulator
-	var usage agent.ModelUsage
-	var stopReason string
 	completionBytes := 0
-	limited := false
 	for {
 		var read sseReadResult
 		select {
@@ -225,104 +201,76 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		case <-ctx.Done():
 			return agent.ModelResponse{}, ctx.Err()
 		}
-		payload, err := read.payload, read.err
-		if errors.Is(err, io.EOF) {
-			if stopReason == "" && !reader.done {
-				return agent.ModelResponse{}, fmt.Errorf("%s stream ended before a finish reason", backend.provider)
-			}
-			break
+
+		payload, readErr := read.payload, read.err
+		if errors.Is(readErr, io.EOF) {
+			return agent.ModelResponse{}, fmt.Errorf("%s Responses stream ended before a terminal event", backend.provider)
 		}
-		if errors.Is(err, errSSETokenTooLarge) {
-			limited = true
-			break
+		if errors.Is(readErr, errSSETokenTooLarge) || len(payload) > backend.maxCompletionBytes-completionBytes {
+			return partialStreamResponse(text.String(), reasoning.String()), nil
 		}
-		if err != nil {
-			return agent.ModelResponse{}, fmt.Errorf("read %s stream: %w", backend.provider, err)
-		}
-		if len(payload) > backend.maxCompletionBytes-completionBytes {
-			limited = true
-			break
+		if readErr != nil {
+			return agent.ModelResponse{}, fmt.Errorf("read %s Responses stream: %w", backend.provider, readErr)
 		}
 		completionBytes += len(payload)
-		var chunk streamChunk
-		if err := json.Unmarshal(payload, &chunk); err != nil {
-			return agent.ModelResponse{}, fmt.Errorf("decode %s stream chunk: %w", backend.provider, err)
+		var event streamEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return agent.ModelResponse{}, fmt.Errorf("decode %s Responses stream event: %w", backend.provider, err)
 		}
-		if chunk.Error != nil {
-			return agent.ModelResponse{}, fmt.Errorf("%s API error: %s", backend.provider, chunk.Error.message())
-		}
-		if chunk.Usage != nil {
-			usage = chunk.Usage.modelUsage()
-		}
-		for _, choice := range chunk.Choices {
-			if choice.Index != 0 {
-				continue
+		switch event.Type {
+		case "response.output_text.delta", "response.refusal.delta":
+			text.WriteString(event.Delta)
+			emitModelEvent(emit, agent.EventTextDelta, event.Delta)
+		case "response.reasoning_summary_text.delta":
+			reasoning.WriteString(event.Delta)
+			emitModelEvent(emit, agent.EventReasoningSummaryDelta, event.Delta)
+		case "response.completed", "response.incomplete":
+			if event.Response == nil {
+				return agent.ModelResponse{}, fmt.Errorf("%s Responses terminal event has no response", backend.provider)
 			}
-			if choice.Delta.ReasoningContent != "" {
-				reasoning.WriteString(choice.Delta.ReasoningContent)
-				emitModelEvent(emit, agent.EventReasoningSummaryDelta, choice.Delta.ReasoningContent)
+			if event.Response.Status == "" {
+				event.Response.Status = strings.TrimPrefix(event.Type, "response.")
 			}
-			if choice.Delta.Content != "" {
-				text.WriteString(choice.Delta.Content)
-				emitModelEvent(emit, agent.EventTextDelta, choice.Delta.Content)
+			return backend.parseResponse(*event.Response)
+		case "response.failed":
+			if event.Response != nil && event.Response.Error != nil {
+				return agent.ModelResponse{}, fmt.Errorf("%s Responses API error: %s", backend.provider, event.Response.Error.message())
 			}
-			if err := calls.merge(choice.Delta.ToolCalls); err != nil {
-				return agent.ModelResponse{}, fmt.Errorf("decode %s tool calls: %w", backend.provider, err)
+			return agent.ModelResponse{}, fmt.Errorf("%s Responses API failed", backend.provider)
+		case "error":
+			message := strings.TrimSpace(event.Message)
+			if event.Error != nil {
+				message = event.Error.message()
 			}
-			if choice.FinishReason != "" && choice.FinishReason != "null" {
-				stopReason = choice.FinishReason
+			if message == "" {
+				message = "unknown error"
 			}
+			return agent.ModelResponse{}, fmt.Errorf("%s Responses stream error: %s", backend.provider, message)
 		}
 	}
+}
 
-	if limited {
-		stopReason = agent.StopReasonOutputLimit
+func partialStreamResponse(text, reasoning string) agent.ModelResponse {
+	items := make([]agent.Item, 0, 2)
+	if reasoning != "" {
+		items = append(items, agent.Item{Kind: agent.ItemReasoning, Text: reasoning})
 	}
-	items := make([]agent.Item, 0, 2+len(calls.calls))
-	if reasoning.Len() != 0 {
-		items = append(items, agent.Item{Kind: agent.ItemReasoning, Text: reasoning.String()})
+	if text != "" {
+		items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: text})
 	}
-	if text.Len() != 0 {
-		items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: text.String()})
-	}
-	// Tool calls are not durable unless they are complete enough to execute.
-	// If the response was cut locally, keep only renderable partial content.
-	if !limited {
-		for _, call := range calls.snapshot() {
-			if strings.TrimSpace(call.Function.Name) == "" {
-				return agent.ModelResponse{}, errors.New("chat completion returned a tool call without a name")
-			}
-			toolCall := agent.ToolCall{Name: call.Function.Name, RawArguments: call.Function.Arguments}
-			if call.ID != "" {
-				data, _ := json.Marshal(call.ID)
-				toolCall.ProviderReferences = []agent.ProviderReference{{
-					Kind: backend.callIDReferenceKind(),
-					Data: data,
-				}}
-			}
-			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &toolCall})
-		}
-	}
-	if len(items) == 0 && !limited {
-		return agent.ModelResponse{}, errors.New("chat completion returned no output items")
-	}
-	return agent.ModelResponse{Items: items, Usage: usage, StopReason: stopReason}, nil
+	return agent.ModelResponse{Items: items, StopReason: agent.StopReasonOutputLimit}
 }
 
 func emitModelEvent(emit func(agent.ModelStreamEvent), kind agent.EventKind, text string) {
-	if emit != nil {
+	if emit != nil && text != "" {
 		emit(agent.ModelStreamEvent{Kind: kind, Text: text})
 	}
-}
-
-func (backend *Backend) callIDReferenceKind() string {
-	return "chat_completions." + backend.provider + ".call_id"
 }
 
 func decodeHTTPError(provider, model string, response *http.Response) error {
 	body, err := io.ReadAll(io.LimitReader(response.Body, productlimits.MaxModelCompletionBytes+1))
 	if err != nil {
-		return fmt.Errorf("%s API returned HTTP %s (read body: %w)", provider, response.Status, err)
+		return fmt.Errorf("%s Responses API returned HTTP %s (read body: %w)", provider, response.Status, err)
 	}
 	if len(body) > productlimits.MaxModelCompletionBytes {
 		body = body[:productlimits.MaxModelCompletionBytes]

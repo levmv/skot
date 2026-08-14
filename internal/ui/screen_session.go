@@ -17,7 +17,7 @@ func (m *screenModel) clearSession() {
 	}
 	m.resetTranscript()
 	m.composer.resetHistory()
-	m.rememberKnownModel(m.agent.CurrentModel())
+	m.refreshModelChoices()
 	m.addBlock(screenBlockSystem, "new session "+app.ShortSessionID(id))
 }
 
@@ -58,7 +58,7 @@ func (m *screenModel) resumeSession(idOrPrefix string) {
 		m.addBlock(screenBlockError, "resume session: "+err.Error())
 		return
 	}
-	m.rememberKnownModel(m.agent.CurrentModel())
+	m.refreshModelChoices()
 	m.continueTranscriptBelow()
 	m.addBlock(screenBlockSystem, "resumed session "+app.ShortSessionID(id))
 	if notices := m.agent.StartupNotices(); noticeCount < len(notices) {

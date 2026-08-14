@@ -49,7 +49,7 @@ func TestRuntimeRunsWithJournalAndModelAdapters(t *testing.T) {
 type echoModel struct{}
 
 func (echoModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "example", Model: "echo", ContextWindow: 128_000}
+	return agent.ModelInfo{Backend: "example", Provider: "example", Model: "echo", ContextWindow: 128_000}
 }
 
 func (echoModel) Complete(_ context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {

@@ -33,7 +33,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Model: "test", ContextWindow: 32 * 1024},
+		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 32 * 1024},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			var result string
 			for _, item := range request.Items {
@@ -112,7 +112,7 @@ func TestInsufficientToolPruningFallsThroughToCompaction(t *testing.T) {
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Model: "test", ContextWindow: 16 * 1024},
+		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				if request.Instructions != compactionSystemInstructions {

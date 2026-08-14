@@ -23,14 +23,24 @@ type Item struct {
 	Kind            ItemKind         `json:"kind"`
 	ResponseID      string           `json:"response_id,omitempty"`
 	ProviderContext *ProviderContext `json:"provider_context,omitempty"`
-	Text            string           `json:"text,omitempty"`
-	ToolCall        *ToolCall        `json:"tool_call,omitempty"`
-	ToolResult      *ToolResult      `json:"tool_result,omitempty"`
+	// ProviderData carries bounded adapter-owned state whose opaque fields must
+	// survive replay verbatim. Visible text remains in Text so it follows the
+	// normal sanitization path. Ownership is inherited from ProviderContext; the
+	// entries deliberately do not duplicate backend or epoch fields.
+	ProviderData []ProviderData `json:"provider_data,omitempty"`
+	Text         string         `json:"text,omitempty"`
+	ToolCall     *ToolCall      `json:"tool_call,omitempty"`
+	ToolResult   *ToolResult    `json:"tool_result,omitempty"`
 }
 
 type ProviderContext struct {
 	Backend string `json:"backend"`
 	Epoch   string `json:"epoch"`
+}
+
+type ProviderData struct {
+	Kind string          `json:"kind"`
+	Data json.RawMessage `json:"data"`
 }
 
 type ToolCall struct {
@@ -121,14 +131,18 @@ type ModelRequest struct {
 }
 
 type ModelInfo struct {
-	Backend                string `json:"backend"`
-	Provider               string `json:"provider,omitempty"`
-	Model                  string `json:"model"`
-	ReasoningEffort        string `json:"reasoning_effort,omitempty"`
-	ContextWindow          int    `json:"context_window,omitempty"`
-	ContextWindowEstimated bool   `json:"context_window_estimated,omitempty"`
-	MaxRequestBytes        int    `json:"max_request_bytes,omitempty"`
-	MaxCompletionBytes     int    `json:"max_completion_bytes,omitempty"`
+	Backend         string `json:"backend"`
+	Provider        string `json:"provider,omitempty"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// ProviderStateContract is an adapter-owned, human-readable identifier for
+	// the rules used to create and replay opaque provider state. A change must
+	// rotate the session epoch even when the backend and model stay the same.
+	ProviderStateContract  ProviderStateContract `json:"provider_state_contract,omitempty"`
+	ContextWindow          int                   `json:"context_window,omitempty"`
+	ContextWindowEstimated bool                  `json:"context_window_estimated,omitempty"`
+	MaxRequestBytes        int                   `json:"max_request_bytes,omitempty"`
+	MaxCompletionBytes     int                   `json:"max_completion_bytes,omitempty"`
 	// Endpoint identifies the effective provider endpoint without credentials.
 	// It is journaled diagnostic metadata, not authorization configuration.
 	Endpoint string `json:"endpoint,omitempty"`
@@ -273,7 +287,11 @@ type RecordKind string
 
 // JournalSchemaVersion is the only record schema this pre-v1 runtime accepts.
 // Future changes require an explicit migration rather than best-effort replay.
-const JournalSchemaVersion = 1
+const JournalSchemaVersion = 2
+
+// ProviderStateContract is intentionally readable in journal records. Agent
+// compares it for epoch ownership but does not interpret adapter semantics.
+type ProviderStateContract string
 
 const (
 	RecordSessionStarted    RecordKind = "session_started"
@@ -323,11 +341,12 @@ type SessionStartedRecord struct {
 }
 
 type ModelSelectedRecord struct {
-	Backend         string `json:"backend"`
-	Provider        string `json:"provider,omitempty"`
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	Epoch           string `json:"epoch"`
+	Backend               string                `json:"backend"`
+	Provider              string                `json:"provider"`
+	Model                 string                `json:"model"`
+	ReasoningEffort       string                `json:"reasoning_effort,omitempty"`
+	ProviderStateContract ProviderStateContract `json:"provider_state_contract,omitempty"`
+	Epoch                 string                `json:"epoch"`
 }
 
 // EffectiveConfigSnapshot is the secret-free configuration under which

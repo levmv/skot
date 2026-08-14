@@ -230,6 +230,13 @@ func (runtime *Runtime) CurrentReasoningEffort() string {
 	return runtime.modelInfo.ReasoningEffort
 }
 
+// CurrentModelInfo returns the effective, secret-free model configuration.
+func (runtime *Runtime) CurrentModelInfo() ModelInfo {
+	runtime.configMu.RLock()
+	defer runtime.configMu.RUnlock()
+	return runtime.modelInfo
+}
+
 func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 	if model == nil {
 		return errors.New("model is required")
@@ -258,19 +265,18 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 	if live.state.hasUnfinishedWork() {
 		return unfinishedWorkError("switching model")
 	}
-	if live.state.SessionID != "" && (live.state.Selection.Backend != modelInfo.Backend ||
-		live.state.Selection.Provider != modelInfo.Provider || live.state.Selection.Model != modelInfo.Model ||
-		live.state.Selection.ReasoningEffort != modelInfo.ReasoningEffort) {
+	if live.state.SessionID != "" && !selectionMatchesModel(live.state.Selection, modelInfo) {
 		epoch, err := newID("epoch")
 		if err != nil {
 			return err
 		}
 		selection := ModelSelectedRecord{
-			Backend:         modelInfo.Backend,
-			Provider:        modelInfo.Provider,
-			Model:           modelInfo.Model,
-			ReasoningEffort: modelInfo.ReasoningEffort,
-			Epoch:           epoch,
+			Backend:               modelInfo.Backend,
+			Provider:              modelInfo.Provider,
+			Model:                 modelInfo.Model,
+			ReasoningEffort:       modelInfo.ReasoningEffort,
+			ProviderStateContract: modelInfo.ProviderStateContract,
+			Epoch:                 epoch,
 		}
 		_, err = appendRecordAndApply(ctx, runtime.journal, live, RecordModelSelected, selection)
 		if err != nil {
@@ -291,9 +297,10 @@ func normalizeModelInfo(modelInfo ModelInfo) (ModelInfo, error) {
 	modelInfo.Provider = strings.TrimSpace(modelInfo.Provider)
 	modelInfo.Model = strings.TrimSpace(modelInfo.Model)
 	modelInfo.ReasoningEffort = strings.ToLower(strings.TrimSpace(modelInfo.ReasoningEffort))
+	modelInfo.ProviderStateContract = ProviderStateContract(strings.TrimSpace(string(modelInfo.ProviderStateContract)))
 	modelInfo.Endpoint = strings.TrimSpace(modelInfo.Endpoint)
-	if modelInfo.Backend == "" || modelInfo.Model == "" {
-		return ModelInfo{}, errors.New("model backend and model name are required")
+	if modelInfo.Backend == "" || modelInfo.Provider == "" || modelInfo.Model == "" {
+		return ModelInfo{}, errors.New("model backend, provider, and model name are required")
 	}
 	if modelInfo.ContextWindow < 0 {
 		return ModelInfo{}, errors.New("model context window cannot be negative")
@@ -308,11 +315,15 @@ func normalizeModelInfo(modelInfo ModelInfo) (ModelInfo, error) {
 }
 
 func modelURI(modelInfo ModelInfo) string {
-	provider := modelInfo.Provider
-	if provider == "" {
-		provider = modelInfo.Backend
-	}
-	return provider + "/" + modelInfo.Model
+	return modelInfo.Provider + "/" + modelInfo.Model
+}
+
+func selectionMatchesModel(selection ModelSelectedRecord, modelInfo ModelInfo) bool {
+	return selection.Backend == modelInfo.Backend &&
+		selection.Provider == modelInfo.Provider &&
+		selection.Model == modelInfo.Model &&
+		selection.ReasoningEffort == modelInfo.ReasoningEffort &&
+		selection.ProviderStateContract == modelInfo.ProviderStateContract
 }
 
 // SetTools atomically replaces the model-visible tool set between runs.
@@ -882,10 +893,7 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 	if runtime.workspace != "" && state.Workspace != "" && state.Workspace != runtime.workspace {
 		return fmt.Errorf("session workspace is %q, not %q", state.Workspace, runtime.workspace)
 	}
-	if state.Selection.Backend == runtime.modelInfo.Backend &&
-		state.Selection.Provider == runtime.modelInfo.Provider &&
-		state.Selection.Model == runtime.modelInfo.Model &&
-		state.Selection.ReasoningEffort == runtime.modelInfo.ReasoningEffort {
+	if selectionMatchesModel(state.Selection, runtime.modelInfo) {
 		return runtime.recordCurrentEffectiveConfigurationAndApply(ctx, reducer)
 	}
 	epoch, err := newID("epoch")
@@ -893,11 +901,12 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 		return err
 	}
 	selection := ModelSelectedRecord{
-		Backend:         runtime.modelInfo.Backend,
-		Provider:        runtime.modelInfo.Provider,
-		Model:           runtime.modelInfo.Model,
-		ReasoningEffort: runtime.modelInfo.ReasoningEffort,
-		Epoch:           epoch,
+		Backend:               runtime.modelInfo.Backend,
+		Provider:              runtime.modelInfo.Provider,
+		Model:                 runtime.modelInfo.Model,
+		ReasoningEffort:       runtime.modelInfo.ReasoningEffort,
+		ProviderStateContract: runtime.modelInfo.ProviderStateContract,
+		Epoch:                 epoch,
 	}
 	_, err = appendRecordAndApply(ctx, runtime.journal, reducer, RecordModelSelected, selection)
 	if err != nil {
@@ -1008,6 +1017,8 @@ func (runtime *Runtime) sanitizeItems(items []Item) []Item {
 	sanitized := cloneItems(items)
 	for index := range sanitized {
 		sanitized[index].Text = runtime.sanitize(sanitized[index].Text)
+		// ProviderData is signed/encrypted opaque state. Mutating bytes would
+		// corrupt it, so cloning is the only sanitization operation applied.
 		if sanitized[index].ToolCall != nil {
 			sanitized[index].ToolCall.RawArguments = runtime.sanitize(sanitized[index].ToolCall.RawArguments)
 		}
@@ -1097,7 +1108,7 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 		item.ResponseID = responseID
 		switch item.Kind {
 		case ItemAssistantText:
-			if item.ToolCall != nil || item.ToolResult != nil {
+			if len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
 				return ModelResponse{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
 			}
 			item.ProviderContext = nil
@@ -1105,9 +1116,13 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 			if item.ToolCall != nil || item.ToolResult != nil {
 				return ModelResponse{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
 			}
+			item.ProviderData, err = normalizeProviderData(item.ProviderData)
+			if err != nil {
+				return ModelResponse{}, fmt.Errorf("invalid reasoning provider data: %w", err)
+			}
 			item.ProviderContext = &ProviderContext{Backend: providerContext.Backend, Epoch: providerContext.Epoch}
 		case ItemToolCall:
-			if item.ToolCall == nil || strings.TrimSpace(item.ToolCall.Name) == "" {
+			if len(item.ProviderData) != 0 || item.ToolCall == nil || strings.TrimSpace(item.ToolCall.Name) == "" {
 				return ModelResponse{}, errors.New("tool call name is required")
 			}
 			for _, reference := range item.ToolCall.ProviderReferences {
@@ -1140,7 +1155,7 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 func validateAcceptedItem(item Item) error {
 	switch item.Kind {
 	case ItemAssistantText:
-		if item.ResponseID == "" || item.ToolCall != nil || item.ToolResult != nil {
+		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
 			return fmt.Errorf("%s item has unrelated payload", item.Kind)
 		}
 		if item.ProviderContext != nil {
@@ -1150,8 +1165,11 @@ func validateAcceptedItem(item Item) error {
 		if item.ResponseID == "" || item.ProviderContext == nil || item.ProviderContext.Backend == "" || item.ProviderContext.Epoch == "" || item.ToolCall != nil || item.ToolResult != nil {
 			return errors.New("reasoning item requires provider context")
 		}
+		if err := validateProviderData(item.ProviderData); err != nil {
+			return fmt.Errorf("reasoning item has invalid provider data: %w", err)
+		}
 	case ItemToolCall:
-		if item.ResponseID == "" || item.ToolCall == nil || item.ToolCall.ID == "" || strings.TrimSpace(item.ToolCall.Name) == "" {
+		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall == nil || item.ToolCall.ID == "" || strings.TrimSpace(item.ToolCall.Name) == "" {
 			return errors.New("accepted tool call requires ID and name")
 		}
 	default:
@@ -1211,6 +1229,7 @@ func cloneItemForProjection(item Item, includeDetails bool) Item {
 		context := *item.ProviderContext
 		item.ProviderContext = &context
 	}
+	item.ProviderData = cloneProviderData(item.ProviderData)
 	item.ToolCall = cloneToolCallPointer(item.ToolCall)
 	if includeDetails {
 		item.ToolResult = cloneToolResult(item.ToolResult)

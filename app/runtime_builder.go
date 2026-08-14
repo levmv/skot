@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/state"
@@ -11,7 +13,7 @@ import (
 
 type modelBackendOptions struct {
 	requireCredential bool
-	refreshContext    bool
+	httpClient        *http.Client
 }
 
 // runtimeBuilder contains the resolved application-owned dependencies shared
@@ -19,8 +21,10 @@ type modelBackendOptions struct {
 // selection remain per-build inputs.
 type runtimeBuilder struct {
 	baseURL           string
+	modelAPI          modelAPI
 	contextWindow     int
 	credentials       *state.Store
+	metadataLookup    modelContextLookup
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
 	profiles          toolpolicy.Profiles
@@ -42,19 +46,28 @@ type runtimeBuildParams struct {
 	reasoningEffort string
 	instructions    string
 	modelOptions    modelBackendOptions
+	resumedState    *agent.State
 }
 
-func (builder runtimeBuilder) build(params runtimeBuildParams) (*agent.Runtime, error) {
-	model, err := buildModelBackend(
-		params.modelURI, params.reasoningEffort, builder.baseURL, builder.contextWindow,
-		builder.credentials, params.modelOptions,
-	)
+func (builder runtimeBuilder) build(ctx context.Context, params runtimeBuildParams) (*agent.Runtime, error) {
+	runtime, _, err := builder.buildWithRoute(ctx, params)
+	return runtime, err
+}
+
+func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtimeBuildParams) (*agent.Runtime, resolvedModelRoute, error) {
+	route, err := activateModelRoute(ctx, params.modelURI, params.reasoningEffort, modelRouteOverrides{
+		BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow,
+	}, savedModelContextFromState(params.resumedState), builder.metadataLookup)
 	if err != nil {
-		return nil, err
+		return nil, resolvedModelRoute{}, agent.MarkInvalidRequest(err)
+	}
+	model, err := buildModelBackend(route, builder.credentials, params.modelOptions)
+	if err != nil {
+		return nil, resolvedModelRoute{}, err
 	}
 	selectedTools, err := profileTools(builder.profiles, builder.tools, builder.credentials, builder.profile)
 	if err != nil {
-		return nil, fmt.Errorf("select profile tools: %w", err)
+		return nil, resolvedModelRoute{}, fmt.Errorf("select profile tools: %w", err)
 	}
 	externalWork := builder.externalWork
 	if externalWork == nil {
@@ -78,7 +91,7 @@ func (builder runtimeBuilder) build(params runtimeBuildParams) (*agent.Runtime, 
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("initialize agent runtime: %w", err)
+		return nil, resolvedModelRoute{}, fmt.Errorf("initialize agent runtime: %w", err)
 	}
-	return runtime, nil
+	return runtime, route, nil
 }

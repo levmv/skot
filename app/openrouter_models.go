@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,17 +16,19 @@ const openRouterModelsURL = "https://openrouter.ai/api/v1"
 
 var openRouterMetadataClient = &http.Client{Timeout: 2 * time.Second}
 
-func openRouterContextWindow(modelID string) (int, error) {
-	return fetchOpenRouterContextWindow(openRouterMetadataClient, openRouterModelsURL, modelID)
+type modelContextLookup func(context.Context, string) (int, error)
+
+func openRouterContextWindow(ctx context.Context, modelID string) (int, error) {
+	return fetchOpenRouterContextWindow(ctx, openRouterMetadataClient, openRouterModelsURL, modelID)
 }
 
-func fetchOpenRouterContextWindow(client *http.Client, baseURL, modelID string) (int, error) {
+func fetchOpenRouterContextWindow(ctx context.Context, client *http.Client, baseURL, modelID string) (int, error) {
 	parts := strings.Split(strings.TrimSpace(modelID), "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return 0, fmt.Errorf("invalid OpenRouter model ID %q", modelID)
 	}
 	endpoint := strings.TrimRight(baseURL, "/") + "/model/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return 0, err
 	}

@@ -31,6 +31,7 @@ var providerCredentialCatalog = []providerCredentialSpec{
 	{name: "deepseek", environment: "DEEPSEEK_API_KEY", description: "model provider", credentialURL: "https://platform.deepseek.com/api_keys", capabilities: credentialModel},
 	{name: "openrouter", environment: "OPENROUTER_API_KEY", description: "model provider", credentialURL: "https://openrouter.ai/settings/keys", capabilities: credentialModel},
 	{name: "openai", environment: "OPENAI_API_KEY", description: "model provider", credentialURL: "https://platform.openai.com/api-keys", capabilities: credentialModel},
+	{name: "opencode-go", environment: "OPENCODE_API_KEY", description: "OpenCode Go subscription", credentialURL: "https://opencode.ai/auth", capabilities: credentialModel},
 	{name: "tavily", environment: "TAVILY_API_KEY", description: "web search", credentialURL: "https://app.tavily.com", capabilities: credentialWebSearch},
 	{name: "firecrawl", environment: "FIRECRAWL_API_KEY", description: "web fetch fallback", credentialURL: "https://www.firecrawl.dev/app/api-keys", capabilities: credentialWebFetch},
 	{name: "exa", environment: "EXA_API_KEY", description: "web search and fetch", credentialURL: "https://dashboard.exa.ai/api-keys", capabilities: credentialWebSearch | credentialWebFetch},

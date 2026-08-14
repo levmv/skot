@@ -122,7 +122,8 @@ func (reducer *stateReducer) applyModelSelected(record Record) error {
 		return err
 	}
 	state := &reducer.state
-	if state.SessionID == "" || payload.Backend == "" || payload.Model == "" || payload.Epoch == "" {
+	if state.SessionID == "" || strings.TrimSpace(payload.Backend) == "" || strings.TrimSpace(payload.Provider) == "" ||
+		strings.TrimSpace(payload.Model) == "" || strings.TrimSpace(payload.Epoch) == "" {
 		return fmt.Errorf("invalid model selection at sequence %d", record.Sequence)
 	}
 	if state.hasUnfinishedWork() {

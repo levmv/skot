@@ -66,8 +66,11 @@ func (m *screenModel) syncCommandSuggestions() {
 			candidates = append(candidates, "/sandbox "+item.value)
 		}
 	case strings.HasPrefix(value, "/model "):
-		for _, model := range m.knownModels {
-			candidates = append(candidates, "/model "+model)
+		for _, choice := range m.modelChoices {
+			if choice.Unavailable {
+				continue
+			}
+			candidates = append(candidates, "/model "+choice.URI)
 		}
 	case strings.HasPrefix(value, "/login "), strings.HasPrefix(value, "/logout "):
 		command := "/login "
@@ -319,10 +322,16 @@ func (m *screenModel) openModelPicker() {
 	}
 	current := m.agent.CurrentModel()
 	currentEffort := m.agent.CurrentReasoningEffort()
-	items := make([]pickerItem, 0, len(m.knownModels)+1)
-	for _, model := range m.knownModels {
+	items := make([]pickerItem, 0, len(m.modelChoices)+1)
+	var unavailable []ModelChoice
+	for _, choice := range m.modelChoices {
+		if choice.Unavailable {
+			unavailable = append(unavailable, choice)
+			continue
+		}
+		model := choice.URI
 		status := credentials[modelProvider(model)]
-		efforts := m.agent.ReasoningEfforts(model)
+		efforts := choice.ReasoningEfforts
 		if len(efforts) == 0 {
 			efforts = []string{""}
 		}
@@ -335,20 +344,92 @@ func (m *screenModel) openModelPicker() {
 				}
 			}
 		}
-		description := ""
+		description := modelChoiceDescription(choice)
 		if status.Source == "none" {
-			description = "login required"
+			description = appendDescription(description, "login required")
+		}
+		label := model
+		if strings.TrimSpace(choice.Name) != "" {
+			label = choice.Name
+			description = appendDescription(model, description)
 		}
 		item := pickerItem{
-			value: model, label: model,
+			value: model, label: label,
 			description: description,
 			source:      status.Source, credentialURL: status.CredentialURL,
 			efforts: append([]string(nil), efforts...), effortIndex: effortIndex,
 		}
 		items = append(items, item)
 	}
+	if len(unavailable) != 0 {
+		items = append(items, pickerItem{
+			label: "Unavailable routes…", description: fmt.Sprintf("%d known routes", len(unavailable)),
+			details: unavailableModelDetails(unavailable),
+		})
+	}
 	items = append(items, pickerItem{label: "Enter model URI…", description: "provider/model", custom: true})
 	m.openPicker(pickerModel, items, markCurrentPickerItem(items, current))
+}
+
+func unavailableModelDetails(choices []ModelChoice) string {
+	lines := []string{"Unavailable model routes:"}
+	for _, choice := range choices {
+		label := choice.URI
+		if name := strings.TrimSpace(choice.Name); name != "" {
+			label = name + " (" + choice.URI + ")"
+		}
+		description := modelChoiceDiagnosticDescription(choice)
+		if description != "" {
+			label += " · " + description
+		}
+		if reason := strings.TrimSpace(choice.UnavailableReason); reason != "" {
+			label += " · " + reason
+		}
+		lines = append(lines, "- "+label)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func modelChoiceDescription(choice ModelChoice) string {
+	if choice.ContextWindowEstimated {
+		if choice.ContextWindow > 0 {
+			return "~" + formatModelTokenCount(choice.ContextWindow) + " context"
+		}
+		return "context unknown"
+	}
+	if choice.ContextWindow > 0 {
+		return formatModelTokenCount(choice.ContextWindow) + " context"
+	}
+	return ""
+}
+
+func modelChoiceDiagnosticDescription(choice ModelChoice) string {
+	description := modelChoiceDescription(choice)
+	if protocol := strings.ReplaceAll(strings.TrimSpace(choice.Protocol), "_", " "); protocol != "" {
+		description = appendDescription(protocol, description)
+	}
+	return description
+}
+
+func formatModelTokenCount(tokens int) string {
+	if tokens < 1_000_000 {
+		return fmt.Sprintf("%dK", (tokens+500)/1000)
+	}
+	millions := float64(tokens) / 1_000_000
+	value := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", millions), "0"), ".")
+	return value + "M"
+}
+
+func appendDescription(description, part string) string {
+	description = strings.TrimSpace(description)
+	part = strings.TrimSpace(part)
+	if description == "" {
+		return part
+	}
+	if part == "" {
+		return description
+	}
+	return description + " · " + part
 }
 
 func (m *screenModel) openProfilePicker() {
@@ -426,6 +507,11 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 	m.closePicker()
 	switch picker.kind {
 	case pickerModel:
+		if item.details != "" {
+			m.addBlock(screenBlockSystem, item.details)
+			m.refreshTranscript()
+			return m, nil
+		}
 		if item.custom {
 			m.composer.setValue("/model ")
 			m.composer.cursorEnd()
@@ -496,7 +582,7 @@ func (m *screenModel) openStartupLoginPicker() {
 	items := make([]pickerItem, 0, len(m.providers))
 	selected := 0
 	for _, status := range m.providers {
-		modelURI := firstProviderModel(m.knownModels, status.Name)
+		modelURI := firstProviderModel(m.modelChoices, status.Name)
 		current := status.Name == provider
 		if current {
 			modelURI = currentModel
@@ -633,7 +719,7 @@ func (m *screenModel) switchModel(uri, effort string) {
 		return
 	}
 	current := m.agent.CurrentModel()
-	m.rememberKnownModel(current)
+	m.refreshModelChoices()
 	m.addBlock(screenBlockSystem, "model: "+current)
 }
 
@@ -665,11 +751,11 @@ func credentialSourceDescription(source string) string {
 	}
 }
 
-func firstProviderModel(models []string, provider string) string {
+func firstProviderModel(choices []ModelChoice, provider string) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	for _, uri := range models {
-		if modelProvider(uri) == provider {
-			return uri
+	for _, choice := range choices {
+		if !choice.Unavailable && modelProvider(choice.URI) == provider {
+			return choice.URI
 		}
 	}
 	return ""
@@ -699,21 +785,8 @@ func (m *screenModel) closePicker() {
 	m.syncCommandSuggestions()
 }
 
-func (m *screenModel) rememberKnownModel(model string) {
-	models := append([]string{model}, m.knownModels...)
-	m.knownModels = m.knownModels[:0]
-	seen := make(map[string]struct{}, len(models))
-	for _, candidate := range models {
-		key := strings.ToLower(strings.TrimSpace(candidate))
-		if key == "" {
-			continue
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		m.knownModels = append(m.knownModels, candidate)
-	}
+func (m *screenModel) refreshModelChoices() {
+	m.modelChoices = m.agent.ModelChoices()
 	m.syncCommandSuggestions()
 }
 

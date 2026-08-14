@@ -23,7 +23,6 @@ type Settings struct {
 	AgentModels     []string            `json:"agent_models,omitempty"`
 	Sandbox         string              `json:"sandbox,omitempty"`
 	ProtectedPaths  []string            `json:"protected_paths,omitempty"`
-	ModelContexts   map[string]int      `json:"model_contexts,omitempty"`
 }
 
 type CredentialProfile struct {
@@ -103,30 +102,6 @@ func (store *Store) SetDefaultProfile(profile string) error {
 
 func (store *Store) SetDefaultSandbox(policy string) error {
 	return store.update(func(settings *Settings) { settings.Sandbox = strings.TrimSpace(policy) })
-}
-
-func (store *Store) ModelContext(uri string) (int, bool, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	settings, err := store.load()
-	if err != nil {
-		return 0, false, err
-	}
-	window, ok := settings.ModelContexts[normalizeModelURI(uri)]
-	return window, ok && window > 0, nil
-}
-
-func (store *Store) SetModelContext(uri string, window int) error {
-	uri = normalizeModelURI(uri)
-	if uri == "" || window <= 0 {
-		return errors.New("model URI and positive context window are required")
-	}
-	return store.update(func(settings *Settings) {
-		if settings.ModelContexts == nil {
-			settings.ModelContexts = make(map[string]int)
-		}
-		settings.ModelContexts[uri] = window
-	})
 }
 
 func (store *Store) APIKey(provider string) (string, bool, error) {

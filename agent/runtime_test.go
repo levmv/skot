@@ -720,7 +720,7 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 	journal := &memoryJournal{}
 	var firstRequest ModelRequest
 	firstModel := &scriptedModel{
-		info: ModelInfo{Backend: "backend.a", Model: "alpha"},
+		info: ModelInfo{Backend: "backend.a", Provider: "provider-a", Model: "alpha"},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			firstRequest = request
 			return ModelResponse{Items: []Item{
@@ -735,7 +735,7 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 
 	var secondRequest ModelRequest
 	secondModel := &scriptedModel{
-		info: ModelInfo{Backend: "backend.b", Model: "beta"},
+		info: ModelInfo{Backend: "backend.b", Provider: "provider-b", Model: "beta"},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			secondRequest = request
 			for _, item := range request.Items {
@@ -810,6 +810,55 @@ func TestRuntimeSwitchModelJournalsSelectionBeforeNextRun(t *testing.T) {
 	}
 	if secondRequest.ProviderEpoch != switchedEpoch || countRecordKind(journal.snapshot(), RecordModelSelected) != 2 {
 		t.Fatalf("request epoch = %q, switch epoch = %q, records = %#v", secondRequest.ProviderEpoch, switchedEpoch, journal.snapshot())
+	}
+}
+
+func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
+	journal := &memoryJournal{}
+	first := &scriptedModel{
+		info: ModelInfo{
+			Backend: "chat_completions.test", Provider: "test", Model: "same",
+			ProviderStateContract: "chat_completions.reasoning_replay.current_turn.v1",
+		},
+		steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}}, nil
+		}},
+	}
+	runtime := newTestRuntime(t, Config{Model: first, Journal: journal})
+	if _, err := runtime.Run(context.Background(), "first", nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := &scriptedModel{info: ModelInfo{
+		Backend: "chat_completions.test", Provider: "test", Model: "same",
+		ProviderStateContract: "chat_completions.reasoning_replay.tool_turns.v1",
+	}}
+	if err := runtime.SwitchModel(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Selection.Epoch == before.Selection.Epoch || after.Selection.ProviderStateContract != second.info.ProviderStateContract {
+		t.Fatalf("selection before/after = %#v / %#v", before.Selection, after.Selection)
+	}
+	if countRecordKind(journal.snapshot(), RecordModelSelected) != 2 {
+		t.Fatalf("selection records = %#v", journal.snapshot())
+	}
+}
+
+func TestRuntimeRequiresModelProvider(t *testing.T) {
+	_, err := New(Config{
+		Model:   &scriptedModel{info: ModelInfo{Backend: "chat_completions.deepseek", Model: "model"}},
+		Journal: &memoryJournal{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider") {
+		t.Fatalf("New() error = %v", err)
 	}
 }
 
@@ -963,7 +1012,7 @@ func TestReconcileRejectsFinishedRunWithPendingTool(t *testing.T) {
 	runID := "run-cancelled"
 	call := ToolCall{ID: "call-cancelled", Name: "wait", RawArguments: `{}`}
 	mustAppend(t, journal, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session-cancelled"})
-	mustAppend(t, journal, RecordModelSelected, ModelSelectedRecord{Backend: "test", Model: "test", Epoch: "epoch-cancelled"})
+	mustAppend(t, journal, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch-cancelled"})
 	mustAppend(t, journal, RecordRunStarted, RunStartedRecord{RunID: runID})
 	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: "wait"})
 	mustAppend(t, journal, RecordModelResponse, ModelResponseRecord{
@@ -985,7 +1034,7 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 	runID := "run_interrupted"
 	call := ToolCall{ID: "call_local", Name: "write", RawArguments: `{}`}
 	mustAppend(t, journal, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session_interrupted"})
-	mustAppend(t, journal, RecordModelSelected, ModelSelectedRecord{Backend: "test", Model: "test", Epoch: "epoch_interrupted"})
+	mustAppend(t, journal, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch_interrupted"})
 	mustAppend(t, journal, RecordRunStarted, RunStartedRecord{RunID: runID})
 	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: "change it"})
 	mustAppend(t, journal, RecordModelResponse, ModelResponseRecord{
@@ -1034,7 +1083,7 @@ type scriptedModel struct {
 
 func (model *scriptedModel) Info() ModelInfo {
 	if model.info.Backend == "" {
-		return ModelInfo{Backend: "test", Model: "test"}
+		return ModelInfo{Backend: "test", Provider: "test", Model: "test"}
 	}
 	return model.info
 }
@@ -1050,7 +1099,7 @@ func (model *scriptedModel) Complete(ctx context.Context, request ModelRequest, 
 
 type modelFunc func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
 
-func (modelFunc) Info() ModelInfo { return ModelInfo{Backend: "test", Model: "test"} }
+func (modelFunc) Info() ModelInfo { return ModelInfo{Backend: "test", Provider: "test", Model: "test"} }
 
 func (function modelFunc) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 	return function(ctx, request, emit)

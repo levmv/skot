@@ -33,9 +33,28 @@ var (
 type ProviderError struct {
 	Cause      error
 	StatusCode int
+	Kind       ProviderErrorKind
+	// Code is the provider's structured error code when one was present in the
+	// response. Callers must not infer billing or quota values from Cause text.
+	Code       string
 	Retryable  bool
 	RetryAfter time.Duration
 }
+
+// ProviderErrorKind describes the caller action suggested by a structured
+// provider failure. The empty value means the response was not specific enough
+// to classify without guessing.
+type ProviderErrorKind string
+
+const (
+	ProviderErrorAuthentication ProviderErrorKind = "authentication"
+	ProviderErrorPermission     ProviderErrorKind = "permission"
+	ProviderErrorSubscription   ProviderErrorKind = "subscription"
+	ProviderErrorQuota          ProviderErrorKind = "quota"
+	ProviderErrorRateLimit      ProviderErrorKind = "rate_limit"
+	ProviderErrorRequest        ProviderErrorKind = "request"
+	ProviderErrorUnavailable    ProviderErrorKind = "unavailable"
+)
 
 func (err *ProviderError) Error() string {
 	if err == nil || err.Cause == nil {

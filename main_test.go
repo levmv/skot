@@ -274,6 +274,56 @@ func TestRunClassifiesInvalidConfigurationAndProviderFailure(t *testing.T) {
 	})
 }
 
+func TestRunAcceptsKnownModelAPIOverrideButRejectsUnknownOrUnavailableAdapters(t *testing.T) {
+	for _, test := range []struct {
+		api  string
+		want string
+	}{
+		{api: "anthropic_messages", want: `model API "anthropic_messages" is not implemented`},
+		{api: "future", want: `unsupported model API "future"`},
+	} {
+		t.Run(test.api, func(t *testing.T) {
+			err := run(context.Background(), []string{
+				"-model", "deepseek/deepseek-v4-flash", "-model-api", test.api,
+				"-base-url", "http://127.0.0.1:1", "-home", t.TempDir(), "-root", t.TempDir(), "task",
+			}, bytes.NewReader(nil), io.Discard, io.Discard)
+			if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want invalid request containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRunUsesResponsesAdapterWithoutAProactiveCompatibilityWarning(t *testing.T) {
+	var received map[string]json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/responses" {
+			t.Errorf("path = %q", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}]}}\n\n")
+	}))
+	defer server.Close()
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{
+		"-model", "deepseek/deepseek-v4-flash", "-model-api", "responses",
+		"-base-url", server.URL, "-sandbox", "off", "-home", t.TempDir(), "-root", t.TempDir(), "task",
+	}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "done\n" || string(received["store"]) != "false" || string(received["stream"]) != "true" {
+		t.Fatalf("stdout/request = %q / %#v", stdout.String(), received)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestRunReadsToolsFileFromEnvironmentBeforeModelRequest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tools.json")
 	if err := os.WriteFile(path, []byte(`{"tools":[],"unexpected":true}`), 0o600); err != nil {

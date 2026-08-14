@@ -120,6 +120,8 @@ func estimateItemsTokens(items []Item) int {
 	for _, item := range items {
 		switch item.Kind {
 		case ItemUserText, ItemBoundaryText, ItemAssistantText, ItemReasoning:
+			// Opaque provider bytes count against the adapter's encoded request
+			// limit, but ciphertext size is not a defensible token estimate.
 			tokens += estimateTextTokens(item.Text) + perMessageTokens
 		case ItemToolCall:
 			if item.ToolCall != nil {

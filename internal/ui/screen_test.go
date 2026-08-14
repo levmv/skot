@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -30,6 +31,7 @@ type fakeAgent struct {
 	reasoningEfforts map[string][]string
 	modelErr         error
 	knownModels      []string
+	modelChoices     []ModelChoice
 	sandbox          string
 	security         string
 	sandboxErr       error
@@ -131,14 +133,29 @@ func (fake *fakeAgent) SwitchProfile(_ context.Context, profile string) error {
 
 func (fake *fakeAgent) CurrentModel() string { return fake.model }
 
-func (fake *fakeAgent) KnownModels() []string {
-	if len(fake.knownModels) != 0 {
-		return append([]string(nil), fake.knownModels...)
+func (fake *fakeAgent) ModelChoices() []ModelChoice {
+	if len(fake.modelChoices) != 0 {
+		choices := append([]ModelChoice(nil), fake.modelChoices...)
+		for index := range choices {
+			choices[index].ReasoningEfforts = append([]string(nil), choices[index].ReasoningEfforts...)
+		}
+		return choices
 	}
-	if fake.model != "" {
-		return []string{fake.model}
+	models := append([]string{fake.model}, fake.knownModels...)
+	choices := make([]ModelChoice, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, uri := range models {
+		key := strings.ToLower(strings.TrimSpace(uri))
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		choices = append(choices, ModelChoice{URI: uri, ReasoningEfforts: fake.ReasoningEfforts(uri)})
 	}
-	return nil
+	return choices
 }
 
 func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort string) error {
@@ -332,7 +349,9 @@ func TestProfileCommandShowsAndSwitchesProfile(t *testing.T) {
 }
 
 func TestModelCommandShowsAndSwitchesModel(t *testing.T) {
-	fake := &fakeAgent{model: "deepseek/old", knownModels: []string{"deepseek/old", "openrouter/recent"}}
+	fake := &fakeAgent{
+		model: "deepseek/old", knownModels: []string{"deepseek/old", "openrouter/recent"},
+	}
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/model")
 	model, _ = model.submitInput()
@@ -349,6 +368,9 @@ func TestModelCommandShowsAndSwitchesModel(t *testing.T) {
 	model, _ = model.submitInput()
 	if fake.model != "openrouter/new/model" || model.composer.value() != "" {
 		t.Fatalf("model = %q, input = %q", fake.model, model.composer.value())
+	}
+	if transcript := strings.Join(model.transcript.lines, "\n"); strings.Contains(transcript, "unverified") {
+		t.Fatalf("model switch leaked internal compatibility status: %q", transcript)
 	}
 }
 
@@ -468,6 +490,7 @@ func TestTranscriptTracksDirtyRenderedSuffix(t *testing.T) {
 func TestSessionHistorySeedsTranscriptAndInputHistory(t *testing.T) {
 	fake := &fakeAgent{state: agent.State{Items: []agent.Item{
 		{Kind: agent.ItemUserText, Text: "hello"},
+		{Kind: agent.ItemReasoning, Text: "private summary", ProviderData: []agent.ProviderData{{Kind: "responses.reasoning_item", Data: json.RawMessage(`{"encrypted_content":"opaque-secret"}`)}}},
 		{Kind: agent.ItemBoundaryText, Text: "Background job job-1 completed."},
 		{Kind: agent.ItemAssistantText, Text: "hi"},
 	}}}
@@ -478,6 +501,9 @@ func TestSessionHistorySeedsTranscriptAndInputHistory(t *testing.T) {
 	}
 	if len(model.transcript.blocks) != 4 || model.transcript.blocks[1].kind != screenBlockUser || model.transcript.blocks[2].kind != screenBlockSystem || model.transcript.blocks[3].kind != screenBlockAssistant {
 		t.Fatalf("blocks = %#v", model.transcript.blocks)
+	}
+	if transcript := strings.Join(model.transcript.lines, "\n"); strings.Contains(transcript, "private summary") || strings.Contains(transcript, "opaque-secret") {
+		t.Fatalf("provider state rendered in transcript: %q", transcript)
 	}
 }
 

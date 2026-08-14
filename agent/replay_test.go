@@ -21,6 +21,16 @@ func TestReplayRequiresSupportedJournalSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestReplayRequiresExplicitModelProvider(t *testing.T) {
+	records := []Record{
+		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
+		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "chat_completions.deepseek", Model: "model", Epoch: "epoch"}),
+	}
+	if _, err := Replay(records); err == nil || !strings.Contains(err.Error(), "invalid model selection") {
+		t.Fatalf("Replay() error = %v", err)
+	}
+}
+
 func TestReplayRemovesPendingToolCallsByIdentity(t *testing.T) {
 	toolCall := func(id string) Item {
 		return Item{
@@ -30,7 +40,7 @@ func TestReplayRemovesPendingToolCallsByIdentity(t *testing.T) {
 	}
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
-		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "test", Model: "model", Epoch: "epoch"}),
+		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"}),
 		recordForTest(t, 3, RecordRunStarted, RunStartedRecord{RunID: "run"}),
 		recordForTest(t, 4, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "hello"}),
 		recordForTest(t, 5, RecordModelResponse, ModelResponseRecord{

@@ -34,6 +34,10 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if config.Resume && config.SaveSession {
 		return nil, agent.MarkInvalidRequest(errors.New("resume cannot be combined with save session"))
 	}
+	modelAPIOverride, err := parseModelAPI(config.ModelAPI)
+	if err != nil {
+		return nil, agent.MarkInvalidRequest(err)
+	}
 	home, err := session.ResolveHome(config.Home)
 	if err != nil {
 		return nil, err
@@ -134,22 +138,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return cleanup(fmt.Errorf("reconcile session: %w", err))
 	}
 	runtimeSessionID := sessionID
-	if runtimeSessionID == "" {
-		records, err := journal.Records(ctx)
-		if err != nil {
-			return cleanup(fmt.Errorf("read session identity: %w", err))
-		}
-		replayed, err := agent.Replay(records)
-		if err != nil {
-			return cleanup(fmt.Errorf("replay session identity: %w", err))
-		}
-		runtimeSessionID = replayed.SessionID
-	}
-	if err := processes.AttachSession(sessionID); err != nil {
-		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
-	}
-	notices = append(notices, processes.AttachSessionNotices(sessionID)...)
-	if config.Resume && !config.ModelExplicit {
+	var replayedState *agent.State
+	if runtimeSessionID == "" || config.Resume {
 		records, err := journal.Records(ctx)
 		if err != nil {
 			return cleanup(fmt.Errorf("read resumed session: %w", err))
@@ -158,21 +148,36 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		if err != nil {
 			return cleanup(fmt.Errorf("replay resumed session: %w", err))
 		}
-		if replayed.Selection.Provider != "" && replayed.Selection.Model != "" {
-			config.ModelURI = replayed.Selection.Provider + "/" + replayed.Selection.Model
+		replayedState = &replayed
+		if runtimeSessionID == "" {
+			runtimeSessionID = replayed.SessionID
+		}
+	}
+	if err := processes.AttachSession(sessionID); err != nil {
+		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
+	}
+	notices = append(notices, processes.AttachSessionNotices(sessionID)...)
+	if config.Resume && !config.ModelExplicit {
+		if replayedState != nil && replayedState.Selection.Model != "" {
+			config.ModelURI = replayedState.Selection.Provider + "/" + replayedState.Selection.Model
 			if !config.ReasoningEffortExplicit {
-				config.ReasoningEffort = replayed.Selection.ReasoningEffort
+				config.ReasoningEffort = replayedState.Selection.ReasoningEffort
 			}
 		}
 	}
-	config.ReasoningEffort, err = normalizeReasoningEffort(config.ModelURI, config.ReasoningEffort)
+	initialRoute, err := resolveModelRoute(config.ModelURI, config.ReasoningEffort, modelRouteOverrides{
+		BaseURL: config.BaseURL, API: modelAPIOverride, ContextWindow: config.ContextWindow,
+	}, modelRouteEnrichment{})
 	if err != nil {
 		return cleanup(agent.MarkInvalidRequest(err))
 	}
+	config.ReasoningEffort = initialRoute.ReasoningEffort
 	builder := runtimeBuilder{
 		baseURL:           config.BaseURL,
+		modelAPI:          modelAPIOverride,
 		contextWindow:     config.ContextWindow,
 		credentials:       settingsStore,
+		metadataLookup:    openRouterContextWindow,
 		tools:             catalog,
 		programTools:      programSnapshots,
 		profiles:          profiles,
@@ -194,7 +199,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	builder.externalWork = applicationExternalWork{
 		processes: processExternalWork{processes: processes, await: !config.Interactive}, agents: children,
 	}
-	runtime, err := builder.build(runtimeBuildParams{
+	runtime, _, err := builder.buildWithRoute(ctx, runtimeBuildParams{
 		journal:         journal,
 		sessionID:       sessionID,
 		modelURI:        config.ModelURI,
@@ -203,6 +208,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		modelOptions: modelBackendOptions{
 			requireCredential: !config.Interactive,
 		},
+		resumedState: replayedState,
 	})
 	if err != nil {
 		return cleanup(err)
@@ -221,7 +227,9 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			protectedPaths:    protection.Paths(),
 			protection:        protection,
 			baseURL:           config.BaseURL,
+			modelAPI:          modelAPIOverride,
 			contextWindow:     config.ContextWindow,
+			metadataLookup:    openRouterContextWindow,
 			retryBudget:       config.RetryBudget,
 			streamIdleTimeout: config.StreamIdleTimeout,
 			maxToolIterations: config.MaxToolIterations,

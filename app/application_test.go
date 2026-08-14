@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -495,6 +498,21 @@ func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
 	}
 }
 
+func TestOpenAppliesModelAPIOverrideBeforeReasoningEffortValidation(t *testing.T) {
+	application, err := Open(context.Background(), Config{
+		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "opencode-go/future-model", ModelExplicit: true,
+		ModelAPI: "responses", ReasoningEffort: "high", ReasoningEffortExplicit: true,
+		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if application.CurrentModel() != "opencode-go/future-model" || application.CurrentReasoningEffort() != "high" {
+		t.Fatalf("model=%q effort=%q", application.CurrentModel(), application.CurrentReasoningEffort())
+	}
+}
+
 func TestApplicationOwnsAndPersistsToolProfile(t *testing.T) {
 	settings, err := state.Open(t.TempDir())
 	if err != nil {
@@ -668,7 +686,7 @@ func TestApplicationListsAndResumesSessionWithRecordedModel(t *testing.T) {
 	}
 	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: application.config.root})
 	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
-		Backend: "chat_completions", Provider: "deepseek", Model: "resumed-model", Epoch: "epoch-resumed",
+		Backend: "chat_completions", Provider: "deepseek", Model: "resumed-model", ReasoningEffort: " HIGH ", Epoch: "epoch-resumed",
 	})
 	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "run-resumed"})
 	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "run-resumed", Text: "resume this task"})
@@ -699,8 +717,8 @@ func TestApplicationListsAndResumesSessionWithRecordedModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumedID != sourceID || application.SessionID() != sourceID || application.CurrentModel() != "deepseek/resumed-model" {
-		t.Fatalf("resumed=%q current=%q model=%q", resumedID, application.SessionID(), application.CurrentModel())
+	if resumedID != sourceID || application.SessionID() != sourceID || application.CurrentModel() != "deepseek/resumed-model" || application.CurrentReasoningEffort() != "high" {
+		t.Fatalf("resumed=%q current=%q model=%q effort=%q", resumedID, application.SessionID(), application.CurrentModel(), application.CurrentReasoningEffort())
 	}
 	if _, err := oldJournal.Records(context.Background()); err == nil {
 		t.Fatal("previous journal remained open")
@@ -711,6 +729,172 @@ func TestApplicationListsAndResumesSessionWithRecordedModel(t *testing.T) {
 	}
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/chat/completions" {
+			t.Errorf("request path = %q", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	originalProvider := modelProviderCatalog["openrouter"]
+	provider := originalProvider
+	provider.baseURL = server.URL
+	modelProviderCatalog["openrouter"] = provider
+	t.Cleanup(func() { modelProviderCatalog["openrouter"] = originalProvider })
+
+	application, _ := newSessionApplication(t)
+	if err := application.config.settings.SetAPIKey("openrouter", "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	lookups := 0
+	application.config.metadataLookup = func(context.Context, string) (int, error) {
+		lookups++
+		return 0, errors.New("offline")
+	}
+
+	source, sourceID, err := session.Create(application.config.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: application.config.root,
+	})
+	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+		Backend: "chat_completions.openrouter", Provider: "openrouter", Model: "~x-ai/grok-latest",
+		ProviderStateContract: defaultModelSpec("openrouter").ChatTraits.ProviderStateContract(), Epoch: "epoch-openrouter",
+	})
+	appendApplicationRecord(t, source, agent.RecordSessionConfigured, agent.EffectiveConfigSnapshot{
+		ModelContext:  agent.ModelContextSnapshot{CompactionInstructions: "compact", ToolLimitInstructions: "limit tools"},
+		RuntimePolicy: agent.RuntimePolicySnapshot{ContextWindow: 333_000, MaxModelAttempts: 1, MaxToolIterations: 1},
+		Environment:   agent.ExecutionEnvironmentSnapshot{Endpoint: server.URL},
+	})
+	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "saved-run"})
+	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "saved-run", Text: "saved task"})
+	appendApplicationRecord(t, source, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "saved-run", Status: agent.RunCompleted})
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := application.ResumeSession(context.Background(), session.ShortID(sourceID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Run(context.Background(), "continue", nil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := application.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 1 || state.Configured == nil || state.Configured.RuntimePolicy.ContextWindow != 333_000 || state.Configured.RuntimePolicy.ContextWindowEstimated {
+		t.Fatalf("lookups/configuration = %d / %#v", lookups, state.Configured)
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplicationReselectUsesCurrentOpenRouterContextWhenLookupFails(t *testing.T) {
+	application, _ := newSessionApplication(t)
+	if err := application.config.settings.SetAPIKey("openrouter", "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	lookups := 0
+	application.config.metadataLookup = func(context.Context, string) (int, error) {
+		lookups++
+		if lookups == 1 {
+			return 333_000, nil
+		}
+		return 0, errors.New("offline")
+	}
+
+	if err := application.SwitchModel(context.Background(), "openrouter/~x-ai/grok-latest", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchModel(context.Background(), "openrouter/~x-ai/grok-latest", "high"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := application.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lookups != 2 || state.Configured == nil || state.Configured.RuntimePolicy.ContextWindow != 333_000 || state.Configured.RuntimePolicy.ContextWindowEstimated || state.Selection.ReasoningEffort != "high" {
+		t.Fatalf("lookups/state = %d / %#v", lookups, state)
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenDoesNotTurnInternalRouteReviewStateIntoAStartupWarning(t *testing.T) {
+	application, err := Open(context.Background(), Config{
+		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/unreviewed-model",
+		Interactive: true, Sandbox: workspacetools.SandboxOff, SandboxExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+	if notices := application.StartupNotices(); len(notices) != 0 {
+		t.Fatalf("startup notices = %#v", notices)
+	}
+}
+
+func TestApplicationModelChoicesKeepCurrentEffectiveContext(t *testing.T) {
+	runtime, err := agent.New(agent.Config{
+		Model: applicationModelInfoModel{info: agent.ModelInfo{
+			Backend: "chat_completions.openrouter", Provider: "openrouter", Model: "~x-ai/grok-latest",
+			ContextWindow: 333_000,
+		}},
+		Journal: &applicationMemoryJournal{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{state: applicationState{session: newLiveSession("", runtime, nil, false)}}
+	for _, choice := range application.ModelChoices() {
+		if choice.URI == "openrouter/~x-ai/grok-latest" {
+			if choice.ContextWindow != 333_000 || choice.ContextWindowEstimated {
+				t.Fatalf("current choice = %#v", choice)
+			}
+			return
+		}
+	}
+	t.Fatal("current OpenRouter choice is missing")
+}
+
+func TestApplicationDoesNotWarnWhenSelectingAnUnreviewedRoute(t *testing.T) {
+	settings, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := session.Open(filepath.Join(t.TempDir(), "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = journal.Close() })
+	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{
+		config: applicationConfig{settings: settings},
+		state:  applicationState{session: newLiveSession("", runtime, nil, false)},
+	}
+	t.Setenv("DEEPSEEK_API_KEY", "secret")
+
+	for range 2 {
+		if err := application.SwitchModel(context.Background(), "deepseek/unreviewed-model", "high"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if notices := application.StartupNotices(); len(notices) != 0 {
+		t.Fatalf("startup notices = %#v", notices)
 	}
 }
 
@@ -809,13 +993,21 @@ func appendApplicationRecord(t *testing.T, journal *session.Store, kind agent.Re
 
 type applicationTestModel struct{}
 
+type applicationModelInfoModel struct{ info agent.ModelInfo }
+
+func (model applicationModelInfoModel) Info() agent.ModelInfo { return model.info }
+
+func (applicationModelInfoModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+	return agent.ModelResponse{}, errors.New("unused")
+}
+
 type profileCaptureModel struct {
 	t    *testing.T
 	want string
 }
 
 func (model profileCaptureModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Model: "profile-capture"}
+	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "profile-capture"}
 }
 
 func (model profileCaptureModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {

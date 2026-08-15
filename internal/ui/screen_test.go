@@ -36,6 +36,8 @@ type fakeAgent struct {
 	sandbox          string
 	security         string
 	sandboxErr       error
+	theme            string
+	themeErr         error
 	contextReport    agent.ContextReport
 	contextErr       error
 	compaction       agent.ContextCompactedRecord
@@ -200,6 +202,16 @@ func (fake *fakeAgent) SwitchSandbox(_ context.Context, policy string) error {
 	return nil
 }
 
+func (fake *fakeAgent) CurrentTheme() string { return fake.theme }
+
+func (fake *fakeAgent) SwitchTheme(theme string) error {
+	if fake.themeErr != nil {
+		return fake.themeErr
+	}
+	fake.theme = theme
+	return nil
+}
+
 func (fake *fakeAgent) ContextReport(context.Context) (agent.ContextReport, error) {
 	return fake.contextReport, fake.contextErr
 }
@@ -254,6 +266,9 @@ func (fake *fakeAgent) ResumeSession(_ context.Context, value string) (string, e
 
 func testScreenModel(t *testing.T, fake *fakeAgent) screenModel {
 	t.Helper()
+	if fake.theme == "" {
+		fake.theme = ThemeLight
+	}
 	model, err := newScreenModel(context.Background(), fake, Config{}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -296,6 +311,7 @@ func TestSubmitWhileWorkingQueuesInput(t *testing.T) {
 	model := testScreenModel(t, fake)
 	model.operation.kind = operationTurn
 	model.composer.setValue("follow up")
+	blocksBefore := len(model.transcript.blocks)
 
 	model, _ = model.submitInput()
 	if len(fake.queued) != 1 || fake.queued[0] != "follow up" {
@@ -304,8 +320,39 @@ func TestSubmitWhileWorkingQueuesInput(t *testing.T) {
 	if model.composer.value() != "" {
 		t.Fatalf("input was not cleared: %q", model.composer.value())
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "queued: follow up" {
-		t.Fatalf("status = %q", got)
+	if got := len(model.transcript.blocks); got != blocksBefore {
+		t.Fatalf("transcript blocks = %d, want %d", got, blocksBefore)
+	}
+	if got := strings.TrimSpace(model.queuedLine()); got != "queued: follow up" {
+		t.Fatalf("queued line = %q", got)
+	}
+}
+
+func TestQueuedLineShowsLatestInputAndCount(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{queued: []string{"first", "latest"}})
+	if got := strings.TrimSpace(model.queuedLine()); got != "queued 2 · latest: latest" {
+		t.Fatalf("queued line = %q", got)
+	}
+}
+
+func TestQueuedLineOffsetsEditorCursor(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{queued: []string{"follow up"}})
+	model.operation.kind = operationTurn
+	model.composer.setValue("draft")
+	frame := model.inlineFrame()
+
+	editorRow := -1
+	for index, line := range frame.dynamic {
+		if strings.Contains(line, "draft") {
+			editorRow = index
+			break
+		}
+	}
+	if editorRow < 0 {
+		t.Fatalf("editor row not found in %#v", frame.dynamic)
+	}
+	if frame.cursor == nil || frame.cursor.Position.Y != len(frame.transcript)+editorRow {
+		t.Fatalf("cursor = %#v, want row %d", frame.cursor, len(frame.transcript)+editorRow)
 	}
 }
 
@@ -320,6 +367,9 @@ func TestAltUpRecallsNewestQueuedInput(t *testing.T) {
 	}
 	if len(fake.queued) != 1 || fake.queued[0] != "first" {
 		t.Fatalf("remaining queue = %#v", fake.queued)
+	}
+	if got := strings.TrimSpace(model.queuedLine()); got != "queued: first" {
+		t.Fatalf("queued line = %q", got)
 	}
 }
 
@@ -441,6 +491,9 @@ func TestEscapeCancelsAndRestoresQueuedInput(t *testing.T) {
 	}
 	if len(fake.queued) != 0 {
 		t.Fatalf("queue = %#v", fake.queued)
+	}
+	if got := model.queuedLine(); got != "" {
+		t.Fatalf("stale queued line = %q", got)
 	}
 }
 
@@ -590,9 +643,29 @@ func TestLongInputWrapsAndGrowsComposer(t *testing.T) {
 	}
 }
 
+func TestUserMessageGutterContinuesThroughWrappedLines(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("SK_COLOR", "always")
+	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeDark}, Config{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(24, 14)
+	lines := model.renderBlockLines(screenBlock{kind: screenBlockUser, text: strings.Repeat("wrapped message ", 5)})
+	if len(lines) < 4 {
+		t.Fatalf("user message did not wrap: %#v", lines)
+	}
+	if marker := model.userGutterStyle.Render(userMarker); !strings.HasPrefix(lines[1], marker) {
+		t.Fatalf("first user line has no styled chevron: %q", lines[1])
+	}
+	if marker := model.userGutterStyle.Render(" "); !strings.HasPrefix(lines[2], marker) {
+		t.Fatalf("wrapped user line has no gutter background: %q", lines[2])
+	}
+}
+
 func TestMultilinePasteKeepsRendererRowsAligned(t *testing.T) {
 	var output bytes.Buffer
-	model, err := newScreenModel(context.Background(), &fakeAgent{}, Config{}, &output)
+	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeLight}, Config{}, &output)
 	if err != nil {
 		t.Fatal(err)
 	}

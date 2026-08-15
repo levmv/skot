@@ -63,6 +63,7 @@ type applicationState struct {
 	children         *childSupervisor
 	toolSet          string
 	requestedSandbox string
+	theme            string
 	security         securityState
 	startupNotices   []string
 }
@@ -141,6 +142,32 @@ func (application *Application) CurrentReasoningEffort() string {
 		return ""
 	}
 	return runtime.CurrentReasoningEffort()
+}
+
+func (application *Application) CurrentTheme() string {
+	application.mu.RLock()
+	defer application.mu.RUnlock()
+	return application.state.theme
+}
+
+func (application *Application) SwitchTheme(value string) error {
+	theme, err := state.NormalizeTheme(value)
+	if err != nil {
+		return err
+	}
+	application.mu.Lock()
+	defer application.mu.Unlock()
+	if application.state.session == nil || application.config.settings == nil {
+		return errors.New("application is closed")
+	}
+	if theme == application.state.theme {
+		return nil
+	}
+	if err := application.config.settings.SetThemeSelection(theme); err != nil {
+		return fmt.Errorf("save theme: %w", err)
+	}
+	application.state.theme = theme
+	return nil
 }
 
 func (application *Application) ModelChoices() []ModelChoice {

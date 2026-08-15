@@ -49,7 +49,6 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
 | `-json` | — | Emit one versioned JSON result on stdout. |
 | `-v` | — | Show attempts, retries, tool activity, maintenance, status, and final token usage on stderr. |
-| `-theme value` | `SK_THEME` | Select `auto`, `light`, or `dark` terminal rendering. |
 | `-version` | — | Print the version and exit. |
 
 `SK_COLOR=always|never` overrides automatic styled-output detection.
@@ -114,6 +113,7 @@ rejected. A representative configuration is:
   "reasoning_effort": "high",
   "tool_set": "delegate",
   "sandbox": "auto",
+  "theme": "auto",
   "tool_sets": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
@@ -131,6 +131,7 @@ rejected. A representative configuration is:
 | `tool_sets` | Map of tool set names to exact ordered tool-name lists. A custom definition replaces a built-in set with the same name. |
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
 | `sandbox` | Persisted sandbox selection. |
+| `theme` | Persisted interactive terminal theme: `auto`, `light`, or `dark`. An unrecognized saved value is reset to `auto` at interactive startup. |
 | `protected_paths` | Additional paths hidden from model tools and model-owned processes. |
 
 Use `/login` rather than editing `auth.json` directly.
@@ -163,6 +164,7 @@ recent session for that workspace.
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
 | `/sandbox [auto|workspace|masked|off]` | Show or switch filesystem isolation. |
+| `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
 | `/logout [provider]` | Remove a stored key. |

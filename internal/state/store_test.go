@@ -29,6 +29,9 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err := store.SetDefaultSandbox("off"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SetThemeSelection(" DARK "); err != nil {
+		t.Fatal(err)
+	}
 	reopened, err := Open(home)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +40,7 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.ToolSet != "edit" || settings.Sandbox != "off" {
+	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.ToolSet != "edit" || settings.Sandbox != "off" || settings.Theme != ThemeDark {
 		t.Fatalf("settings = %#v", settings)
 	}
 	if got := strings.Join(settings.ToolSets["review"], ","); got != "read,grep" {
@@ -55,6 +58,23 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestThemeSelectionDefaultsToAutoAndRejectsInvalidValues(t *testing.T) {
+	if got, err := NormalizeTheme(""); err != nil || got != ThemeAuto {
+		t.Fatalf("default theme = %q, %v", got, err)
+	}
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetThemeSelection("sepia"); err == nil {
+		t.Fatal("invalid theme accepted")
+	}
+	settings, err := store.Settings()
+	if err != nil || settings.Theme != "" {
+		t.Fatalf("settings after rejected theme = %#v, %v", settings, err)
 	}
 }
 

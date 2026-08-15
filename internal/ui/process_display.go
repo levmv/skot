@@ -23,7 +23,7 @@ func (m screenModel) renderProcessResultLines(block screenBlock) []string {
 	marker := "×"
 	style := m.errorStyle
 	if result.Status == workspacetools.ProcessCompleted {
-		marker = "✓"
+		marker = completedToolMarker(tool)
 		style = m.successStyle
 	} else if result.Status == workspacetools.ProcessRunning {
 		marker = "◌"

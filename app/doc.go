@@ -1,7 +1,7 @@
 // Package app assembles and owns the concrete Skot application.
 //
 // It is UI-neutral but deliberately not a generic framework: it includes
-// Skot's tools, sessions, settings, model selection, credentials, and sandbox
+// Skot's tools, sessions, settings, model selection, credentials, theme, and sandbox
 // policy. A terminal, graphical, or service frontend can drive Application
 // without reconstructing those product decisions.
 //

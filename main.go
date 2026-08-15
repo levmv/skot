@@ -39,7 +39,6 @@ type cliConfig struct {
 	toolSet           string
 	saveSession       bool
 	sandbox           string
-	theme             string
 	verbose           bool
 	jsonOutput        bool
 	showVersion       bool
@@ -95,7 +94,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.toolSet, "tools", envOr("SK_TOOLS", app.ToolSetDefault), "tool set available to the model")
 	flags.BoolVar(&config.saveSession, "save-session", false, "keep a resumable session for a one-shot invocation")
 	flags.StringVar(&config.sandbox, "sandbox", envOr("SK_SANDBOX", app.SandboxAuto), "model filesystem isolation: auto, workspace, masked, or off")
-	flags.StringVar(&config.theme, "theme", envOr("SK_THEME", ui.ThemeAuto), "terminal theme: auto, light, or dark")
 	flags.BoolVar(&config.verbose, "v", false, "show model attempts and status")
 	flags.BoolVar(&config.jsonOutput, "json", false, "emit one versioned JSON result on stdout")
 	flags.BoolVar(&config.showVersion, "version", false, "print the Skot version and exit")
@@ -137,10 +135,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	reasoningEffortExplicit := setFlags["reasoning-effort"] || strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")) != ""
 	toolSetExplicit := setFlags["tools"] || strings.TrimSpace(os.Getenv("SK_TOOLS")) != ""
 	sandboxExplicit := setFlags["sandbox"] || strings.TrimSpace(os.Getenv("SK_SANDBOX")) != ""
-	config.theme, err = ui.NormalizeTheme(config.theme)
-	if err != nil {
-		return agent.MarkInvalidRequest(err)
-	}
 	inFile, outFile, terminalScreen := ui.CanUseScreen(stdin, stdout)
 	interactive := len(invocation.args) == 0 && terminalScreen
 	var prompt string
@@ -177,7 +171,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			Root:            application.Root(),
 			ToolSet:         application.CurrentToolSet(),
 			Security:        application.SecuritySummary(),
-			Theme:           config.theme,
 		}, inFile, outFile)
 	}
 	measureUsage := config.verbose || config.jsonOutput

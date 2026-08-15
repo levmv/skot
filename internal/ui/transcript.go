@@ -357,9 +357,7 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 	case screenBlockSystem:
 		return m.wrappedMarked(" ", m.renderSystemText(block.text))
 	case screenBlockUser:
-		lines := []string{m.marked(" ", "")}
-		lines = append(lines, m.wrappedMarked(userMarker, block.text)...)
-		return append(lines, m.marked(" ", ""))
+		return m.renderUserBlock(block.text)
 	case screenBlockAssistant:
 		return m.renderAssistantBlock(block.text)
 	case screenBlockTool:
@@ -376,7 +374,7 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 		marker := "◌"
 		style := m.mutedStyle
 		if tool.done {
-			marker = "✓"
+			marker = completedToolMarker(tool)
 			style = m.successStyle
 		}
 		if tool.failed {
@@ -395,6 +393,13 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 	default:
 		return m.wrappedMarked(" ", fmt.Sprint(block.text))
 	}
+}
+
+func completedToolMarker(tool *toolBlock) string {
+	if tool != nil && tool.name == "bash" {
+		return "•"
+	}
+	return "✓"
 }
 
 func (m screenModel) renderSystemText(text string) string {
@@ -432,7 +437,21 @@ func (m screenModel) renderAssistantBlock(text string) []string {
 	return append(lines, m.marked(" ", ""))
 }
 
+func (m screenModel) renderUserBlock(text string) []string {
+	lines := []string{m.marked(" ", "")}
+	lines = append(lines, m.wrappedMarkedWithContinuation(
+		m.userGutterStyle.Render(userMarker),
+		m.userGutterStyle.Render(" "),
+		text,
+	)...)
+	return append(lines, m.marked(" ", ""))
+}
+
 func (m screenModel) wrappedMarked(marker, text string) []string {
+	return m.wrappedMarkedWithContinuation(marker, " ", text)
+}
+
+func (m screenModel) wrappedMarkedWithContinuation(marker, continuation, text string) []string {
 	width := m.contentWidth()
 	var lines []string
 	marked := false
@@ -442,7 +461,7 @@ func (m screenModel) wrappedMarked(marker, text string) []string {
 			wrapped = " "
 		}
 		for _, line := range strings.Split(wrapped, "\n") {
-			lineMarker := " "
+			lineMarker := continuation
 			if !marked {
 				lineMarker = marker
 				marked = true

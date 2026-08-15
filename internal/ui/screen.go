@@ -25,12 +25,6 @@ const (
 	themeQueryTimeout = 150 * time.Millisecond
 )
 
-const (
-	ThemeAuto  = "auto"
-	ThemeLight = "light"
-	ThemeDark  = "dark"
-)
-
 type ConversationAgent interface {
 	Run(context.Context, string, agent.EmitFunc) (agent.RunResult, error)
 	QueueInput(string) error
@@ -61,6 +55,8 @@ type ConfigurationAgent interface {
 	CurrentSandbox() string
 	SecuritySummary() string
 	SwitchSandbox(context.Context, string) error
+	CurrentTheme() string
+	SwitchTheme(string) error
 }
 
 type CredentialAgent interface {
@@ -100,7 +96,6 @@ type Config struct {
 	Root            string
 	ToolSet         string
 	Security        string
-	Theme           string
 }
 
 type pickerKind uint8
@@ -110,6 +105,7 @@ const (
 	pickerModel
 	pickerToolSet
 	pickerSandbox
+	pickerTheme
 	pickerLogin
 	pickerLogout
 	pickerSession
@@ -183,7 +179,7 @@ type agentDoneMsg struct {
 }
 
 type resumeSessionMsg struct{ idOrPrefix string }
-type themeQueryTimeoutMsg struct{}
+type themeQueryTimeoutMsg struct{ generation uint64 }
 
 type screenModel struct {
 	ctx    context.Context
@@ -210,15 +206,18 @@ type screenModel struct {
 
 	renderer     *inlineRenderer
 	renderErr    error
+	theme        string
 	themePending bool
+	themeQuery   uint64
 	darkTheme    bool
 	useStyle     bool
 
-	mutedStyle   lipgloss.Style
-	accentStyle  lipgloss.Style
-	errorStyle   lipgloss.Style
-	successStyle lipgloss.Style
-	markdown     markdownRenderer
+	mutedStyle      lipgloss.Style
+	accentStyle     lipgloss.Style
+	errorStyle      lipgloss.Style
+	successStyle    lipgloss.Style
+	userGutterStyle lipgloss.Style
+	markdown        markdownRenderer
 }
 
 func CanUseScreen(in io.Reader, out io.Writer) (*os.File, *os.File, bool) {
@@ -307,9 +306,9 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 	secret.SetVirtualCursor(false)
 	_ = secret.Focus()
 	useStyle := shouldUseStyle(out)
-	requestedTheme := strings.ToLower(strings.TrimSpace(config.Theme))
-	if requestedTheme == "" {
-		requestedTheme = ThemeLight
+	requestedTheme, err := normalizeTheme(runtime.CurrentTheme())
+	if err != nil {
+		return screenModel{}, err
 	}
 	darkTheme := requestedTheme == ThemeDark
 
@@ -320,10 +319,10 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 		composer:     composer,
 		secret:       secret,
 		renderer:     newInlineRenderer(out),
+		theme:        requestedTheme,
 		themePending: requestedTheme == ThemeAuto,
 		darkTheme:    darkTheme,
 		useStyle:     useStyle,
-		markdown:     markdownRenderer{useStyle: useStyle},
 		modelChoices: runtime.ModelChoices(),
 	}
 	m.applyTerminalTheme(darkTheme)
@@ -341,12 +340,18 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 
 func (m screenModel) Init() tea.Cmd {
 	if m.themePending {
-		return tea.Batch(
-			tea.RequestBackgroundColor,
-			tea.Tick(themeQueryTimeout, func(time.Time) tea.Msg { return themeQueryTimeoutMsg{} }),
-		)
+		return queryTerminalTheme(m.themeQuery)
 	}
 	return nil
+}
+
+func queryTerminalTheme(generation uint64) tea.Cmd {
+	return tea.Batch(
+		tea.RequestBackgroundColor,
+		tea.Tick(themeQueryTimeout, func(time.Time) tea.Msg {
+			return themeQueryTimeoutMsg{generation: generation}
+		}),
+	)
 }
 
 func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -381,6 +386,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		m.refreshTranscript()
 		return m, nil
 	case themeQueryTimeoutMsg:
+		if !m.themePending || msg.generation != m.themeQuery {
+			return m, nil
+		}
 		// OSC 11 is optional and is sometimes filtered by terminal
 		// multiplexers. Auto deliberately falls back to the light palette.
 		m.themePending = false
@@ -471,23 +479,28 @@ func (m *screenModel) resize(width, height int) {
 
 func (m screenModel) inlineFrame() inlineFrame {
 	dynamic := []string{m.workingLine()}
+	editorDynamicStart := -1
 	if m.operation.isMaintenance() {
 		elapsed := formatTurnDuration(time.Since(m.operation.startedAt))
 		dynamic = append(dynamic, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render(m.operation.label()+" ("+elapsed+" · esc to interrupt)"))
 	} else if m.picker.active() {
 		dynamic = append(dynamic, m.renderPicker()...)
 	} else {
+		if queued := m.queuedLine(); queued != "" {
+			dynamic = append(dynamic, queued)
+		}
+		editorDynamicStart = len(dynamic)
 		dynamic = append(dynamic, m.markedEditorLines()...)
 		dynamic = append(dynamic, m.renderCommandSuggestions()...)
 	}
 	dynamic = append(dynamic, "", strings.Repeat(" ", transcriptGutter)+truncateANSI(m.footerLine(), m.contentWidth()))
 
 	var cursor *tea.Cursor
-	if !m.operation.isMaintenance() && !m.picker.active() {
+	if editorDynamicStart >= 0 {
 		if editorCursor := m.editorCursor(); editorCursor != nil {
 			copy := *editorCursor
 			copy.Position.X += transcriptGutter
-			copy.Position.Y += len(m.transcript.lines) + 1
+			copy.Position.Y += len(m.transcript.lines) + editorDynamicStart
 			cursor = &copy
 		}
 	}
@@ -535,28 +548,37 @@ func (m screenModel) workingLine() string {
 }
 
 func (m screenModel) footerLine() string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 3)
 	model := strings.TrimSpace(m.agent.CurrentModel())
 	if model == "" {
 		model = strings.TrimSpace(m.config.ModelURI)
 	}
-	if value := model; value != "" {
-		parts = append(parts, sanitizeTerminalText(value))
+	if model != "" {
+		parts = append(parts, sanitizeTerminalText(model))
 	}
-	value := strings.TrimSpace(m.agent.CurrentToolSet())
-	if value == "" {
-		value = strings.TrimSpace(m.config.ToolSet)
+	toolSet := strings.TrimSpace(m.agent.CurrentToolSet())
+	if toolSet == "" {
+		toolSet = strings.TrimSpace(m.config.ToolSet)
 	}
-	if value != "" {
-		parts = append(parts, "tools: "+sanitizeTerminalText(value))
+	if toolSet != "" {
+		parts = append(parts, "tools: "+sanitizeTerminalText(toolSet))
 	}
-	if value := strings.TrimSpace(m.config.Root); value != "" {
-		parts = append(parts, sanitizeTerminalText(value))
-	}
-	if queued := len(m.agent.QueuedInputs()); queued != 0 {
-		parts = append(parts, fmt.Sprintf("queued %d", queued))
+	if root := strings.TrimSpace(m.config.Root); root != "" {
+		parts = append(parts, sanitizeTerminalText(root))
 	}
 	return m.mutedStyle.Render(strings.Join(parts, " · "))
+}
+
+func (m screenModel) queuedLine() string {
+	queued := m.agent.QueuedInputs()
+	if len(queued) == 0 {
+		return ""
+	}
+	text := "queued: " + compactSingleLine(queued[len(queued)-1], 120)
+	if len(queued) > 1 {
+		text = fmt.Sprintf("queued %d · latest: %s", len(queued), compactSingleLine(queued[len(queued)-1], 120))
+	}
+	return m.marked(" ", truncateANSI(m.mutedStyle.Render(text), m.contentWidth()))
 }
 
 func (m screenModel) contentWidth() int { return max(1, max(20, m.width)-transcriptGutter-1) }

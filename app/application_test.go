@@ -67,6 +67,105 @@ func TestApplicationSwitchesAndPersistsRequestedSandbox(t *testing.T) {
 	}
 }
 
+func TestApplicationSwitchesAndPersistsTheme(t *testing.T) {
+	home := t.TempDir()
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), Interactive: true,
+		Sandbox: SandboxOff, SandboxExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchTheme(" DARK "); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := application.config.settings.Settings()
+	if err != nil || application.CurrentTheme() != state.ThemeDark || stored.Theme != state.ThemeDark {
+		t.Fatalf("theme = %q, stored = %q, err = %v", application.CurrentTheme(), stored.Theme, err)
+	}
+	if err := application.SwitchTheme("sepia"); err == nil {
+		t.Fatal("invalid theme accepted")
+	}
+	if application.CurrentTheme() != state.ThemeDark {
+		t.Fatalf("theme changed after invalid selection: %q", application.CurrentTheme())
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchTheme(state.ThemeLight); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("switch theme after close error = %v", err)
+	}
+	reopened, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err = reopened.Settings()
+	if err != nil || stored.Theme != state.ThemeDark {
+		t.Fatalf("theme after closed switch = %q, err = %v", stored.Theme, err)
+	}
+}
+
+func TestOpenLoadsPersistedTheme(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, Interactive: true,
+		Sandbox: SandboxOff, SandboxExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if got := application.CurrentTheme(); got != state.ThemeDark {
+		t.Fatalf("loaded theme = %q", got)
+	}
+}
+
+func TestOpenIgnoresThemeOutsideInteractiveUI(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"theme":"sepia"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "ollama/qwen3:8b", ModelExplicit: true,
+		Sandbox: SandboxOff, SandboxExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if got := application.CurrentTheme(); got != state.ThemeAuto {
+		t.Fatalf("non-interactive theme = %q", got)
+	}
+}
+
+func TestOpenResetsInvalidInteractiveThemeToAuto(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"theme":"sepia"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), Interactive: true,
+		Sandbox: SandboxOff, SandboxExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if got := application.CurrentTheme(); got != state.ThemeAuto {
+		t.Fatalf("theme = %q, want auto", got)
+	}
+	settings, err := application.config.settings.Settings()
+	if err != nil || settings.Theme != state.ThemeAuto {
+		t.Fatalf("stored theme = %q, err = %v", settings.Theme, err)
+	}
+	if notices := strings.Join(application.StartupNotices(), "\n"); !strings.Contains(notices, "reset to auto") {
+		t.Fatalf("startup notices = %q", notices)
+	}
+}
+
 func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,

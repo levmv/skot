@@ -6,15 +6,22 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const (
-	ansiReset  = "\x1b[0m"
-	ansiBold   = "\x1b[1m"
-	ansiGray   = "\x1b[90m"
-	ansiCyan   = "\x1b[36m"
-	ansiYellow = "\x1b[33m"
-)
+type markdownRenderer struct {
+	useStyle    bool
+	accentStyle lipgloss.Style
+	mutedStyle  lipgloss.Style
+	codeStyle   lipgloss.Style
+}
 
-type markdownRenderer struct{ useStyle bool }
+func newMarkdownRenderer(useStyle bool, palette terminalPalette) markdownRenderer {
+	renderer := markdownRenderer{useStyle: useStyle}
+	if useStyle {
+		renderer.accentStyle = lipgloss.NewStyle().Foreground(palette.accent)
+		renderer.mutedStyle = lipgloss.NewStyle().Foreground(palette.muted)
+		renderer.codeStyle = lipgloss.NewStyle().Foreground(palette.code)
+	}
+	return renderer
+}
 
 func (renderer markdownRenderer) renderLinesAtWidth(text string, width int) []string {
 	text = sanitizeTerminalText(text)
@@ -75,7 +82,7 @@ func (renderer markdownRenderer) renderLines(input []string, fence *markdownFenc
 			if closesMarkdownFence(input[index], *fence) {
 				*fence = markdownFence{}
 			} else {
-				out = append(out, renderer.style(input[index], ansiYellow))
+				out = append(out, renderer.style(input[index], renderer.codeStyle))
 			}
 			index++
 			continue
@@ -104,17 +111,17 @@ func (renderer markdownRenderer) renderLine(line string) string {
 	if !renderer.useStyle {
 		return line
 	}
-	base := ""
+	base := lipgloss.NewStyle()
 	trimmed := strings.TrimLeft(line, " \t")
 	indent := line[:len(line)-len(trimmed)]
 	if level, text, ok := parseHeading(trimmed); ok {
 		line = indent + text
-		base = ansiBold + ansiCyan
-		if level >= 3 {
-			base = ansiCyan
+		base = renderer.accentStyle
+		if level < 3 {
+			base = base.Bold(true)
 		}
 	}
-	return base + renderInlineMarkdownMarkers(line, base) + ansiReset
+	return renderer.renderInlineMarkdownMarkers(line, base)
 }
 
 func (renderer markdownRenderer) renderTable(lines []string, maxWidth int) []string {
@@ -143,7 +150,7 @@ func (renderer markdownRenderer) renderTable(lines []string, maxWidth int) []str
 	for index, row := range rows {
 		out = append(out, renderer.renderTableRows(row, widths, index == 0)...)
 		if index == 0 {
-			out = append(out, renderer.style(renderTableSeparator(widths), ansiGray))
+			out = append(out, renderer.style(renderTableSeparator(widths), renderer.mutedStyle))
 		}
 	}
 	return out
@@ -191,7 +198,11 @@ func (renderer markdownRenderer) renderTableRows(row []string, widths []int, hea
 			cell = row[index]
 		}
 		if renderer.useStyle {
-			cell = renderInlineMarkdownMarkers(cell, "")
+			base := lipgloss.NewStyle()
+			if header {
+				base = renderer.accentStyle.Bold(true)
+			}
+			cell = renderer.renderInlineMarkdownMarkers(cell, base)
 		}
 		wrappedCells[index] = wrapDisplayLine(cell, max(1, widths[index]))
 		height = max(height, len(wrappedCells[index]))
@@ -206,14 +217,15 @@ func (renderer markdownRenderer) renderTableRows(row []string, widths []int, hea
 				cell = wrappedCells[column][lineIndex]
 			}
 			if pad := widths[column] - visibleLen(cell); pad > 0 {
-				cell += strings.Repeat(" ", pad)
-			}
-			if header {
-				cell = renderer.style(cell, ansiBold+ansiCyan)
+				padding := strings.Repeat(" ", pad)
+				if header {
+					padding = renderer.style(padding, renderer.accentStyle.Bold(true))
+				}
+				cell += padding
 			}
 			cells[column] = cell
 		}
-		separator := renderer.style("|", ansiGray)
+		separator := renderer.style("|", renderer.mutedStyle)
 		lines = append(lines, separator+" "+strings.Join(cells, " "+separator+" ")+" "+separator)
 	}
 	return lines
@@ -221,16 +233,16 @@ func (renderer markdownRenderer) renderTableRows(row []string, widths []int, hea
 
 func (renderer markdownRenderer) cellWidth(cell string) int {
 	if renderer.useStyle {
-		cell = renderInlineMarkdownMarkers(cell, "")
+		cell = renderer.renderInlineMarkdownMarkers(cell, lipgloss.NewStyle())
 	}
 	return visibleLen(cell)
 }
 
-func (renderer markdownRenderer) style(text, style string) string {
+func (renderer markdownRenderer) style(text string, style lipgloss.Style) string {
 	if !renderer.useStyle || text == "" {
 		return text
 	}
-	return style + text + ansiReset
+	return style.Render(text)
 }
 
 func renderTableSeparator(widths []int) string {
@@ -278,43 +290,42 @@ func parseHeading(line string) (int, string, bool) {
 	return level, strings.TrimSpace(line[level+1:]), true
 }
 
-func renderInlineMarkdownMarkers(text, base string) string {
+func (renderer markdownRenderer) renderInlineMarkdownMarkers(text string, base lipgloss.Style) string {
 	var builder strings.Builder
+	segmentStart := 0
 	bold := false
 	code := false
+	flush := func(end int) {
+		if end <= segmentStart {
+			return
+		}
+		style := base
+		if code {
+			style = style.Foreground(renderer.codeStyle.GetForeground())
+		}
+		if bold {
+			style = style.Bold(true)
+		}
+		builder.WriteString(style.Render(text[segmentStart:end]))
+	}
 	for index := 0; index < len(text); {
 		if !code && strings.HasPrefix(text[index:], "**") {
-			if bold {
-				builder.WriteString(ansiReset)
-				builder.WriteString(base)
-			} else {
-				builder.WriteString(ansiBold)
-			}
+			flush(index)
 			bold = !bold
 			index += 2
+			segmentStart = index
 			continue
 		}
 		if text[index] == '`' {
-			if code {
-				builder.WriteString(ansiReset)
-				builder.WriteString(base)
-				if bold {
-					builder.WriteString(ansiBold)
-				}
-			} else {
-				builder.WriteString(ansiYellow)
-			}
+			flush(index)
 			code = !code
 			index++
+			segmentStart = index
 			continue
 		}
-		builder.WriteByte(text[index])
 		index++
 	}
-	if bold || code {
-		builder.WriteString(ansiReset)
-		builder.WriteString(base)
-	}
+	flush(len(text))
 	return builder.String()
 }
 

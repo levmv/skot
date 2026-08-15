@@ -71,6 +71,13 @@ func TestToolDisplayIsSanitizedBeforeTerminal(t *testing.T) {
 	}
 }
 
+func TestCompactSingleLineSanitizesTerminalControls(t *testing.T) {
+	input := "safe\x1b[31mred\x1b[0m \x1b]52;c;Y2xpcGJvYXJk\aafter\nnext"
+	if got, want := compactSingleLine(input, 80), "safered after next"; got != want {
+		t.Fatalf("compact single line = %q, want %q", got, want)
+	}
+}
+
 func TestRejectedToolCallIsShownWithoutRemainingPending(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	call := agent.ToolCall{ID: "rejected", Name: "read", RawArguments: `{"path":"large.txt"}`}

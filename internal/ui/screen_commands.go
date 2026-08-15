@@ -58,6 +58,7 @@ func init() {
 		{name: "/model", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
 		{name: "/sandbox", description: "show or switch model filesystem isolation", usage: "/sandbox [auto|workspace|masked|off]", maxArgs: 1, duringTurn: true, run: runSandboxCommand},
+		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
 		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
 		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
 		// Logout sits with exit rather than next to login: it is rare, and the
@@ -74,6 +75,12 @@ var sandboxPickerItems = []pickerItem{
 	{value: "off", label: "off", description: "ambient model process authority"},
 }
 
+var themePickerItems = []pickerItem{
+	{value: ThemeAuto, label: ThemeAuto, description: "detect the terminal background"},
+	{value: ThemeLight, label: ThemeLight, description: "colors for a light background"},
+	{value: ThemeDark, label: ThemeDark, description: "colors for a dark background"},
+}
+
 func (m *screenModel) syncCommandSuggestions() {
 	value := strings.ToLower(strings.TrimLeft(m.composer.value(), " \t"))
 	var candidates []string
@@ -85,6 +92,10 @@ func (m *screenModel) syncCommandSuggestions() {
 	case strings.HasPrefix(value, "/sandbox "):
 		for _, item := range sandboxPickerItems {
 			candidates = append(candidates, "/sandbox "+item.value)
+		}
+	case strings.HasPrefix(value, "/theme "):
+		for _, item := range themePickerItems {
+			candidates = append(candidates, "/theme "+item.value)
 		}
 	case strings.HasPrefix(value, "/model "):
 		for _, choice := range m.modelChoices {
@@ -311,6 +322,22 @@ func runSandboxCommand(m *screenModel, input string, args []string) tea.Cmd {
 	return m.startSandboxSwitch(args[0])
 }
 
+func runThemeCommand(m *screenModel, input string, args []string) tea.Cmd {
+	if len(args) == 0 {
+		m.composer.remember(input)
+		m.openThemePicker()
+		return nil
+	}
+	command, err := m.switchTerminalTheme(args[0])
+	if err != nil {
+		m.addBlock(screenBlockError, "theme: "+err.Error())
+		return nil
+	}
+	m.acceptCommand(input)
+	m.addBlock(screenBlockSystem, "theme: "+m.theme)
+	return command
+}
+
 func runContextCommand(m *screenModel, input string, _ []string) tea.Cmd {
 	report, err := m.agent.ContextReport(m.ctx)
 	if err != nil {
@@ -512,6 +539,11 @@ func (m *screenModel) openSandboxPicker() {
 	m.openPicker(pickerSandbox, items, markCurrentPickerItem(items, m.agent.CurrentSandbox()))
 }
 
+func (m *screenModel) openThemePicker() {
+	items := append([]pickerItem(nil), themePickerItems...)
+	m.openPicker(pickerTheme, items, markCurrentPickerItem(items, m.theme))
+}
+
 func markCurrentPickerItem(items []pickerItem, current string) int {
 	selected := 0
 	for index := range items {
@@ -533,7 +565,7 @@ func pickerNavigationFor(kind pickerKind) pickerNavigation {
 	switch kind {
 	case pickerModel:
 		return navigationSearch
-	case pickerToolSet, pickerSandbox, pickerLogin, pickerSession:
+	case pickerToolSet, pickerSandbox, pickerTheme, pickerLogin, pickerSession:
 		return navigationNumbers
 	default:
 		// Logout keeps arrows only: it is the one destructive picker, and rare
@@ -718,6 +750,18 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.startSandboxSwitch(item.value)
+	case pickerTheme:
+		if item.current && item.value != ThemeAuto {
+			return m, nil
+		}
+		command, err := m.switchTerminalTheme(item.value)
+		if err != nil {
+			m.addBlock(screenBlockError, "theme: "+err.Error())
+		} else {
+			m.addBlock(screenBlockSystem, "theme: "+m.theme)
+		}
+		m.refreshTranscript()
+		return m, command
 	case pickerLogin:
 		pendingModel := ""
 		if picker.startupLogin {

@@ -22,7 +22,25 @@ type Settings struct {
 	ToolSets        map[string][]string `json:"tool_sets,omitempty"`
 	AgentModels     []string            `json:"agent_models,omitempty"`
 	Sandbox         string              `json:"sandbox,omitempty"`
+	Theme           string              `json:"theme,omitempty"`
 	ProtectedPaths  []string            `json:"protected_paths,omitempty"`
+}
+
+const (
+	ThemeAuto  = "auto"
+	ThemeLight = "light"
+	ThemeDark  = "dark"
+)
+
+func NormalizeTheme(value string) (string, error) {
+	switch value = strings.ToLower(strings.TrimSpace(value)); value {
+	case "", ThemeAuto:
+		return ThemeAuto, nil
+	case ThemeLight, ThemeDark:
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid terminal theme %q; expected auto, light, or dark", value)
+	}
 }
 
 type CredentialProfile struct {
@@ -102,6 +120,14 @@ func (store *Store) SetToolSetSelection(toolSet string) error {
 
 func (store *Store) SetDefaultSandbox(policy string) error {
 	return store.update(func(settings *Settings) { settings.Sandbox = strings.TrimSpace(policy) })
+}
+
+func (store *Store) SetThemeSelection(value string) error {
+	theme, err := NormalizeTheme(value)
+	if err != nil {
+		return err
+	}
+	return store.update(func(settings *Settings) { settings.Theme = theme })
 }
 
 func (store *Store) APIKey(provider string) (string, bool, error) {

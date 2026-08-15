@@ -81,10 +81,13 @@ func TestShellResultRendersStatusAndOutput(t *testing.T) {
 	}
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]
 	rendered := strings.Join(model.renderBlockLines(block), "\n")
-	for _, want := range []string{"✓", "$ printf hello", "1.2s", "5 B", "hello"} {
+	for _, want := range []string{"•", "$ printf hello", "1.2s", "5 B", "hello"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered shell missed %q: %q", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "✓") {
+		t.Fatalf("successful shell rendered checkmark: %q", rendered)
 	}
 	if strings.Contains(rendered, "exit 0") {
 		t.Fatalf("successful shell rendered redundant exit code: %q", rendered)
@@ -119,7 +122,7 @@ func TestModelBashResultUsesProcessPresentation(t *testing.T) {
 		t.Fatalf("model bash block = %#v", block)
 	}
 	rendered := strings.Join(model.renderBlockLines(block), "\n")
-	if !strings.Contains(rendered, "$ go test ./...") || !strings.Contains(rendered, "ok") {
+	if !strings.Contains(rendered, "•") || !strings.Contains(rendered, "$ go test ./...") || !strings.Contains(rendered, "ok") {
 		t.Fatalf("rendered model bash = %q", rendered)
 	}
 	if !strings.Contains(rendered, "\n    ok") {
@@ -205,7 +208,7 @@ func TestFailedModelProcessFallsBackToFailureTail(t *testing.T) {
 		})},
 	})
 	rendered := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
-	if !strings.Contains(rendered, "exit 1") || !strings.Contains(rendered, "useful failure") || !strings.Contains(rendered, "last line") {
+	if !strings.Contains(rendered, "×") || !strings.Contains(rendered, "exit 1") || !strings.Contains(rendered, "useful failure") || !strings.Contains(rendered, "last line") {
 		t.Fatalf("failure tail was hidden: %q", rendered)
 	}
 }

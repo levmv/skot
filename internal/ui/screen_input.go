@@ -187,8 +187,6 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 			m.addBlock(screenBlockError, "queue input: "+err.Error())
 			m.composer.setValue(input)
 			m.composer.cursorEnd()
-		} else {
-			m.addBlock(screenBlockSystem, "queued: "+compactSingleLine(input, 120))
 		}
 		m.refreshTranscript()
 		return m, nil

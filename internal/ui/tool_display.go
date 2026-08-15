@@ -248,7 +248,7 @@ func compactURL(raw string) string {
 }
 
 func compactSingleLine(value string, limit int) string {
-	value = strings.Join(strings.Fields(strings.ToValidUTF8(value, "�")), " ")
+	value = strings.Join(strings.Fields(sanitizeTerminalText(value)), " ")
 	return truncateToolDisplay(value, limit)
 }
 

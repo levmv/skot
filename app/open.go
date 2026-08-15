@@ -55,6 +55,19 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
+	var notices []string
+	theme := state.ThemeAuto
+	if config.Interactive {
+		selectedTheme, themeErr := state.NormalizeTheme(settings.Theme)
+		if themeErr == nil {
+			theme = selectedTheme
+		} else {
+			notices = append(notices, themeErr.Error()+"; reset to auto")
+			if saveErr := settingsStore.SetThemeSelection(state.ThemeAuto); saveErr != nil {
+				notices = append(notices, "save reset terminal theme: "+saveErr.Error())
+			}
+		}
+	}
 	if !config.ModelExplicit && strings.TrimSpace(settings.Model) != "" {
 		config.ModelURI = settings.Model
 		if !config.ReasoningEffortExplicit {
@@ -93,7 +106,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err := validateSecurity(security); err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("%w; choose -sandbox off explicitly to run without it", err))
 	}
-	var notices []string
 	protection.SetEnabled(security.EffectivePolicy != workspacetools.SandboxOff)
 	projectInstructions, err := loadInstructions(root, protection)
 	if err != nil {
@@ -242,6 +254,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			children:         children,
 			toolSet:          config.ToolSet,
 			requestedSandbox: config.Sandbox,
+			theme:            theme,
 			security:         security,
 			startupNotices:   notices,
 		},

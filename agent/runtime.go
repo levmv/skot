@@ -64,6 +64,12 @@ type Runtime struct {
 	// runMu serializes journal/model/tool operations. Configuration writers
 	// acquire runMu before configMu, so one run observes one coherent setup.
 	runMu sync.Mutex
+	// statusMu protects only the last fully calculated session status. Status
+	// calculation happens before taking this lock so readers never wait on a
+	// journal replay or model projection.
+	statusMu       sync.RWMutex
+	sessionStatus  SessionStatus
+	statusSequence uint64
 	// queueMu owns pendingInputs independently of a running turn.
 	queueMu sync.Mutex
 	// configMu synchronizes short observer reads with configuration changes.
@@ -139,7 +145,7 @@ func New(config Config) (*Runtime, error) {
 		return nil, err
 	}
 
-	return &Runtime{
+	runtime := &Runtime{
 		model:             config.Model,
 		modelInfo:         modelInfo,
 		journal:           config.Journal,
@@ -157,7 +163,9 @@ func New(config Config) (*Runtime, error) {
 		sandbox:           sanitizeSandboxSnapshot(config.Metadata.Sandbox, sanitize),
 		awaitRequiredJobs: config.Metadata.AwaitRequiredJobs,
 		programTools:      programTools,
-	}, nil
+	}
+	runtime.sessionStatus = runtime.calculateSessionStatus(State{})
+	return runtime, nil
 }
 
 func normalizeProgramToolSnapshots(input []ProgramToolSnapshot, sanitize func(string) string) ([]ProgramToolSnapshot, error) {
@@ -262,6 +270,7 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 	if err != nil {
 		return err
 	}
+	runtime.publishSessionStatus(live.state)
 	if live.state.hasUnfinishedWork() {
 		return unfinishedWorkError("switching model")
 	}
@@ -289,6 +298,7 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 	}
 	runtime.model = model
 	runtime.modelInfo = modelInfo
+	runtime.publishSessionStatus(live.state)
 	return nil
 }
 
@@ -350,6 +360,7 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet stri
 	if err != nil {
 		return err
 	}
+	runtime.publishSessionStatus(live.state)
 	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, tools, toolSet, runtime.sandbox)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
@@ -357,6 +368,7 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet stri
 	runtime.tools = tools
 	runtime.toolByName = toolByName
 	runtime.toolSet = toolSet
+	runtime.publishSessionStatus(live.state)
 	return nil
 }
 
@@ -394,6 +406,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 	if err != nil {
 		return RunResult{}, err
 	}
+	runtime.publishSessionStatus(live.state)
 	if live.state.hasUnfinishedWork() {
 		return RunResult{}, unfinishedWorkError("starting another run")
 	}
@@ -444,6 +457,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 			return runtime.finish(ctx, live, emit, runID, "", status, contextErr)
 		}
 		live = reducerFromState(state)
+		runtime.publishSessionStatus(live.state)
 		response, callErr := runtime.complete(ctx, runID, live.state, emit)
 		if callErr != nil {
 			status, callErr := runFailure(ctx, callErr)
@@ -460,6 +474,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 			}
 			return RunResult{RunID: runID}, err
 		}
+		runtime.publishSessionStatus(live.state)
 		if committed.incomplete {
 			return runtime.finish(ctx, live, emit, runID, committed.answer, RunIncomplete, RunIncompleteError{StopReason: committed.response.StopReason})
 		}
@@ -550,6 +565,7 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, contextErr)
 	}
 	live = reducerFromState(state)
+	runtime.publishSessionStatus(live.state)
 	request, err := runtime.modelRequest(live.state)
 	if err != nil {
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunFailed, err)
@@ -1001,6 +1017,7 @@ func (runtime *Runtime) finishRun(ctx context.Context, reducer *stateReducer, em
 	if err != nil {
 		return result, errors.Join(cause, err)
 	}
+	runtime.publishSessionStatus(reducer.state)
 	emitEvent(emit, Event{Sequence: record.Sequence, Kind: EventRunFinished, RunID: runID, Text: answer, Status: status, ToolLimitReached: toolLimitReached, DetachedJobs: append([]string(nil), payload.DetachedJobs...)})
 	return result, cause
 }

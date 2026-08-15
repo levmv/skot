@@ -569,6 +569,53 @@ func TestSecuritySummaryReportsRunningProcessesWithEarlierSandboxPolicy(t *testi
 }
 
 func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
+	application, settings, _ := newModelSwitchApplication(t)
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := settings.Settings()
+	if err != nil || stored.Model != "deepseek/new-model" || stored.ReasoningEffort != "high" || application.CurrentModel() != "deepseek/new-model" || application.CurrentReasoningEffort() != "high" {
+		t.Fatalf("stored=%#v current=%q err=%v", stored, application.CurrentModel(), err)
+	}
+}
+
+func TestApplicationDoesNotSwitchModelWhenSavingSelectionFails(t *testing.T) {
+	application, _, home := newModelSwitchApplication(t)
+	if err := os.Remove(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err == nil || !strings.Contains(err.Error(), "save model selection") {
+		t.Fatalf("switch error = %v", err)
+	}
+	if got := application.CurrentModel(); got != "test/initial" {
+		t.Fatalf("model changed after settings failure: %q", got)
+	}
+}
+
+func TestApplicationRestoresSavedModelWhenRuntimeRejectsSwitch(t *testing.T) {
+	application, settings, _ := newModelSwitchApplication(t)
+	if err := settings.SetDefaultModelSelection("deepseek/old-model", "high"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := application.SwitchModel(ctx, "deepseek/new-model", "high"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("switch error = %v", err)
+	}
+	stored, err := settings.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Model != "deepseek/old-model" || stored.ReasoningEffort != "high" {
+		t.Fatalf("saved model after rejected switch = %#v", stored)
+	}
+	if got := application.CurrentModel(); got != "test/initial" {
+		t.Fatalf("runtime model changed after rejected switch: %q", got)
+	}
+}
+
+func newModelSwitchApplication(t *testing.T) (*Application, *state.Store, string) {
+	t.Helper()
 	home := t.TempDir()
 	settings, err := state.Open(home)
 	if err != nil {
@@ -579,25 +626,15 @@ func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{
-		Model:   applicationTestModel{},
-		Journal: journal,
-	})
+	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
 	if err != nil {
 		t.Fatal(err)
 	}
-	application := &Application{
+	t.Setenv("DEEPSEEK_API_KEY", "secret")
+	return &Application{
 		config: applicationConfig{settings: settings},
 		state:  applicationState{session: newLiveSession("", runtime, nil, false)},
-	}
-	t.Setenv("DEEPSEEK_API_KEY", "secret")
-	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err != nil {
-		t.Fatal(err)
-	}
-	stored, err := settings.Settings()
-	if err != nil || stored.Model != "deepseek/new-model" || stored.ReasoningEffort != "high" || application.CurrentModel() != "deepseek/new-model" || application.CurrentReasoningEffort() != "high" {
-		t.Fatalf("stored=%#v current=%q err=%v", stored, application.CurrentModel(), err)
-	}
+	}, settings, home
 }
 
 func TestOpenAppliesModelAPIOverrideBeforeReasoningEffortValidation(t *testing.T) {

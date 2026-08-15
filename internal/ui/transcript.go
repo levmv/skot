@@ -80,6 +80,7 @@ func (m *screenModel) loadSessionHistory() error {
 	if err != nil {
 		return err
 	}
+	m.refreshSessionStatus()
 	for index := 0; index < len(state.Items); index++ {
 		item := state.Items[index]
 		switch item.Kind {

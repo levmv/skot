@@ -111,6 +111,7 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	if err != nil {
 		return err
 	}
+	settings := application.config.settings
 	route, err := activateModelRoute(ctx, uri, effort, modelRouteOverrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
 	}, savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
@@ -121,17 +122,28 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	if err != nil {
 		return err
 	}
+	previous, err := settings.Settings()
+	if err != nil {
+		return fmt.Errorf("load saved model selection: %w", err)
+	}
+	if err := settings.SetDefaultModelSelection(route.URI, route.ReasoningEffort); err != nil {
+		return fmt.Errorf("save model selection: %w", err)
+	}
 	if err := runtime.SwitchModel(ctx, model); err != nil {
-		return err
+		rollbackErr := settings.SetDefaultModelSelection(previous.Model, previous.ReasoningEffort)
+		if rollbackErr != nil {
+			// Runtime rejected the switch and remains authoritative for this
+			// process; the joined error exposes that persistence could not be
+			// restored and may select the attempted model on the next launch.
+			rollbackErr = fmt.Errorf("restore previous model selection: %w", rollbackErr)
+		}
+		return errors.Join(err, rollbackErr)
 	}
 	application.mu.RLock()
 	children := application.state.children
 	application.mu.RUnlock()
 	if children != nil {
 		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort())
-	}
-	if err := application.config.settings.SetDefaultModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort()); err != nil {
-		return fmt.Errorf("save model selection: %w", err)
 	}
 	return nil
 }
@@ -327,12 +339,12 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 	return nil
 }
 
-func (application *Application) ContextReport(ctx context.Context) (agent.ContextReport, error) {
-	runtime, err := application.requireRuntime()
-	if err != nil {
-		return agent.ContextReport{}, err
+func (application *Application) SessionStatus() agent.SessionStatus {
+	runtime := application.runtimeOrNil()
+	if runtime == nil {
+		return agent.SessionStatus{}
 	}
-	return runtime.ContextReport(ctx)
+	return runtime.SessionStatus()
 }
 
 func (application *Application) Compact(ctx context.Context, keepRecent int) (agent.ContextCompactedRecord, error) {

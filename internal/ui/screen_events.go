@@ -19,12 +19,12 @@ func (m *screenModel) startTurn(input string) tea.Cmd {
 
 func runAgentTurnCmd(ctx context.Context, runtime ConversationAgent, input string, events chan<- tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		result, err := runtime.Run(ctx, input, func(event agent.Event) {
+		_, err := runtime.Run(ctx, input, func(event agent.Event) {
 			// Keep attempt-reset and final events ordered even after cancellation;
 			// otherwise partial streamed output can survive an interrupted turn.
 			events <- agentEventMsg{event: event}
 		})
-		events <- agentDoneMsg{result: result, err: err}
+		events <- agentDoneMsg{err: err}
 		return nil
 	}
 }

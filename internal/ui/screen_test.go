@@ -39,7 +39,6 @@ type fakeAgent struct {
 	theme            string
 	themeErr         error
 	contextReport    agent.ContextReport
-	contextErr       error
 	compaction       agent.ContextCompactedRecord
 	compactionErr    error
 	providers        []ProviderStatus
@@ -212,8 +211,8 @@ func (fake *fakeAgent) SwitchTheme(theme string) error {
 	return nil
 }
 
-func (fake *fakeAgent) ContextReport(context.Context) (agent.ContextReport, error) {
-	return fake.contextReport, fake.contextErr
+func (fake *fakeAgent) SessionStatus() agent.SessionStatus {
+	return agent.SessionStatus{ContextReport: fake.contextReport, Usage: fake.state.Usage}
 }
 
 func (fake *fakeAgent) Compact(context.Context, int) (agent.ContextCompactedRecord, error) {

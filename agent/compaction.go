@@ -45,14 +45,22 @@ func (runtime *Runtime) Compact(ctx context.Context, keepVerbatimBlocks int) (Co
 	if err != nil {
 		return ContextCompactedRecord{}, err
 	}
+	runtime.publishSessionStatus(live.state)
 	if live.state.hasUnfinishedWork() {
 		return ContextCompactedRecord{}, errors.New("cannot compact unfinished work")
 	}
 	if err := runtime.prepareSession(ctx, live); err != nil {
 		return ContextCompactedRecord{}, err
 	}
-	compaction, _, err := runtime.compactLocked(ctx, live.state, keepVerbatimBlocks, nil)
-	return compaction, err
+	compaction, record, err := runtime.compactLocked(ctx, live.state, keepVerbatimBlocks, nil)
+	if err != nil {
+		return ContextCompactedRecord{}, err
+	}
+	if err := live.apply(record); err != nil {
+		return ContextCompactedRecord{}, err
+	}
+	runtime.publishSessionStatus(live.state)
+	return compaction, nil
 }
 
 func (runtime *Runtime) compactLocked(ctx context.Context, state State, keepVerbatimBlocks int, emit EmitFunc) (ContextCompactedRecord, Record, error) {

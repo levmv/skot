@@ -59,10 +59,80 @@ func TestRuntimeDirectResponse(t *testing.T) {
 	if state.Usage.TotalTokens != 11 || state.Usage.InputTokens != 9 || state.Usage.OutputTokens != 2 || state.Usage.ReasoningTokens != 1 {
 		t.Fatalf("replayed usage = %#v", state.Usage)
 	}
+	status := runtime.SessionStatus()
+	if status.Usage != state.Usage || status.ContextReport.InstructionTokens == 0 {
+		t.Fatalf("session status = %#v, state usage = %#v", status, state.Usage)
+	}
 	if !hasEvent(events, EventTextDelta) || events[len(events)-1].Kind != EventRunFinished {
 		t.Fatalf("events = %#v", events)
 	}
 	assertAuthoritativeEvents(t, events, journal.snapshot())
+
+	resumed := newTestRuntime(t, Config{Model: model, Journal: journal, Instructions: "be useful"})
+	resumedState, err := resumed.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.SessionStatus().Usage != resumedState.Usage {
+		t.Fatalf("status was not bootstrapped by State: %#v", resumed.SessionStatus())
+	}
+}
+
+func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{}, 1)
+	t.Cleanup(func() {
+		select {
+		case releaseTool <- struct{}{}:
+		default:
+		}
+	})
+	model := &scriptedModel{steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{
+				Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{
+					ID: "call", Name: "wait", RawArguments: `{}`,
+				}}},
+				Usage: ModelUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+			}, nil
+		},
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{
+				Items:      []Item{{Kind: ItemAssistantText, Text: "done"}},
+				Usage:      ModelUsage{InputTokens: 3, OutputTokens: 1, TotalTokens: 4},
+				StopReason: "stop",
+			}, nil
+		},
+	}}
+	tool := Tool{
+		Spec: ToolSpec{Name: "wait", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(context.Context, string) (ToolOutput, error) {
+			close(toolStarted)
+			<-releaseTool
+			return ToolOutput{Content: "ready"}, nil
+		},
+	}
+	runtime := newTestRuntime(t, Config{
+		Model: model, Journal: &memoryJournal{}, Tools: []Tool{tool},
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.Run(context.Background(), "start", nil)
+		done <- err
+	}()
+	waitForSignal(t, toolStarted, "tool start")
+	during := runtime.SessionStatus()
+	if during.Usage.TotalTokens != 12 || during.ContextReport.TotalInputTokens == 0 {
+		t.Fatalf("status during run = %#v", during)
+	}
+	releaseTool <- struct{}{}
+	if err := waitForError(t, done); err != nil {
+		t.Fatal(err)
+	}
+	after := runtime.SessionStatus()
+	if after.Usage.TotalTokens != 16 || after.ContextReport.TotalInputTokens <= during.ContextReport.TotalInputTokens {
+		t.Fatalf("final status = %#v, during = %#v", after, during)
+	}
 }
 
 func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {

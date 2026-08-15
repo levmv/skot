@@ -18,6 +18,7 @@ func (m *screenModel) clearSession() {
 	m.resetTranscript()
 	m.composer.resetHistory()
 	m.refreshModelChoices()
+	m.refreshSessionStatus()
 	m.addBlock(screenBlockSystem, "new session "+app.ShortSessionID(id))
 }
 

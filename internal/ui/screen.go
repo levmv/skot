@@ -26,6 +26,7 @@ const (
 )
 
 type ConversationAgent interface {
+	SessionStatus() agent.SessionStatus
 	Run(context.Context, string, agent.EmitFunc) (agent.RunResult, error)
 	QueueInput(string) error
 	ClaimQueued() (string, bool)
@@ -34,7 +35,6 @@ type ConversationAgent interface {
 	QueuedInputs() []string
 	State(context.Context) (agent.State, error)
 	ToolStatus(string) ([]agent.Detail, bool)
-	ContextReport(context.Context) (agent.ContextReport, error)
 	Compact(context.Context, int) (agent.ContextCompactedRecord, error)
 }
 
@@ -167,16 +167,9 @@ type sandboxDoneMsg struct {
 	err        error
 }
 
-type compactionDoneMsg struct {
-	record agent.ContextCompactedRecord
-	report agent.ContextReport
-	err    error
-}
+type compactionDoneMsg struct{ err error }
 
-type agentDoneMsg struct {
-	result agent.RunResult
-	err    error
-}
+type agentDoneMsg struct{ err error }
 
 type resumeSessionMsg struct{ idOrPrefix string }
 type themeQueryTimeoutMsg struct{ generation uint64 }
@@ -197,6 +190,7 @@ type screenModel struct {
 	loginModel    string
 	loginEffort   string
 	loginReturn   pickerState
+	sessionStatus agent.SessionStatus
 
 	width     int
 	height    int
@@ -425,6 +419,7 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		m.refreshTranscript()
 		return m, nil
 	case turnTickMsg:
+		m.refreshSessionStatus()
 		if m.refreshProcessResults() {
 			m.refreshTranscript()
 		}
@@ -433,6 +428,7 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		}
 		return m, scheduleTurnTick()
 	case shellDoneMsg:
+		m.refreshSessionStatus()
 		m.finishShell(msg.result, msg.err, time.Now())
 		m.refreshTranscript()
 		return m, nil
@@ -449,6 +445,7 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		m.refreshTranscript()
 		return m, nil
 	case agentDoneMsg:
+		m.refreshSessionStatus()
 		m.finishTurnChanges()
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.addBlock(screenBlockError, "error: "+msg.err.Error())
@@ -545,28 +542,6 @@ func (m screenModel) workingLine() string {
 	}
 	elapsed := formatTurnDuration(time.Since(m.operation.startedAt))
 	return strings.Repeat(" ", transcriptGutter) + m.mutedStyle.Render("Working ("+elapsed+" · esc to interrupt)")
-}
-
-func (m screenModel) footerLine() string {
-	parts := make([]string, 0, 3)
-	model := strings.TrimSpace(m.agent.CurrentModel())
-	if model == "" {
-		model = strings.TrimSpace(m.config.ModelURI)
-	}
-	if model != "" {
-		parts = append(parts, sanitizeTerminalText(model))
-	}
-	toolSet := strings.TrimSpace(m.agent.CurrentToolSet())
-	if toolSet == "" {
-		toolSet = strings.TrimSpace(m.config.ToolSet)
-	}
-	if toolSet != "" {
-		parts = append(parts, "tools: "+sanitizeTerminalText(toolSet))
-	}
-	if root := strings.TrimSpace(m.config.Root); root != "" {
-		parts = append(parts, sanitizeTerminalText(root))
-	}
-	return m.mutedStyle.Render(strings.Join(parts, " · "))
 }
 
 func (m screenModel) queuedLine() string {

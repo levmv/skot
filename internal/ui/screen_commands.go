@@ -308,6 +308,7 @@ func runToolsCommand(m *screenModel, input string, args []string) tea.Cmd {
 		return nil
 	}
 	m.acceptCommand(input)
+	m.refreshSessionStatus()
 	m.addBlock(screenBlockSystem, "tools: "+m.agent.CurrentToolSet())
 	return nil
 }
@@ -339,13 +340,9 @@ func runThemeCommand(m *screenModel, input string, args []string) tea.Cmd {
 }
 
 func runContextCommand(m *screenModel, input string, _ []string) tea.Cmd {
-	report, err := m.agent.ContextReport(m.ctx)
-	if err != nil {
-		m.addBlock(screenBlockError, "context: "+err.Error())
-		return nil
-	}
 	m.acceptCommand(input)
-	m.addBlock(screenBlockSystem, formatContextReport(report))
+	m.refreshSessionStatus()
+	m.addBlock(screenBlockSystem, formatContextReport(m.sessionStatus.ContextReport))
 	return nil
 }
 
@@ -743,6 +740,7 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if err := m.agent.SwitchToolSet(m.ctx, item.value); err != nil {
 			m.addBlock(screenBlockError, "tools: "+err.Error())
 		} else {
+			m.refreshSessionStatus()
 			m.addBlock(screenBlockSystem, "tools: "+m.agent.CurrentToolSet())
 		}
 	case pickerSandbox:
@@ -944,6 +942,7 @@ func (m *screenModel) switchModel(uri, effort string) {
 		return
 	}
 	current := m.agent.CurrentModel()
+	m.refreshSessionStatus()
 	m.refreshModelChoices()
 	m.addBlock(screenBlockSystem, "model: "+current)
 }

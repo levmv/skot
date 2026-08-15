@@ -16,7 +16,7 @@ func TestContextCommandShowsBudgetBreakdown(t *testing.T) {
 	model.composer.setValue("/context")
 	model, _ = model.submitInput()
 	got := model.transcript.blocks[len(model.transcript.blocks)-1].text
-	if !strings.Contains(got, "context: 12k / 80k") || !strings.Contains(got, "history 12k") {
+	if !strings.Contains(got, "context: 12.5k / 80k") || !strings.Contains(got, "history 12k") {
 		t.Fatalf("context report = %q", got)
 	}
 }

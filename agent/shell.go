@@ -41,6 +41,7 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 	if err != nil {
 		return ToolResult{}, err
 	}
+	runtime.publishSessionStatus(live.state)
 	if live.state.hasUnfinishedWork() {
 		return ToolResult{}, unfinishedWorkError("running a shell command")
 	}
@@ -112,6 +113,7 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 	if _, err := appendRecordAndApply(journalCtx, runtime.journal, live, RecordRunFinished, finished); err != nil {
 		runErr = errors.Join(runErr, err)
 	}
+	runtime.publishSessionStatus(live.state)
 	return result, runErr
 }
 

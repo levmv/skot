@@ -228,10 +228,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	if state.CompactionCount != 1 || state.Usage.TotalTokens != 8_020 {
 		t.Fatalf("state compactions=%d usage=%#v", state.CompactionCount, state.Usage)
 	}
-	report, err := runtime.ContextReport(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := runtime.SessionStatus().ContextReport
 	if report.Window != 16*1024 || report.TotalInputTokens > report.InputLimit || report.CompactionCount != 1 {
 		t.Fatalf("context report = %#v", report)
 	}

@@ -195,10 +195,7 @@ func TestQueuedInputAfterFinalBoundaryRemainsClaimable(t *testing.T) {
 	if err := waitForError(t, done); err != nil {
 		t.Fatal(err)
 	}
-	report, err := runtime.ContextReport(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := runtime.SessionStatus().ContextReport
 	if report.PendingTokens == 0 {
 		t.Fatalf("queued input missing from context report: %#v", report)
 	}

@@ -31,20 +31,41 @@ type ContextReport struct {
 	ToolPruningCount     int
 }
 
-func (runtime *Runtime) ContextReport(ctx context.Context) (ContextReport, error) {
-	if !runtime.runMu.TryLock() {
-		return ContextReport{}, ErrRunActive
+// SessionStatus is the coherent, presentation-neutral status of one journal
+// projection. Runtime publishes complete values at operation boundaries so
+// observers never have to replay the journal or assemble a partial view.
+type SessionStatus struct {
+	ContextReport ContextReport
+	Usage         ModelUsage
+}
+
+func (runtime *Runtime) SessionStatus() SessionStatus {
+	runtime.statusMu.RLock()
+	defer runtime.statusMu.RUnlock()
+	return runtime.sessionStatus
+}
+
+// publishSessionStatus always uses the canonical next-request projection:
+// tools are included and only still-queued input is treated as pending.
+func (runtime *Runtime) publishSessionStatus(state State) {
+	runtime.storeSessionStatus(state.LastSequence, runtime.calculateSessionStatus(state))
+}
+
+func (runtime *Runtime) calculateSessionStatus(state State) SessionStatus {
+	return SessionStatus{
+		ContextReport: runtime.contextReport(state, runtime.QueuedInputs()...),
+		Usage:         state.Usage,
 	}
-	defer runtime.runMu.Unlock()
-	records, err := runtime.journal.Records(ctx)
-	if err != nil {
-		return ContextReport{}, fmt.Errorf("read journal for context report: %w", err)
+}
+
+func (runtime *Runtime) storeSessionStatus(sequence uint64, status SessionStatus) {
+	runtime.statusMu.Lock()
+	defer runtime.statusMu.Unlock()
+	if sequence < runtime.statusSequence {
+		return
 	}
-	state, err := Replay(records)
-	if err != nil {
-		return ContextReport{}, err
-	}
-	return runtime.contextReport(state, runtime.QueuedInputs()...), nil
+	runtime.statusSequence = sequence
+	runtime.sessionStatus = status
 }
 
 func (runtime *Runtime) prepareContext(ctx context.Context, state State, pendingInput string, emit EmitFunc) (State, ContextReport, error) {

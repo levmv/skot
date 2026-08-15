@@ -92,6 +92,13 @@ var modelCatalog = []modelSpec{
 		},
 		Compatibility: modelCompatibilitySupported,
 	},
+	// The Messages adapter sends no thinking controls, so this route declares no
+	// reasoning vocabulary even though the model reasons by default.
+	{
+		URI: "anthropic/claude-opus-5", Name: "Claude Opus 5", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		Compatibility: modelCompatibilitySupported,
+	},
 	{URI: "openrouter/free", Name: "OpenRouter Free", Compatibility: modelCompatibilitySupported},
 	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest", Compatibility: modelCompatibilitySupported},
 	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest", Compatibility: modelCompatibilitySupported},

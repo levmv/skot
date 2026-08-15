@@ -74,6 +74,7 @@ the currently available route list and switch models.
 | Provider | Credential |
 | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | OpenCode Go | `OPENCODE_API_KEY` |

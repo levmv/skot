@@ -168,6 +168,38 @@ func TestOpenCodeGoKnownAnthropicRouteDoesNotFallBackToChatCompletions(t *testin
 	}
 }
 
+func TestAnthropicProviderRoutesThroughNativeMessages(t *testing.T) {
+	route, err := resolveModelRoute("anthropic/claude-opus-5", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.API != modelAPIAnthropicMessages || route.BaseURL != "https://api.anthropic.com/v1" ||
+		route.Compatibility != modelCompatibilitySupported || route.ContextWindow != 1_000_000 ||
+		route.ContextWindowEstimated || route.MaxOutputTokens != 128_000 {
+		t.Fatalf("Anthropic route = %#v", route)
+	}
+	// Undeclared models stay usable on the provider default protocol; only the
+	// reviewed route facts are withheld.
+	undeclared, err := resolveModelRoute("anthropic/claude-unreleased", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if undeclared.API != modelAPIAnthropicMessages || undeclared.Compatibility != modelCompatibilityUnverified ||
+		undeclared.MaxOutputTokens != 0 || !undeclared.ContextWindowEstimated {
+		t.Fatalf("undeclared Anthropic route = %#v", undeclared)
+	}
+	custom, err := resolveModelRoute("anthropic/claude-opus-5", "", modelRouteOverrides{
+		BaseURL: "https://gateway.example/v1",
+	}, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom.BaseURL != "https://gateway.example/v1" || custom.API != modelAPIAnthropicMessages ||
+		custom.MaxOutputTokens != 0 || custom.ContextWindow != unknownModelContextWindow || !custom.ContextWindowEstimated {
+		t.Fatalf("custom Anthropic route = %#v", custom)
+	}
+}
+
 func TestBuildModelBackendRejectsUnknownModelAPI(t *testing.T) {
 	original := modelCatalog
 	modelCatalog = append(append([]modelSpec(nil), original...), modelSpec{URI: "ollama/future-test", API: modelAPI("future")})

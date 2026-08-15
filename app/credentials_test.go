@@ -63,6 +63,28 @@ func TestOpenCodeGoCredentialUsesSubscriptionEnvironmentAndLoginURL(t *testing.T
 	t.Fatal("OpenCode Go credential status is missing")
 }
 
+func TestAnthropicCredentialUsesNativeEnvironmentAndLoginURL(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "native-key")
+	token, source, err := credentialForProvider(nil, "Anthropic")
+	if err != nil || token != "native-key" || source != "environment override" {
+		t.Fatalf("credential = %q/%q, %v", token, source, err)
+	}
+	statuses, err := providerStatuses(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range statuses {
+		if status.Name == "anthropic" {
+			if status.Source != "environment override" || status.Description != "model provider" ||
+				status.CredentialURL != "https://platform.claude.com/settings/keys" {
+				t.Fatalf("Anthropic status = %#v", status)
+			}
+			return
+		}
+	}
+	t.Fatal("Anthropic credential status is missing")
+}
+
 func TestStoredAPIKeyAuthorizerUsesNativeMessagesHeader(t *testing.T) {
 	t.Setenv("OPENCODE_API_KEY", "subscription-key")
 	request, _ := http.NewRequest(http.MethodPost, "https://example.test/messages", nil)

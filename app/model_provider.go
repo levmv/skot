@@ -23,7 +23,8 @@ const (
 )
 
 var modelProviderCatalog = map[string]providerSpec{
-	"deepseek": {baseURL: "https://api.deepseek.com/v1", defaultAPI: modelAPIChatCompletions},
+	"deepseek":  {baseURL: "https://api.deepseek.com/v1", defaultAPI: modelAPIChatCompletions},
+	"anthropic": {baseURL: "https://api.anthropic.com/v1", defaultAPI: modelAPIAnthropicMessages},
 	"openrouter": {
 		baseURL:    "https://openrouter.ai/api/v1",
 		defaultAPI: modelAPIChatCompletions,

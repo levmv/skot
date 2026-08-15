@@ -12,7 +12,7 @@ in scripts.
 - Bounded file, search, Bash, job, web, and custom program tools.
 - Configurable tool sets and filesystem isolation for model-owned processes.
 - Read-only child agents for parallel independent work.
-- Supports DeepSeek, OpenAI, OpenRouter, OpenCode Go, and Ollama.
+- Supports DeepSeek, Anthropic, OpenAI, OpenRouter, OpenCode Go, and Ollama.
 
 ## Install
 

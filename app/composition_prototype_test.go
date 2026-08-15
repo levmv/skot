@@ -142,7 +142,7 @@ func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
 			t.Fatalf("duplicate journal session ID %q", state.SessionID)
 		}
 		sessionIDs[state.SessionID] = struct{}{}
-		if state.Configured == nil || state.Configured.ModelContext.ToolProfile != app.ProfileReadOnly {
+		if state.Configured == nil || state.Configured.ModelContext.ToolSet != app.ToolSetReadOnly {
 			t.Fatalf("child %d effective configuration = %#v", index, state.Configured)
 		}
 		if exposed := child.SessionID(); exposed != "" {
@@ -243,7 +243,7 @@ func openCompositionChild(home, root, baseURL, journalPath string) (*app.Applica
 		Home: home, Root: root,
 		ModelURI: "deepseek/composition-probe", ModelExplicit: true,
 		BaseURL: baseURL, ContextWindow: 32 * 1024,
-		Profile: app.ProfileReadOnly, ProfileExplicit: true,
+		ToolSet: app.ToolSetReadOnly, ToolSetExplicit: true,
 		Sandbox: app.SandboxOff, SandboxExplicit: true,
 		JournalPath: journalPath,
 	})

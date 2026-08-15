@@ -36,7 +36,7 @@ type cliConfig struct {
 	home              string
 	journalPath       string
 	root              string
-	profile           string
+	toolSet           string
 	saveSession       bool
 	sandbox           string
 	theme             string
@@ -88,11 +88,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.maxToolIterations, "max-tool-iterations", strings.TrimSpace(os.Getenv("SK_MAX_TOOL_ITERATIONS")), fmt.Sprintf("maximum completed model-to-tool cycles per run, or unlimited (default %d)", agent.DefaultMaxToolIterations))
 	flags.StringVar(&config.systemPrompt, "system-prompt", os.Getenv("SK_SYSTEM_PROMPT"), "system instructions")
 	flags.StringVar(&config.systemPromptFile, "system-prompt-file", strings.TrimSpace(os.Getenv("SK_SYSTEM_PROMPT_FILE")), "system instructions from a file")
-	flags.StringVar(&config.toolsFile, "tools", strings.TrimSpace(os.Getenv("SK_TOOLS")), "external program tool catalog (default: tools.json in the Skot data directory)")
+	flags.StringVar(&config.toolsFile, "tools-file", strings.TrimSpace(os.Getenv("SK_TOOLS_FILE")), "external program tool definitions (default: tools.json in the Skot data directory)")
 	flags.StringVar(&config.home, "home", defaultHome, "Skot data directory for settings, credentials, sessions, and tools")
 	flags.StringVar(&config.journalPath, "journal", "", "JSONL session journal to keep and resume")
 	flags.StringVar(&config.root, "root", envOr("SK_ROOT", "."), "workspace root for file tools")
-	flags.StringVar(&config.profile, "profile", envOr("SK_PROFILE", app.ProfileFull), "model tool profile name")
+	flags.StringVar(&config.toolSet, "tools", envOr("SK_TOOLS", app.ToolSetFull), "tool set available to the model")
 	flags.BoolVar(&config.saveSession, "save-session", false, "keep a resumable session for a one-shot invocation")
 	flags.StringVar(&config.sandbox, "sandbox", envOr("SK_SANDBOX", app.SandboxAuto), "model filesystem isolation: auto, workspace, masked, or off")
 	flags.StringVar(&config.theme, "theme", envOr("SK_THEME", ui.ThemeAuto), "terminal theme: auto, light, or dark")
@@ -135,7 +135,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.Visit(func(value *flag.Flag) { setFlags[value.Name] = true })
 	modelExplicit := setFlags["model"] || strings.TrimSpace(os.Getenv("SK_MODEL")) != ""
 	reasoningEffortExplicit := setFlags["reasoning-effort"] || strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")) != ""
-	profileExplicit := setFlags["profile"] || strings.TrimSpace(os.Getenv("SK_PROFILE")) != ""
+	toolSetExplicit := setFlags["tools"] || strings.TrimSpace(os.Getenv("SK_TOOLS")) != ""
 	sandboxExplicit := setFlags["sandbox"] || strings.TrimSpace(os.Getenv("SK_SANDBOX")) != ""
 	config.theme, err = ui.NormalizeTheme(config.theme)
 	if err != nil {
@@ -158,7 +158,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		BaseURL: config.baseURL, ContextWindow: config.contextWindow,
 		RetryBudget: retryBudget, StreamIdleTimeout: streamIdleTimeout, MaxToolIterations: maxToolIterations, SystemPrompt: config.systemPrompt,
 		ToolsFile: config.toolsFile,
-		Profile:   config.profile, ProfileExplicit: profileExplicit,
+		ToolSet:   config.toolSet, ToolSetExplicit: toolSetExplicit,
 		Sandbox: config.sandbox, SandboxExplicit: sandboxExplicit,
 		JournalPath: config.journalPath, Resume: invocation.resume, ResumePrefix: invocation.sessionPrefix,
 		SaveSession: config.saveSession, Interactive: interactive,
@@ -175,7 +175,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			ModelURI:        application.CurrentModel(),
 			ReasoningEffort: application.CurrentReasoningEffort(),
 			Root:            application.Root(),
-			Profile:         application.CurrentProfile(),
+			ToolSet:         application.CurrentToolSet(),
 			Security:        application.SecuritySummary(),
 			Theme:           config.theme,
 		}, inFile, outFile)
@@ -216,7 +216,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			DurationMillis:  durationMillis,
 			Model:           application.CurrentModel(),
 			ReasoningEffort: reasoningEffort,
-			Profile:         application.CurrentProfile(),
+			ToolSet:         application.CurrentToolSet(),
 			ModelAttempts:   int(observer.modelAttempts.Load()),
 		}
 		if err := writeJSONResult(stdout, result, usage, application.SessionID(), metadata, runErr); err != nil {

@@ -27,8 +27,8 @@ type runtimeBuilder struct {
 	metadataLookup    modelContextLookup
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
-	profiles          toolpolicy.Profiles
-	profile           string
+	toolSets          toolpolicy.ToolSets
+	toolSet           string
 	processes         *workspacetools.ProcessManager
 	workspace         string
 	requestPolicy     agent.ModelRequestPolicy
@@ -65,9 +65,9 @@ func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtime
 	if err != nil {
 		return nil, resolvedModelRoute{}, err
 	}
-	selectedTools, err := profileTools(builder.profiles, builder.tools, builder.credentials, builder.profile)
+	selectedTools, err := toolSetTools(builder.toolSets, builder.tools, builder.credentials, builder.toolSet)
 	if err != nil {
-		return nil, resolvedModelRoute{}, fmt.Errorf("select profile tools: %w", err)
+		return nil, resolvedModelRoute{}, fmt.Errorf("select tools for tool set: %w", err)
 	}
 	externalWork := builder.externalWork
 	if externalWork == nil {
@@ -86,7 +86,7 @@ func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtime
 		ExternalWork:      externalWork,
 		Sanitize:          builder.sanitize,
 		Metadata: agent.ConfigurationMetadata{
-			ToolProfile: builder.profile, Sandbox: builder.sandbox, AwaitRequiredJobs: builder.awaitRequiredJobs,
+			ToolSet: builder.toolSet, Sandbox: builder.sandbox, AwaitRequiredJobs: builder.awaitRequiredJobs,
 			ProgramTools: builder.programTools,
 		},
 	})

@@ -39,12 +39,12 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	standard, err := application.config.profiles.Tools(application.config.tools, ProfileFull)
+	standard, err := application.config.toolSets.Tools(application.config.tools, ToolSetFull)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if childTestHasTool(standard, "agent") {
-		t.Fatal("agent tool leaked into the standard full profile")
+		t.Fatal("agent tool leaked into the standard full tool set")
 	}
 	if _, err := application.Run(context.Background(), "parent", nil); err != nil {
 		t.Fatal(err)
@@ -543,7 +543,7 @@ func childTestConfig(home, root, baseURL string, interactive bool) Config {
 		Home: home, Root: root,
 		ModelURI: "deepseek/child-test", ModelExplicit: true,
 		BaseURL: baseURL, ContextWindow: 32 * 1024,
-		Profile: "delegate", ProfileExplicit: true, Profiles: childTestProfiles(),
+		ToolSet: "delegate", ToolSetExplicit: true, ToolSets: childTestToolSets(),
 		Sandbox: SandboxOff, SandboxExplicit: true, Interactive: interactive,
 	}
 }
@@ -573,7 +573,7 @@ func childBoundaryRecordCount(t *testing.T, application *Application) int {
 	return count
 }
 
-func childTestProfiles() map[string][]string {
+func childTestToolSets() map[string][]string {
 	return map[string][]string{"delegate": {"read", "grep", "glob", "agent"}}
 }
 

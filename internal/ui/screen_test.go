@@ -23,10 +23,10 @@ type fakeAgent struct {
 	shellPrivate     bool
 	status           []agent.Detail
 	statusFound      bool
-	profile          string
-	profiles         []string
-	profileTools     map[string][]string
-	profileErr       error
+	toolSet          string
+	toolSets         []string
+	toolSetTools     map[string][]string
+	toolSetErr       error
 	model            string
 	reasoningEffort  string
 	reasoningEfforts map[string][]string
@@ -115,24 +115,24 @@ func (fake *fakeAgent) ToolStatus(string) ([]agent.Detail, bool) {
 	return fake.status, fake.statusFound
 }
 
-func (fake *fakeAgent) CurrentProfile() string { return fake.profile }
+func (fake *fakeAgent) CurrentToolSet() string { return fake.toolSet }
 
-func (fake *fakeAgent) Profiles() []string {
-	if len(fake.profiles) != 0 {
-		return append([]string(nil), fake.profiles...)
+func (fake *fakeAgent) ToolSets() []string {
+	if len(fake.toolSets) != 0 {
+		return append([]string(nil), fake.toolSets...)
 	}
-	return []string{toolpolicy.ProfileReadOnly, toolpolicy.ProfileEdit, toolpolicy.ProfileFull}
+	return []string{toolpolicy.ToolSetReadOnly, toolpolicy.ToolSetEdit, toolpolicy.ToolSetFull}
 }
 
-func (fake *fakeAgent) ProfileTools(profile string) []string {
-	return append([]string(nil), fake.profileTools[profile]...)
+func (fake *fakeAgent) ToolSetTools(toolSet string) []string {
+	return append([]string(nil), fake.toolSetTools[toolSet]...)
 }
 
-func (fake *fakeAgent) SwitchProfile(_ context.Context, profile string) error {
-	if fake.profileErr != nil {
-		return fake.profileErr
+func (fake *fakeAgent) SwitchToolSet(_ context.Context, toolSet string) error {
+	if fake.toolSetErr != nil {
+		return fake.toolSetErr
 	}
-	fake.profile = profile
+	fake.toolSet = toolSet
 	return nil
 }
 
@@ -336,28 +336,28 @@ func TestWorkingCommandsAreNotQueued(t *testing.T) {
 	}
 }
 
-func TestProfileCommandShowsAndSwitchesProfile(t *testing.T) {
-	fake := &fakeAgent{profile: toolpolicy.ProfileEdit, profiles: []string{
-		toolpolicy.ProfileReadOnly, toolpolicy.ProfileEdit, toolpolicy.ProfileFull, "review",
-	}, profileTools: map[string][]string{
-		toolpolicy.ProfileReadOnly: {"read", "grep"},
-		toolpolicy.ProfileEdit:     {"bash", "job"},
-		toolpolicy.ProfileFull:     {"read", "write", "bash", "job"},
+func TestToolSetCommandShowsAndSwitchesToolSet(t *testing.T) {
+	fake := &fakeAgent{toolSet: toolpolicy.ToolSetEdit, toolSets: []string{
+		toolpolicy.ToolSetReadOnly, toolpolicy.ToolSetEdit, toolpolicy.ToolSetFull, "review",
+	}, toolSetTools: map[string][]string{
+		toolpolicy.ToolSetReadOnly: {"read", "grep"},
+		toolpolicy.ToolSetEdit:     {"bash", "job"},
+		toolpolicy.ToolSetFull:     {"read", "write", "bash", "job"},
 		"review":                   {"read", "custom"},
 	}}
 	model := testScreenModel(t, fake)
-	model.composer.setValue("/profile")
+	model.composer.setValue("/tools")
 	model, _ = model.submitInput()
-	if model.picker.kind != pickerProfile || len(model.picker.items) != 4 || model.picker.items[3].value != "review" || model.picker.index != 1 || !model.picker.items[1].current {
-		t.Fatalf("profile picker = %#v", model.picker)
+	if model.picker.kind != pickerToolSet || len(model.picker.items) != 4 || model.picker.items[3].value != "review" || model.picker.index != 1 || !model.picker.items[1].current {
+		t.Fatalf("tool set picker = %#v", model.picker)
 	}
 	if got := model.picker.items[1].description; got != "tools: bash, job" {
 		t.Fatalf("customized edit description = %q", got)
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyUp, BaseCode: tea.KeyUp})
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
-	if fake.profile != toolpolicy.ProfileReadOnly || model.composer.value() != "" {
-		t.Fatalf("profile = %q, input = %q", fake.profile, model.composer.value())
+	if fake.toolSet != toolpolicy.ToolSetReadOnly || model.composer.value() != "" {
+		t.Fatalf("tool set = %q, input = %q", fake.toolSet, model.composer.value())
 	}
 }
 
@@ -388,20 +388,20 @@ func TestModelCommandShowsAndSwitchesModel(t *testing.T) {
 }
 
 func TestCommandSuggestionsCompleteAndSelectArguments(t *testing.T) {
-	fake := &fakeAgent{profile: toolpolicy.ProfileFull}
+	fake := &fakeAgent{toolSet: toolpolicy.ToolSetFull}
 	model := testScreenModel(t, fake)
-	model.composer.setValue("/profile e")
+	model.composer.setValue("/tools e")
 	model.syncCommandSuggestions()
-	if !model.commandSuggestionsVisible() || model.currentCommandSuggestion() != "/profile edit" {
+	if !model.commandSuggestionsVisible() || model.currentCommandSuggestion() != "/tools edit" {
 		t.Fatalf("suggestions = %#v", model.composer.suggestions)
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyTab, BaseCode: tea.KeyTab})
-	if model.composer.value() != "/profile edit" {
+	if model.composer.value() != "/tools edit" {
 		t.Fatalf("completed input = %q", model.composer.value())
 	}
 	model, _ = model.submitInput()
-	if fake.profile != toolpolicy.ProfileEdit {
-		t.Fatalf("profile = %q", fake.profile)
+	if fake.toolSet != toolpolicy.ToolSetEdit {
+		t.Fatalf("tool set = %q", fake.toolSet)
 	}
 }
 

@@ -50,10 +50,10 @@ type ShellAgent interface {
 }
 
 type ConfigurationAgent interface {
-	CurrentProfile() string
-	Profiles() []string
-	ProfileTools(string) []string
-	SwitchProfile(context.Context, string) error
+	CurrentToolSet() string
+	ToolSets() []string
+	ToolSetTools(string) []string
+	SwitchToolSet(context.Context, string) error
 	CurrentModel() string
 	ModelChoices() []app.ModelChoice
 	SwitchModel(context.Context, string, string) error
@@ -98,7 +98,7 @@ type Config struct {
 	ModelURI        string
 	ReasoningEffort string
 	Root            string
-	Profile         string
+	ToolSet         string
 	Security        string
 	Theme           string
 }
@@ -108,7 +108,7 @@ type pickerKind uint8
 const (
 	pickerNone pickerKind = iota
 	pickerModel
-	pickerProfile
+	pickerToolSet
 	pickerSandbox
 	pickerLogin
 	pickerLogout
@@ -519,12 +519,12 @@ func (m screenModel) footerLine() string {
 	if value := model; value != "" {
 		parts = append(parts, sanitizeTerminalText(value))
 	}
-	value := strings.TrimSpace(m.agent.CurrentProfile())
+	value := strings.TrimSpace(m.agent.CurrentToolSet())
 	if value == "" {
-		value = strings.TrimSpace(m.config.Profile)
+		value = strings.TrimSpace(m.config.ToolSet)
 	}
 	if value != "" {
-		parts = append(parts, "profile: "+sanitizeTerminalText(value))
+		parts = append(parts, "tools: "+sanitizeTerminalText(value))
 	}
 	if value := strings.TrimSpace(m.config.Root); value != "" {
 		parts = append(parts, sanitizeTerminalText(value))

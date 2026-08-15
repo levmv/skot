@@ -67,7 +67,7 @@ type ProgramToolConfig struct {
 type ResolvedProgramTool struct {
 	Tool     agent.Tool
 	Snapshot agent.ProgramToolSnapshot
-	// CanBackground means a profile selecting Tool must also select job.
+	// CanBackground means any tool set containing Tool must also contain job.
 	CanBackground bool
 }
 

@@ -20,7 +20,7 @@ type jsonResult struct {
 	DurationMillis   int64            `json:"duration_ms"`
 	Model            string           `json:"model"`
 	ReasoningEffort  string           `json:"reasoning_effort"`
-	Profile          string           `json:"profile"`
+	ToolSet          string           `json:"tool_set"`
 	ModelAttempts    int              `json:"model_attempts"`
 	RunID            string           `json:"run_id,omitempty"`
 	SessionID        string           `json:"session_id,omitempty"`
@@ -33,7 +33,7 @@ type jsonRunMetadata struct {
 	DurationMillis  int64
 	Model           string
 	ReasoningEffort string
-	Profile         string
+	ToolSet         string
 	ModelAttempts   int
 }
 
@@ -46,7 +46,7 @@ func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsa
 		DurationMillis:   metadata.DurationMillis,
 		Model:            metadata.Model,
 		ReasoningEffort:  metadata.ReasoningEffort,
-		Profile:          metadata.Profile,
+		ToolSet:          metadata.ToolSet,
 		ModelAttempts:    metadata.ModelAttempts,
 		RunID:            run.RunID,
 		SessionID:        sessionID,

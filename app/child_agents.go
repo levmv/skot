@@ -167,16 +167,16 @@ func (supervisor *childSupervisor) configure(builder runtimeBuilder, instruction
 		return fmt.Errorf("configure child default model: %w", err)
 	}
 	readOnly := childReadOnlyToolNames(builder.tools)
-	profiles, err := toolpolicy.NewProfiles(builder.tools, map[string][]string{
-		toolpolicy.ProfileReadOnly: readOnly,
-		toolpolicy.ProfileEdit:     readOnly,
-		toolpolicy.ProfileFull:     readOnly,
+	toolSets, err := toolpolicy.NewToolSets(builder.tools, map[string][]string{
+		toolpolicy.ToolSetReadOnly: readOnly,
+		toolpolicy.ToolSetEdit:     readOnly,
+		toolpolicy.ToolSetFull:     readOnly,
 	})
 	if err != nil {
-		return fmt.Errorf("configure child profiles: %w", err)
+		return fmt.Errorf("configure child tool sets: %w", err)
 	}
-	builder.profiles = profiles
-	builder.profile = toolpolicy.ProfileReadOnly
+	builder.toolSets = toolSets
+	builder.toolSet = toolpolicy.ToolSetReadOnly
 	builder.awaitRequiredJobs = false
 	builder.externalWork = nil
 

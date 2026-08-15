@@ -119,6 +119,9 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.Contains(stdout.Bytes(), []byte(`"tool_set":"full"`)) || bytes.Contains(stdout.Bytes(), []byte(`"profile"`)) {
+		t.Fatalf("JSON result uses an unexpected tool set field: %s", stdout.String())
+	}
 	decoder := json.NewDecoder(&stdout)
 	var result jsonResult
 	if err := decoder.Decode(&result); err != nil {
@@ -130,7 +133,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if result.Version != jsonResultVersion || result.Reply != "done" || result.Status != agent.RunCompleted ||
 		result.RunID == "" || result.SessionID == "" || result.Error != "" || result.DurationMillis < 0 ||
 		result.Model != "deepseek/test-model" || result.ReasoningEffort != "default" ||
-		result.Profile != toolpolicy.ProfileFull || result.ModelAttempts != 1 {
+		result.ToolSet != toolpolicy.ToolSetFull || result.ModelAttempts != 1 {
 		t.Fatalf("JSON result = %#v", result)
 	}
 	if result.Usage.InputTokens != 12 || result.Usage.CachedInputTokens != 4 ||
@@ -260,7 +263,7 @@ func TestRunOneShotPrintsPartialAnswerAndReturnsIncomplete(t *testing.T) {
 func TestRunClassifiesInvalidConfigurationAndProviderFailure(t *testing.T) {
 	t.Run("configuration", func(t *testing.T) {
 		err := run(context.Background(), []string{
-			"-home", t.TempDir(), "-root", t.TempDir(), "-profile", "admin", "task",
+			"-home", t.TempDir(), "-root", t.TempDir(), "-tools", "admin", "task",
 		}, bytes.NewReader(nil), io.Discard, io.Discard)
 		if !errors.Is(err, agent.ErrInvalidRequest) || exitCodeFor(err) != exitConfig {
 			t.Fatalf("configuration error/code = %v/%d", err, exitCodeFor(err))
@@ -367,7 +370,7 @@ func TestRunReadsToolsFileFromEnvironmentBeforeModelRequest(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"tools":[],"unexpected":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SK_TOOLS", path)
+	t.Setenv("SK_TOOLS_FILE", path)
 	err := run(context.Background(), []string{
 		"-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard)
@@ -493,7 +496,7 @@ func TestRunOrdinaryOneShotDoesNotCreateManagedSession(t *testing.T) {
 
 func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
-	settings := `{"profiles":{"full":["read","grep","glob","edit","write","bash","job","agent"]}}`
+	settings := `{"tool_sets":{"full":["read","grep","glob","edit","write","bash","job","agent"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +575,7 @@ func TestRunKeepsOneShotSessionForDetachedJob(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"profiles":{"full":["read","grep","glob","edit","write","bash","job","detached_worker"]}}`
+	settings := `{"tool_sets":{"full":["read","grep","glob","edit","write","bash","job","detached_worker"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +961,7 @@ func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"profiles":{"full":["read","grep","glob","edit","write","bash","job","lookup"]}}`
+	settings := `{"tool_sets":{"full":["read","grep","glob","edit","write","bash","job","lookup"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1199,7 +1202,7 @@ func TestRunLoadsSavedSettingsUnlessExplicitlyOverridden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.SetDefaultProfile(toolpolicy.ProfileEdit); err != nil {
+	if err := settings.SetDefaultToolSet(toolpolicy.ToolSetEdit); err != nil {
 		t.Fatal(err)
 	}
 	if err := settings.SetDefaultModelSelection("deepseek/saved-model", "high"); err != nil {
@@ -1228,7 +1231,7 @@ func TestRunLoadsSavedSettingsUnlessExplicitlyOverridden(t *testing.T) {
 		}
 	}
 	runOnce()
-	runOnce("-model", "deepseek/explicit-model", "-profile", toolpolicy.ProfileFull)
+	runOnce("-model", "deepseek/explicit-model", "-tools", toolpolicy.ToolSetFull)
 	runOnce("-reasoning-effort", "default")
 	t.Setenv("SK_REASONING_EFFORT", "high")
 	runOnce("-model", "deepseek/env-effort-model")

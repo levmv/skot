@@ -33,7 +33,7 @@ func init() {
 		{name: "/login", synopsis: "/login [provider]", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
 		{name: "/logout", synopsis: "/logout [provider]", description: "remove a stored API key", usage: "/logout [provider]", maxArgs: 1, run: runLogoutCommand},
 		{name: "/model", synopsis: "/model [provider/model]", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
-		{name: "/profile", synopsis: "/profile [name]", description: "show or switch the tool profile", usage: "/profile [name]", maxArgs: 1, run: runProfileCommand},
+		{name: "/tools", synopsis: "/tools [name]", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
 		{name: "/sandbox", synopsis: "/sandbox [auto|workspace|masked|off]", description: "show or switch model filesystem isolation", usage: "/sandbox [auto|workspace|masked|off]", maxArgs: 1, duringTurn: true, run: runSandboxCommand},
 		{name: "/context", synopsis: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
 		{name: "/compact", synopsis: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
@@ -57,9 +57,9 @@ func (m *screenModel) syncCommandSuggestions() {
 	value := strings.ToLower(strings.TrimLeft(m.composer.value(), " \t"))
 	var candidates []string
 	switch {
-	case strings.HasPrefix(value, "/profile "):
-		for _, profile := range m.agent.Profiles() {
-			candidates = append(candidates, "/profile "+profile)
+	case strings.HasPrefix(value, "/tools "):
+		for _, toolSet := range m.agent.ToolSets() {
+			candidates = append(candidates, "/tools "+toolSet)
 		}
 	case strings.HasPrefix(value, "/sandbox "):
 		for _, item := range sandboxPickerItems {
@@ -265,18 +265,18 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 	return nil
 }
 
-func runProfileCommand(m *screenModel, input string, args []string) tea.Cmd {
+func runToolsCommand(m *screenModel, input string, args []string) tea.Cmd {
 	if len(args) == 0 {
 		m.composer.remember(input)
-		m.openProfilePicker()
+		m.openToolSetPicker()
 		return nil
 	}
-	if err := m.agent.SwitchProfile(m.ctx, args[0]); err != nil {
-		m.addBlock(screenBlockError, "profile: "+err.Error())
+	if err := m.agent.SwitchToolSet(m.ctx, args[0]); err != nil {
+		m.addBlock(screenBlockError, "tools: "+err.Error())
 		return nil
 	}
 	m.acceptCommand(input)
-	m.addBlock(screenBlockSystem, "profile: "+m.agent.CurrentProfile())
+	m.addBlock(screenBlockSystem, "tools: "+m.agent.CurrentToolSet())
 	return nil
 }
 
@@ -432,16 +432,16 @@ func appendDescription(description, part string) string {
 	return description + " · " + part
 }
 
-func (m *screenModel) openProfilePicker() {
-	profiles := m.agent.Profiles()
-	items := make([]pickerItem, 0, len(profiles))
-	for _, profile := range profiles {
-		items = append(items, pickerItem{value: profile, label: profile, description: profileDescription(m.agent.ProfileTools(profile))})
+func (m *screenModel) openToolSetPicker() {
+	toolSets := m.agent.ToolSets()
+	items := make([]pickerItem, 0, len(toolSets))
+	for _, toolSet := range toolSets {
+		items = append(items, pickerItem{value: toolSet, label: toolSet, description: toolSetDescription(m.agent.ToolSetTools(toolSet))})
 	}
-	m.openPicker(pickerProfile, items, markCurrentPickerItem(items, m.agent.CurrentProfile()))
+	m.openPicker(pickerToolSet, items, markCurrentPickerItem(items, m.agent.CurrentToolSet()))
 }
 
-func profileDescription(tools []string) string {
+func toolSetDescription(tools []string) string {
 	if len(tools) == 0 {
 		return "no model tools"
 	}
@@ -517,14 +517,14 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			return m, nil
 		}
 		m.selectModel(item.value, effort)
-	case pickerProfile:
+	case pickerToolSet:
 		if item.current {
 			return m, nil
 		}
-		if err := m.agent.SwitchProfile(m.ctx, item.value); err != nil {
-			m.addBlock(screenBlockError, "profile: "+err.Error())
+		if err := m.agent.SwitchToolSet(m.ctx, item.value); err != nil {
+			m.addBlock(screenBlockError, "tools: "+err.Error())
 		} else {
-			m.addBlock(screenBlockSystem, "profile: "+m.agent.CurrentProfile())
+			m.addBlock(screenBlockSystem, "tools: "+m.agent.CurrentToolSet())
 		}
 	case pickerSandbox:
 		if item.current {

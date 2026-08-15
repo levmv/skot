@@ -14,8 +14,8 @@ import (
 type builtToolCatalog struct {
 	tools            []agent.Tool
 	programSnapshots []agent.ProgramToolSnapshot
-	profiles         toolpolicy.Profiles
-	profile          string
+	toolSets         toolpolicy.ToolSets
+	toolSet          string
 }
 
 func buildToolCatalog(config Config, settings state.Settings, credentials *state.Store, masker *secretMasker, base []agent.Tool, processes *workspacetools.ProcessManager) (builtToolCatalog, error) {
@@ -58,7 +58,7 @@ func buildToolCatalog(config Config, settings state.Settings, credentials *state
 	}
 	programSnapshots := make([]agent.ProgramToolSnapshot, 0, len(resolvedPrograms))
 	// A foreground Bash command can yield a managed job even when background
-	// was not requested, so every profile containing bash also needs job.
+	// was not requested, so every tool set containing bash also needs job.
 	backgroundCapable := map[string]struct{}{"bash": {}}
 	for _, resolved := range resolvedPrograms {
 		name := resolved.Tool.Spec.Name
@@ -76,27 +76,27 @@ func buildToolCatalog(config Config, settings state.Settings, credentials *state
 	if err != nil {
 		return builtToolCatalog{}, fmt.Errorf("validate complete tool catalog: %w", err)
 	}
-	profiles, err := toolpolicy.NewProfiles(catalog, settings.Profiles, config.Profiles)
+	toolSets, err := toolpolicy.NewToolSets(catalog, settings.ToolSets, config.ToolSets)
 	if err != nil {
-		return builtToolCatalog{}, fmt.Errorf("configure tool profiles: %w", err)
+		return builtToolCatalog{}, fmt.Errorf("configure tool sets: %w", err)
 	}
-	if err := profiles.RequireTogether("job", backgroundCapable); err != nil {
+	if err := toolSets.RequireTogether("job", backgroundCapable); err != nil {
 		return builtToolCatalog{}, err
 	}
-	profile, err := profiles.Normalize(config.Profile)
+	toolSet, err := toolSets.Normalize(config.ToolSet)
 	if err != nil {
 		return builtToolCatalog{}, err
 	}
 	return builtToolCatalog{
 		tools:            catalog,
 		programSnapshots: programSnapshots,
-		profiles:         profiles,
-		profile:          profile,
+		toolSets:         toolSets,
+		toolSet:          toolSet,
 	}, nil
 }
 
-func profileTools(profiles toolpolicy.Profiles, tools []agent.Tool, credentials *state.Store, profile string) ([]agent.Tool, error) {
-	selected, err := profiles.Tools(tools, profile)
+func toolSetTools(toolSets toolpolicy.ToolSets, tools []agent.Tool, credentials *state.Store, toolSet string) ([]agent.Tool, error) {
+	selected, err := toolSets.Tools(tools, toolSet)
 	if err != nil {
 		return nil, err
 	}

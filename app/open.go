@@ -61,8 +61,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			config.ReasoningEffort = settings.ReasoningEffort
 		}
 	}
-	if !config.ProfileExplicit && strings.TrimSpace(settings.Profile) != "" {
-		config.Profile = settings.Profile
+	if !config.ToolSetExplicit && strings.TrimSpace(settings.ToolSet) != "" {
+		config.ToolSet = settings.ToolSet
 	}
 	if !config.SandboxExplicit && strings.TrimSpace(settings.Sandbox) != "" {
 		config.Sandbox = settings.Sandbox
@@ -117,9 +117,9 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return resources.fail(agent.MarkInvalidRequest(err))
 	}
 	catalog = builtCatalog.tools
-	profiles := builtCatalog.profiles
+	toolSets := builtCatalog.toolSets
 	programSnapshots := builtCatalog.programSnapshots
-	config.Profile = builtCatalog.profile
+	config.ToolSet = builtCatalog.toolSet
 
 	opened, err := openInitialSession(config, home, root)
 	resources.session = newLiveSession(opened.id, nil, opened.journal, opened.managed)
@@ -180,8 +180,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		metadataLookup:    openRouterContextWindow,
 		tools:             catalog,
 		programTools:      programSnapshots,
-		profiles:          profiles,
-		profile:           config.Profile,
+		toolSets:          toolSets,
+		toolSet:           config.ToolSet,
 		processes:         processes,
 		workspace:         root,
 		requestPolicy:     modelRequestPolicy(config.RetryBudget, config.StreamIdleTimeout),
@@ -219,7 +219,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			settings:          settingsStore,
 			tools:             append([]agent.Tool(nil), catalog...),
 			programTools:      append([]agent.ProgramToolSnapshot(nil), programSnapshots...),
-			profiles:          profiles,
+			toolSets:          toolSets,
 			systemPrompt:      config.SystemPrompt,
 			root:              root,
 			home:              home,
@@ -240,7 +240,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			session:          currentSession,
 			processes:        processes,
 			children:         children,
-			profile:          config.Profile,
+			toolSet:          config.ToolSet,
 			requestedSandbox: config.Sandbox,
 			security:         security,
 			startupNotices:   notices,

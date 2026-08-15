@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools []Tool, toolProfile string, sandbox SandboxSnapshot) EffectiveConfigSnapshot {
+func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools []Tool, toolSet string, sandbox SandboxSnapshot) EffectiveConfigSnapshot {
 	toolSpecs := make([]ToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		toolSpecs = append(toolSpecs, cloneToolSpec(tool.Spec))
@@ -19,7 +19,7 @@ func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools
 			Instructions:           runtime.instructions,
 			CompactionInstructions: compactionSystemInstructions,
 			ToolLimitInstructions:  toolLimitInstructions,
-			ToolProfile:            strings.TrimSpace(toolProfile),
+			ToolSet:                strings.TrimSpace(toolSet),
 			Tools:                  toolSpecs,
 		},
 		RuntimePolicy: RuntimePolicySnapshot{
@@ -88,7 +88,7 @@ func (runtime *Runtime) recordEffectiveConfigurationAndApply(ctx context.Context
 func (runtime *Runtime) recordCurrentEffectiveConfigurationAndApply(ctx context.Context, reducer *stateReducer) error {
 	runtime.configMu.RLock()
 	defer runtime.configMu.RUnlock()
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolProfile, runtime.sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, runtime.sandbox)
 	return runtime.recordEffectiveConfigurationAndApply(ctx, reducer, snapshot)
 }
 
@@ -250,7 +250,7 @@ func (runtime *Runtime) SetSandboxSnapshot(ctx context.Context, sandbox SandboxS
 	if err != nil {
 		return err
 	}
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolProfile, sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, sandbox)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}

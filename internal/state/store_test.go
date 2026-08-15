@@ -10,7 +10,7 @@ import (
 
 func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"profiles":{"review":["read","grep"]},"agent_models":["openai/gpt-5-mini"],"protected_paths":[".env","~/private"]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"tool_sets":{"review":["read","grep"]},"agent_models":["openai/gpt-5-mini"],"protected_paths":[".env","~/private"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(home)
@@ -23,7 +23,7 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err := store.SetDefaultModelSelection("deepseek/next-model", " HIGH "); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultProfile("edit"); err != nil {
+	if err := store.SetDefaultToolSet("edit"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetDefaultSandbox("off"); err != nil {
@@ -37,11 +37,11 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.Profile != "edit" || settings.Sandbox != "off" {
+	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.ToolSet != "edit" || settings.Sandbox != "off" {
 		t.Fatalf("settings = %#v", settings)
 	}
-	if got := strings.Join(settings.Profiles["review"], ","); got != "read,grep" {
-		t.Fatalf("profiles = %#v", settings.Profiles)
+	if got := strings.Join(settings.ToolSets["review"], ","); got != "read,grep" {
+		t.Fatalf("tool sets = %#v", settings.ToolSets)
 	}
 	if got := strings.Join(settings.ProtectedPaths, ","); got != ".env,~/private" {
 		t.Fatalf("protected paths = %#v", settings.ProtectedPaths)

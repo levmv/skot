@@ -13,9 +13,9 @@ const (
 	// persisted selection overrides it.
 	DefaultModelURI = "deepseek/deepseek-v4-flash"
 
-	ProfileFull     = toolpolicy.ProfileFull
-	ProfileEdit     = toolpolicy.ProfileEdit
-	ProfileReadOnly = toolpolicy.ProfileReadOnly
+	ToolSetFull     = toolpolicy.ToolSetFull
+	ToolSetEdit     = toolpolicy.ToolSetEdit
+	ToolSetReadOnly = toolpolicy.ToolSetReadOnly
 
 	SandboxAuto      = workspacetools.SandboxAuto
 	SandboxWorkspace = workspacetools.SandboxWorkspace
@@ -48,18 +48,18 @@ type Config struct {
 	// tools.json in Home; a missing file is an empty catalog.
 	ToolsFile string
 	// ConfigureTools receives the complete standard catalog and returns the
-	// complete catalog to expose through profiles. It may add, remove, replace,
+	// complete catalog to expose through tool sets. It may add, remove, replace,
 	// or modify any tool. Open validates and takes an owned copy of the result;
 	// returning nil deliberately selects an empty catalog. Resources captured
 	// by added or replacement tools remain owned by the caller. A newly added
-	// tool is model-visible only when a profile also names it.
+	// tool is model-visible only when a tool set also names it.
 	ConfigureTools func([]agent.Tool) ([]agent.Tool, error)
-	// Profiles adds named exact tool lists and completely replaces built-in
-	// profiles with the same case-insensitive name. Values from Config override
+	// ToolSets adds named exact tool lists and completely replaces built-in
+	// tool sets with the same case-insensitive name. Values from Config override
 	// definitions loaded from the settings file.
-	Profiles        map[string][]string
-	Profile         string
-	ProfileExplicit bool
+	ToolSets        map[string][]string
+	ToolSet         string
+	ToolSetExplicit bool
 	// AgentModels adds model URIs which the opt-in agent tool may select for a
 	// child. Omitting a model always inherits the parent's current selection.
 	AgentModels     []string

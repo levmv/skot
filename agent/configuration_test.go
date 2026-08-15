@@ -32,7 +32,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 3}, MaxToolIterations: 7,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, "secret", "[redacted]") },
 		Metadata: ConfigurationMetadata{
-			ToolProfile: "read-only", AwaitRequiredJobs: true,
+			ToolSet: "read-only", AwaitRequiredJobs: true,
 			Sandbox: SandboxSnapshot{
 				RequestedPolicy: "auto", EffectivePolicy: "masked", Container: "secret container", Network: "inherited",
 			},
@@ -56,7 +56,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if configured == nil {
 		t.Fatal("replay lost effective configuration")
 	}
-	if configured.ModelContext.Instructions != "follow [redacted]" || configured.ModelContext.ToolProfile != "read-only" || len(configured.ModelContext.Tools) != 1 {
+	if configured.ModelContext.Instructions != "follow [redacted]" || configured.ModelContext.ToolSet != "read-only" || len(configured.ModelContext.Tools) != 1 {
 		t.Fatalf("model context snapshot = %#v", configured.ModelContext)
 	}
 	if configured.RuntimePolicy.ContextWindow != 64_000 || !configured.RuntimePolicy.ContextWindowEstimated || configured.RuntimePolicy.MaxModelAttempts != 3 || configured.RuntimePolicy.MaxToolIterations != 7 || configured.RuntimePolicy.MaxRequestBytes != 1_000_000 || configured.RuntimePolicy.MaxCompletionBytes != 100_000 || !configured.RuntimePolicy.AwaitRequiredJobs {
@@ -103,7 +103,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Configured == nil || state.Configured.RuntimePolicy.ContextWindow != 128_000 || state.Configured.Environment.Endpoint != "https://next.example/v1" || state.Configured.ModelContext.ToolProfile != "edit" || len(state.Configured.ModelContext.Tools) != 2 {
+	if state.Configured == nil || state.Configured.RuntimePolicy.ContextWindow != 128_000 || state.Configured.Environment.Endpoint != "https://next.example/v1" || state.Configured.ModelContext.ToolSet != "edit" || len(state.Configured.ModelContext.Tools) != 2 {
 		t.Fatalf("latest configuration = %#v", state.Configured)
 	}
 	firstConfigured, firstRun := -1, -1

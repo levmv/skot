@@ -70,7 +70,7 @@ func TestApplicationSwitchesAndPersistsRequestedSandbox(t *testing.T) {
 func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: toolpolicy.ProfileReadOnly, ProfileExplicit: true,
+		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 	})
 	if err != nil {
@@ -88,7 +88,7 @@ func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 		t.Fatal("application session has no effective configuration")
 	}
 	snapshot := configured.Configured
-	if snapshot.ModelContext.ToolProfile != toolpolicy.ProfileReadOnly || len(snapshot.ModelContext.Tools) == 0 || snapshot.ModelContext.CompactionInstructions == "" {
+	if snapshot.ModelContext.ToolSet != toolpolicy.ToolSetReadOnly || len(snapshot.ModelContext.Tools) == 0 || snapshot.ModelContext.CompactionInstructions == "" {
 		t.Fatalf("model context = %#v", snapshot.ModelContext)
 	}
 	if snapshot.Environment.Endpoint != "https://api.deepseek.com/v1" || snapshot.Environment.Sandbox.RequestedPolicy != workspacetools.SandboxOff || snapshot.Environment.Sandbox.EffectivePolicy != workspacetools.SandboxOff || snapshot.Environment.Sandbox.Network != "inherited" {
@@ -157,12 +157,12 @@ func TestOpenConfiguresAndOwnsCompleteToolCatalog(t *testing.T) {
 	seenDefaults := make(map[string]bool)
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: toolpolicy.ProfileFull, ProfileExplicit: true,
+		ToolSet: toolpolicy.ToolSetFull, ToolSetExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
-		Profiles: map[string][]string{
-			toolpolicy.ProfileReadOnly: {"ls", "grep", "glob"},
-			toolpolicy.ProfileEdit:     {"ls", "grep", "glob", "edit", "write"},
-			toolpolicy.ProfileFull:     {"grep", "glob", "edit", "write", "bash", "job", "custom"},
+		ToolSets: map[string][]string{
+			toolpolicy.ToolSetReadOnly: {"ls", "grep", "glob"},
+			toolpolicy.ToolSetEdit:     {"ls", "grep", "glob", "edit", "write"},
+			toolpolicy.ToolSetFull:     {"grep", "glob", "edit", "write", "bash", "job", "custom"},
 		},
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
 			borrowed = catalog
@@ -231,7 +231,7 @@ func TestOpenConfiguresAndOwnsCompleteToolCatalog(t *testing.T) {
 	}
 }
 
-func TestOpenLoadsProgramToolsIntoExactProfilesAndRecordsResolvedRuntime(t *testing.T) {
+func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *testing.T) {
 	home := t.TempDir()
 	toolsDocument := `{"tools":[{
 	  "name":"lookup","description":"lookup configured data",
@@ -242,13 +242,13 @@ func TestOpenLoadsProgramToolsIntoExactProfilesAndRecordsResolvedRuntime(t *test
 	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"profiles":{"full":["read","grep","glob","edit","write","bash","job","lookup"]}}`
+	settings := `{"tool_sets":{"full":["read","grep","glob","edit","write","bash","job","lookup"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: toolpolicy.ProfileFull, ProfileExplicit: true,
+		ToolSet: toolpolicy.ToolSetFull, ToolSetExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 	})
 	if err != nil {
@@ -278,7 +278,7 @@ func TestOpenLoadsProgramToolsIntoExactProfilesAndRecordsResolvedRuntime(t *test
 	if got := application.config.masker.Redact("token=journal-secret"); got != "token=[REDACTED]" {
 		t.Fatalf("program environment was not registered for redaction: %q", got)
 	}
-	if err := application.SwitchProfile(context.Background(), toolpolicy.ProfileReadOnly); err != nil {
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetReadOnly); err != nil {
 		t.Fatal(err)
 	}
 	state, err = application.State(context.Background())
@@ -287,15 +287,15 @@ func TestOpenLoadsProgramToolsIntoExactProfilesAndRecordsResolvedRuntime(t *test
 	}
 }
 
-func TestOpenRejectsBackgroundProgramProfileWithoutJob(t *testing.T) {
+func TestOpenRejectsBackgroundProgramToolSetWithoutJob(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(`{"tools":[{"name":"worker","description":"work","command":["true"],"background":"always"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: "worker-only", ProfileExplicit: true,
-		Profiles: map[string][]string{"worker-only": {"worker"}},
+		ToolSet: "worker-only", ToolSetExplicit: true,
+		ToolSets: map[string][]string{"worker-only": {"worker"}},
 		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 	})
 	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
@@ -306,11 +306,11 @@ func TestOpenRejectsBackgroundProgramProfileWithoutJob(t *testing.T) {
 // Bash needs the job tool for the same reason a background-capable program
 // does, and needs it without anyone having asked for background: a foreground
 // command still running after the yield hands the model a job id.
-func TestOpenRejectsBashProfileWithoutJob(t *testing.T) {
+func TestOpenRejectsBashToolSetWithoutJob(t *testing.T) {
 	_, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: "shell-only", ProfileExplicit: true,
-		Profiles: map[string][]string{"shell-only": {"read", "bash"}},
+		ToolSet: "shell-only", ToolSetExplicit: true,
+		ToolSets: map[string][]string{"shell-only": {"read", "bash"}},
 		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 	})
 	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
@@ -318,10 +318,10 @@ func TestOpenRejectsBashProfileWithoutJob(t *testing.T) {
 	}
 }
 
-func TestOpenValidatesCompleteCatalogBeforeProfileFiltering(t *testing.T) {
+func TestOpenValidatesCompleteCatalogBeforeToolSetFiltering(t *testing.T) {
 	_, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: toolpolicy.ProfileReadOnly, ProfileExplicit: true,
+		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
 			return append(catalog, applicationTool("bash")), nil
@@ -336,10 +336,10 @@ func TestOpenAllowsDeliberatelyEmptyToolCatalog(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
-		Profiles: map[string][]string{
-			toolpolicy.ProfileReadOnly: nil,
-			toolpolicy.ProfileEdit:     nil,
-			toolpolicy.ProfileFull:     nil,
+		ToolSets: map[string][]string{
+			toolpolicy.ToolSetReadOnly: nil,
+			toolpolicy.ToolSetEdit:     nil,
+			toolpolicy.ToolSetFull:     nil,
 		},
 		ConfigureTools: func([]agent.Tool) ([]agent.Tool, error) { return nil, nil },
 	})
@@ -359,17 +359,17 @@ func TestOpenAllowsDeliberatelyEmptyToolCatalog(t *testing.T) {
 	}
 }
 
-func TestOpenLoadsCustomProfilesAndLetsConfigReplaceBuiltIns(t *testing.T) {
+func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 	home := t.TempDir()
-	settings := `{"profiles":{"full":["read"],"review":["read","custom"]}}`
+	settings := `{"tool_sets":{"full":["read"],"review":["read","custom"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	configuredProfiles := map[string][]string{toolpolicy.ProfileFull: {"custom"}}
+	configuredToolSets := map[string][]string{toolpolicy.ToolSetFull: {"custom"}}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Profile: toolpolicy.ProfileFull, ProfileExplicit: true,
-		Profiles: configuredProfiles,
+		ToolSet: toolpolicy.ToolSetFull, ToolSetExplicit: true,
+		ToolSets: configuredToolSets,
 		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
 			return append(catalog, applicationTool("custom")), nil
@@ -379,12 +379,12 @@ func TestOpenLoadsCustomProfilesAndLetsConfigReplaceBuiltIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = application.Close() })
-	configuredProfiles[toolpolicy.ProfileFull][0] = "read"
-	if got := strings.Join(application.Profiles(), ","); got != "read-only,edit,full,review" {
-		t.Fatalf("profiles = %q", got)
+	configuredToolSets[toolpolicy.ToolSetFull][0] = "read"
+	if got := strings.Join(application.ToolSets(), ","); got != "read-only,edit,full,review" {
+		t.Fatalf("tool sets = %q", got)
 	}
-	if got := strings.Join(application.ProfileTools(toolpolicy.ProfileFull), ","); got != "custom" {
-		t.Fatalf("full profile tools = %q", got)
+	if got := strings.Join(application.ToolSetTools(toolpolicy.ToolSetFull), ","); got != "custom" {
+		t.Fatalf("tools in full set = %q", got)
 	}
 
 	if _, err := application.RunShell(context.Background(), "true"); err != nil {
@@ -398,19 +398,19 @@ func TestOpenLoadsCustomProfilesAndLetsConfigReplaceBuiltIns(t *testing.T) {
 		t.Fatalf("overridden full tools = %q", got)
 	}
 
-	if err := application.SwitchProfile(context.Background(), " REVIEW "); err != nil {
+	if err := application.SwitchToolSet(context.Background(), " REVIEW "); err != nil {
 		t.Fatal(err)
 	}
 	state, err = application.State(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := configuredToolNames(state); got != "read,custom" || application.CurrentProfile() != "review" {
-		t.Fatalf("review tools = %q, current = %q", got, application.CurrentProfile())
+	if got := configuredToolNames(state); got != "read,custom" || application.CurrentToolSet() != "review" {
+		t.Fatalf("review tools = %q, current = %q", got, application.CurrentToolSet())
 	}
 	stored, err := application.config.settings.Settings()
-	if err != nil || strings.Join(stored.Profiles["review"], ",") != "read,custom" {
-		t.Fatalf("stored profiles = %#v, %v", stored.Profiles, err)
+	if err != nil || strings.Join(stored.ToolSets["review"], ",") != "read,custom" {
+		t.Fatalf("stored tool sets = %#v, %v", stored.ToolSets, err)
 	}
 }
 
@@ -516,7 +516,7 @@ func TestOpenAppliesModelAPIOverrideBeforeReasoningEffortValidation(t *testing.T
 	}
 }
 
-func TestApplicationOwnsAndPersistsToolProfile(t *testing.T) {
+func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 	settings, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -531,16 +531,16 @@ func TestApplicationOwnsAndPersistsToolProfile(t *testing.T) {
 		applicationTool("bash"),
 		applicationTool("job"),
 	}
-	profiles, err := toolpolicy.NewProfiles(catalog)
+	toolSets, err := toolpolicy.NewToolSets(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedTools, err := profiles.Tools(catalog, toolpolicy.ProfileFull)
+	selectedTools, err := toolSets.Tools(catalog, toolpolicy.ToolSetFull)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := agent.New(agent.Config{
-		Model:   profileCaptureModel{t: t, want: "read,ls,grep,glob"},
+		Model:   toolSetCaptureModel{t: t, want: "read,ls,grep,glob"},
 		Journal: &applicationMemoryJournal{},
 		Tools:   selectedTools,
 	})
@@ -548,21 +548,21 @@ func TestApplicationOwnsAndPersistsToolProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := &Application{
-		config: applicationConfig{settings: settings, tools: catalog, profiles: profiles},
+		config: applicationConfig{settings: settings, tools: catalog, toolSets: toolSets},
 		state: applicationState{
 			session: newLiveSession("", runtime, nil, false),
-			profile: toolpolicy.ProfileFull,
+			toolSet: toolpolicy.ToolSetFull,
 		},
 	}
-	if err := application.SwitchProfile(context.Background(), toolpolicy.ProfileReadOnly); err != nil {
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetReadOnly); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "check tools", nil); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := settings.Settings()
-	if err != nil || stored.Profile != toolpolicy.ProfileReadOnly || application.CurrentProfile() != toolpolicy.ProfileReadOnly {
-		t.Fatalf("stored=%q current=%q err=%v", stored.Profile, application.CurrentProfile(), err)
+	if err != nil || stored.ToolSet != toolpolicy.ToolSetReadOnly || application.CurrentToolSet() != toolpolicy.ToolSetReadOnly {
+		t.Fatalf("stored=%q current=%q err=%v", stored.ToolSet, application.CurrentToolSet(), err)
 	}
 }
 
@@ -946,11 +946,11 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 		t.Fatal(err)
 	}
 	catalog = append(catalog, processes.Tools()...)
-	profiles, err := toolpolicy.NewProfiles(catalog)
+	toolSets, err := toolpolicy.NewToolSets(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedTools, err := profiles.Tools(catalog, toolpolicy.ProfileFull)
+	selectedTools, err := toolSets.Tools(catalog, toolpolicy.ToolSetFull)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -972,13 +972,13 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 	}
 	return &Application{
 		config: applicationConfig{
-			settings: settings, root: root, home: home, tools: catalog, profiles: profiles,
+			settings: settings, root: root, home: home, tools: catalog, toolSets: toolSets,
 			retryBudget: DefaultRetryBudget, streamIdleTimeout: DefaultStreamIdleTimeout,
 			maxToolIterations: agent.DefaultMaxToolIterations,
 		},
 		state: applicationState{
 			session: newLiveSession(id, runtime, journal, true), processes: processes,
-			profile: toolpolicy.ProfileFull, requestedSandbox: workspacetools.SandboxOff,
+			toolSet: toolpolicy.ToolSetFull, requestedSandbox: workspacetools.SandboxOff,
 		},
 	}, journal
 }
@@ -1004,16 +1004,16 @@ func (applicationModelInfoModel) Complete(context.Context, agent.ModelRequest, f
 	return agent.ModelResponse{}, errors.New("unused")
 }
 
-type profileCaptureModel struct {
+type toolSetCaptureModel struct {
 	t    *testing.T
 	want string
 }
 
-func (model profileCaptureModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "profile-capture"}
+func (model toolSetCaptureModel) Info() agent.ModelInfo {
+	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "tool-set-capture"}
 }
 
-func (model profileCaptureModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+func (model toolSetCaptureModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	names := make([]string, 0, len(request.Tools))
 	for _, tool := range request.Tools {
 		names = append(names, tool.Name)
@@ -1089,7 +1089,7 @@ func (applicationDeepseekModel) Complete(context.Context, agent.ModelRequest, fu
 
 func (applicationModelInfoModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
 
-func (model profileCaptureModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (model toolSetCaptureModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
 
 func (applicationTestModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
 

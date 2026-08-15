@@ -18,8 +18,8 @@ type Settings struct {
 	Model           string              `json:"model,omitempty"`
 	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
 	RecentModels    []string            `json:"recent_models,omitempty"`
-	Profile         string              `json:"profile,omitempty"`
-	Profiles        map[string][]string `json:"profiles,omitempty"`
+	ToolSet         string              `json:"tool_set,omitempty"`
+	ToolSets        map[string][]string `json:"tool_sets,omitempty"`
 	AgentModels     []string            `json:"agent_models,omitempty"`
 	Sandbox         string              `json:"sandbox,omitempty"`
 	ProtectedPaths  []string            `json:"protected_paths,omitempty"`
@@ -96,8 +96,8 @@ func (store *Store) SetDefaultModelSelection(model, reasoningEffort string) erro
 	})
 }
 
-func (store *Store) SetDefaultProfile(profile string) error {
-	return store.update(func(settings *Settings) { settings.Profile = strings.TrimSpace(profile) })
+func (store *Store) SetDefaultToolSet(toolSet string) error {
+	return store.update(func(settings *Settings) { settings.ToolSet = strings.TrimSpace(toolSet) })
 }
 
 func (store *Store) SetDefaultSandbox(policy string) error {

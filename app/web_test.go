@@ -82,10 +82,10 @@ func TestProviderStatusesIncludeWebServices(t *testing.T) {
 func availableApplicationTools(t *testing.T, application *Application) string {
 	t.Helper()
 	application.mu.RLock()
-	profiles, profile, settings := application.config.profiles, application.state.profile, application.config.settings
+	toolSets, toolSet, settings := application.config.toolSets, application.state.toolSet, application.config.settings
 	tools := append([]agent.Tool(nil), application.config.tools...)
 	application.mu.RUnlock()
-	selected, err := profileTools(profiles, tools, settings, profile)
+	selected, err := toolSetTools(toolSets, tools, settings, toolSet)
 	if err != nil {
 		t.Fatal(err)
 	}

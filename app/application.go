@@ -37,7 +37,7 @@ type applicationConfig struct {
 	settings          *state.Store
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
-	profiles          toolpolicy.Profiles
+	toolSets          toolpolicy.ToolSets
 	systemPrompt      string
 	root              string
 	home              string
@@ -61,7 +61,7 @@ type applicationState struct {
 	session          *liveSession
 	processes        *workspacetools.ProcessManager
 	children         *childSupervisor
-	profile          string
+	toolSet          string
 	requestedSandbox string
 	security         securityState
 	startupNotices   []string
@@ -243,59 +243,59 @@ func (application *Application) ToolStatus(id string) ([]agent.Detail, bool) {
 	return runtime.ToolStatus(id)
 }
 
-func (application *Application) CurrentProfile() string {
+func (application *Application) CurrentToolSet() string {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
-	return application.state.profile
+	return application.state.toolSet
 }
 
-func (application *Application) Profiles() []string {
-	return application.config.profiles.Names()
+func (application *Application) ToolSets() []string {
+	return application.config.toolSets.Names()
 }
 
-func (application *Application) ProfileTools(profile string) []string {
-	return application.config.profiles.ToolNames(profile)
+func (application *Application) ToolSetTools(toolSet string) []string {
+	return application.config.toolSets.ToolNames(toolSet)
 }
 
-func (application *Application) SwitchProfile(ctx context.Context, value string) error {
+func (application *Application) SwitchToolSet(ctx context.Context, value string) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return err
 	}
 	catalog := append([]agent.Tool(nil), application.config.tools...)
-	profiles := application.config.profiles
+	toolSets := application.config.toolSets
 	settings := application.config.settings
 	application.mu.RLock()
-	oldProfile := application.state.profile
+	oldToolSet := application.state.toolSet
 	application.mu.RUnlock()
-	profile, err := profiles.Normalize(value)
+	toolSet, err := toolSets.Normalize(value)
 	if err != nil {
 		return err
 	}
-	selected, err := profileTools(profiles, catalog, settings, profile)
+	selected, err := toolSetTools(toolSets, catalog, settings, toolSet)
 	if err != nil {
 		return err
 	}
-	if err := runtime.SetTools(ctx, selected, profile); err != nil {
+	if err := runtime.SetTools(ctx, selected, toolSet); err != nil {
 		return err
 	}
-	if err := settings.SetDefaultProfile(profile); err != nil {
-		previous, selectErr := profileTools(profiles, catalog, settings, oldProfile)
+	if err := settings.SetDefaultToolSet(toolSet); err != nil {
+		previous, selectErr := toolSetTools(toolSets, catalog, settings, oldToolSet)
 		rollbackErr := selectErr
 		if selectErr == nil {
-			rollbackErr = runtime.SetTools(context.WithoutCancel(ctx), previous, oldProfile)
+			rollbackErr = runtime.SetTools(context.WithoutCancel(ctx), previous, oldToolSet)
 		}
 		if rollbackErr != nil {
-			rollbackErr = fmt.Errorf("restore previous tool profile: %w", rollbackErr)
+			rollbackErr = fmt.Errorf("restore previous tool set: %w", rollbackErr)
 		}
-		return errors.Join(fmt.Errorf("save profile: %w", err), rollbackErr)
+		return errors.Join(fmt.Errorf("save tool set: %w", err), rollbackErr)
 	}
 	application.mu.Lock()
 	if application.state.session == nil || application.state.session.runtime != runtime {
 		application.mu.Unlock()
-		return errors.New("runtime changed while switching profile")
+		return errors.New("runtime changed while switching tool set")
 	}
-	application.state.profile = profile
+	application.state.toolSet = toolSet
 	application.mu.Unlock()
 	return nil
 }
@@ -432,28 +432,28 @@ func (application *Application) updateCredential(ctx context.Context, provider, 
 		return rollback(err)
 	}
 	if previousAvailable != nextAvailable {
-		if err := application.reloadActiveProfileTools(ctx); err != nil {
+		if err := application.reloadActiveTools(ctx); err != nil {
 			return rollback(fmt.Errorf("reload tools after %s: %w", operation, err))
 		}
 	}
 	return nil
 }
 
-func (application *Application) reloadActiveProfileTools(ctx context.Context) error {
+func (application *Application) reloadActiveTools(ctx context.Context) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return err
 	}
 	tools := append([]agent.Tool(nil), application.config.tools...)
-	profiles, settings := application.config.profiles, application.config.settings
+	toolSets, settings := application.config.toolSets, application.config.settings
 	application.mu.RLock()
-	profile := application.state.profile
+	toolSet := application.state.toolSet
 	application.mu.RUnlock()
-	selected, err := profileTools(profiles, tools, settings, profile)
+	selected, err := toolSetTools(toolSets, tools, settings, toolSet)
 	if err != nil {
 		return err
 	}
-	return runtime.SetTools(ctx, selected, profile)
+	return runtime.SetTools(ctx, selected, toolSet)
 }
 
 func restoreStoredCredential(store *state.Store, provider, token string, existed bool) error {
@@ -548,13 +548,13 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	root, systemPrompt := application.config.root, application.config.systemPrompt
 	tools := append([]agent.Tool(nil), application.config.tools...)
 	programTools := append([]agent.ProgramToolSnapshot(nil), application.config.programTools...)
-	profiles := application.config.profiles
+	toolSets := application.config.toolSets
 	awaitRequiredJobs := application.config.awaitRequiredJobs
 	application.mu.RLock()
 	processes := application.state.processes
 	children := application.state.children
 	security := application.state.security
-	profile := application.state.profile
+	toolSet := application.state.toolSet
 	currentSession := application.state.session
 	application.mu.RUnlock()
 	if currentSession == nil || settings == nil || processes == nil {
@@ -577,8 +577,8 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		metadataLookup:    application.config.metadataLookup,
 		tools:             tools,
 		programTools:      programTools,
-		profiles:          profiles,
-		profile:           profile,
+		toolSets:          toolSets,
+		toolSet:           toolSet,
 		processes:         processes,
 		workspace:         root,
 		requestPolicy:     modelRequestPolicy(retryBudget, streamIdleTimeout),

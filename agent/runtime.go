@@ -54,7 +54,7 @@ type Config struct {
 }
 
 type ConfigurationMetadata struct {
-	ToolProfile       string
+	ToolSet           string
 	Sandbox           SandboxSnapshot
 	AwaitRequiredJobs bool
 	ProgramTools      []ProgramToolSnapshot
@@ -83,7 +83,7 @@ type Runtime struct {
 	userShell         ShellFunc
 	externalWork      ExternalWork
 	sanitize          func(string) string
-	toolProfile       string
+	toolSet           string
 	sandbox           SandboxSnapshot
 	awaitRequiredJobs bool
 	programTools      []ProgramToolSnapshot
@@ -153,7 +153,7 @@ func New(config Config) (*Runtime, error) {
 		userShell:         config.UserShell,
 		externalWork:      config.ExternalWork,
 		sanitize:          sanitize,
-		toolProfile:       strings.TrimSpace(config.Metadata.ToolProfile),
+		toolSet:           strings.TrimSpace(config.Metadata.ToolSet),
 		sandbox:           sanitizeSandboxSnapshot(config.Metadata.Sandbox, sanitize),
 		awaitRequiredJobs: config.Metadata.AwaitRequiredJobs,
 		programTools:      programTools,
@@ -283,7 +283,7 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 			return err
 		}
 	}
-	snapshot := runtime.effectiveConfigSnapshotLocked(modelInfo, runtime.tools, runtime.toolProfile, runtime.sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(modelInfo, runtime.tools, runtime.toolSet, runtime.sandbox)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}
@@ -327,9 +327,9 @@ func selectionMatchesModel(selection ModelSelectedRecord, modelInfo ModelInfo) b
 }
 
 // SetTools atomically replaces the model-visible tool set between runs.
-// Profile names and exact membership deliberately live in the application
+// Tool set names and exact membership deliberately live in the application
 // assembling the runtime.
-func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolProfile string) error {
+func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet string) error {
 	if !runtime.runMu.TryLock() {
 		return ErrRunActive
 	}
@@ -341,7 +341,7 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolProfile 
 	if err != nil {
 		return err
 	}
-	toolProfile = runtime.sanitize(strings.TrimSpace(toolProfile))
+	toolSet = runtime.sanitize(strings.TrimSpace(toolSet))
 	records, err := runtime.journal.Records(ctx)
 	if err != nil {
 		return fmt.Errorf("read journal before tool reconfiguration: %w", err)
@@ -350,13 +350,13 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolProfile 
 	if err != nil {
 		return err
 	}
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, tools, toolProfile, runtime.sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, tools, toolSet, runtime.sandbox)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}
 	runtime.tools = tools
 	runtime.toolByName = toolByName
-	runtime.toolProfile = toolProfile
+	runtime.toolSet = toolSet
 	return nil
 }
 

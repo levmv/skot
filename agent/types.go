@@ -376,7 +376,7 @@ type ModelContextSnapshot struct {
 	Instructions           string     `json:"instructions,omitempty"`
 	CompactionInstructions string     `json:"compaction_instructions"`
 	ToolLimitInstructions  string     `json:"tool_limit_instructions"`
-	ToolProfile            string     `json:"tool_profile,omitempty"`
+	ToolSet                string     `json:"tool_set,omitempty"`
 	Tools                  []ToolSpec `json:"tools,omitempty"`
 }
 

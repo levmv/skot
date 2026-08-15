@@ -41,9 +41,9 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-system-prompt text` | `SK_SYSTEM_PROMPT` | Add system instructions. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |
 | `-root path` | `SK_ROOT` | Workspace root for file and process tools. Default: current directory. |
-| `-profile name` | `SK_PROFILE` | Select the exact model tool profile. Default: `full`. |
+| `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Default: `full`. |
+| `-tools-file path` | `SK_TOOLS_FILE` | Load custom program tool definitions. Default: `tools.json` in the Skot data directory. |
 | `-sandbox policy` | `SK_SANDBOX` | Select `auto`, `workspace`, `masked`, or `off`. Default: `auto`. |
-| `-tools path` | `SK_TOOLS` | Load a custom program-tool catalog. Default: `tools.json` in the Skot data directory. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
 | `-journal path` | — | Use an explicit JSONL session journal. |
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
@@ -55,7 +55,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 `SK_COLOR=always|never` overrides automatic styled-output detection.
 `NO_COLOR` disables styling.
 
-For the model, reasoning effort, profile, and sandbox, an explicit flag or
+For the model, reasoning effort, tool set, and sandbox, an explicit flag or
 environment variable wins over the persisted interactive selection. When a
 session is resumed without an explicit model, its recorded model and effort are
 restored.
@@ -96,10 +96,10 @@ thinking switch are not carried across an incompatible protocol override.
 Skot uses `~/.skot` by default. `SK_HOME` and `-home` select another data
 directory. It contains:
 
-- `config.json` — settings, custom profiles, child-model allowlist, and
+- `config.json` — settings, custom tool sets, child-model allowlist, and
   protected paths;
 - `auth.json` — credentials managed by `/login` and `/logout`;
-- `tools.json` — the default custom program-tool catalog;
+- `tools.json` — the default custom program tool catalog;
 - `sessions/` — managed session journals and child-agent state.
 
 The directory is created with private permissions. Session journals contain
@@ -112,9 +112,9 @@ rejected. A representative configuration is:
 {
   "model": "deepseek/deepseek-v4-flash",
   "reasoning_effort": "high",
-  "profile": "delegate",
+  "tool_set": "delegate",
   "sandbox": "auto",
-  "profiles": {
+  "tool_sets": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
   "agent_models": ["deepseek/deepseek-v4-flash"],
@@ -127,8 +127,8 @@ rejected. A representative configuration is:
 | `model` | Persisted default model selected by the interactive UI. |
 | `reasoning_effort` | Persisted route-specific effort. |
 | `recent_models` | UI-managed recent-model list; normally not edited by hand. |
-| `profile` | Persisted default tool profile. |
-| `profiles` | Map of profile names to exact ordered tool-name lists. A custom definition replaces a built-in profile with the same name. |
+| `tool_set` | Persisted default tool set. |
+| `tool_sets` | Map of tool set names to exact ordered tool-name lists. A custom definition replaces a built-in set with the same name. |
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
 | `sandbox` | Persisted sandbox selection. |
 | `protected_paths` | Additional paths hidden from model tools and model-owned processes. |
@@ -162,7 +162,7 @@ recent session for that workspace.
 | `/login [provider]` | Store a provider or service key. |
 | `/logout [provider]` | Remove a stored key. |
 | `/model [provider/model]` | List or switch models. |
-| `/profile [name]` | Show or switch the tool profile. |
+| `/tools [name]` | Show or switch the active tool set. |
 | `/sandbox [auto|workspace|masked|off]` | Show or switch filesystem isolation. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
@@ -179,28 +179,28 @@ sandbox.
 Skot loads applicable `AGENTS.md` instructions from the workspace root down
 to the current directory.
 
-## Tools and profiles
+## Tools and tool sets
 
 Built-in file tools operate inside `-root`. Paths and symlinks may not escape
 that root; reads and searches are bounded, and writes are atomic.
 
-| Profile | Tools |
+| Tool set | Tools |
 | --- | --- |
 | `read-only` | `read`, `ls`, `grep`, `glob` |
 | `edit` | Read-only tools plus `edit`, `write` |
 | `full` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job` |
 
-All built-in profiles include bounded public `web_fetch`. They include
-`web_search` when a Tavily or Exa key is available. A custom profile is an
-exact tool list, not a set of additions to a built-in profile.
+All built-in tool sets include bounded public `web_fetch`. They include
+`web_search` when a Tavily or Exa key is available. A custom tool set is an
+exact tool list, not a set of additions to a built-in set.
 
 ### Child agents
 
-Add the single `agent` capability to a custom profile to permit delegation:
+Add the single `agent` capability to a custom tool set to permit delegation:
 
 ```json
 {
-  "profiles": {
+  "tool_sets": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
   "agent_models": ["deepseek/deepseek-v4-flash"]
@@ -221,7 +221,7 @@ their history; it does not leave model calls detached in another process.
 ### Custom program tools
 
 Skot loads `tools.json` from its data directory, or another file selected by
-`-tools`. A minimal catalog is:
+`-tools-file`. A minimal catalog is:
 
 ```json
 {
@@ -242,7 +242,7 @@ Skot loads `tools.json` from its data directory, or another file selected by
 
 The executable receives one JSON argument object on stdin. Stdout becomes the
 model-facing result; stderr remains diagnostic output. A configured tool is
-visible only when the active profile names it.
+visible only when the active tool set names it.
 
 | Field | Meaning |
 | --- | --- |
@@ -258,7 +258,7 @@ visible only when the active profile names it.
 | `yield` | Seconds to wait for a foreground result before returning a managed job. |
 | `detach` | Allow managed work to survive a clean Skot exit. Requires background capability or a positive yield. |
 
-Any profile containing `bash` or a background-capable program tool must also
+Any tool set containing `bash` or a background-capable program tool must also
 contain `job`, so the model can observe and stop work it starts.
 
 ## Processes and jobs
@@ -301,7 +301,7 @@ or the code it runs is untrusted.
 
 Three rules define the normal boundary:
 
-- a profile decides which tools the model has;
+- a tool set decides which tools the model has;
 - built-in file tools always stay inside the workspace root;
 - model-owned processes use the selected sandbox policy.
 
@@ -375,7 +375,7 @@ present:
 
 ```sh
 sk "review this change"
-git diff | SK_PROFILE=read-only sk "review this patch"
+git diff | SK_TOOLS=read-only sk "review this patch"
 ```
 
 The ordinary answer is written to stdout. Progress, diagnostics, resume hints,
@@ -404,7 +404,7 @@ a raw provider response.
   "duration_ms": 2450,
   "model": "deepseek/deepseek-v4-flash",
   "reasoning_effort": "high",
-  "profile": "read-only",
+  "tool_set": "read-only",
   "model_attempts": 1,
   "run_id": "run_...",
   "session_id": "session_..."
@@ -412,7 +412,7 @@ a raw provider response.
 ```
 
 The stable fields are `version`, `reply`, `usage`, `status`,
-`duration_ms`, `model`, `reasoning_effort`, `profile`, and
+`duration_ms`, `model`, `reasoning_effort`, `tool_set`, and
 `model_attempts`. Depending on lifecycle and outcome, the object may also
 contain `run_id`, `session_id`, `tool_limit_reached`, `detached_jobs`,
 and `error`.

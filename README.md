@@ -10,7 +10,7 @@ in scripts.
   scrollback.
 - Durable conversations and background jobs that survive restarts.
 - Bounded file, search, Bash, job, web, and custom program tools.
-- Exact tool profiles and filesystem isolation for model-owned processes.
+- Configurable tool sets and filesystem isolation for model-owned processes.
 - Read-only child agents for parallel independent work.
 - Supports DeepSeek, OpenAI, OpenRouter, OpenCode Go, and Ollama.
 
@@ -59,7 +59,7 @@ For scripts, pass a prompt as arguments or through stdin. The normal answer goes
 to stdout; `-json` emits one versioned result object.
 
 ```sh
-SK_PROFILE=read-only sk -json "summarize this project" > result.json
+SK_TOOLS=read-only sk -json "summarize this project" > result.json
 ```
 
 Skot uses `~/.skot` as its default data directory. Set `SK_HOME` or pass

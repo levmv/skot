@@ -62,6 +62,9 @@ func (reducer *stateReducer) apply(record Record) error {
 	if record.Sequence == 0 || record.Sequence <= reducer.state.LastSequence {
 		return fmt.Errorf("record sequence %d is not strictly increasing", record.Sequence)
 	}
+	if reducer.state.LastSequence == 0 && record.Kind != RecordSessionStarted {
+		return fmt.Errorf("first journal record must be %q, got %q at sequence %d", RecordSessionStarted, record.Kind, record.Sequence)
+	}
 	if err := reducer.applyRecord(record); err != nil {
 		return err
 	}
@@ -94,6 +97,12 @@ func (reducer *stateReducer) applyRecord(record Record) error {
 	case RecordToolResultsPruned:
 		return reducer.applyToolResultsPruned(record)
 	default:
+		if strings.HasPrefix(string(record.Kind), auxiliaryRecordKindPrefix) {
+			// This reader capability intentionally ships before any aux/ writer.
+			// Auxiliary records are semantic leaves: ignoring one may change only
+			// LastSequence, and no required record may reference or depend on it.
+			return nil
+		}
 		return fmt.Errorf("unknown record kind %q at sequence %d", record.Kind, record.Sequence)
 	}
 }

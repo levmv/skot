@@ -17,6 +17,7 @@ import (
 // Open assembles one concrete Skot application. It owns all returned session,
 // process, and temporary resources until Application.Close.
 func Open(ctx context.Context, config Config) (*Application, error) {
+	build := currentBuildSnapshot(config.Version)
 	if config.RetryBudget < 0 {
 		return nil, agent.MarkInvalidRequest(errors.New("retry budget cannot be negative"))
 	}
@@ -201,6 +202,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		metadataLookup:    openRouterContextWindow,
 		tools:             catalog,
 		programTools:      programSnapshots,
+		applicationBuild:  build,
 		toolSets:          toolSets,
 		toolSet:           config.ToolSet,
 		processes:         processes,
@@ -240,6 +242,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			settings:          settingsStore,
 			tools:             append([]agent.Tool(nil), catalog...),
 			programTools:      append([]agent.ProgramToolSnapshot(nil), programSnapshots...),
+			applicationBuild:  build,
 			toolSets:          toolSets,
 			systemPrompt:      config.SystemPrompt,
 			root:              root,

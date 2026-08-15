@@ -37,6 +37,7 @@ type applicationConfig struct {
 	settings          *state.Store
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
+	applicationBuild  agent.BuildSnapshot
 	toolSets          toolpolicy.ToolSets
 	systemPrompt      string
 	root              string
@@ -616,6 +617,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		metadataLookup:    application.config.metadataLookup,
 		tools:             tools,
 		programTools:      programTools,
+		applicationBuild:  application.config.applicationBuild,
 		toolSets:          toolSets,
 		toolSet:           toolSet,
 		processes:         processes,

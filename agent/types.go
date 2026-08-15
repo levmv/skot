@@ -297,9 +297,12 @@ type RunResult struct {
 
 type RecordKind string
 
-// JournalSchemaVersion is the only record schema this pre-v1 runtime accepts.
-// Future changes require an explicit migration rather than best-effort replay.
+// JournalSchemaVersion versions the required semantic projection of a journal,
+// not its exact set of record kinds or optional payload fields. Incompatible
+// semantic changes require an explicit migration rather than best-effort replay.
 const JournalSchemaVersion = 2
+
+const auxiliaryRecordKindPrefix = "aux/"
 
 // ProviderStateContract is intentionally readable in journal records. Agent
 // compares it for epoch ownership but does not interpret adapter semantics.
@@ -400,8 +403,18 @@ type RuntimePolicySnapshot struct {
 
 type ExecutionEnvironmentSnapshot struct {
 	Endpoint     string                `json:"endpoint,omitempty"`
+	Build        BuildSnapshot         `json:"build,omitzero"`
 	Sandbox      SandboxSnapshot       `json:"sandbox"`
 	ProgramTools []ProgramToolSnapshot `json:"program_tools,omitempty"`
+}
+
+// BuildSnapshot identifies the host application build which produced an
+// effective configuration. Modified is nil when VCS status is unavailable,
+// false for a clean tree, and true for a dirty tree.
+type BuildSnapshot struct {
+	Version  string `json:"version,omitempty"`
+	Revision string `json:"revision,omitempty"`
+	Modified *bool  `json:"modified,omitempty"`
 }
 
 // ProgramToolSnapshot records how an executable-backed tool was resolved for

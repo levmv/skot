@@ -37,6 +37,7 @@ func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools
 		},
 		Environment: ExecutionEnvironmentSnapshot{
 			Endpoint:     runtime.sanitize(strings.TrimSpace(modelInfo.Endpoint)),
+			Build:        runtime.build,
 			Sandbox:      sandbox,
 			ProgramTools: activeProgramToolSnapshots(runtime.programTools, tools),
 		},
@@ -196,6 +197,10 @@ func durationSnapshot(value time.Duration) string {
 
 func cloneEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) EffectiveConfigSnapshot {
 	cloned := snapshot
+	if snapshot.Environment.Build.Modified != nil {
+		modified := *snapshot.Environment.Build.Modified
+		cloned.Environment.Build.Modified = &modified
+	}
 	cloned.ModelContext.Tools = make([]ToolSpec, len(snapshot.ModelContext.Tools))
 	for index, tool := range snapshot.ModelContext.Tools {
 		cloned.ModelContext.Tools[index] = cloneToolSpec(tool)

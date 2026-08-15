@@ -159,6 +159,20 @@ Session selection is scoped to the canonical workspace path. A short ID may be
 used when it identifies exactly one session. Bare `resume` chooses the most
 recent session for that workspace.
 
+### Journal compatibility
+
+The journal schema version describes the required semantic projection used to
+rebuild session state, rather than the exact set of record kinds or JSON fields.
+Adding an optional payload field, or an observational record kind in the
+reserved `aux/` namespace, does not by itself change the schema version.
+
+An `aux/` record is a semantic leaf. Ignoring it may change only the replayed
+last sequence number: it must not affect conversation blocks, compaction or
+pruning boundaries, pending work, usage, configuration, or the validity of any
+required record. Unknown kinds outside `aux/` fail replay, and every journal
+must still begin with `session_started`. A change to required state or replay
+invariants requires a new schema version and an explicit migration.
+
 ### Interactive commands
 
 | Command | Action |

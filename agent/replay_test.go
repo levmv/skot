@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -18,6 +19,42 @@ func TestReplayRequiresSupportedJournalSchemaVersion(t *testing.T) {
 				t.Fatalf("Replay() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestReplayIgnoresAuxiliaryRecordExceptForSequence(t *testing.T) {
+	base := []Record{
+		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
+	}
+	want, err := Replay(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.LastSequence = 2
+
+	state, err := Replay(append(base, recordForTest(t, 2, RecordKind("aux/trace"), map[string]any{"detail": "ignored"})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(state, want) {
+		t.Fatalf("state after auxiliary record = %#v, want %#v", state, want)
+	}
+}
+
+func TestReplayRejectsUnknownRequiredRecordKind(t *testing.T) {
+	records := []Record{
+		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
+		recordForTest(t, 2, RecordKind("future_required"), struct{}{}),
+	}
+	if _, err := Replay(records); err == nil || !strings.Contains(err.Error(), `unknown record kind "future_required"`) {
+		t.Fatalf("Replay() error = %v", err)
+	}
+}
+
+func TestReplayRequiresSessionStartBeforeAuxiliaryRecords(t *testing.T) {
+	records := []Record{recordForTest(t, 1, RecordKind("aux/trace"), struct{}{})}
+	if _, err := Replay(records); err == nil || !strings.Contains(err.Error(), `first journal record must be "session_started"`) {
+		t.Fatalf("Replay() error = %v", err)
 	}
 }
 

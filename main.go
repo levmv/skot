@@ -153,7 +153,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	application, err := app.Open(ctx, app.Config{
-		Home: config.home, Root: config.root,
+		Version: version,
+		Home:    config.home, Root: config.root,
 		ModelURI: config.modelURI, ReasoningEffort: config.reasoningEffort, ModelAPI: config.modelAPI,
 		ModelExplicit: modelExplicit, ReasoningEffortExplicit: reasoningEffortExplicit,
 		BaseURL: config.baseURL, ContextWindow: config.contextWindow,

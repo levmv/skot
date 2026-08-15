@@ -31,6 +31,9 @@ const (
 // Config describes one concrete Skot application instance. Explicit flags
 // distinguish CLI/env choices from values that may be restored from settings.
 type Config struct {
+	// Version identifies the host application build. VCS provenance is obtained
+	// from Go build information when available.
+	Version                 string
 	Home                    string
 	Root                    string
 	ModelURI                string

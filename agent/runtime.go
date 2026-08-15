@@ -55,6 +55,7 @@ type Config struct {
 
 type ConfigurationMetadata struct {
 	ToolSet           string
+	Build             BuildSnapshot
 	Sandbox           SandboxSnapshot
 	AwaitRequiredJobs bool
 	ProgramTools      []ProgramToolSnapshot
@@ -90,6 +91,7 @@ type Runtime struct {
 	externalWork      ExternalWork
 	sanitize          func(string) string
 	toolSet           string
+	build             BuildSnapshot
 	sandbox           SandboxSnapshot
 	awaitRequiredJobs bool
 	programTools      []ProgramToolSnapshot
@@ -144,6 +146,13 @@ func New(config Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	build := config.Metadata.Build
+	build.Version = sanitize(strings.TrimSpace(build.Version))
+	build.Revision = sanitize(strings.TrimSpace(build.Revision))
+	if build.Modified != nil {
+		modified := *build.Modified
+		build.Modified = &modified
+	}
 
 	runtime := &Runtime{
 		model:             config.Model,
@@ -160,6 +169,7 @@ func New(config Config) (*Runtime, error) {
 		externalWork:      config.ExternalWork,
 		sanitize:          sanitize,
 		toolSet:           strings.TrimSpace(config.Metadata.ToolSet),
+		build:             build,
 		sandbox:           sanitizeSandboxSnapshot(config.Metadata.Sandbox, sanitize),
 		awaitRequiredJobs: config.Metadata.AwaitRequiredJobs,
 		programTools:      programTools,

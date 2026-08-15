@@ -27,17 +27,20 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 		},
 	}
+	modified := false
 	runtime := newTestRuntime(t, Config{
 		Model: model, Journal: journal, Tools: []Tool{read}, Instructions: "follow secret",
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 3}, MaxToolIterations: 7,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, "secret", "[redacted]") },
 		Metadata: ConfigurationMetadata{
 			ToolSet: "read-only", AwaitRequiredJobs: true,
+			Build: BuildSnapshot{Version: "v1.2.3", Revision: "abc123", Modified: &modified},
 			Sandbox: SandboxSnapshot{
 				RequestedPolicy: "auto", EffectivePolicy: "masked", Container: "secret container", Network: "inherited",
 			},
 		},
 	})
+	modified = true
 
 	if _, err := runtime.Run(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
@@ -64,6 +67,9 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	}
 	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Sandbox.Container != "[redacted] container" {
 		t.Fatalf("execution environment snapshot = %#v", configured.Environment)
+	}
+	if configured.Environment.Build.Version != "v1.2.3" || configured.Environment.Build.Revision != "abc123" || configured.Environment.Build.Modified == nil || *configured.Environment.Build.Modified {
+		t.Fatalf("build snapshot = %#v", configured.Environment.Build)
 	}
 	if len(requests) != 2 || requests[0].Instructions != configured.ModelContext.Instructions || len(requests[0].Tools) != len(configured.ModelContext.Tools) {
 		t.Fatalf("requests = %#v, configured = %#v", requests, configured.ModelContext)
@@ -121,6 +127,23 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	}
 	if firstConfigured < 0 || firstRun < 0 || firstConfigured >= firstRun {
 		t.Fatalf("first configured/run indexes = %d/%d", firstConfigured, firstRun)
+	}
+}
+
+func TestCloneEffectiveConfigSnapshotDoesNotAliasBuildStatus(t *testing.T) {
+	modified := false
+	snapshot := EffectiveConfigSnapshot{
+		Environment: ExecutionEnvironmentSnapshot{
+			Build: BuildSnapshot{Modified: &modified},
+		},
+	}
+	cloned := cloneEffectiveConfigSnapshot(snapshot)
+	if cloned.Environment.Build.Modified == nil {
+		t.Fatal("cloned build status is nil")
+	}
+	*cloned.Environment.Build.Modified = true
+	if *snapshot.Environment.Build.Modified {
+		t.Fatal("cloned build status aliases the source snapshot")
 	}
 }
 

@@ -27,6 +27,7 @@ type runtimeBuilder struct {
 	metadataLookup    modelContextLookup
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
+	applicationBuild  agent.BuildSnapshot
 	toolSets          toolpolicy.ToolSets
 	toolSet           string
 	processes         *workspacetools.ProcessManager
@@ -87,7 +88,7 @@ func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtime
 		Sanitize:          builder.sanitize,
 		Metadata: agent.ConfigurationMetadata{
 			ToolSet: builder.toolSet, Sandbox: builder.sandbox, AwaitRequiredJobs: builder.awaitRequiredJobs,
-			ProgramTools: builder.programTools,
+			Build: builder.applicationBuild, ProgramTools: builder.programTools,
 		},
 	})
 	if err != nil {

@@ -37,8 +37,20 @@ func TestLoadInstructionsUsesCurrentHierarchy(t *testing.T) {
 	if len(prompts) != 2 || !strings.Contains(prompts[0], "root rules") || !strings.Contains(prompts[1], "pkg/AGENTS.md") || !strings.Contains(prompts[1], "nested rules") {
 		t.Fatalf("prompts = %#v", prompts)
 	}
-	if got := effectiveInstructions("custom", prompts); !strings.HasPrefix(got, "custom\n\n") || !strings.Contains(got, "root rules") {
+	got := effectiveInstructions("custom", root, prompts)
+	if !strings.HasPrefix(got, "custom\n\n") || !strings.Contains(got, "root rules") {
 		t.Fatalf("effective instructions = %q", got)
+	}
+	// A custom prompt without the token stays exactly as its author wrote it.
+	if strings.Contains(got, root) {
+		t.Fatalf("custom prompt gained an unrequested workspace root: %q", got)
+	}
+	if substituted := effectiveInstructions("work in {{workspace_root}} only", root, nil); substituted != "work in "+root+" only" {
+		t.Fatalf("substituted prompt = %q", substituted)
+	}
+	if standard := effectiveInstructions("", root, nil); !strings.Contains(standard, "Your workspace root is "+root+".") ||
+		strings.Contains(standard, workspaceRootToken) {
+		t.Fatalf("default prompt = %q", standard)
 	}
 }
 

@@ -603,7 +603,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	if err != nil {
 		return fmt.Errorf("load project instructions: %w", err)
 	}
-	instructions := effectiveInstructions(systemPrompt, projectInstructions)
+	instructions := effectiveInstructions(systemPrompt, root, projectInstructions)
 	if err := processes.AttachSession(id); err != nil {
 		return fmt.Errorf("attach durable jobs: %w", err)
 	}

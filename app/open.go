@@ -111,7 +111,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
-	instructions := effectiveInstructions(config.SystemPrompt, projectInstructions)
+	instructions := effectiveInstructions(config.SystemPrompt, root, projectInstructions)
 	processes, err := workspacetools.NewProcessManager(root, home, toolHomeRoot, security.EffectivePolicy, protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))

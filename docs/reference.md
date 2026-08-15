@@ -38,7 +38,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-retry-budget duration` | `SK_RETRY_BUDGET` | Wall-clock retry budget for one logical model request. Default: `15m`. |
 | `-stream-idle-timeout duration` | `SK_STREAM_IDLE_TIMEOUT` | Maximum silence between stream events. Default: `5m`. |
 | `-max-tool-iterations n` | `SK_MAX_TOOL_ITERATIONS` | Emergency model-to-tool cycle limit. Default: `128`; use `unlimited` to disable it. |
-| `-system-prompt text` | `SK_SYSTEM_PROMPT` | Add system instructions. |
+| `-system-prompt text` | `SK_SYSTEM_PROMPT` | Replace the built-in system instructions. Use `{{workspace_root}}` to insert the workspace root. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |
 | `-root path` | `SK_ROOT` | Workspace root for file and process tools. Default: current directory. |
 | `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |

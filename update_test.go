@@ -24,12 +24,12 @@ func TestUpdaterReplacesExecutableWithVerifiedRelease(t *testing.T) {
 		if request.Header.Get("User-Agent") != "skot/v0.1.0" {
 			t.Errorf("User-Agent = %q", request.Header.Get("User-Agent"))
 		}
-		_, _ = io.WriteString(writer, `[{"tag_name":"other-v9.0.0"},{"tag_name":"skot-v0.2.0"}]`)
+		_, _ = io.WriteString(writer, `[{"tag_name":"other-v9.0.0"},{"tag_name":"v0.2.0"}]`)
 	})
-	mux.HandleFunc("/download/skot-v0.2.0/checksums.txt", func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/download/v0.2.0/checksums.txt", func(writer http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(writer, "%s  %s\n", hex.EncodeToString(checksum[:]), asset)
 	})
-	mux.HandleFunc("/download/skot-v0.2.0/"+asset, func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/download/v0.2.0/"+asset, func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write(binary)
 	})
 	server := httptest.NewServer(mux)
@@ -76,12 +76,12 @@ func TestUpdaterLeavesExecutableUntouchedOnChecksumFailure(t *testing.T) {
 	oldBinary := []byte("old sk binary")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/releases", func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(writer, `[{"tag_name":"skot-v0.2.0"}]`)
+		_, _ = io.WriteString(writer, `[{"tag_name":"v0.2.0"}]`)
 	})
-	mux.HandleFunc("/download/skot-v0.2.0/checksums.txt", func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/download/v0.2.0/checksums.txt", func(writer http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(writer, "%064x  sk-linux-amd64\n", 1)
 	})
-	mux.HandleFunc("/download/skot-v0.2.0/sk-linux-amd64", func(writer http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/download/v0.2.0/sk-linux-amd64", func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("corrupt download"))
 	})
 	server := httptest.NewServer(mux)
@@ -121,7 +121,7 @@ func TestUpdaterSkipsDownloadWhenCurrentReleaseIsLatest(t *testing.T) {
 		if request.URL.Path != "/releases" {
 			t.Errorf("unexpected request path %q", request.URL.Path)
 		}
-		_, _ = io.WriteString(writer, `[{"tag_name":"skot-v0.2.0"}]`)
+		_, _ = io.WriteString(writer, `[{"tag_name":"v0.2.0"}]`)
 	}))
 	defer server.Close()
 
@@ -157,8 +157,78 @@ func TestUpdaterReportsMissingSkotRelease(t *testing.T) {
 		goos:           "linux",
 		goarch:         "amd64",
 	}.update(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "no skot-v* GitHub release") {
+	if err == nil || !strings.Contains(err.Error(), "no stable vX.Y.Z GitHub release") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestUpdaterSelectsHighestStableRelease(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		currentVersion string
+		releases       string
+		want           string
+	}{
+		{
+			name:           "drafts, prereleases, and suffixed tags",
+			currentVersion: "v0.2.0",
+			releases: `[{"tag_name":"v0.4.0","prerelease":true},{"tag_name":"v0.3.0","draft":true},` +
+				`{"tag_name":"v0.2.1-rc1"},{"tag_name":"v0.2.0"}]`,
+			want: "v0.2.0",
+		},
+		{
+			name:           "versions compare numerically",
+			currentVersion: "v0.10.0",
+			releases:       `[{"tag_name":"v0.2.0"},{"tag_name":"v0.10.0"}]`,
+			want:           "v0.10.0",
+		},
+		{
+			name:           "a republished older release is not installed",
+			currentVersion: "v0.3.0",
+			releases:       `[{"tag_name":"v0.2.0"}]`,
+			want:           "v0.2.0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.URL.Path != "/releases" {
+					t.Errorf("unexpected request path %q", request.URL.Path)
+				}
+				_, _ = io.WriteString(writer, test.releases)
+			}))
+			defer server.Close()
+
+			result, err := updater{
+				client:         server.Client(),
+				releasesURL:    server.URL + "/releases",
+				releaseBaseURL: server.URL + "/download",
+				executablePath: filepath.Join(t.TempDir(), "sk"),
+				currentVersion: test.currentVersion,
+				goos:           "linux",
+				goarch:         "amd64",
+			}.update(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.changed || result.to != test.want || requests != 1 {
+				t.Fatalf("result/requests = %#v/%d", result, requests)
+			}
+		})
+	}
+}
+
+func TestParseReleaseVersion(t *testing.T) {
+	for _, tag := range []string{"v0.1.0", "v1.2.3", "v10.20.30"} {
+		if version, ok := parseReleaseVersion(tag); !ok || version.tag != tag {
+			t.Errorf("parseReleaseVersion(%q) = %#v, %v", tag, version, ok)
+		}
+	}
+	for _, tag := range []string{"", "v", "0.1.0", "v0.1", "v0.1.0.1", "v0.1.0-rc1", "v0.1.0+build", "vx.y.z", "skot-v0.1.0"} {
+		if _, ok := parseReleaseVersion(tag); ok {
+			t.Errorf("parseReleaseVersion(%q) unexpectedly accepted", tag)
+		}
 	}
 }
 

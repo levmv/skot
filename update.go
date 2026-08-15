@@ -42,8 +42,16 @@ type updateResult struct {
 }
 
 type githubRelease struct {
-	TagName string `json:"tag_name"`
-	Draft   bool   `json:"draft"`
+	TagName    string `json:"tag_name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+}
+
+// releaseVersion is a stable vX.Y.Z release tag. Tags are also the version
+// strings that release builds report.
+type releaseVersion struct {
+	tag   string
+	parts [3]int
 }
 
 func runUpdateCommand(ctx context.Context, output io.Writer) error {
@@ -85,25 +93,27 @@ func (u updater) update(ctx context.Context) (updateResult, error) {
 	if err != nil {
 		return updateResult{}, err
 	}
-	tag, err := u.latestReleaseTag(ctx)
+	latest, err := u.latestStableRelease(ctx)
 	if err != nil {
 		return updateResult{}, err
 	}
-	latestVersion := strings.TrimPrefix(tag, "skot-")
-	result := updateResult{from: u.currentVersion, to: latestVersion}
-	if latestVersion == u.currentVersion {
+	result := updateResult{from: u.currentVersion, to: latest.tag}
+	// A build whose version is not a release tag parses as v0.0.0 and is
+	// therefore replaced by any published release.
+	current, _ := parseReleaseVersion(u.currentVersion)
+	if !latest.newerThan(current) {
 		return result, nil
 	}
 
-	tagPath := url.PathEscape(tag)
+	tagPath := url.PathEscape(latest.tag)
 	checksumsURL := strings.TrimRight(u.releaseBaseURL, "/") + "/" + tagPath + "/checksums.txt"
 	checksums, err := u.readURL(ctx, checksumsURL, maxChecksumsBytes)
 	if err != nil {
-		return updateResult{}, fmt.Errorf("download checksums for %s: %w", tag, err)
+		return updateResult{}, fmt.Errorf("download checksums for %s: %w", latest.tag, err)
 	}
 	expectedChecksum, err := checksumForAsset(checksums, asset)
 	if err != nil {
-		return updateResult{}, fmt.Errorf("read checksums for %s: %w", tag, err)
+		return updateResult{}, fmt.Errorf("read checksums for %s: %w", latest.tag, err)
 	}
 
 	executablePath, err := filepath.Abs(u.executablePath)
@@ -160,21 +170,70 @@ func (u updater) update(ctx context.Context) (updateResult, error) {
 	return result, nil
 }
 
-func (u updater) latestReleaseTag(ctx context.Context) (string, error) {
+// latestStableRelease returns the highest published vX.Y.Z release. Drafts,
+// prereleases, and tags that are not plain release versions are ignored, and
+// the highest version wins rather than the first listed one, so neither a
+// preview nor a late republished older tag can be selected.
+func (u updater) latestStableRelease(ctx context.Context) (releaseVersion, error) {
 	data, err := u.readURL(ctx, u.releasesURL, maxReleaseListBytes)
 	if err != nil {
-		return "", fmt.Errorf("list GitHub releases: %w", err)
+		return releaseVersion{}, fmt.Errorf("list GitHub releases: %w", err)
 	}
 	var releases []githubRelease
 	if err := json.Unmarshal(data, &releases); err != nil {
-		return "", fmt.Errorf("decode GitHub releases: %w", err)
+		return releaseVersion{}, fmt.Errorf("decode GitHub releases: %w", err)
 	}
+	var latest releaseVersion
 	for _, release := range releases {
-		if !release.Draft && strings.HasPrefix(release.TagName, "skot-v") {
-			return release.TagName, nil
+		if release.Draft || release.Prerelease {
+			continue
+		}
+		candidate, ok := parseReleaseVersion(release.TagName)
+		if ok && (latest.tag == "" || candidate.newerThan(latest)) {
+			latest = candidate
 		}
 	}
-	return "", errors.New("no skot-v* GitHub release was found")
+	if latest.tag == "" {
+		return releaseVersion{}, errors.New("no stable vX.Y.Z GitHub release was found")
+	}
+	return latest, nil
+}
+
+// parseReleaseVersion accepts vX.Y.Z and rejects everything else, including
+// prerelease and build suffixes such as v1.2.0-rc1.
+func parseReleaseVersion(tag string) (releaseVersion, bool) {
+	rest, found := strings.CutPrefix(tag, "v")
+	if !found {
+		return releaseVersion{}, false
+	}
+	fields := strings.Split(rest, ".")
+	if len(fields) != 3 {
+		return releaseVersion{}, false
+	}
+	version := releaseVersion{tag: tag}
+	for index, field := range fields {
+		if field == "" || len(field) > 9 {
+			return releaseVersion{}, false
+		}
+		value := 0
+		for _, digit := range []byte(field) {
+			if digit < '0' || digit > '9' {
+				return releaseVersion{}, false
+			}
+			value = value*10 + int(digit-'0')
+		}
+		version.parts[index] = value
+	}
+	return version, true
+}
+
+func (v releaseVersion) newerThan(other releaseVersion) bool {
+	for index := range v.parts {
+		if v.parts[index] != other.parts[index] {
+			return v.parts[index] > other.parts[index]
+		}
+	}
+	return false
 }
 
 func (u updater) readURL(ctx context.Context, rawURL string, limit int64) ([]byte, error) {

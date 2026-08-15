@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "skot-v*"
+      - "v*"
 
 permissions:
   contents: read
@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#skot-}" make release
+          VERSION="$GITHUB_REF_NAME" make release
 
       - name: Create GitHub release
         env:
@@ -51,7 +51,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Skot ${GITHUB_REF_NAME#skot-}" \
+            --title "Skot $GITHUB_REF_NAME" \
             --notes "Licenses: [MIT](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/LICENSE) · [Third-party notices](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/NOTICE)" \
             --generate-notes \
             --verify-tag

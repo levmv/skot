@@ -3,7 +3,7 @@
 set -eu
 
 repository="levmv/skot"
-releases_api="https://api.github.com/repos/${repository}/releases?per_page=100"
+latest_release_api="https://api.github.com/repos/${repository}/releases/latest"
 release_base="https://github.com/${repository}/releases/download"
 
 die() {
@@ -28,19 +28,20 @@ esac
 requested_version=${SK_VERSION:-latest}
 case "$requested_version" in
 	"" | latest)
-		releases=$(curl -fsSL \
+		# The latest endpoint reports one release and never a draft or a
+		# prerelease.
+		release=$(curl -fsSL \
 			-H "Accept: application/vnd.github+json" \
 			-H "X-GitHub-Api-Version: 2022-11-28" \
-			"$releases_api") || die "could not list GitHub releases"
-		tag=$(printf '%s\n' "$releases" |
-			grep -o '"tag_name"[[:space:]]*:[[:space:]]*"skot-v[^"]*"' |
-			sed 's/.*"\(skot-v[^"]*\)"$/\1/' |
+			"$latest_release_api") || die "could not read the latest GitHub release"
+		tag=$(printf '%s\n' "$release" |
+			grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' |
+			sed 's/.*"\([^"]*\)"$/\1/' |
 			head -n 1)
-		[ -n "$tag" ] || die "no skot-v* release was found"
+		[ -n "$tag" ] || die "no released version was found"
 		;;
-	skot-v*) tag="$requested_version" ;;
-	v*) tag="skot-${requested_version}" ;;
-	*) tag="skot-v${requested_version}" ;;
+	v*) tag="$requested_version" ;;
+	*) tag="v${requested_version}" ;;
 esac
 
 asset="sk-${os}-${arch}"
@@ -90,7 +91,7 @@ install -m 0755 "${tmp_dir}/${asset}" "$staged" || die "could not write to ${ins
 mv -f "$staged" "${install_dir}/sk" || die "could not install sk to ${install_dir}"
 staged=""
 
-printf 'Installed Skot %s to %s/sk\n' "${tag#skot-}" "$install_dir"
+printf 'Installed Skot %s to %s/sk\n' "$tag" "$install_dir"
 case ":${PATH:-}:" in
 	*":${install_dir}:"*) ;;
 	*) printf 'Add %s to PATH to run sk.\n' "$install_dir" ;;

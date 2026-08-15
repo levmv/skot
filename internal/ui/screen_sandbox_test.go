@@ -6,22 +6,45 @@ import (
 )
 
 func TestSandboxCommandRunsAsCancellableMaintenance(t *testing.T) {
-	fake := &fakeAgent{sandbox: "off", security: "sandbox: off"}
+	fake := &fakeAgent{
+		sandbox: "off", security: "sandbox: off",
+		sandboxNotice: "Skot home is protected inside the workspace",
+	}
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/sandbox auto")
 	model, cmd := model.submitInput()
 	if cmd == nil || model.operation.kind != operationSandbox || model.operation.cancel == nil || !model.sandbox.pending || model.composer.value() != "" {
 		t.Fatalf("cmd=%v operation=%#v sandbox=%#v input=%q", cmd, model.operation, model.sandbox, model.composer.value())
 	}
-	message, ok := cmd().(sandboxDoneMsg)
+	rawMessage := cmd()
+	message, ok := rawMessage.(sandboxDoneMsg)
 	if !ok {
-		t.Fatalf("message = %T", cmd())
+		t.Fatalf("message = %T", rawMessage)
 	}
 	model.finishSandboxSwitch(message)
 	if model.operation.kind != operationNone || model.sandbox.pending || fake.sandbox != "auto" || fake.security != "sandbox: workspace (auto)" {
 		t.Fatalf("operation=%#v state=%#v sandbox=%q security=%q", model.operation, model.sandbox, fake.sandbox, fake.security)
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "sandbox policy: off → auto") {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "sandbox policy: off → auto") ||
+		!strings.Contains(got, "warning: Skot home is protected inside the workspace") {
+		t.Fatalf("result block = %q", got)
+	}
+}
+
+func TestSandboxCommandDoesNotRepeatNoticeWithoutSwitch(t *testing.T) {
+	fake := &fakeAgent{
+		sandbox: "workspace", security: "sandbox: workspace",
+		sandboxNotice: "Skot home is protected inside the workspace",
+	}
+	model := testScreenModel(t, fake)
+	cmd := model.startSandboxSwitch("workspace")
+	rawMessage := cmd()
+	message, ok := rawMessage.(sandboxDoneMsg)
+	if !ok {
+		t.Fatalf("message = %T", rawMessage)
+	}
+	model.finishSandboxSwitch(message)
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; strings.Contains(got, "warning:") {
 		t.Fatalf("result block = %q", got)
 	}
 }
@@ -35,9 +58,13 @@ func TestSandboxCommandCanSwitchPolicyDuringTurn(t *testing.T) {
 	if cmd == nil || model.operation.kind != operationTurn || !model.sandbox.pending {
 		t.Fatalf("cmd=%v operation=%#v sandbox=%#v", cmd, model.operation, model.sandbox)
 	}
-	message, ok := cmd().(sandboxDoneMsg)
-	if !ok || !message.concurrent {
-		t.Fatalf("message = %#v (%T)", message, message)
+	rawMessage := cmd()
+	message, ok := rawMessage.(sandboxDoneMsg)
+	if !ok {
+		t.Fatalf("message = %T", rawMessage)
+	}
+	if !message.concurrent {
+		t.Fatalf("message = %#v", message)
 	}
 	model.finishSandboxSwitch(message)
 	if model.operation.kind != operationTurn || model.sandbox.pending || fake.sandbox != "workspace" {

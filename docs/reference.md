@@ -196,6 +196,11 @@ All built-in tool sets include bounded public `web_fetch`. They include
 `web_search` when a Tavily or Exa key is available. A custom tool set is an
 exact tool list, not a set of additions to a built-in set.
 
+On Linux, `default` also includes `ls` when the protected Skot home is inside
+the workspace. This keeps root listing available whenever Landlock is active,
+including after a runtime sandbox switch. Explicit custom tool sets remain
+exact.
+
 ### Child agents
 
 Add the single `agent` capability to a custom tool set to permit delegation:
@@ -343,8 +348,11 @@ environment filtering is not a security boundary.
 
 ### Protected paths
 
-The Skot data directory is always protected in `workspace` and `masked`.
-Additional paths are configured in `config.json`:
+The Skot data directory is always protected in `workspace` and `masked`. It may
+be inside the workspace; on Linux, model-owned processes can then use existing
+entries but cannot list or create entries directly in the workspace root.
+Built-in file tools do not have this limitation. Additional paths are configured
+in `config.json`:
 
 ```json
 {

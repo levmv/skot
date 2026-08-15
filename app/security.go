@@ -43,27 +43,15 @@ func buildSecurityStateWithToolHome(ctx context.Context, requested, root, home, 
 	if effective == workspacetools.SandboxOff {
 		return state
 	}
-	if pathsOverlap(root, home) {
-		return unavailableSandbox(state, "Skot home overlaps the workspace; keep private state outside the workspace with -home")
-	}
 	protected := []string{home}
 	if len(protectedSets) > 0 {
 		protected = append([]string(nil), protectedSets[0]...)
 	}
-	for _, path := range protected {
-		if securityPathContains(path, root) {
-			return unavailableSandbox(state, "protected path contains the workspace: "+path)
-		}
+	sandbox := workspacetools.Sandbox{
+		Policy: effective, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
 	}
-	if effective == workspacetools.SandboxWorkspace && (pathsOverlap(home, toolHome) || pathsOverlap(root, toolHome)) {
-		return unavailableSandbox(state, "tool home must be outside Skot home and the workspace")
-	}
-	if effective == workspacetools.SandboxWorkspace {
-		for _, path := range protected {
-			if pathsOverlap(path, toolHome) {
-				return unavailableSandbox(state, "protected path overlaps tool home: "+path)
-			}
-		}
+	if err := sandbox.ValidateLayout(); err != nil {
+		return unavailableSandbox(state, err.Error())
 	}
 	backend := workspacetools.SandboxBackend()
 	if backend == "" {
@@ -89,9 +77,7 @@ func buildSecurityStateWithToolHome(ctx context.Context, requested, root, home, 
 	command := "if IFS= read -r _ < " + quotedProbe + " 2>/dev/null; then exit 42; fi; " +
 		"if : > " + quotedProbe + " 2>/dev/null; then exit 43; fi; " +
 		"if rm -f -- " + quotedProbe + " 2>/dev/null; then exit 44; fi; exit 0"
-	cmd, err := workspacetools.SandboxedBashCommand(command, root, workspacetools.Sandbox{
-		Policy: effective, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
-	})
+	cmd, err := workspacetools.SandboxedBashCommand(command, root, sandbox)
 	if err != nil {
 		return unavailableSandbox(state, "sandbox command failed: "+err.Error())
 	}
@@ -135,6 +121,17 @@ func buildSecurityStateWithToolHome(ctx context.Context, requested, root, home, 
 func unavailableSandbox(state securityState, probe string) securityState {
 	state.Failure = probe
 	return state
+}
+
+func sandboxWorkspaceNotice(state securityState, root, home string) string {
+	if !landlockNestedHomeLimitsWorkspaceRoot(state.Backend, root, home) {
+		return ""
+	}
+	return "Skot home is protected inside the workspace; Bash and program tools cannot list or create entries directly in the workspace root; use the built-in file tools for root operations"
+}
+
+func landlockNestedHomeLimitsWorkspaceRoot(backend, root, home string) bool {
+	return backend == "landlock" && securityPathContains(root, home) && !securityPathContains(home, root)
 }
 
 func resolveSandboxPolicy(requested, container string) string {
@@ -184,10 +181,6 @@ func canonicalSecurityPath(path string) string {
 		missing = append(missing, filepath.Base(current))
 		current = parent
 	}
-}
-
-func pathsOverlap(first, second string) bool {
-	return securityPathContains(first, second) || securityPathContains(second, first)
 }
 
 func securityPathContains(root, path string) bool {

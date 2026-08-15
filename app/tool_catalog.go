@@ -18,7 +18,7 @@ type builtToolCatalog struct {
 	toolSet          string
 }
 
-func buildToolCatalog(config Config, settings state.Settings, credentials *state.Store, masker *secretMasker, base []agent.Tool, processes *workspacetools.ProcessManager) (builtToolCatalog, error) {
+func buildToolCatalog(config Config, settings state.Settings, credentials *state.Store, masker *secretMasker, base []agent.Tool, processes *workspacetools.ProcessManager, builtInOptions toolpolicy.BuiltInOptions) (builtToolCatalog, error) {
 	catalog := append([]agent.Tool(nil), base...)
 	catalog = append(catalog, processes.Tools()...)
 	catalog = append(catalog, workspacetools.NewWebTools(webCredentialLookup(credentials))...)
@@ -76,7 +76,7 @@ func buildToolCatalog(config Config, settings state.Settings, credentials *state
 	if err != nil {
 		return builtToolCatalog{}, fmt.Errorf("validate complete tool catalog: %w", err)
 	}
-	toolSets, err := toolpolicy.NewToolSets(catalog, settings.ToolSets, config.ToolSets)
+	toolSets, err := toolpolicy.NewToolSetsWithOptions(catalog, builtInOptions, settings.ToolSets, config.ToolSets)
 	if err != nil {
 		return builtToolCatalog{}, fmt.Errorf("configure tool sets: %w", err)
 	}

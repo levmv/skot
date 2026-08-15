@@ -79,7 +79,6 @@ type CompletionEvent struct {
 type ProcessManager struct {
 	workspace              *workspace
 	protection             *ProtectedPathPolicy
-	stateHome              string
 	toolHome               string
 	jobHome                string
 	logLimit               int64
@@ -246,7 +245,8 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 		return nil, errors.New("bash is unavailable")
 	}
 	toolHome := canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, workspace.root))
-	if err := validateSandboxRoots(sandbox, workspace.root, stateHome, toolHome, protection.Paths()); err != nil {
+	layout := Sandbox{Policy: sandbox, Workspace: workspace.root, ToolHome: toolHome, ProtectedPaths: protection.Paths()}
+	if err := layout.ValidateLayout(); err != nil {
 		return nil, err
 	}
 	protection.SetEnabled(sandbox != SandboxOff)
@@ -260,7 +260,6 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 	return &ProcessManager{
 		workspace:      workspace,
 		protection:     protection,
-		stateHome:      stateHome,
 		toolHome:       toolHome,
 		jobHome:        jobHome,
 		logLimit:       defaultCommandLogLimit,
@@ -271,31 +270,6 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 		loadedSessions: make(map[string]struct{}),
 		attachNotices:  make(map[string][]string),
 	}, nil
-}
-
-func validateSandboxRoots(policy, workspace, stateHome, toolHome string, protected []string) error {
-	if policy == SandboxOff {
-		return nil
-	}
-	if sandboxPathsOverlap(stateHome, workspace) {
-		return errors.New("skot state home and workspace must not overlap")
-	}
-	for _, path := range protected {
-		if pathContains(path, workspace) {
-			return fmt.Errorf("protected path %s contains the workspace", path)
-		}
-	}
-	if policy == SandboxWorkspace && (sandboxPathsOverlap(stateHome, toolHome) || sandboxPathsOverlap(workspace, toolHome)) {
-		return errors.New("tool home must be outside Skot state and the workspace")
-	}
-	if policy == SandboxWorkspace {
-		for _, path := range protected {
-			if sandboxPathsOverlap(path, toolHome) {
-				return fmt.Errorf("protected path %s overlaps tool home", path)
-			}
-		}
-	}
-	return nil
 }
 
 func (manager *ProcessManager) processSandbox(policy string) Sandbox {
@@ -570,7 +544,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		return nil, fmt.Errorf("unknown process origin %d", spec.origin)
 	}
 	if spec.origin == processOriginModel {
-		if err := validateSandboxRoots(sandbox, manager.workspace.root, manager.stateHome, manager.toolHome, manager.protection.Paths()); err != nil {
+		if err := manager.processSandbox(sandbox).ValidateLayout(); err != nil {
 			return nil, err
 		}
 		if sandbox != SandboxOff && manager.protection.contains(spec.workdir) {
@@ -819,7 +793,7 @@ func (manager *ProcessManager) SetSandboxAfter(policy string, beforeApply func()
 	if manager.closed {
 		return errors.New("process manager is closed")
 	}
-	if err := validateSandboxRoots(policy, manager.workspace.root, manager.stateHome, manager.toolHome, manager.protection.Paths()); err != nil {
+	if err := manager.processSandbox(policy).ValidateLayout(); err != nil {
 		return err
 	}
 	if policy == SandboxWorkspace {

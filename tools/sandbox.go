@@ -29,6 +29,33 @@ type Sandbox struct {
 	ProtectedPaths []string `json:"protected_paths,omitempty"`
 }
 
+// ValidateLayout checks the path relationships required by a concrete
+// sandbox policy.
+func (sandbox Sandbox) ValidateLayout() error {
+	if err := validateConcreteSandboxPolicy(sandbox.Policy); err != nil {
+		return err
+	}
+	if sandbox.Policy == SandboxOff {
+		return nil
+	}
+	for _, path := range sandbox.ProtectedPaths {
+		if pathContains(path, sandbox.Workspace) {
+			return fmt.Errorf("protected path %s contains the workspace", path)
+		}
+	}
+	if sandbox.Policy == SandboxWorkspace && pathContains(sandbox.ToolHome, sandbox.Workspace) {
+		return fmt.Errorf("tool home must not contain the workspace")
+	}
+	if sandbox.Policy == SandboxWorkspace {
+		for _, path := range sandbox.ProtectedPaths {
+			if sandboxPathsOverlap(path, sandbox.ToolHome) {
+				return fmt.Errorf("protected path %s overlaps tool home", path)
+			}
+		}
+	}
+	return nil
+}
+
 func NormalizeSandboxPolicy(policy string) (string, error) {
 	policy = strings.ToLower(strings.TrimSpace(policy))
 	if policy == "" {

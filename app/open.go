@@ -10,6 +10,7 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
+	"github.com/levmv/skot/internal/toolpolicy"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -106,6 +107,9 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err := validateSecurity(security); err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("%w; choose -sandbox off explicitly to run without it", err))
 	}
+	if notice := sandboxWorkspaceNotice(security, root, home); notice != "" {
+		notices = append(notices, notice)
+	}
 	protection.SetEnabled(security.EffectivePolicy != workspacetools.SandboxOff)
 	projectInstructions, err := loadInstructions(root, protection)
 	if err != nil {
@@ -124,7 +128,12 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	resources := &openResources{processes: processes, children: children}
 	catalog = append(catalog, children.tool())
-	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes)
+	// Derive this from platform and layout rather than the current policy so a
+	// runtime sandbox switch does not silently change the active tool set.
+	builtInOptions := toolpolicy.BuiltInOptions{
+		DefaultIncludesLS: landlockNestedHomeLimitsWorkspaceRoot(workspacetools.SandboxBackend(), root, home),
+	}
+	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes, builtInOptions)
 	if err != nil {
 		return resources.fail(agent.MarkInvalidRequest(err))
 	}

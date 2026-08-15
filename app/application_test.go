@@ -67,6 +67,35 @@ func TestApplicationSwitchesAndPersistsRequestedSandbox(t *testing.T) {
 	}
 }
 
+func TestApplicationSupportsNestedHomeAcrossSandboxSwitch(t *testing.T) {
+	if workspacetools.SandboxBackend() != "landlock" {
+		t.Skip("nested-home process limitation is specific to Landlock")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, ".skot")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, ".cache"))
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, Interactive: true,
+		Sandbox: SandboxOff, SandboxExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if notice := application.SandboxNotice(); notice != "" {
+		t.Fatalf("off notice = %q", notice)
+	}
+	if tools := application.ToolSetTools(toolpolicy.ToolSetDefault); !slices.Contains(tools, "ls") {
+		t.Fatalf("nested-home default tools = %#v", tools)
+	}
+	if err := application.SwitchSandbox(context.Background(), SandboxWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if notice := application.SandboxNotice(); !strings.Contains(notice, "cannot list or create entries") {
+		t.Fatalf("workspace notice = %q", notice)
+	}
+}
+
 func TestApplicationSwitchesAndPersistsTheme(t *testing.T) {
 	home := t.TempDir()
 	application, err := Open(context.Background(), Config{

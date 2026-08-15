@@ -337,6 +337,51 @@ func TestMaskedSandboxHidesMultipleProtectedPaths(t *testing.T) {
 	}
 }
 
+func TestSandboxesCarveStateHomeInsideWorkspace(t *testing.T) {
+	for _, policy := range []string{SandboxWorkspace, SandboxMasked} {
+		t.Run(policy, func(t *testing.T) {
+			workspace := t.TempDir()
+			stateHome := filepath.Join(workspace, ".skot")
+			public := filepath.Join(workspace, "project")
+			if err := os.MkdirAll(stateHome, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(public, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			secret := filepath.Join(stateHome, "auth.json")
+			if err := os.WriteFile(secret, []byte("secret\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			toolHomeRoot := filepath.Join(workspace, ".cache", "skot", "tool-home")
+			manager, err := NewProcessManager(workspace, stateHome, toolHomeRoot, policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = manager.Close() })
+
+			command := "if cat .skot/auth.json >/dev/null 2>&1; then exit 41; fi; " +
+				"if ls . >/dev/null 2>&1; then exit 42; fi; " +
+				"if : > root-created 2>/dev/null; then exit 43; fi; " +
+				"printf visible > project/result.txt"
+			result := runProcessResult(t, manager.bash, bashArgs{Command: command})
+			metadata := processResultForTest(t, result)
+			if metadata.Status != ProcessCompleted {
+				t.Fatalf("nested state result = %#v / %q", metadata, result.Content)
+			}
+			if raw, err := os.ReadFile(secret); err != nil || string(raw) != "secret\n" {
+				t.Fatalf("private state = %q, %v", raw, err)
+			}
+			if raw, err := os.ReadFile(filepath.Join(public, "result.txt")); err != nil || string(raw) != "visible" {
+				t.Fatalf("public result = %q, %v", raw, err)
+			}
+			if _, err := os.Stat(filepath.Join(workspace, "root-created")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("workspace root entry was created: %v", err)
+			}
+		})
+	}
+}
+
 func shellQuoteForTest(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

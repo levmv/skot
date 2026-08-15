@@ -81,24 +81,63 @@ func TestSandboxOffMustBeExplicit(t *testing.T) {
 	}
 }
 
-func TestSandboxProbeRejectsSkotHomeInsideWorkspace(t *testing.T) {
-	root := t.TempDir()
-	home := root + "/.skot"
-	toolHome := workspacetools.WorkspaceToolHome(t.TempDir(), root)
-	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.SandboxWorkspace, root, home, toolHome)
-	if state.Backend != "" || !strings.Contains(state.Failure, "Skot home") || !strings.Contains(state.Failure, "-home") {
+func TestSandboxProbeAllowsSkotHomeInsideWorkspace(t *testing.T) {
+	for _, policy := range []string{workspacetools.SandboxWorkspace, workspacetools.SandboxMasked} {
+		t.Run(policy, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, ".skot")
+			toolHome := workspacetools.WorkspaceToolHome(filepath.Join(root, ".cache", "skot", "tool-home"), root)
+			state := buildSecurityStateWithToolHome(context.Background(), policy, root, home, toolHome)
+			if state.Backend == "" || state.Failure != "" {
+				t.Fatalf("security state = %#v", state)
+			}
+		})
+	}
+}
+
+func TestSandboxProbeRejectsToolHomeContainingWorkspace(t *testing.T) {
+	toolHome := t.TempDir()
+	root := filepath.Join(toolHome, "workspace")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := buildSecurityStateWithToolHome(
+		context.Background(), workspacetools.SandboxWorkspace, root, t.TempDir(), toolHome,
+	)
+	if state.Backend != "" || !strings.Contains(state.Failure, "tool home must not contain") {
 		t.Fatalf("security state = %#v", state)
 	}
 }
 
 func TestOpenExplainsExplicitStartupOptOutAfterSandboxFailure(t *testing.T) {
-	root := t.TempDir()
+	home := t.TempDir()
+	root := filepath.Join(home, "workspace")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	_, err := Open(context.Background(), Config{
-		Home: filepath.Join(root, ".skot"), Root: root,
+		Home: home, Root: root,
 		Sandbox: workspacetools.SandboxWorkspace, SandboxExplicit: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "-sandbox off") {
 		t.Fatalf("startup error = %v", err)
+	}
+}
+
+func TestSandboxWorkspaceNoticeDescribesLandlockRootLimitation(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".skot")
+	state := securityState{EffectivePolicy: workspacetools.SandboxWorkspace, Backend: "landlock"}
+	if got := sandboxWorkspaceNotice(state, root, home); !strings.Contains(got, "cannot list or create entries") {
+		t.Fatalf("notice = %q", got)
+	}
+	state.Backend = "seatbelt"
+	if got := sandboxWorkspaceNotice(state, root, home); got != "" {
+		t.Fatalf("seatbelt notice = %q", got)
+	}
+	state.Backend = "landlock"
+	if got := sandboxWorkspaceNotice(state, root, t.TempDir()); got != "" {
+		t.Fatalf("disjoint notice = %q", got)
 	}
 }
 

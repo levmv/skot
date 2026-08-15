@@ -728,6 +728,16 @@ func (application *Application) SecuritySummary() string {
 	return summary
 }
 
+// SandboxNotice describes a current sandbox limitation that is useful at
+// startup or immediately after changing policy, but too noisy for
+// SecuritySummary.
+func (application *Application) SandboxNotice() string {
+	application.mu.RLock()
+	security := application.state.security
+	application.mu.RUnlock()
+	return sandboxWorkspaceNotice(security, application.config.root, application.config.home)
+}
+
 func (application *Application) SwitchSandbox(ctx context.Context, value string) error {
 	application.sandboxMu.Lock()
 	defer application.sandboxMu.Unlock()

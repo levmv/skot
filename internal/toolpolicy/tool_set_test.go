@@ -26,6 +26,26 @@ func TestBuiltInToolSetsSelectExactOrderedTools(t *testing.T) {
 	}
 }
 
+func TestBuiltInOptionsAddDefaultLSWithoutChangingOverrides(t *testing.T) {
+	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "custom")
+	toolSets, err := NewToolSetsWithOptions(catalog, BuiltInOptions{DefaultIncludesLS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := toolNames(mustToolSetTools(t, toolSets, catalog, ToolSetDefault)); got != "read,ls,grep,glob,edit,write,bash,job" {
+		t.Fatalf("conditional default tools = %q", got)
+	}
+	toolSets, err = NewToolSetsWithOptions(
+		catalog, BuiltInOptions{DefaultIncludesLS: true}, map[string][]string{ToolSetDefault: {"custom"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := toolNames(mustToolSetTools(t, toolSets, catalog, ToolSetDefault)); got != "custom" {
+		t.Fatalf("overridden default tools = %q", got)
+	}
+}
+
 func TestBuiltInToolSetsIncludeKnownWebTools(t *testing.T) {
 	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "web_fetch", "web_search")
 	toolSets, err := NewToolSets(catalog)

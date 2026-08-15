@@ -23,11 +23,19 @@ var builtInToolSetOrder = []string{ToolSetDefault, ToolSetEdit, ToolSetReadOnly}
 var builtInToolSetTools = map[string][]string{
 	ToolSetReadOnly: {"read", "ls", "grep", "glob"},
 	ToolSetEdit:     {"read", "ls", "grep", "glob", "edit", "write"},
-	// Default deliberately omits ls: Bash provides richer directory inspection.
+	// Default normally omits ls: Bash provides richer directory inspection.
 	ToolSetDefault: {"read", "grep", "glob", "edit", "write", "bash", "job"},
 }
 
 var optionalBuiltInTools = []string{"web_fetch", "web_search"}
+
+// BuiltInOptions adjusts product-owned sets before exact user overrides are
+// applied.
+type BuiltInOptions struct {
+	// DefaultIncludesLS covers layouts where process sandboxing can prevent
+	// Bash from enumerating the workspace root.
+	DefaultIncludesLS bool
+}
 
 // ToolSets is a validated collection of exact, ordered tool-name lists. User
 // definitions replace built-in sets with the same normalized name and add sets
@@ -41,6 +49,12 @@ type ToolSets struct {
 // Override maps are applied in order; a later definition with the same
 // normalized name replaces the earlier definition completely.
 func NewToolSets(catalog []agent.Tool, overrides ...map[string][]string) (ToolSets, error) {
+	return NewToolSetsWithOptions(catalog, BuiltInOptions{}, overrides...)
+}
+
+// NewToolSetsWithOptions builds named sets with conditional product-owned
+// defaults. User definitions still replace a built-in set exactly.
+func NewToolSetsWithOptions(catalog []agent.Tool, options BuiltInOptions, overrides ...map[string][]string) (ToolSets, error) {
 	available := make(map[string]agent.Tool, len(catalog))
 	for _, tool := range catalog {
 		name := strings.TrimSpace(tool.Spec.Name)
@@ -56,6 +70,11 @@ func NewToolSets(catalog []agent.Tool, overrides ...map[string][]string) (ToolSe
 	definitions := make(map[string][]string, len(builtInToolSetTools))
 	for name, tools := range builtInToolSetTools {
 		definitions[name] = append([]string(nil), tools...)
+		if name == ToolSetDefault && options.DefaultIncludesLS {
+			withLS := make([]string, 0, len(definitions[name])+1)
+			withLS = append(withLS, definitions[name][0], "ls")
+			definitions[name] = append(withLS, definitions[name][1:]...)
+		}
 		for _, optional := range optionalBuiltInTools {
 			if _, exists := available[optional]; exists {
 				definitions[name] = append(definitions[name], optional)

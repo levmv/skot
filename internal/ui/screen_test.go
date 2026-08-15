@@ -36,6 +36,7 @@ type fakeAgent struct {
 	modelChoices     []ModelChoice
 	sandbox          string
 	security         string
+	sandboxNotice    string
 	sandboxErr       error
 	theme            string
 	themeErr         error
@@ -186,6 +187,8 @@ func (fake *fakeAgent) ReasoningEfforts(uri string) []string {
 func (fake *fakeAgent) CurrentSandbox() string { return fake.sandbox }
 
 func (fake *fakeAgent) SecuritySummary() string { return fake.security }
+
+func (fake *fakeAgent) SandboxNotice() string { return fake.sandboxNotice }
 
 func (fake *fakeAgent) SwitchSandbox(_ context.Context, policy string) error {
 	if fake.sandboxErr != nil {

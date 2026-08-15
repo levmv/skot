@@ -22,15 +22,22 @@ func (m *screenModel) startSandboxSwitch(policy string) tea.Cmd {
 	}
 	operationCtx, cancel := context.WithCancel(m.ctx)
 	concurrent := m.operation.isTurn()
-	m.sandbox = sandboxSwitchState{pending: true, cancel: cancel, previous: m.agent.CurrentSandbox()}
+	previous := m.agent.CurrentSandbox()
+	m.sandbox = sandboxSwitchState{pending: true, cancel: cancel, previous: previous}
 	if !concurrent {
 		m.operation = activeOperation{kind: operationSandbox, startedAt: time.Now(), cancel: cancel}
 	}
 	return func() tea.Msg {
 		err := m.agent.SwitchSandbox(operationCtx, policy)
+		current := m.agent.CurrentSandbox()
+		notice := ""
+		if err == nil && current != previous {
+			notice = m.agent.SandboxNotice()
+		}
 		return sandboxDoneMsg{
-			policy:     m.agent.CurrentSandbox(),
+			policy:     current,
 			summary:    m.agent.SecuritySummary(),
+			notice:     notice,
 			concurrent: concurrent,
 			err:        err,
 		}
@@ -51,6 +58,9 @@ func (m *screenModel) finishSandboxSwitch(message sandboxDoneMsg) {
 		return
 	}
 	text := formatSettingChange("sandbox policy", previous, message.policy) + "\n" + message.summary
+	if message.notice != "" {
+		text += "\nwarning: " + message.notice
+	}
 	if message.concurrent {
 		text += "\nnew processes use this policy; already running processes retain their launch policy"
 	}

@@ -55,6 +55,7 @@ type ConfigurationAgent interface {
 	CurrentReasoningEffort() string
 	CurrentSandbox() string
 	SecuritySummary() string
+	SandboxNotice() string
 	SwitchSandbox(context.Context, string) error
 	CurrentTheme() string
 	SwitchTheme(string) error
@@ -164,6 +165,7 @@ type shellDoneMsg struct {
 type sandboxDoneMsg struct {
 	policy     string
 	summary    string
+	notice     string
 	concurrent bool
 	err        error
 }

@@ -263,6 +263,24 @@ func testScreenModel(t *testing.T, fake *fakeAgent) screenModel {
 	return model
 }
 
+func TestHelpKeepsItsColumnsOnANarrowTerminal(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.resize(60, 40)
+	// Help is a two column layout, and the transcript wraps a long line back to
+	// the left margin, which would break the columns rather than shorten them.
+	for _, line := range strings.Split(tuiCommandHelp, "\n") {
+		if len(line) > model.contentWidth() {
+			t.Fatalf("help line of %d columns does not fit %d: %q", len(line), model.contentWidth(), line)
+		}
+	}
+	model.composer.setValue("/help")
+	model, _ = model.submitInput()
+	model.refreshTranscript()
+	if !strings.Contains(strings.Join(model.transcript.lines, "\n"), "Type / for commands.") {
+		t.Fatalf("help transcript = %q", model.transcript.lines)
+	}
+}
+
 func TestExitCommandAliasesQuit(t *testing.T) {
 	for _, input := range []string{"/exit", "/quit", "/q", "/Q"} {
 		model := testScreenModel(t, &fakeAgent{})
@@ -338,7 +356,7 @@ func TestWorkingCommandsAreNotQueued(t *testing.T) {
 
 func TestToolSetCommandShowsAndSwitchesToolSet(t *testing.T) {
 	fake := &fakeAgent{toolSet: toolpolicy.ToolSetEdit, toolSets: []string{
-		toolpolicy.ToolSetReadOnly, toolpolicy.ToolSetEdit, toolpolicy.ToolSetFull, "review",
+		toolpolicy.ToolSetFull, toolpolicy.ToolSetEdit, toolpolicy.ToolSetReadOnly, "review",
 	}, toolSetTools: map[string][]string{
 		toolpolicy.ToolSetReadOnly: {"read", "grep"},
 		toolpolicy.ToolSetEdit:     {"bash", "job"},
@@ -351,12 +369,14 @@ func TestToolSetCommandShowsAndSwitchesToolSet(t *testing.T) {
 	if model.picker.kind != pickerToolSet || len(model.picker.items) != 4 || model.picker.items[3].value != "review" || model.picker.index != 1 || !model.picker.items[1].current {
 		t.Fatalf("tool set picker = %#v", model.picker)
 	}
-	if got := model.picker.items[1].description; got != "tools: bash, job" {
+	if got := model.picker.items[1].description; got != "bash, job" {
 		t.Fatalf("customized edit description = %q", got)
 	}
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyUp, BaseCode: tea.KeyUp})
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
-	if fake.toolSet != toolpolicy.ToolSetReadOnly || model.composer.value() != "" {
+	if !model.picker.numberSelectionEnabled() {
+		t.Fatalf("tool set picker without digit shortcuts = %#v", model.picker)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "1", Code: '1', BaseCode: '1'})
+	if fake.toolSet != toolpolicy.ToolSetFull || model.composer.value() != "" {
 		t.Fatalf("tool set = %q, input = %q", fake.toolSet, model.composer.value())
 	}
 }

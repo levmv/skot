@@ -50,7 +50,7 @@ func TestResumePickerDefersSwitchAndLoadsSelectedHistoryBelowScrollback(t *testi
 		t.Fatalf("picker item = %#v", model.picker.items[0])
 	}
 
-	model, cmd = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	model, cmd = model.handleKey(tea.KeyPressMsg{Text: "1", Code: '1', BaseCode: '1'})
 	if cmd == nil || fake.resumeArg != "" {
 		t.Fatalf("session switched before picker frame: arg=%q cmd=%v", fake.resumeArg, cmd)
 	}

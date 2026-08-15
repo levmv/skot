@@ -58,7 +58,7 @@ func TestConfiguredToolSetsReplaceDefaultsAndAddNames(t *testing.T) {
 	if got := toolNames(mustToolSetTools(t, toolSets, catalog, "empty")); got != "" {
 		t.Fatalf("empty tools = %q", got)
 	}
-	if got := strings.Join(toolSets.Names(), ","); got != "read-only,edit,full,empty,review" {
+	if got := strings.Join(toolSets.Names(), ","); got != "full,edit,read-only,empty,review" {
 		t.Fatalf("tool set names = %q", got)
 	}
 	if got := strings.Join(toolSets.ToolNames(ToolSetFull), ","); got != "custom" {
@@ -104,7 +104,7 @@ func TestNormalizeRejectsUnknownToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := toolSets.Normalize("admin"); err == nil || !strings.Contains(err.Error(), "read-only, edit, full") {
+	if _, err := toolSets.Normalize("admin"); err == nil || !strings.Contains(err.Error(), "full, edit, read-only") {
 		t.Fatalf("unknown tool set error = %v", err)
 	}
 }

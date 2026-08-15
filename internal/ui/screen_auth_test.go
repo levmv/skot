@@ -68,6 +68,10 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 	if model.picker.kind != pickerLogout || len(model.picker.items) != 1 || model.picker.items[0].value != "deepseek" {
 		t.Fatalf("logout picker = %#v", model.picker)
 	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "1", Code: '1', BaseCode: '1'})
+	if fake.logoutProvider != "" || !model.picker.active() {
+		t.Fatalf("logout accepted a numeric shortcut: provider=%q picker=%#v", fake.logoutProvider, model.picker)
+	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	if fake.logoutProvider != "deepseek" {
 		t.Fatalf("logout provider = %q", fake.logoutProvider)
@@ -91,8 +95,7 @@ func TestStartupLoginPickerCanSwitchToConfiguredProvider(t *testing.T) {
 	if !strings.Contains(model.picker.items[1].description, "environment credential") || model.picker.items[1].modelURI != "openrouter/free" {
 		t.Fatalf("OpenRouter item = %#v", model.picker.items[1])
 	}
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyDown, BaseCode: tea.KeyDown})
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "2", Code: '2', BaseCode: '2'})
 	if fake.model != "openrouter/free" || model.loginProvider != "" {
 		t.Fatalf("model=%q login=%q", fake.model, model.loginProvider)
 	}
@@ -138,10 +141,14 @@ func TestModelPickerShowsCredentialStateAndDefersMissingLogin(t *testing.T) {
 	if model.picker.kind != pickerModel || len(model.picker.items) != 3 || model.picker.items[0].description != "" || model.picker.items[1].description != "login required" {
 		t.Fatalf("model picker = %#v", model.picker)
 	}
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyDown, BaseCode: tea.KeyDown})
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "openrouter", Code: 'o', BaseCode: 'o'})
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	if fake.model != "deepseek/model" || model.loginProvider != "openrouter" || model.loginModel != "openrouter/free" {
 		t.Fatalf("deferred selection: model=%q login=%q pending=%q", fake.model, model.loginProvider, model.loginModel)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape, BaseCode: tea.KeyEscape})
+	if model.loginProvider != "" || model.picker.kind != pickerModel || model.picker.query != "openrouter" || model.picker.items[model.picker.index].value != "openrouter/free" {
+		t.Fatalf("restored model picker = %#v, login=%q", model.picker, model.loginProvider)
 	}
 }
 
@@ -163,11 +170,177 @@ func TestModelPickerShowsCuratedRouteFacts(t *testing.T) {
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/model")
 	model, _ = model.submitInput()
+	// The split matters, not the styling: what a route always says (a barrier
+	// to using it) against what only the selected route says (a reminder).
 	item := model.picker.items[1]
-	if item.label != "GPT 5.6 Luna" || !strings.Contains(item.description, "opencode-go/gpt-5.6-luna") ||
-		!strings.Contains(item.description, "922K context") || !strings.Contains(item.description, "login required") ||
-		strings.Contains(item.description, "~922K") || strings.Contains(item.description, "responses") {
+	if item.label != "opencode-go/gpt-5.6-luna" || !item.dimmed || item.description != "login required" ||
+		item.activeDetail != "922K context" || strings.Contains(item.activeDetail, "~922K") ||
+		strings.Contains(item.activeDetail, "responses") {
 		t.Fatalf("OpenCode choice = %#v", item)
+	}
+}
+
+func TestModelPickerFiltersRoutesAsTheQueryIsTyped(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/deepseek-v4-flash",
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash"},
+			{URI: "opencode-go/gpt-5.6-luna", Name: "OpenCode Go · GPT 5.6 Luna"},
+			{URI: "opencode-go/kimi-k3", Name: "OpenCode Go · Kimi K3"},
+		},
+		providers: []ProviderStatus{
+			{Name: "deepseek", Source: "auth store"},
+			{Name: "opencode-go", Source: "auth store"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	// One key at a time, the way a terminal delivers them: the query narrows on
+	// every keystroke, including the digits.
+	for _, r := range "opencode-go 5.6" {
+		model, _ = model.handleKey(tea.KeyPressMsg{Text: string(r), Code: r, BaseCode: r})
+	}
+	visible := model.picker.visibleIndices()
+	if model.picker.query != "opencode-go 5.6" || len(visible) != 2 || model.picker.items[visible[0]].value != "opencode-go/gpt-5.6-luna" || !model.picker.items[visible[1]].custom {
+		t.Fatalf("filtered model picker = %#v, visible=%#v", model.picker, visible)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	if fake.model != "opencode-go/gpt-5.6-luna" {
+		t.Fatalf("selected model = %q", fake.model)
+	}
+}
+
+func TestModelPickerSearchAcceptsPastedText(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/flash",
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/flash", Name: "DeepSeek V4 Flash"},
+			{URI: "opencode-go/kimi-k3", Name: "OpenCode Go · Kimi K3"},
+		},
+		providers: []ProviderStatus{
+			{Name: "deepseek", Source: "auth store"},
+			{Name: "opencode-go", Source: "auth store"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	updated, _ := model.Update(tea.PasteMsg{Content: "opencode-go/kimi-k3\n"})
+	model = updated.(screenModel)
+	visible := model.picker.visibleIndices()
+	if model.picker.query != "opencode-go/kimi-k3 " || len(visible) != 2 || model.picker.items[visible[0]].value != "opencode-go/kimi-k3" {
+		t.Fatalf("pasted query = %q, visible = %#v", model.picker.query, visible)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	if fake.model != "opencode-go/kimi-k3" {
+		t.Fatalf("selected model = %q", fake.model)
+	}
+}
+
+func TestModelPickerPlacesDefaultEffortMidLadderAndClampsAtBothEnds(t *testing.T) {
+	if got := orderedReasoningEfforts([]string{"", "none", "low", "medium", "high", "xhigh", "max"}); strings.Join(got, ",") != "none,low,medium,,high,xhigh,max" {
+		t.Fatalf("seven step ladder = %#v", got)
+	}
+	// Nothing to place before the default when there is a single explicit step.
+	if got := orderedReasoningEfforts([]string{"", "high"}); strings.Join(got, ",") != ",high" {
+		t.Fatalf("two step ladder = %#v", got)
+	}
+	if got := orderedReasoningEfforts(nil); len(got) != 1 || got[0] != "" {
+		t.Fatalf("empty ladder = %#v", got)
+	}
+	fake := &fakeAgent{
+		model: "opencode-go/deepseek-v4-flash",
+		modelChoices: []ModelChoice{
+			{
+				URI: "opencode-go/deepseek-v4-flash", Name: "OpenCode Go · DeepSeek V4 Flash",
+				ContextWindow: 1_000_000, ReasoningEfforts: []string{"", "low", "high", "max"},
+			},
+			{
+				URI: "opencode-go/gpt-5.6-luna", Name: "OpenCode Go · GPT 5.6 Luna",
+				ContextWindow: 922_000, ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+			},
+		},
+		providers: []ProviderStatus{{Name: "opencode-go", Source: "auth store"}},
+	}
+	model := testScreenModel(t, fake)
+	model.resize(80, 24)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	if got := model.picker.items[0].efforts; strings.Join(got, ",") != "low,,high,max" {
+		t.Fatalf("effort ladder = %#v", got)
+	}
+	// A route the session is not on starts at the default, which is no longer
+	// the first rung.
+	if got := selectedModelEffort(model.picker.items[1]); got != "" {
+		t.Fatalf("effort of an unselected route = %q", got)
+	}
+	// Width, not wording: the hint used to be truncated away entirely on an
+	// 80 column terminal, which is where most of these rows are read.
+	if rendered := strings.Join(model.renderPicker(), "\n"); !strings.Contains(rendered, "effort") {
+		t.Fatalf("effort hint at 80 columns = %q", rendered)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight, BaseCode: tea.KeyRight})
+	if got := selectedModelEffort(model.picker.items[0]); got != "high" {
+		t.Fatalf("right from the default effort = %q", got)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyLeft, BaseCode: tea.KeyLeft})
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyLeft, BaseCode: tea.KeyLeft})
+	if got := selectedModelEffort(model.picker.items[0]); got != "low" {
+		t.Fatalf("left from the default effort = %q", got)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyLeft, BaseCode: tea.KeyLeft})
+	if got := selectedModelEffort(model.picker.items[0]); got != "low" {
+		t.Fatalf("effort before the first step = %q", got)
+	}
+	for range 5 {
+		model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyRight, BaseCode: tea.KeyRight})
+	}
+	if got := selectedModelEffort(model.picker.items[0]); got != "max" {
+		t.Fatalf("effort past the last step = %q", got)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	if fake.reasoningEffort != "max" {
+		t.Fatalf("selected effort = %q", fake.reasoningEffort)
+	}
+}
+
+func TestModelPickerKeepsSearchForCustomModelEntry(t *testing.T) {
+	fake := &fakeAgent{
+		model:       "deepseek/model",
+		knownModels: []string{"deepseek/model"},
+		providers:   []ProviderStatus{{Name: "deepseek", Source: "auth store"}},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "other/custom", Code: 'o', BaseCode: 'o'})
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	if model.picker.active() || model.composer.value() != "/model other/custom" {
+		t.Fatalf("custom model input = %q, picker=%#v", model.composer.value(), model.picker)
+	}
+}
+
+func TestModelPickerKeepsCurrentFirstAndMovesLoginRequiredRoutesAfterAvailable(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/current",
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/current"},
+			{URI: "openrouter/login-required"},
+			{URI: "openai/available"},
+		},
+		providers: []ProviderStatus{
+			{Name: "deepseek", Source: "auth store"},
+			{Name: "openrouter", Source: "none"},
+			{Name: "openai", Source: "environment override"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model")
+	model, _ = model.submitInput()
+	got := []string{model.picker.items[0].value, model.picker.items[1].value, model.picker.items[2].value}
+	if strings.Join(got, ",") != "deepseek/current,openai/available,openrouter/login-required" || !model.picker.items[2].dimmed {
+		t.Fatalf("model order = %#v; picker=%#v", got, model.picker)
 	}
 }
 
@@ -202,35 +375,14 @@ func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
 	if len(model.picker.items) != 3 || model.picker.items[1].label != "Unavailable routes…" || model.picker.items[1].value != "" {
 		t.Fatalf("model picker = %#v", model.picker)
 	}
-	model.picker.index = 1
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "minimax", Code: 'm', BaseCode: 'm'})
+	if model.picker.items[model.picker.index].label != "Unavailable routes…" {
+		t.Fatalf("unavailable route search = %#v", model.picker)
+	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	details := strings.Join(model.transcript.lines, "\n")
 	if !strings.Contains(details, "MiniMax M3 (opencode-go/minimax-m3)") ||
 		!strings.Contains(details, "anthropic messages") || fake.model != "deepseek/model" {
 		t.Fatalf("unavailable details = %q, model = %q", details, fake.model)
-	}
-}
-
-func TestModelPickerCyclesAndPersistsReasoningEffort(t *testing.T) {
-	uri := "deepseek/model"
-	fake := &fakeAgent{
-		model:            uri,
-		knownModels:      []string{uri},
-		reasoningEfforts: map[string][]string{uri: {"", "high"}},
-		providers:        []ProviderStatus{{Name: "deepseek", Source: "auth store", Description: "model provider"}},
-	}
-	model := testScreenModel(t, fake)
-	model.composer.setValue("/model")
-	model, _ = model.submitInput()
-	if lines := strings.Join(model.renderPicker(), "\n"); !strings.Contains(lines, "effort: default") {
-		t.Fatalf("default effort is not visible: %q", lines)
-	}
-	model, _ = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyRight, BaseCode: tea.KeyRight})
-	if lines := strings.Join(model.renderPicker(), "\n"); !strings.Contains(lines, "effort: high") {
-		t.Fatalf("high effort is not visible: %q", lines)
-	}
-	model, _ = model.handlePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
-	if fake.reasoningEffort != "high" {
-		t.Fatalf("effort = %q", fake.reasoningEffort)
 	}
 }

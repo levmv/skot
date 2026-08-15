@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -11,7 +12,6 @@ import (
 type tuiCommand struct {
 	name        string
 	aliases     []string
-	synopsis    string
 	description string
 	usage       string
 	minArgs     int
@@ -21,29 +21,50 @@ type tuiCommand struct {
 }
 
 var tuiCommands []tuiCommand
-var tuiCommandHelp string
+
+// tuiCommandHelp deliberately omits the command list: typing "/" already shows
+// it as a vertical menu with descriptions, and that menu also completes the
+// command. Help covers what the menu cannot — keys, shell escapes, and what
+// input does while a turn is running.
+const tuiCommandHelp = `Keys
+  enter                    send
+  shift/alt+enter, ctrl+j  insert a newline
+  tab                      accept the suggestion
+  up/down, ctrl+p/ctrl+n   walk input history
+  ctrl+a/e/b/f             start, end, back, forward
+  ctrl+u/k/w               erase to start, to end, word
+  esc                      cancel the running turn
+  ctrl+c                   cancel the turn, else exit
+  ctrl+d                   exit when the input is empty
+
+Shell
+  ! command                keeps the result in context
+  !! command               private, keeps nothing
+
+While Skot is working
+  enter                    queue for the next turn
+  alt+up                   take the last one back
+
+Type / for commands.`
 
 func init() {
 	// Assigning the function-valued table here avoids a package initialization
 	// cycle through command handlers which refresh suggestions from this table.
 	tuiCommands = []tuiCommand{
-		{name: "/help", synopsis: "/help", description: "show commands and keyboard shortcuts", usage: "/help", run: runHelpCommand},
-		{name: "/clear", synopsis: "/clear", description: "start a new session", usage: "/clear", run: runClearCommand},
-		{name: "/resume", synopsis: "/resume [id-or-prefix]", description: "choose or resume a previous session", usage: "/resume [id-or-prefix]", maxArgs: 1, run: runResumeCommand},
-		{name: "/login", synopsis: "/login [provider]", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
-		{name: "/logout", synopsis: "/logout [provider]", description: "remove a stored API key", usage: "/logout [provider]", maxArgs: 1, run: runLogoutCommand},
-		{name: "/model", synopsis: "/model [provider/model]", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
-		{name: "/tools", synopsis: "/tools [name]", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
-		{name: "/sandbox", synopsis: "/sandbox [auto|workspace|masked|off]", description: "show or switch model filesystem isolation", usage: "/sandbox [auto|workspace|masked|off]", maxArgs: 1, duringTurn: true, run: runSandboxCommand},
-		{name: "/context", synopsis: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
-		{name: "/compact", synopsis: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
-		{name: "/exit", aliases: []string{"/quit", "/q"}, synopsis: "/exit", description: "exit Skot", usage: "/exit", run: runExitCommand},
+		{name: "/help", description: "show keys", usage: "/help", run: runHelpCommand},
+		{name: "/clear", description: "start a new session", usage: "/clear", run: runClearCommand},
+		{name: "/resume", description: "choose or resume a previous session", usage: "/resume [id-or-prefix]", maxArgs: 1, run: runResumeCommand},
+		{name: "/login", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
+		{name: "/model", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
+		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
+		{name: "/sandbox", description: "show or switch model filesystem isolation", usage: "/sandbox [auto|workspace|masked|off]", maxArgs: 1, duringTurn: true, run: runSandboxCommand},
+		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
+		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
+		// Logout sits with exit rather than next to login: it is rare, and the
+		// suggestion list is ordered by how often a command is reached for.
+		{name: "/logout", description: "remove a stored API key", usage: "/logout [provider]", maxArgs: 1, run: runLogoutCommand},
+		{name: "/exit", aliases: []string{"/quit", "/q"}, description: "exit Skot", usage: "/exit", run: runExitCommand},
 	}
-	synopses := make([]string, 0, len(tuiCommands))
-	for _, command := range tuiCommands {
-		synopses = append(synopses, command.synopsis)
-	}
-	tuiCommandHelp = "Commands: " + strings.Join(synopses, " · ") + "\n\nEnter sends · Shift/Alt+Enter or Ctrl+J inserts a newline · ! runs shell in context · !! runs private shell · Esc cancels · Alt+Up recalls queued input · Ctrl+C exits"
 }
 
 var sandboxPickerItems = []pickerItem{
@@ -235,7 +256,7 @@ func runLoginCommand(m *screenModel, input string, args []string) tea.Cmd {
 		return nil
 	}
 	m.acceptCommand(input)
-	m.startProviderLogin(args[0], "", "")
+	m.startProviderLogin(args[0], "", "", pickerState{})
 	return nil
 }
 
@@ -261,7 +282,7 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 	if strings.EqualFold(args[0], m.agent.CurrentModel()) {
 		effort = m.agent.CurrentReasoningEffort()
 	}
-	m.selectModel(args[0], effort)
+	m.selectModel(args[0], effort, pickerState{})
 	return nil
 }
 
@@ -322,7 +343,7 @@ func (m *screenModel) openModelPicker() {
 	}
 	current := m.agent.CurrentModel()
 	currentEffort := m.agent.CurrentReasoningEffort()
-	items := make([]pickerItem, 0, len(m.modelChoices)+1)
+	var currentItems, availableItems, loginItems []pickerItem
 	var unavailable []ModelChoice
 	for _, choice := range m.modelChoices {
 		if choice.Unavailable {
@@ -331,44 +352,82 @@ func (m *screenModel) openModelPicker() {
 		}
 		model := choice.URI
 		status := credentials[modelProvider(model)]
-		efforts := choice.ReasoningEfforts
-		if len(efforts) == 0 {
-			efforts = []string{""}
-		}
-		effortIndex := 0
+		efforts := orderedReasoningEfforts(choice.ReasoningEfforts)
+		// A route the session is not on starts at the provider default, which
+		// sits in the middle of the ladder rather than at its first rung.
+		selected := ""
 		if strings.EqualFold(model, current) {
-			for index, effort := range efforts {
-				if effort == currentEffort {
-					effortIndex = index
-					break
-				}
-			}
+			selected = currentEffort
 		}
-		description := modelChoiceDescription(choice)
-		if status.Source == "none" {
-			description = appendDescription(description, "login required")
+		effortIndex := slices.Index(efforts, selected)
+		if effortIndex < 0 {
+			effortIndex = max(0, slices.Index(efforts, ""))
 		}
-		label := model
-		if strings.TrimSpace(choice.Name) != "" {
-			label = choice.Name
-			description = appendDescription(model, description)
+		description := ""
+		loginRequired := status.Source == "none"
+		if loginRequired {
+			description = "login required"
 		}
 		item := pickerItem{
-			value: model, label: label,
-			description: description,
-			source:      status.Source, credentialURL: status.CredentialURL,
-			efforts: append([]string(nil), efforts...), effortIndex: effortIndex,
+			value: model, label: model,
+			description:  description,
+			activeDetail: modelChoiceDescription(choice),
+			dimmed:       loginRequired,
+			source:       status.Source,
+			efforts:      efforts, effortIndex: effortIndex,
 		}
-		items = append(items, item)
+		switch {
+		case strings.EqualFold(model, current):
+			currentItems = append(currentItems, item)
+		case loginRequired:
+			loginItems = append(loginItems, item)
+		default:
+			availableItems = append(availableItems, item)
+		}
 	}
+	items := make([]pickerItem, 0, len(currentItems)+len(availableItems)+len(loginItems)+2)
+	items = append(items, currentItems...)
+	items = append(items, availableItems...)
+	items = append(items, loginItems...)
 	if len(unavailable) != 0 {
+		known := fmt.Sprintf("%d known routes", len(unavailable))
+		if len(unavailable) == 1 {
+			known = "1 known route"
+		}
 		items = append(items, pickerItem{
-			label: "Unavailable routes…", description: fmt.Sprintf("%d known routes", len(unavailable)),
+			label: "Unavailable routes…", description: known,
 			details: unavailableModelDetails(unavailable),
 		})
 	}
 	items = append(items, pickerItem{label: "Enter model URI…", description: "provider/model", custom: true})
 	m.openPicker(pickerModel, items, markCurrentPickerItem(items, current))
+}
+
+// orderedReasoningEfforts puts the provider default in the middle of the
+// ladder. Efforts are declared weakest first, and the empty one means "let the
+// provider decide" — a point the scale cannot locate. At the front it made ←/→
+// read backwards: one step right off the default landed on the weakest level.
+func orderedReasoningEfforts(efforts []string) []string {
+	explicit := make([]string, 0, len(efforts))
+	hasDefault := false
+	for _, effort := range efforts {
+		if effort == "" {
+			hasDefault = true
+			continue
+		}
+		explicit = append(explicit, effort)
+	}
+	if len(explicit) == 0 {
+		return []string{""}
+	}
+	if !hasDefault {
+		return explicit
+	}
+	middle := len(explicit) / 2
+	ordered := make([]string, 0, len(explicit)+1)
+	ordered = append(ordered, explicit[:middle]...)
+	ordered = append(ordered, "")
+	return append(ordered, explicit[middle:]...)
 }
 
 func unavailableModelDetails(choices []ModelChoice) string {
@@ -445,7 +504,7 @@ func toolSetDescription(tools []string) string {
 	if len(tools) == 0 {
 		return "no model tools"
 	}
-	return "tools: " + strings.Join(tools, ", ")
+	return strings.Join(tools, ", ")
 }
 
 func (m *screenModel) openSandboxPicker() {
@@ -470,23 +529,133 @@ func (m *screenModel) openPicker(kind pickerKind, items []pickerItem, selected i
 	m.syncCommandSuggestions()
 }
 
+func pickerNavigationFor(kind pickerKind) pickerNavigation {
+	switch kind {
+	case pickerModel:
+		return navigationSearch
+	case pickerToolSet, pickerSandbox, pickerLogin, pickerSession:
+		return navigationNumbers
+	default:
+		// Logout keeps arrows only: it is the one destructive picker, and rare
+		// enough that a shortcut is worth less than a stray digit costs.
+		return navigationArrows
+	}
+}
+
+func (picker pickerState) visibleIndices() []int {
+	indices := make([]int, 0, len(picker.items))
+	var terms []string
+	if pickerNavigationFor(picker.kind) == navigationSearch {
+		terms = strings.Fields(strings.ToLower(picker.query))
+	}
+	for index, item := range picker.items {
+		if len(terms) == 0 || item.custom || pickerItemMatches(item, terms) {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+func pickerItemMatches(item pickerItem, terms []string) bool {
+	haystack := strings.ToLower(strings.Join([]string{item.label, item.value, item.details}, " "))
+	for _, term := range terms {
+		if !strings.Contains(haystack, term) {
+			return false
+		}
+	}
+	return true
+}
+
+// appendQuery takes both typed keys and pasted text, so it flattens a paste
+// into a single searchable line instead of carrying newlines into the query.
+func (picker *pickerState) appendQuery(text string) {
+	text = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, sanitizeTerminalText(text))
+	if text == "" {
+		return
+	}
+	picker.query += text
+	picker.reconcileSelection()
+}
+
+func (picker *pickerState) reconcileSelection() {
+	visible := picker.visibleIndices()
+	if len(visible) == 0 {
+		picker.index = -1
+		return
+	}
+	for _, index := range visible {
+		if index == picker.index {
+			return
+		}
+	}
+	picker.index = visible[0]
+}
+
+func (picker *pickerState) moveSelection(delta int) {
+	visible := picker.visibleIndices()
+	if len(visible) == 0 {
+		picker.index = -1
+		return
+	}
+	position := 0
+	for index, itemIndex := range visible {
+		if itemIndex == picker.index {
+			position = index
+			break
+		}
+	}
+	position = min(max(0, position+delta), len(visible)-1)
+	picker.index = visible[position]
+}
+
+func (picker pickerState) numberSelectionEnabled() bool {
+	return pickerNavigationFor(picker.kind) == navigationNumbers && len(picker.items) > 0 && len(picker.items) <= 9
+}
+
 func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	key := message.Key()
+	digit := pickerDigit(message)
+	navigation := pickerNavigationFor(m.picker.kind)
 	switch {
 	case isEscapeKey(message) || isInterruptKey(message):
 		m.closePicker()
 		return m, nil
 	case isUpKey(message):
-		m.picker.index = max(0, m.picker.index-1)
+		m.picker.moveSelection(-1)
 		return m, nil
 	case isDownKey(message):
-		m.picker.index = min(len(m.picker.items)-1, m.picker.index+1)
+		m.picker.moveSelection(1)
 		return m, nil
 	case m.picker.kind == pickerModel && (key.Code == tea.KeyLeft || key.Code == tea.KeyKpLeft):
 		m.cycleModelEffort(-1)
 		return m, nil
 	case m.picker.kind == pickerModel && (key.Code == tea.KeyRight || key.Code == tea.KeyKpRight):
 		m.cycleModelEffort(1)
+		return m, nil
+	case navigation == navigationSearch && keyIsCtrl(message, 'u'):
+		m.picker.query = ""
+		m.picker.reconcileSelection()
+		return m, nil
+	case navigation == navigationSearch && key.Code == tea.KeyBackspace:
+		runes := []rune(m.picker.query)
+		if len(runes) != 0 {
+			m.picker.query = string(runes[:len(runes)-1])
+			m.picker.reconcileSelection()
+		}
+		return m, nil
+	case navigation == navigationSearch && key.Text != "" && key.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModHyper|tea.ModSuper) == 0:
+		m.picker.appendQuery(key.Text)
+		return m, nil
+	case m.picker.numberSelectionEnabled() && digit > 0:
+		if digit <= len(m.picker.items) {
+			m.picker.index = digit - 1
+			return m.selectPickerItem()
+		}
 		return m, nil
 	case isEnterKey(message):
 		return m.selectPickerItem()
@@ -495,8 +664,26 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 	}
 }
 
+func pickerDigit(message tea.KeyPressMsg) int {
+	key := message.Key()
+	if key.Mod&(tea.ModShift|tea.ModAlt|tea.ModCtrl|tea.ModMeta|tea.ModHyper|tea.ModSuper) != 0 {
+		return 0
+	}
+	if len(key.Text) == 1 && key.Text[0] >= '1' && key.Text[0] <= '9' {
+		return int(key.Text[0] - '0')
+	}
+	// Keypad digits arrive as their own contiguous codes and carry no text.
+	if key.Code >= tea.KeyKp1 && key.Code <= tea.KeyKp9 {
+		return int(key.Code-tea.KeyKp1) + 1
+	}
+	return 0
+}
+
 func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 	picker := m.picker
+	if picker.index < 0 || picker.index >= len(picker.items) {
+		return m, nil
+	}
 	item := picker.items[picker.index]
 	m.closePicker()
 	switch picker.kind {
@@ -507,7 +694,7 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			return m, nil
 		}
 		if item.custom {
-			m.composer.setValue("/model ")
+			m.composer.setValue("/model " + strings.TrimSpace(picker.query))
 			m.composer.cursorEnd()
 			m.syncCommandSuggestions()
 			return m, nil
@@ -516,7 +703,7 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if item.current && effort == m.agent.CurrentReasoningEffort() && item.source != "none" {
 			return m, nil
 		}
-		m.selectModel(item.value, effort)
+		m.selectModel(item.value, effort, picker)
 	case pickerToolSet:
 		if item.current {
 			return m, nil
@@ -536,7 +723,7 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if picker.startupLogin {
 			pendingModel = item.modelURI
 		}
-		m.startProviderLogin(item.value, pendingModel, "")
+		m.startProviderLogin(item.value, pendingModel, "", pickerState{})
 	case pickerLogout:
 		m.logoutProvider(item.value)
 	case pickerSession:
@@ -588,7 +775,7 @@ func (m *screenModel) openStartupLoginPicker() {
 		description := credentialSourceDescription(status.Source) + " · " + modelURI
 		items = append(items, pickerItem{
 			value: status.Name, label: status.Name, description: description, current: current,
-			source: status.Source, credentialURL: status.CredentialURL, modelURI: modelURI,
+			modelURI: modelURI,
 		})
 	}
 	if len(items) == 0 {
@@ -612,7 +799,6 @@ func (m *screenModel) openLoginPicker() {
 		}
 		items = append(items, pickerItem{
 			value: status.Name, label: status.Name, description: description,
-			source: status.Source, credentialURL: status.CredentialURL,
 		})
 	}
 	if len(items) == 0 {
@@ -641,7 +827,7 @@ func (m *screenModel) openLogoutPicker() {
 	m.openPicker(pickerLogout, items, 0)
 }
 
-func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort string) {
+func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort string, returnPicker pickerState) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if err := m.refreshProviderStatuses(); err != nil {
 		m.addBlock(screenBlockError, "login: "+err.Error())
@@ -668,6 +854,7 @@ func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort s
 		m.loginProvider = provider
 		m.loginModel = pendingModel
 		m.loginEffort = pendingEffort
+		m.loginReturn = returnPicker
 		m.secret.Reset()
 		m.secret.EchoMode = textinput.EchoPassword
 		m.secret.Placeholder = provider + " API key"
@@ -684,7 +871,7 @@ func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort s
 	m.addBlock(screenBlockError, "login: unsupported provider "+provider)
 }
 
-func (m *screenModel) selectModel(uri, effort string) {
+func (m *screenModel) selectModel(uri, effort string, returnPicker pickerState) {
 	uri = strings.TrimSpace(uri)
 	provider := modelProvider(uri)
 	if provider == "" {
@@ -700,7 +887,7 @@ func (m *screenModel) selectModel(uri, effort string) {
 			if strings.EqualFold(uri, m.agent.CurrentModel()) && effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
 				return
 			}
-			m.startProviderLogin(provider, uri, effort)
+			m.startProviderLogin(provider, uri, effort, returnPicker)
 			return
 		}
 	}
@@ -718,11 +905,16 @@ func (m *screenModel) switchModel(uri, effort string) {
 }
 
 func (m *screenModel) cycleModelEffort(delta int) {
+	if m.picker.index < 0 || m.picker.index >= len(m.picker.items) {
+		return
+	}
 	item := &m.picker.items[m.picker.index]
 	if len(item.efforts) <= 1 {
 		return
 	}
-	item.effortIndex = (item.effortIndex + delta + len(item.efforts)) % len(item.efforts)
+	// The ends clamp instead of wrapping: wrapping put the cheapest and the
+	// most expensive effort one keypress apart from the starting position.
+	item.effortIndex = min(max(0, item.effortIndex+delta), len(item.efforts)-1)
 }
 
 func selectedModelEffort(item pickerItem) string {
@@ -785,37 +977,77 @@ func (m *screenModel) refreshModelChoices() {
 }
 
 func (m screenModel) renderPicker() []string {
-	limit := min(10, max(1, m.height-5))
-	selected := m.picker.index
-	start := max(0, selected-limit/2)
-	if start+limit > len(m.picker.items) {
-		start = max(0, len(m.picker.items)-limit)
+	searchable := pickerNavigationFor(m.picker.kind) == navigationSearch
+	reservedLines := 5
+	if searchable {
+		reservedLines++
 	}
-	end := min(len(m.picker.items), start+limit)
-	lines := make([]string, 0, end-start)
-	for index := start; index < end; index++ {
+	limit := min(10, max(1, m.height-reservedLines))
+	visible := m.picker.visibleIndices()
+	selectedPosition := 0
+	for position, index := range visible {
+		if index == m.picker.index {
+			selectedPosition = position
+			break
+		}
+	}
+	start := max(0, selectedPosition-limit/2)
+	if start+limit > len(visible) {
+		start = max(0, len(visible)-limit)
+	}
+	end := min(len(visible), start+limit)
+	lines := make([]string, 0, end-start+1)
+	if searchable {
+		filter := m.mutedStyle.Render("filter: ")
+		if m.picker.query == "" {
+			filter += m.mutedStyle.Render("type to search")
+		} else {
+			filter += m.accentStyle.Render(sanitizeTerminalText(m.picker.query))
+		}
+		lines = append(lines, strings.Repeat(" ", transcriptGutter)+truncateANSI(filter, m.contentWidth()))
+	}
+	if len(visible) == 0 {
+		return append(lines, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render("no matches"))
+	}
+	numbered := m.picker.numberSelectionEnabled()
+	for position := start; position < end; position++ {
+		index := visible[position]
 		item := m.picker.items[index]
 		marker := " "
-		if index == selected {
+		if index == m.picker.index {
 			marker = userMarker
 		}
 		label := sanitizeTerminalText(item.label)
-		if item.current {
-			label = m.accentStyle.Render(label) + m.mutedStyle.Render("  current")
-		} else if index == selected {
+		switch {
+		case index == m.picker.index || item.current:
 			label = m.accentStyle.Render(label)
+		case item.dimmed:
+			label = m.mutedStyle.Render(label)
 		}
-		if item.description != "" {
-			label += m.mutedStyle.Render("  " + sanitizeTerminalText(item.description))
+		if item.current {
+			label += m.mutedStyle.Render("  ✓")
 		}
-		if m.picker.kind == pickerModel && index == selected && len(item.efforts) > 1 {
+		description := item.description
+		if index == m.picker.index {
+			description = appendDescription(item.activeDetail, description)
+		}
+		if description != "" {
+			label += m.mutedStyle.Render("  " + sanitizeTerminalText(description))
+		}
+		if m.picker.kind == pickerModel && index == m.picker.index && len(item.efforts) > 1 {
 			effort := selectedModelEffort(item)
 			if effort == "" {
 				effort = "default"
 			}
 			label += m.mutedStyle.Render("  effort: " + sanitizeTerminalText(effort) + "  ←/→")
 		}
-		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+truncateANSI(label, m.contentWidth()))
+		shortcut := ""
+		availableWidth := m.contentWidth()
+		if numbered {
+			shortcut = m.mutedStyle.Render(fmt.Sprintf("%d ", index+1))
+			availableWidth = max(1, availableWidth-2)
+		}
+		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+shortcut+truncateANSI(label, availableWidth))
 	}
 	return lines
 }

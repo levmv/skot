@@ -156,16 +156,16 @@ recent session for that workspace.
 
 | Command | Action |
 | --- | --- |
-| `/help` | Show commands and keyboard shortcuts. |
+| `/help` | Show keyboard shortcuts. |
 | `/clear` | Start a new session. |
 | `/resume [id-or-prefix]` | Choose or resume a previous session. |
 | `/login [provider]` | Store a provider or service key. |
-| `/logout [provider]` | Remove a stored key. |
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
 | `/sandbox [auto|workspace|masked|off]` | Show or switch filesystem isolation. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
+| `/logout [provider]` | Remove a stored key. |
 | `/exit`, `/quit`, `/q` | Exit Skot. |
 
 Enter sends a message. Shift/Alt+Enter or Ctrl+J inserts a newline. Escape
@@ -186,9 +186,9 @@ that root; reads and searches are bounded, and writes are atomic.
 
 | Tool set | Tools |
 | --- | --- |
-| `read-only` | `read`, `ls`, `grep`, `glob` |
-| `edit` | Read-only tools plus `edit`, `write` |
 | `full` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job` |
+| `edit` | `read`, `ls`, `grep`, `glob`, `edit`, `write` |
+| `read-only` | `read`, `ls`, `grep`, `glob` |
 
 All built-in tool sets include bounded public `web_fetch`. They include
 `web_search` when a Tavily or Exa key is available. A custom tool set is an

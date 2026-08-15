@@ -17,7 +17,8 @@ const (
 	ToolSetReadOnly = "read-only"
 )
 
-var defaultToolSetOrder = []string{ToolSetReadOnly, ToolSetEdit, ToolSetFull}
+// The default set leads: it is what a session runs unless told otherwise.
+var defaultToolSetOrder = []string{ToolSetFull, ToolSetEdit, ToolSetReadOnly}
 
 var defaultToolSetTools = map[string][]string{
 	ToolSetReadOnly: {"read", "ls", "grep", "glob"},

@@ -380,7 +380,7 @@ func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = application.Close() })
 	configuredToolSets[toolpolicy.ToolSetFull][0] = "read"
-	if got := strings.Join(application.ToolSets(), ","); got != "read-only,edit,full,review" {
+	if got := strings.Join(application.ToolSets(), ","); got != "full,edit,read-only,review" {
 		t.Fatalf("tool sets = %q", got)
 	}
 	if got := strings.Join(application.ToolSetTools(toolpolicy.ToolSetFull), ","); got != "custom" {

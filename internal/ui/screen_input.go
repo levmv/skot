@@ -109,7 +109,17 @@ func (m screenModel) updateInput(msg tea.Msg) (screenModel, tea.Cmd) {
 
 func (m screenModel) handleLoginKey(message tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	switch {
-	case isInterruptKey(message) || isEscapeKey(message):
+	case isEscapeKey(message):
+		returnPicker := m.loginReturn
+		m.cancelLogin()
+		if returnPicker.active() {
+			m.picker = returnPicker
+			return m, nil
+		}
+		m.addBlock(screenBlockSystem, "login cancelled")
+		m.refreshTranscript()
+		return m, nil
+	case isInterruptKey(message):
 		m.cancelLogin()
 		m.addBlock(screenBlockSystem, "login cancelled")
 		m.refreshTranscript()
@@ -194,6 +204,7 @@ func (m *screenModel) cancelLogin() {
 	m.loginProvider = ""
 	m.loginModel = ""
 	m.loginEffort = ""
+	m.loginReturn = pickerState{}
 	m.secret.Reset()
 	m.syncCommandSuggestions()
 }

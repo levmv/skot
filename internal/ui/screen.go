@@ -116,23 +116,38 @@ const (
 )
 
 type pickerItem struct {
-	value         string
-	label         string
-	description   string
-	current       bool
-	custom        bool
-	source        string
-	credentialURL string
-	modelURI      string
-	efforts       []string
-	effortIndex   int
-	details       string
+	value       string
+	label       string
+	description string
+	// activeDetail is shown only while the row is selected: facts that inform
+	// the choice already being made rather than the choice between rows.
+	activeDetail string
+	current      bool
+	dimmed       bool
+	custom       bool
+	source       string
+	modelURI     string
+	efforts      []string
+	effortIndex  int
+	details      string
 }
+
+// pickerNavigation is how a picker is driven beyond the arrow keys. Digits
+// belong to short lists whose order is fixed; typing belongs to lists long
+// enough that reading them is the slow part. Never both.
+type pickerNavigation uint8
+
+const (
+	navigationArrows pickerNavigation = iota
+	navigationSearch
+	navigationNumbers
+)
 
 type pickerState struct {
 	kind         pickerKind
 	items        []pickerItem
 	index        int
+	query        string
 	startupLogin bool
 }
 
@@ -185,6 +200,7 @@ type screenModel struct {
 	loginProvider string
 	loginModel    string
 	loginEffort   string
+	loginReturn   pickerState
 
 	width     int
 	height    int
@@ -377,6 +393,14 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.PasteMsg:
+		// Bracketed paste never reaches handleKey, so a searchable picker has
+		// to claim it here or a pasted model URI lands in the hidden composer.
+		if m.picker.active() && pickerNavigationFor(m.picker.kind) == navigationSearch {
+			m.picker.appendQuery(msg.Content)
+			return m, nil
+		}
+		return m.updateInput(msg)
 	case agentEventMsg:
 		m.applyAgentEvent(msg.event)
 		if msg.event.Kind == agent.EventTextDelta {

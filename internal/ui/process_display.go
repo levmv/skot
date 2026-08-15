@@ -20,16 +20,7 @@ const (
 func (m screenModel) renderProcessResultLines(block screenBlock) []string {
 	tool := block.tool
 	result := *tool.process
-	marker := "×"
-	style := m.errorStyle
-	if result.Status == workspacetools.ProcessCompleted {
-		marker = completedToolMarker(tool)
-		style = m.successStyle
-	} else if result.Status == workspacetools.ProcessRunning {
-		marker = "◌"
-		style = m.mutedStyle
-	}
-	lines := m.renderToolSummaryLines(style.Render(marker), block.text, processStatusText(result))
+	lines := m.renderToolSummaryLines(m.toolMarker(tool.failed), block.text, processStatusText(result))
 	output := tool.output
 	userOwned := tool.shell != nil || result.UserInitiated
 	_, _, outputIndent, _ := toolCommandPrefix(block.text)

@@ -20,6 +20,7 @@ import (
 const (
 	transcriptGutter  = 2
 	userMarker        = "›"
+	userBarMarker     = "┃"
 	resizeInterval    = 75 * time.Millisecond
 	transcriptFrame   = 33 * time.Millisecond
 	themeQueryTimeout = 150 * time.Millisecond
@@ -206,12 +207,13 @@ type screenModel struct {
 	darkTheme    bool
 	useStyle     bool
 
-	mutedStyle      lipgloss.Style
-	accentStyle     lipgloss.Style
-	errorStyle      lipgloss.Style
-	successStyle    lipgloss.Style
-	userGutterStyle lipgloss.Style
-	markdown        markdownRenderer
+	mutedStyle   lipgloss.Style
+	accentStyle  lipgloss.Style
+	errorStyle   lipgloss.Style
+	successStyle lipgloss.Style
+	warningStyle lipgloss.Style
+	userBarStyle lipgloss.Style
+	markdown     markdownRenderer
 }
 
 func CanUseScreen(in io.Reader, out io.Writer) (*os.File, *os.File, bool) {
@@ -304,7 +306,9 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 	if err != nil {
 		return screenModel{}, err
 	}
-	darkTheme := requestedTheme == ThemeDark
+	// Auto starts dark and is corrected by OSC 11: terminals skew dark, and a
+	// dark palette on a light terminal stays readable where the reverse does not.
+	darkTheme := requestedTheme != ThemeLight
 
 	m := screenModel{
 		ctx:          ctx,
@@ -321,10 +325,14 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 	}
 	m.applyTerminalTheme(darkTheme)
 	m.syncCommandSuggestions()
-	m.addBlock(screenBlockSystem, "Skot · type / for commands, ! for shell")
+	// The banner and the security line are one startup notice rather than two
+	// events, so they share a block: separating them would give the sandbox
+	// detail the same weight as the greeting.
+	startup := "Skot · type / for commands, ! for shell"
 	if security := strings.TrimSpace(config.Security); security != "" {
-		m.addBlock(screenBlockSystem, security)
+		startup += "\n" + security
 	}
+	m.addBlock(screenBlockSystem, startup)
 	if err := m.loadSessionHistory(); err != nil {
 		return screenModel{}, fmt.Errorf("load session history: %w", err)
 	}
@@ -384,7 +392,7 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 			return m, nil
 		}
 		// OSC 11 is optional and is sometimes filtered by terminal
-		// multiplexers. Auto deliberately falls back to the light palette.
+		// multiplexers. Auto deliberately falls back to the dark palette.
 		m.themePending = false
 		return m, nil
 	case tea.WindowSizeMsg:
@@ -475,7 +483,13 @@ func (m *screenModel) resize(width, height int) {
 }
 
 func (m screenModel) inlineFrame() inlineFrame {
-	dynamic := []string{m.workingLine()}
+	// The idle working line doubles as the gap above the composer, so it is
+	// dropped when the transcript already ends in one: the same blank-run
+	// collapsing the transcript does, applied across the seam to the dynamic area.
+	var dynamic []string
+	if working := m.workingLine(); working != "" || !transcriptEndsBlank(m.transcript.lines) {
+		dynamic = append(dynamic, working)
+	}
 	editorDynamicStart := -1
 	if m.operation.isMaintenance() {
 		elapsed := formatTurnDuration(time.Since(m.operation.startedAt))

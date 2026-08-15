@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -338,11 +337,29 @@ func (transcript *transcriptState) renderLinesFromDirty(width int, renderBlock f
 	transcript.renderCache = transcript.renderCache[:common]
 	transcript.renderCacheLines = transcript.renderCacheLines[:lineEnd]
 	for index := common; index < len(transcript.blocks); index++ {
-		transcript.renderCacheLines = append(transcript.renderCacheLines, renderBlock(transcript.blocks[index])...)
+		lines := renderBlock(transcript.blocks[index])
+		// Blocks declare the air they want on both sides, so neighbours that
+		// both want it would double-space. Drop the leading blank where the
+		// previous block already ended in one, or at the top of the transcript.
+		if len(lines) > 0 && isBlankTranscriptLine(lines[0]) && transcriptEndsBlank(transcript.renderCacheLines) {
+			lines = lines[1:]
+		}
+		transcript.renderCacheLines = append(transcript.renderCacheLines, lines...)
 		transcript.renderCache = append(transcript.renderCache, renderedScreenBlock{end: len(transcript.renderCacheLines)})
 	}
 	transcript.renderDirtyFrom = len(transcript.blocks)
 	return transcript.renderCacheLines, lineEnd
+}
+
+// isBlankTranscriptLine reports whether a line carries no ink. Styled gutters
+// leave escape sequences behind, so those lines are deliberately not blank:
+// the user bar must survive next to an empty message line.
+func isBlankTranscriptLine(line string) bool {
+	return strings.TrimSpace(line) == ""
+}
+
+func transcriptEndsBlank(lines []string) bool {
+	return len(lines) == 0 || isBlankTranscriptLine(lines[len(lines)-1])
 }
 
 func (transcript *transcriptState) invalidate() {
@@ -356,69 +373,78 @@ func (transcript *transcriptState) presented() {
 func (m screenModel) renderBlockLines(block screenBlock) []string {
 	switch block.kind {
 	case screenBlockSystem:
-		return m.wrappedMarked(" ", m.renderSystemText(block.text))
+		return m.padded(m.wrappedMarked(" ", m.renderSystemText(block.text)))
 	case screenBlockUser:
 		return m.renderUserBlock(block.text)
 	case screenBlockAssistant:
 		return m.renderAssistantBlock(block.text)
 	case screenBlockTool:
 		if block.tool == nil {
-			return m.wrappedMarked(m.errorStyle.Render("!"), "invalid tool block")
+			return m.renderErrorNotice("invalid tool block")
 		}
 		tool := block.tool
 		if tool.process != nil {
 			return m.renderProcessResultLines(block)
 		}
 		if tool.fileChange != nil {
-			return m.renderFileChangeLines(block.text, *tool.fileChange)
-		}
-		marker := "◌"
-		style := m.mutedStyle
-		if tool.done {
-			marker = completedToolMarker(tool)
-			style = m.successStyle
-		}
-		if tool.failed {
-			marker = "×"
-			style = m.errorStyle
+			return m.renderFileChangeLines(block.text, *tool.fileChange, m.toolMarker(tool.failed))
 		}
 		detail := ""
 		if tool.done && tool.elapsed > 0 {
 			detail = formatDuration(tool.elapsed)
 		}
-		return m.renderToolSummaryLines(style.Render(marker), block.text, detail)
+		return m.renderToolSummaryLines(m.toolMarker(tool.failed), block.text, detail)
 	case screenBlockError:
-		return m.wrappedMarked(m.errorStyle.Render("!"), block.text)
+		return m.renderErrorNotice(block.text)
 	case screenBlockDuration:
-		return []string{m.renderDurationLine(block.duration)}
+		return m.padded([]string{m.renderDurationLine(block.duration)})
 	default:
-		return m.wrappedMarked(" ", fmt.Sprint(block.text))
+		return m.wrappedMarked(" ", block.text)
 	}
 }
 
-func completedToolMarker(tool *toolBlock) string {
-	if tool != nil && tool.name == "bash" {
-		return "•"
-	}
-	return "✓"
+// renderErrorNotice is the padded "!" notice shared by error blocks and by the
+// fallback for a tool block that arrived without its tool.
+func (m screenModel) renderErrorNotice(text string) []string {
+	return m.padded(m.wrappedMarked(m.errorStyle.Render("!"), text))
 }
 
+// toolMarker keeps the gutter empty for tool calls: the highlighted tool name
+// carries the line on its own, so only failures deserve a mark.
+func (m screenModel) toolMarker(failed bool) string {
+	if failed {
+		return m.errorStyle.Render("×")
+	}
+	return " "
+}
+
+// renderSystemText styles each line on its own. lipgloss pads every line of a
+// multi-line render out to the longest one, which would trail spaces across the
+// block and push a highlighted fragment away from the text it belongs to.
 func (m screenModel) renderSystemText(text string) string {
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		lines[index] = m.renderSystemLine(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m screenModel) renderSystemLine(line string) string {
 	const (
 		sandboxOff = "sandbox: off"
 		off        = "off"
 	)
 	var rendered strings.Builder
 	for {
-		index := strings.Index(text, sandboxOff)
+		index := strings.Index(line, sandboxOff)
 		if index < 0 {
-			rendered.WriteString(m.mutedStyle.Render(text))
+			rendered.WriteString(m.mutedStyle.Render(line))
 			return rendered.String()
 		}
 		offIndex := index + len(sandboxOff) - len(off)
-		rendered.WriteString(m.mutedStyle.Render(text[:offIndex]))
+		rendered.WriteString(m.mutedStyle.Render(line[:offIndex]))
 		rendered.WriteString(m.errorStyle.Render(off))
-		text = text[index+len(sandboxOff):]
+		line = line[index+len(sandboxOff):]
 	}
 }
 
@@ -439,12 +465,11 @@ func (m screenModel) renderAssistantBlock(text string) []string {
 }
 
 func (m screenModel) renderUserBlock(text string) []string {
+	// A muted bar down the whole message stays findable when scrolling back
+	// without the visual weight of a filled gutter.
+	bar := m.userBarStyle.Render(userBarMarker)
 	lines := []string{m.marked(" ", "")}
-	lines = append(lines, m.wrappedMarkedWithContinuation(
-		m.userGutterStyle.Render(userMarker),
-		m.userGutterStyle.Render(" "),
-		text,
-	)...)
+	lines = append(lines, m.wrappedMarkedWithContinuation(bar, bar, text)...)
 	return append(lines, m.marked(" ", ""))
 }
 
@@ -508,6 +533,16 @@ func toolCommandPrefix(text string) (label, body string, indent int, ok bool) {
 	default:
 		return "", text, processOutputIndentWidth, false
 	}
+}
+
+// padded surrounds a notice with blank lines. Tool calls deliberately go
+// unpadded so that a run of them reads as one dense list.
+func (m screenModel) padded(lines []string) []string {
+	blank := m.marked(" ", "")
+	padded := make([]string, 0, len(lines)+2)
+	padded = append(padded, blank)
+	padded = append(padded, lines...)
+	return append(padded, blank)
 }
 
 func (m screenModel) marked(marker, text string) string {

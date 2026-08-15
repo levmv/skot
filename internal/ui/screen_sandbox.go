@@ -10,6 +10,9 @@ import (
 type sandboxSwitchState struct {
 	pending bool
 	cancel  context.CancelFunc
+	// previous is the policy in force when the switch started, kept so the
+	// result can name where it came from once the async switch lands.
+	previous string
 }
 
 func (m *screenModel) startSandboxSwitch(policy string) tea.Cmd {
@@ -19,7 +22,7 @@ func (m *screenModel) startSandboxSwitch(policy string) tea.Cmd {
 	}
 	operationCtx, cancel := context.WithCancel(m.ctx)
 	concurrent := m.operation.isTurn()
-	m.sandbox = sandboxSwitchState{pending: true, cancel: cancel}
+	m.sandbox = sandboxSwitchState{pending: true, cancel: cancel, previous: m.agent.CurrentSandbox()}
 	if !concurrent {
 		m.operation = activeOperation{kind: operationSandbox, startedAt: time.Now(), cancel: cancel}
 	}
@@ -38,6 +41,7 @@ func (m *screenModel) finishSandboxSwitch(message sandboxDoneMsg) {
 	if m.sandbox.cancel != nil {
 		m.sandbox.cancel()
 	}
+	previous := m.sandbox.previous
 	m.sandbox = sandboxSwitchState{}
 	if !message.concurrent {
 		m.operation.clear()
@@ -46,7 +50,7 @@ func (m *screenModel) finishSandboxSwitch(message sandboxDoneMsg) {
 		m.addBlock(screenBlockError, "sandbox: "+message.err.Error())
 		return
 	}
-	text := "sandbox policy: " + message.policy + "\n" + message.summary
+	text := formatSettingChange("sandbox policy", previous, message.policy) + "\n" + message.summary
 	if message.concurrent {
 		text += "\nnew processes use this policy; already running processes retain their launch policy"
 	}

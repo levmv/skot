@@ -164,7 +164,7 @@ recent session for that workspace.
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
 | `/sandbox [auto|workspace|masked|off]` | Show or switch filesystem isolation. |
-| `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`. |
+| `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
 | `/logout [provider]` | Remove a stored key. |

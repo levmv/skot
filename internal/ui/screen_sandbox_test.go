@@ -21,7 +21,7 @@ func TestSandboxCommandRunsAsCancellableMaintenance(t *testing.T) {
 	if model.operation.kind != operationNone || model.sandbox.pending || fake.sandbox != "auto" || fake.security != "sandbox: workspace (auto)" {
 		t.Fatalf("operation=%#v state=%#v sandbox=%q security=%q", model.operation, model.sandbox, fake.sandbox, fake.security)
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "sandbox policy: auto") {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "sandbox policy: off → auto") {
 		t.Fatalf("result block = %q", got)
 	}
 }

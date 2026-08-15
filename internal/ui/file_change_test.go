@@ -33,7 +33,7 @@ func TestFileChangeDetailRendersFocusedDiff(t *testing.T) {
 		t.Fatalf("file change block = %#v", block)
 	}
 	rendered := strings.Join(model.renderBlockLines(block), "\n")
-	want := "• edited note.txt (+1 −1)\n" +
+	want := "  edited note.txt (+1 −1)\n" +
 		"  1    alpha\n" +
 		"  2 −  beta\n" +
 		"  2 +  gamma"
@@ -62,7 +62,7 @@ func TestFileChangeSeparatesHunksWithoutMachineHeader(t *testing.T) {
 		},
 	}
 
-	lines := model.renderFileChangeLines("edited  note.txt", change)
+	lines := model.renderFileChangeLines("edited  note.txt", change, " ")
 	rendered := strings.Join(lines, "\n")
 	if strings.Contains(rendered, "@@") {
 		t.Fatalf("machine hunk header survived: %q", rendered)

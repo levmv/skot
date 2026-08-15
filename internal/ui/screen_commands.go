@@ -297,19 +297,43 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 	return nil
 }
 
+// formatSettingChange reports where a setting landed, naming where it came from
+// when that differs. The arrow is reserved for an actual transition: re-selecting
+// the current value is a no-op, and claiming a change that did not happen is
+// worse than saying nothing.
+func formatSettingChange(name, before, after string) string {
+	if before == "" || before == after {
+		return name + ": " + after
+	}
+	return name + ": " + before + " → " + after
+}
+
+// toolSetChangeNotice names the cost that follows a tool set change. The tool
+// list is part of the cached prefix, so replacing it restarts the cache; the
+// picker warns before the fact, and this covers `/tools <name>`, which never
+// opens the picker. A no-op switch costs nothing and so says nothing.
+func toolSetChangeNotice(before, after string) string {
+	notice := formatSettingChange("tools", before, after)
+	if before != "" && before != after {
+		notice += " · prompt cache reset, next message costs full price"
+	}
+	return notice
+}
+
 func runToolsCommand(m *screenModel, input string, args []string) tea.Cmd {
 	if len(args) == 0 {
 		m.composer.remember(input)
 		m.openToolSetPicker()
 		return nil
 	}
+	before := m.agent.CurrentToolSet()
 	if err := m.agent.SwitchToolSet(m.ctx, args[0]); err != nil {
 		m.addBlock(screenBlockError, "tools: "+err.Error())
 		return nil
 	}
 	m.acceptCommand(input)
 	m.refreshSessionStatus()
-	m.addBlock(screenBlockSystem, "tools: "+m.agent.CurrentToolSet())
+	m.addBlock(screenBlockSystem, toolSetChangeNotice(before, m.agent.CurrentToolSet()))
 	return nil
 }
 
@@ -329,13 +353,14 @@ func runThemeCommand(m *screenModel, input string, args []string) tea.Cmd {
 		m.openThemePicker()
 		return nil
 	}
+	before := m.theme
 	command, err := m.switchTerminalTheme(args[0])
 	if err != nil {
 		m.addBlock(screenBlockError, "theme: "+err.Error())
 		return nil
 	}
 	m.acceptCommand(input)
-	m.addBlock(screenBlockSystem, "theme: "+m.theme)
+	m.addBlock(screenBlockSystem, formatSettingChange("theme", before, m.theme))
 	return command
 }
 
@@ -558,6 +583,46 @@ func (m *screenModel) openPicker(kind pickerKind, items []pickerItem, selected i
 	m.syncCommandSuggestions()
 }
 
+// pickerNoteFor is a caveat about the act of choosing, shown once under the
+// rows. It lives here rather than in a row description because it is true of
+// every row except the current one, and the descriptions are already carrying
+// what distinguishes the rows from each other.
+func pickerNoteFor(kind pickerKind) string {
+	if kind == pickerToolSet {
+		return "switching resets the prompt cache, so the next message costs full price"
+	}
+	return ""
+}
+
+// currentPickerMark flags the active row. Its width is reserved on every row of
+// an aligned picker so the description column does not depend on which row is
+// current.
+const currentPickerMark = "  ✓"
+
+// pickerAlignsDescriptions reports whether descriptions share a column. It pays
+// off where the labels are short and the descriptions invite comparison: the
+// tool sets are nested, so a common left edge shows what each step adds.
+// Search-filtered pickers are excluded, since the column would move while typing.
+func pickerAlignsDescriptions(kind pickerKind) bool {
+	switch kind {
+	case pickerToolSet, pickerSandbox, pickerTheme:
+		return true
+	default:
+		return false
+	}
+}
+
+func (picker pickerState) descriptionColumn() int {
+	if !pickerAlignsDescriptions(picker.kind) {
+		return 0
+	}
+	column := 0
+	for _, item := range picker.items {
+		column = max(column, visibleLen(sanitizeTerminalText(item.label)))
+	}
+	return column + visibleLen(currentPickerMark)
+}
+
 func pickerNavigationFor(kind pickerKind) pickerNavigation {
 	switch kind {
 	case pickerModel:
@@ -737,11 +802,12 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if item.current {
 			return m, nil
 		}
+		before := m.agent.CurrentToolSet()
 		if err := m.agent.SwitchToolSet(m.ctx, item.value); err != nil {
 			m.addBlock(screenBlockError, "tools: "+err.Error())
 		} else {
 			m.refreshSessionStatus()
-			m.addBlock(screenBlockSystem, "tools: "+m.agent.CurrentToolSet())
+			m.addBlock(screenBlockSystem, toolSetChangeNotice(before, m.agent.CurrentToolSet()))
 		}
 	case pickerSandbox:
 		if item.current {
@@ -752,11 +818,12 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if item.current && item.value != ThemeAuto {
 			return m, nil
 		}
+		before := m.theme
 		command, err := m.switchTerminalTheme(item.value)
 		if err != nil {
 			m.addBlock(screenBlockError, "theme: "+err.Error())
 		} else {
-			m.addBlock(screenBlockSystem, "theme: "+m.theme)
+			m.addBlock(screenBlockSystem, formatSettingChange("theme", before, m.theme))
 		}
 		m.refreshTranscript()
 		return m, command
@@ -937,6 +1004,7 @@ func (m *screenModel) selectModel(uri, effort string, returnPicker pickerState) 
 }
 
 func (m *screenModel) switchModel(uri, effort string) {
+	before := m.agent.CurrentModel()
 	if err := m.agent.SwitchModel(m.ctx, uri, effort); err != nil {
 		m.addBlock(screenBlockError, "model: "+err.Error())
 		return
@@ -944,7 +1012,7 @@ func (m *screenModel) switchModel(uri, effort string) {
 	current := m.agent.CurrentModel()
 	m.refreshSessionStatus()
 	m.refreshModelChoices()
-	m.addBlock(screenBlockSystem, "model: "+current)
+	m.addBlock(screenBlockSystem, formatSettingChange("model", before, current))
 }
 
 func (m *screenModel) cycleModelEffort(delta int) {
@@ -1021,9 +1089,15 @@ func (m *screenModel) refreshModelChoices() {
 
 func (m screenModel) renderPicker() []string {
 	searchable := pickerNavigationFor(m.picker.kind) == navigationSearch
+	note := pickerNoteFor(m.picker.kind)
 	reservedLines := 5
 	if searchable {
 		reservedLines++
+	}
+	if note != "" {
+		// The note gets a blank line of its own so it reads as a caveat about
+		// the picker rather than as a trailing row.
+		reservedLines += 2
 	}
 	limit := min(10, max(1, m.height-reservedLines))
 	visible := m.picker.visibleIndices()
@@ -1053,6 +1127,7 @@ func (m screenModel) renderPicker() []string {
 		return append(lines, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render("no matches"))
 	}
 	numbered := m.picker.numberSelectionEnabled()
+	descriptionColumn := m.picker.descriptionColumn()
 	for position := start; position < end; position++ {
 		index := visible[position]
 		item := m.picker.items[index]
@@ -1068,7 +1143,10 @@ func (m screenModel) renderPicker() []string {
 			label = m.mutedStyle.Render(label)
 		}
 		if item.current {
-			label += m.mutedStyle.Render("  ✓")
+			label += m.mutedStyle.Render(currentPickerMark)
+		}
+		if pad := descriptionColumn - visibleLen(label); pad > 0 {
+			label += strings.Repeat(" ", pad)
 		}
 		description := item.description
 		if index == m.picker.index {
@@ -1091,6 +1169,9 @@ func (m screenModel) renderPicker() []string {
 			availableWidth = max(1, availableWidth-2)
 		}
 		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+shortcut+truncateANSI(label, availableWidth))
+	}
+	if note != "" {
+		lines = append(lines, "", strings.Repeat(" ", transcriptGutter)+truncateANSI(m.warningStyle.Render(note), m.contentWidth()))
 	}
 	return lines
 }

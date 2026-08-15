@@ -14,7 +14,7 @@ func (m screenModel) renderToolDisplay(text string) string {
 	return m.accentStyle.Render(name) + arguments
 }
 
-func (m screenModel) renderFileChangeLines(summary string, change fileChangeMeta) []string {
+func (m screenModel) renderFileChangeLines(summary string, change fileChangeMeta, marker string) []string {
 	stats := make([]string, 0, 2)
 	if change.Additions > 0 {
 		stats = append(stats, m.successStyle.Render(fmt.Sprintf("+%d", change.Additions)))
@@ -32,7 +32,7 @@ func (m screenModel) renderFileChangeLines(summary string, change fileChangeMeta
 	} else {
 		styledSummary += " (" + m.mutedStyle.Render("no changes") + ")"
 	}
-	lines := m.wrappedMarked(m.successStyle.Render("•"), styledSummary)
+	lines := m.wrappedMarked(marker, styledSummary)
 
 	numberWidth := diffNumberWidth(change)
 	for hunkIndex, hunk := range change.Hunks {

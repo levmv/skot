@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/toolpolicy"
 )
 
 func TestFooterShowsModelToolsRootContextAndUsage(t *testing.T) {
@@ -27,7 +28,7 @@ func TestFooterShowsModelToolsRootContextAndUsage(t *testing.T) {
 	}
 	model.resize(160, 24)
 
-	want := "deepseek/deepseek-v4-flash · edit · /home/me/work · context ~85% · ↑1.2k ↻340 ↓890"
+	want := "deepseek/deepseek-v4-flash · ctx ~85% · ↑1.2k(340) ↓890 · edit · /home/me/work"
 	if got := model.footerLine(); got != want {
 		t.Fatalf("footer = %q, want %q", got, want)
 	}
@@ -37,15 +38,57 @@ func TestFooterShowsModelToolsRootContextAndUsage(t *testing.T) {
 	}
 }
 
+func TestFooterShowsReasoningEffortOnlyWhenChosen(t *testing.T) {
+	t.Setenv("SK_COLOR", "never")
+	newFooter := func(t *testing.T, effort string) string {
+		t.Helper()
+		fake := &fakeAgent{model: "openai/gpt-5.2", toolSet: toolpolicy.ToolSetDefault, theme: ThemeLight, reasoningEffort: effort}
+		model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		model.resize(160, 24)
+		return model.footerLine()
+	}
+	if got := newFooter(t, "high"); got != "openai/gpt-5.2 high" {
+		t.Fatalf("chosen effort footer = %q", got)
+	}
+	// The default effort is the empty string; naming it would assert a choice
+	// the user never made.
+	if got := newFooter(t, ""); got != "openai/gpt-5.2" {
+		t.Fatalf("default effort footer = %q", got)
+	}
+}
+
+func TestFooterNamesTheToolSetOnlyWhenItIsNotTheDefault(t *testing.T) {
+	t.Setenv("SK_COLOR", "never")
+	newFooter := func(t *testing.T, toolSet string) string {
+		t.Helper()
+		fake := &fakeAgent{model: "openai/gpt-5.2", toolSet: toolSet, theme: ThemeLight}
+		model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		model.resize(160, 24)
+		return model.footerLine()
+	}
+	if got := newFooter(t, toolpolicy.ToolSetReadOnly); got != "openai/gpt-5.2 · read-only" {
+		t.Fatalf("restricted tool set footer = %q", got)
+	}
+	if got := newFooter(t, toolpolicy.ToolSetDefault); got != "openai/gpt-5.2" {
+		t.Fatalf("default tool set footer = %q", got)
+	}
+}
+
 func TestFooterOmitsUnavailableContextAndUsage(t *testing.T) {
 	t.Setenv("SK_COLOR", "never")
-	fake := &fakeAgent{model: "openai/gpt", toolSet: "default", theme: ThemeLight}
+	fake := &fakeAgent{model: "openai/gpt", toolSet: toolpolicy.ToolSetReadOnly, theme: ThemeLight}
 	model, err := newScreenModel(context.Background(), fake, Config{Root: "/work"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	model.resize(80, 24)
-	if got := model.footerLine(); got != "openai/gpt · default · /work" {
+	if got := model.footerLine(); got != "openai/gpt · read-only · /work" {
 		t.Fatalf("footer = %q", got)
 	}
 }
@@ -86,7 +129,8 @@ func TestTurnTickRefreshesPublishedSessionStatus(t *testing.T) {
 }
 
 func TestCompactUsage(t *testing.T) {
-	if got := compactUsage(agent.ModelUsage{InputTokens: 1_200, CachedInputTokens: 340, OutputTokens: 890}); got != "↑1.2k ↻340 ↓890" {
+	// Cached input is a subset of the input, so it nests inside it.
+	if got := compactUsage(agent.ModelUsage{InputTokens: 1_200, CachedInputTokens: 340, OutputTokens: 890}); got != "↑1.2k(340) ↓890" {
 		t.Fatalf("compact usage = %q", got)
 	}
 	if got := compactUsage(agent.ModelUsage{InputTokens: 12_300, OutputTokens: 1_250_000}); got != "↑12.3k ↓1.2m" {

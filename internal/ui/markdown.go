@@ -18,7 +18,10 @@ func newMarkdownRenderer(useStyle bool, palette terminalPalette) markdownRendere
 	if useStyle {
 		renderer.accentStyle = lipgloss.NewStyle().Foreground(palette.accent)
 		renderer.mutedStyle = lipgloss.NewStyle().Foreground(palette.muted)
-		renderer.codeStyle = lipgloss.NewStyle().Foreground(palette.code)
+		// Code shares the accent colour with tool names: both are "this is a
+		// literal, not prose". The style stays separate because the roles
+		// differ in weight, not in hue.
+		renderer.codeStyle = lipgloss.NewStyle().Foreground(palette.accent)
 	}
 	return renderer
 }

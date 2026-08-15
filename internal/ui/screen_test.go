@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
@@ -654,11 +655,154 @@ func TestUserMessageGutterContinuesThroughWrappedLines(t *testing.T) {
 	if len(lines) < 4 {
 		t.Fatalf("user message did not wrap: %#v", lines)
 	}
-	if marker := model.userGutterStyle.Render(userMarker); !strings.HasPrefix(lines[1], marker) {
-		t.Fatalf("first user line has no styled chevron: %q", lines[1])
+	bar := model.userBarStyle.Render(userBarMarker)
+	for _, index := range []int{1, 2} {
+		if !strings.HasPrefix(lines[index], bar) {
+			t.Fatalf("user line %d has no styled bar: %q", index, lines[index])
+		}
 	}
-	if marker := model.userGutterStyle.Render(" "); !strings.HasPrefix(lines[2], marker) {
-		t.Fatalf("wrapped user line has no gutter background: %q", lines[2])
+}
+
+func TestFrameKeepsOneBlankLineAboveTheComposer(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.resize(60, 30)
+	model.addBlock(screenBlockAssistant, "Done.")
+	model.appendBlock(screenBlock{kind: screenBlockDuration, duration: 3 * time.Second})
+	model.refreshTranscript()
+
+	frame := model.inlineFrame()
+	lines := append(append([]string(nil), frame.transcript...), frame.dynamic...)
+	prompt := -1
+	for index, line := range lines {
+		if strings.HasPrefix(line, userMarker) {
+			prompt = index
+			break
+		}
+	}
+	if prompt < 2 {
+		t.Fatalf("composer not found in frame: %#v", lines)
+	}
+	// The duration block already ends in a blank line, so the idle working line
+	// must not lay down a second one across the transcript/dynamic seam.
+	if !isBlankTranscriptLine(lines[prompt-1]) || isBlankTranscriptLine(lines[prompt-2]) {
+		t.Fatalf("blank lines above the composer: %#v", lines[:prompt+1])
+	}
+}
+
+func TestToolSetPickerAlignsDescriptionsIntoOneColumn(t *testing.T) {
+	fake := &fakeAgent{toolSet: "edit", toolSetTools: map[string][]string{
+		"read-only": {"read", "grep"},
+		"edit":      {"read", "grep", "edit"},
+		"default":   {"read", "grep", "edit", "bash"},
+	}}
+	model := testScreenModel(t, fake)
+	model.resize(100, 24)
+	model.composer.setValue("/tools")
+	model, _ = model.submitInput()
+
+	// The checked row reserves its mark on every row, so the shared column
+	// survives the "✓" that only the current tool set carries.
+	column := -1
+	for _, line := range model.renderPicker() {
+		start := strings.Index(line, "read, grep")
+		if start < 0 {
+			continue
+		}
+		// The row markers are multi-byte, so measure the display width of the
+		// prefix rather than its byte offset.
+		start = visibleLen(line[:start])
+		if column == -1 {
+			column = start
+		} else if start != column {
+			t.Fatalf("description column %d != %d: %q", start, column, line)
+		}
+	}
+	if column <= 0 {
+		t.Fatalf("no tool lists rendered: %#v", model.renderPicker())
+	}
+}
+
+func TestToolSetPickerWarnsAboutThePromptCache(t *testing.T) {
+	fake := &fakeAgent{toolSet: "edit"}
+	model := testScreenModel(t, fake)
+	model.resize(90, 24)
+	model.composer.setValue("/tools")
+	model, _ = model.submitInput()
+	rendered := model.renderPicker()
+	if len(rendered) == 0 || !strings.Contains(rendered[len(rendered)-1], "prompt cache") {
+		t.Fatalf("tool set picker has no cache warning: %#v", rendered)
+	}
+	// The caveat is about swapping the tool list, so other pickers stay quiet.
+	model.closePicker()
+	model.composer.setValue("/theme")
+	model, _ = model.submitInput()
+	for _, line := range model.renderPicker() {
+		if strings.Contains(line, "prompt cache") {
+			t.Fatalf("theme picker carries the tool set caveat: %q", line)
+		}
+	}
+}
+
+func TestSettingNoticeNamesTheTransitionOnlyWhenItChanged(t *testing.T) {
+	fake := &fakeAgent{toolSet: "read-only"}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/tools edit")
+	model, _ = model.submitInput()
+	want := "tools: read-only → edit · prompt cache reset, next message costs full price"
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != want {
+		t.Fatalf("switch notice = %q", got)
+	}
+	// Re-selecting the active value is not a transition, so it reports plainly.
+	model.composer.setValue("/tools edit")
+	model, _ = model.submitInput()
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "tools: edit" {
+		t.Fatalf("no-op notice = %q", got)
+	}
+}
+
+func TestNoticesArePaddedWithoutDoubleBlankLines(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.resize(60, 30)
+	model.addBlock(screenBlockUser, "change the tool set")
+	model.addToolCall(agent.ToolCall{ID: "c1", Name: "bash", RawArguments: `{"command":"go build"}`})
+	model.addToolCall(agent.ToolCall{ID: "c2", Name: "bash", RawArguments: `{"command":"go vet"}`})
+	model.addBlock(screenBlockAssistant, "Done.")
+	model.appendBlock(screenBlock{kind: screenBlockDuration, duration: 3 * time.Second})
+	model.addBlock(screenBlockSystem, "tools: default")
+	model.addBlock(screenBlockSystem, "theme: light")
+	model.refreshTranscript()
+
+	lines := model.transcript.lines
+	if len(lines) == 0 || isBlankTranscriptLine(lines[0]) {
+		t.Fatalf("transcript opens on a blank line: %#v", lines)
+	}
+	for index := 1; index < len(lines); index++ {
+		if isBlankTranscriptLine(lines[index]) && isBlankTranscriptLine(lines[index-1]) {
+			t.Fatalf("double blank line at %d: %#v", index, lines)
+		}
+	}
+	// Every notice is surrounded by air.
+	for _, notice := range []string{"Worked for", "tools: default", "theme: light"} {
+		index := -1
+		for candidate, line := range lines {
+			if strings.Contains(line, notice) {
+				index = candidate
+				break
+			}
+		}
+		if index <= 0 || !isBlankTranscriptLine(lines[index-1]) ||
+			index+1 >= len(lines) || !isBlankTranscriptLine(lines[index+1]) {
+			t.Fatalf("notice %q is not padded at %d: %#v", notice, index, lines)
+		}
+	}
+	// Tool calls stay unpadded, so a run of them reads as one dense list.
+	for index, line := range lines {
+		if !strings.Contains(line, "go build") {
+			continue
+		}
+		if index+1 >= len(lines) || !strings.Contains(lines[index+1], "go vet") {
+			t.Fatalf("consecutive tool calls were separated: %#v", lines)
+		}
 	}
 }
 

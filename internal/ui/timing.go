@@ -53,11 +53,15 @@ func (m *screenModel) finishTurnDuration(now time.Time) {
 }
 
 func (m screenModel) renderDurationLine(duration time.Duration) string {
+	// The rule separates turns, so it starts at the screen edge instead of
+	// inside the transcript gutter: an indented divider reads as one more
+	// piece of content rather than a boundary between them.
+	width := transcriptGutter + m.contentWidth()
 	line := "─ Worked for " + formatTurnDuration(duration) + " "
-	if pad := m.contentWidth() - visibleLen(line); pad > 0 {
+	if pad := width - visibleLen(line); pad > 0 {
 		line += strings.Repeat("─", pad)
 	} else {
-		line = truncateANSI(line, m.contentWidth())
+		line = truncateANSI(line, width)
 	}
-	return m.marked(" ", m.mutedStyle.Render(line))
+	return m.mutedStyle.Render(line)
 }

@@ -25,9 +25,6 @@ func TestDarkThemeUsesBrightAccent(t *testing.T) {
 	if model.accentStyle.GetForeground() == nil || !model.accentStyle.GetBold() {
 		t.Fatalf("accent style is incomplete: %#v", model.accentStyle)
 	}
-	if model.userGutterStyle.GetBackground() == nil {
-		t.Fatalf("user gutter style has no background: %#v", model.userGutterStyle)
-	}
 }
 
 func TestLightThemeUsesNeutralUserGutter(t *testing.T) {
@@ -37,11 +34,12 @@ func TestLightThemeUsesNeutralUserGutter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := model.userGutterStyle.GetForeground(); got != lipgloss.Color("242") {
-		t.Fatalf("user gutter foreground = %#v", got)
+	// The user bar is a flat rule that sits below muted text: no fill, no bold.
+	if got := model.userBarStyle.GetForeground(); got != lipgloss.Color("250") {
+		t.Fatalf("user bar foreground = %#v", got)
 	}
-	if got := model.userGutterStyle.GetBackground(); got != lipgloss.Color("255") {
-		t.Fatalf("user gutter background = %#v", got)
+	if model.userBarStyle.GetBackground() != lipgloss.NewStyle().GetBackground() || model.userBarStyle.GetBold() {
+		t.Fatalf("user bar is not flat: %#v", model.userBarStyle)
 	}
 }
 
@@ -85,7 +83,7 @@ func TestAutoThemeWaitsForBackgroundOrTimeout(t *testing.T) {
 	model.resize(80, 24)
 	updated, _ = model.Update(themeQueryTimeoutMsg{})
 	fallback := updated.(screenModel)
-	if fallback.themePending || fallback.darkTheme {
+	if fallback.themePending || !fallback.darkTheme {
 		t.Fatalf("fallback state: pending=%v dark=%v", fallback.themePending, fallback.darkTheme)
 	}
 }
@@ -110,13 +108,13 @@ func TestThemeCommandShowsAndSwitchesTheme(t *testing.T) {
 	if command != nil || model.picker.active() || model.theme != ThemeLight || fake.theme != ThemeLight || model.darkTheme || model.themePending {
 		t.Fatalf("light selection: picker=%#v theme=%q stored=%q dark=%v pending=%v command=%v", model.picker, model.theme, fake.theme, model.darkTheme, model.themePending, command)
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "theme: light" {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "theme: dark → light" {
 		t.Fatalf("theme status = %q", got)
 	}
 }
 
-func TestThemeCommandAutoRedetectsWithLightFallback(t *testing.T) {
-	fake := &fakeAgent{theme: ThemeDark}
+func TestThemeCommandAutoRedetectsWithDarkFallback(t *testing.T) {
+	fake := &fakeAgent{theme: ThemeLight}
 	model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +122,8 @@ func TestThemeCommandAutoRedetectsWithLightFallback(t *testing.T) {
 	model.resize(80, 24)
 	model.composer.setValue("/theme auto")
 	model, command := model.submitInput()
-	if command == nil || model.theme != ThemeAuto || fake.theme != ThemeAuto || !model.themePending || model.darkTheme {
+	// Auto applies the dark fallback up front, before OSC 11 has a chance to answer.
+	if command == nil || model.theme != ThemeAuto || fake.theme != ThemeAuto || !model.themePending || !model.darkTheme {
 		t.Fatalf("auto selection: theme=%q stored=%q pending=%v dark=%v command=%v", model.theme, fake.theme, model.themePending, model.darkTheme, command)
 	}
 
@@ -136,7 +135,7 @@ func TestThemeCommandAutoRedetectsWithLightFallback(t *testing.T) {
 	}
 	updated, _ = model.Update(themeQueryTimeoutMsg{generation: model.themeQuery})
 	fallback := updated.(screenModel)
-	if fallback.themePending || fallback.darkTheme {
+	if fallback.themePending || !fallback.darkTheme {
 		t.Fatalf("auto fallback: pending=%v dark=%v", fallback.themePending, fallback.darkTheme)
 	}
 

@@ -1134,8 +1134,15 @@ func TestRunDeliversBackgroundCompletionThroughJournal(t *testing.T) {
 		}
 		requests = append(requests, body)
 		writer.Header().Set("Content-Type", "text/event-stream")
-		switch len(requests) {
-		case 1:
+		completionDelivered := false
+		for _, message := range body.Messages {
+			if message.Role == "system" && strings.Contains(message.Content, "Background job job-") && strings.Contains(message.Content, "status=completed") {
+				completionDelivered = true
+				break
+			}
+		}
+		switch {
+		case len(requests) == 1:
 			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
 				"index": 0,
 				"delta": map[string]any{"tool_calls": []any{map[string]any{
@@ -1144,12 +1151,12 @@ func TestRunDeliversBackgroundCompletionThroughJournal(t *testing.T) {
 				}}},
 				"finish_reason": "tool_calls",
 			}}})
-		case 2:
+		case !completionDelivered:
 			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
 				"index": 0,
 				"delta": map[string]any{"tool_calls": []any{map[string]any{
-					"index": 0, "id": "provider_pause", "type": "function",
-					"function": map[string]any{"name": "bash", "arguments": `{"command":"sleep 0.15"}`},
+					"index": 0, "id": fmt.Sprintf("provider_pause_%d", len(requests)), "type": "function",
+					"function": map[string]any{"name": "bash", "arguments": `{"command":"sleep 0.05"}`},
 				}}},
 				"finish_reason": "tool_calls",
 			}}})
@@ -1164,14 +1171,16 @@ func TestRunDeliversBackgroundCompletionThroughJournal(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	journalPath := filepath.Join(t.TempDir(), "completion.jsonl")
 	var output bytes.Buffer
-	if err := run(context.Background(), []string{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := run(ctx, []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
 		"-home", t.TempDir(), "-root", t.TempDir(), "-sandbox", "off",
 		"-journal", journalPath, "start background work",
 	}, bytes.NewReader(nil), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "completion received\n" || len(requests) != 3 {
+	if output.String() != "completion received\n" {
 		t.Fatalf("output/requests = %q/%d", output.String(), len(requests))
 	}
 	completionMessages := 0

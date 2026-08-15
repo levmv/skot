@@ -9,6 +9,7 @@ installation and a short introduction, see the [project README](../README.md).
 sk [flags] [prompt...]
 sk [flags] resume
 sk [flags] resume <id-or-prefix> [prompt...]
+sk [flags] update
 sk [flags] -- [prompt...]
 ```
 
@@ -16,6 +17,11 @@ With no prompt and a terminal attached, `sk` opens a new persistent
 interactive session. A prompt supplied as arguments or through stdin runs once
 without the interactive screen. Bare `resume` selects the latest session for
 the current workspace; an ID or unambiguous prefix selects a particular one.
+
+`sk update` downloads the latest `skot-v*` GitHub release for the current
+platform, verifies its SHA-256 checksum, and atomically replaces the running
+executable. Existing processes continue with the old version until restarted.
+Development builds report an error instead of overwriting themselves.
 
 Use `--` when prompt text could otherwise be parsed as a flag:
 

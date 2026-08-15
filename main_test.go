@@ -828,6 +828,14 @@ func TestParseInvocationDistinguishesResumeCommandFromPrompt(t *testing.T) {
 	if prompt.resume || strings.Join(prompt.args, " ") != "resume this discussion" {
 		t.Fatalf("prompt invocation = %#v", prompt)
 	}
+	update := parseInvocation([]string{"update"}, false)
+	if !update.update || len(update.args) != 0 {
+		t.Fatalf("update invocation = %#v", update)
+	}
+	updatePrompt := parseInvocation([]string{"update", "the", "dependencies"}, true)
+	if updatePrompt.update || strings.Join(updatePrompt.args, " ") != "update the dependencies" {
+		t.Fatalf("update prompt invocation = %#v", updatePrompt)
+	}
 }
 
 func TestRunFlagTerminatorTreatsResumeAsPrompt(t *testing.T) {

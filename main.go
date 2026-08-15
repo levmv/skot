@@ -46,6 +46,7 @@ type cliConfig struct {
 
 type cliInvocation struct {
 	resume        bool
+	update        bool
 	sessionPrefix string
 	args          []string
 }
@@ -107,6 +108,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		_, err := fmt.Fprintf(stdout, "sk %s\n", version)
 		return err
 	}
+	invocation := parseInvocation(flags.Args(), explicitPrompt)
+	if invocation.update {
+		if len(invocation.args) != 0 {
+			return agent.MarkInvalidRequest(errors.New("update does not accept arguments"))
+		}
+		return runUpdateCommand(ctx, stdout)
+	}
 	retryBudget, err := parsePositiveDuration(config.retryBudget, "retry budget")
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
@@ -119,7 +127,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
 	}
-	invocation := parseInvocation(flags.Args(), explicitPrompt)
 	if strings.TrimSpace(config.systemPromptFile) != "" {
 		if strings.TrimSpace(config.systemPrompt) != "" {
 			return agent.MarkInvalidRequest(errors.New("set system instructions with -system-prompt or -system-prompt-file, not both"))
@@ -242,7 +249,13 @@ func subtractUsage(total, previous agent.ModelUsage) agent.ModelUsage {
 }
 
 func parseInvocation(args []string, explicitPrompt bool) cliInvocation {
-	if explicitPrompt || len(args) == 0 || strings.ToLower(args[0]) != "resume" {
+	if explicitPrompt || len(args) == 0 {
+		return cliInvocation{args: args}
+	}
+	if strings.EqualFold(args[0], "update") {
+		return cliInvocation{update: true, args: args[1:]}
+	}
+	if !strings.EqualFold(args[0], "resume") {
 		return cliInvocation{args: args}
 	}
 	invocation := cliInvocation{resume: true}
@@ -261,10 +274,12 @@ func writeCLIUsage(flags *flag.FlagSet) {
 	fmt.Fprintln(output, "  sk [flags] [prompt...]")
 	fmt.Fprintln(output, "  sk [flags] resume")
 	fmt.Fprintln(output, "  sk [flags] resume <id-or-prefix> [prompt...]")
+	fmt.Fprintln(output, "  sk [flags] update")
 	fmt.Fprintln(output, "  sk [flags] -- [prompt...]")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "With no prompt, Skot opens a new persistent interactive session.")
 	fmt.Fprintln(output, "Bare resume continues the latest session in the current workspace.")
+	fmt.Fprintln(output, "Update replaces a release build with the latest Skot release.")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Flags:")
 	flags.PrintDefaults()

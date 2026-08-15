@@ -20,6 +20,13 @@ in scripts.
 curl -fsSL https://raw.githubusercontent.com/levmv/skot/main/install.sh | sh
 ```
 
+Update an installed release in place. Existing processes keep running the old
+version; restart them when convenient to use the update:
+
+```sh
+sk update
+```
+
 Or build from a checkout:
 
 ```sh

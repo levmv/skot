@@ -157,12 +157,12 @@ func TestOpenConfiguresAndOwnsCompleteToolCatalog(t *testing.T) {
 	seenDefaults := make(map[string]bool)
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		ToolSet: toolpolicy.ToolSetFull, ToolSetExplicit: true,
+		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 		ToolSets: map[string][]string{
 			toolpolicy.ToolSetReadOnly: {"ls", "grep", "glob"},
 			toolpolicy.ToolSetEdit:     {"ls", "grep", "glob", "edit", "write"},
-			toolpolicy.ToolSetFull:     {"grep", "glob", "edit", "write", "bash", "job", "custom"},
+			toolpolicy.ToolSetDefault:  {"grep", "glob", "edit", "write", "bash", "job", "custom"},
 		},
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
 			borrowed = catalog
@@ -242,13 +242,13 @@ func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *test
 	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"tool_sets":{"full":["read","grep","glob","edit","write","bash","job","lookup"]}}`
+	settings := `{"tool_sets":{"default":["read","grep","glob","edit","write","bash","job","lookup"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		ToolSet: toolpolicy.ToolSetFull, ToolSetExplicit: true,
+		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
 		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 	})
 	if err != nil {
@@ -339,7 +339,7 @@ func TestOpenAllowsDeliberatelyEmptyToolCatalog(t *testing.T) {
 		ToolSets: map[string][]string{
 			toolpolicy.ToolSetReadOnly: nil,
 			toolpolicy.ToolSetEdit:     nil,
-			toolpolicy.ToolSetFull:     nil,
+			toolpolicy.ToolSetDefault:  nil,
 		},
 		ConfigureTools: func([]agent.Tool) ([]agent.Tool, error) { return nil, nil },
 	})
@@ -361,14 +361,14 @@ func TestOpenAllowsDeliberatelyEmptyToolCatalog(t *testing.T) {
 
 func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 	home := t.TempDir()
-	settings := `{"tool_sets":{"full":["read"],"review":["read","custom"]}}`
+	settings := `{"tool_sets":{"default":["read"],"review":["read","custom"]}}`
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	configuredToolSets := map[string][]string{toolpolicy.ToolSetFull: {"custom"}}
+	configuredToolSets := map[string][]string{toolpolicy.ToolSetDefault: {"custom"}}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		ToolSet: toolpolicy.ToolSetFull, ToolSetExplicit: true,
+		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
 		ToolSets: configuredToolSets,
 		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
@@ -379,12 +379,12 @@ func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = application.Close() })
-	configuredToolSets[toolpolicy.ToolSetFull][0] = "read"
-	if got := strings.Join(application.ToolSets(), ","); got != "full,edit,read-only,review" {
+	configuredToolSets[toolpolicy.ToolSetDefault][0] = "read"
+	if got := strings.Join(application.ToolSets(), ","); got != "default,edit,read-only,review" {
 		t.Fatalf("tool sets = %q", got)
 	}
-	if got := strings.Join(application.ToolSetTools(toolpolicy.ToolSetFull), ","); got != "custom" {
-		t.Fatalf("tools in full set = %q", got)
+	if got := strings.Join(application.ToolSetTools(toolpolicy.ToolSetDefault), ","); got != "custom" {
+		t.Fatalf("tools in default set = %q", got)
 	}
 
 	if _, err := application.RunShell(context.Background(), "true"); err != nil {
@@ -395,7 +395,7 @@ func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := configuredToolNames(state); got != "custom" {
-		t.Fatalf("overridden full tools = %q", got)
+		t.Fatalf("overridden default tools = %q", got)
 	}
 
 	if err := application.SwitchToolSet(context.Background(), " REVIEW "); err != nil {
@@ -535,7 +535,7 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedTools, err := toolSets.Tools(catalog, toolpolicy.ToolSetFull)
+	selectedTools, err := toolSets.Tools(catalog, toolpolicy.ToolSetDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +551,7 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 		config: applicationConfig{settings: settings, tools: catalog, toolSets: toolSets},
 		state: applicationState{
 			session: newLiveSession("", runtime, nil, false),
-			toolSet: toolpolicy.ToolSetFull,
+			toolSet: toolpolicy.ToolSetDefault,
 		},
 	}
 	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetReadOnly); err != nil {
@@ -950,7 +950,7 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedTools, err := toolSets.Tools(catalog, toolpolicy.ToolSetFull)
+	selectedTools, err := toolSets.Tools(catalog, toolpolicy.ToolSetDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -978,7 +978,7 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 		},
 		state: applicationState{
 			session: newLiveSession(id, runtime, journal, true), processes: processes,
-			toolSet: toolpolicy.ToolSetFull, requestedSandbox: workspacetools.SandboxOff,
+			toolSet: toolpolicy.ToolSetDefault, requestedSandbox: workspacetools.SandboxOff,
 		},
 	}, journal
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/levmv/skot/agent"
 )
 
-func TestDefaultToolSetsSelectExactOrderedTools(t *testing.T) {
+func TestBuiltInToolSetsSelectExactOrderedTools(t *testing.T) {
 	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "custom")
 	toolSets, err := NewToolSets(catalog)
 	if err != nil {
@@ -18,7 +18,7 @@ func TestDefaultToolSetsSelectExactOrderedTools(t *testing.T) {
 	for toolSet, want := range map[string]string{
 		ToolSetReadOnly: "read,ls,grep,glob",
 		ToolSetEdit:     "read,ls,grep,glob,edit,write",
-		ToolSetFull:     "read,grep,glob,edit,write,bash,job",
+		ToolSetDefault:  "read,grep,glob,edit,write,bash,job",
 	} {
 		if got := toolNames(mustToolSetTools(t, toolSets, catalog, toolSet)); got != want {
 			t.Fatalf("%s tools = %q, want %q", toolSet, got, want)
@@ -26,13 +26,13 @@ func TestDefaultToolSetsSelectExactOrderedTools(t *testing.T) {
 	}
 }
 
-func TestDefaultToolSetsIncludeKnownWebTools(t *testing.T) {
+func TestBuiltInToolSetsIncludeKnownWebTools(t *testing.T) {
 	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "web_fetch", "web_search")
 	toolSets, err := NewToolSets(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, toolSet := range []string{ToolSetReadOnly, ToolSetEdit, ToolSetFull} {
+	for _, toolSet := range []string{ToolSetReadOnly, ToolSetEdit, ToolSetDefault} {
 		got := toolNames(mustToolSetTools(t, toolSets, catalog, toolSet))
 		if !strings.HasSuffix(got, "web_fetch,web_search") {
 			t.Fatalf("%s tools = %q", toolSet, got)
@@ -40,17 +40,17 @@ func TestDefaultToolSetsIncludeKnownWebTools(t *testing.T) {
 	}
 }
 
-func TestConfiguredToolSetsReplaceDefaultsAndAddNames(t *testing.T) {
+func TestConfiguredToolSetsReplaceBuiltInsAndAddNames(t *testing.T) {
 	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "custom")
 	toolSets, err := NewToolSets(catalog,
-		map[string][]string{"full": {"read", "custom"}, "review": {"custom", "read"}},
-		map[string][]string{" FULL ": {"custom"}, "empty": nil},
+		map[string][]string{"default": {"read", "custom"}, "review": {"custom", "read"}},
+		map[string][]string{" DEFAULT ": {"custom"}, "empty": nil},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := toolNames(mustToolSetTools(t, toolSets, catalog, ToolSetFull)); got != "custom" {
-		t.Fatalf("overridden full tools = %q", got)
+	if got := toolNames(mustToolSetTools(t, toolSets, catalog, ToolSetDefault)); got != "custom" {
+		t.Fatalf("overridden default tools = %q", got)
 	}
 	if got := toolNames(mustToolSetTools(t, toolSets, catalog, "review")); got != "custom,read" {
 		t.Fatalf("review tools = %q", got)
@@ -58,16 +58,16 @@ func TestConfiguredToolSetsReplaceDefaultsAndAddNames(t *testing.T) {
 	if got := toolNames(mustToolSetTools(t, toolSets, catalog, "empty")); got != "" {
 		t.Fatalf("empty tools = %q", got)
 	}
-	if got := strings.Join(toolSets.Names(), ","); got != "full,edit,read-only,empty,review" {
+	if got := strings.Join(toolSets.Names(), ","); got != "default,edit,read-only,empty,review" {
 		t.Fatalf("tool set names = %q", got)
 	}
-	if got := strings.Join(toolSets.ToolNames(ToolSetFull), ","); got != "custom" {
-		t.Fatalf("full tool names = %q", got)
+	if got := strings.Join(toolSets.ToolNames(ToolSetDefault), ","); got != "custom" {
+		t.Fatalf("default tool names = %q", got)
 	}
-	if names := toolSets.ToolNames(ToolSetFull); len(names) != 0 {
+	if names := toolSets.ToolNames(ToolSetDefault); len(names) != 0 {
 		names[0] = "read"
 	}
-	if got := strings.Join(toolSets.ToolNames(ToolSetFull), ","); got != "custom" {
+	if got := strings.Join(toolSets.ToolNames(ToolSetDefault), ","); got != "custom" {
 		t.Fatalf("tool set tool names were aliased: %q", got)
 	}
 	if got := toolSets.ToolNames("missing"); got != nil {
@@ -76,7 +76,7 @@ func TestConfiguredToolSetsReplaceDefaultsAndAddNames(t *testing.T) {
 	if got, err := toolSets.Normalize(" REVIEW "); err != nil || got != "review" {
 		t.Fatalf("normalized tool set = %q, %v", got, err)
 	}
-	if got, err := toolSets.Normalize(""); err != nil || got != ToolSetFull {
+	if got, err := toolSets.Normalize(""); err != nil || got != ToolSetDefault {
 		t.Fatalf("default tool set = %q, %v", got, err)
 	}
 }
@@ -89,7 +89,7 @@ func TestConfiguredToolSetsRejectInvalidDefinitions(t *testing.T) {
 		"empty tool":           {"review": {""}},
 		"empty tool set":       {"": {"read"}},
 		"whitespace tool set":  {"code review": {"read"}},
-		"normalized duplicate": {"FULL": {"read"}, " full ": {"read"}},
+		"normalized duplicate": {"DEFAULT": {"read"}, " default ": {"read"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewToolSets(catalog, configured); err == nil {
@@ -104,8 +104,10 @@ func TestNormalizeRejectsUnknownToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := toolSets.Normalize("admin"); err == nil || !strings.Contains(err.Error(), "full, edit, read-only") {
-		t.Fatalf("unknown tool set error = %v", err)
+	for _, input := range []string{"admin", "full"} {
+		if _, err := toolSets.Normalize(input); err == nil || !strings.Contains(err.Error(), "default, edit, read-only") {
+			t.Fatalf("unknown tool set %q error = %v", input, err)
+		}
 	}
 }
 
@@ -115,7 +117,7 @@ func TestToolsRejectsCatalogDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := toolSets.Tools(catalog[:len(catalog)-1], ToolSetFull); err == nil || !strings.Contains(err.Error(), `requires tool "job"`) {
+	if _, err := toolSets.Tools(catalog[:len(catalog)-1], ToolSetDefault); err == nil || !strings.Contains(err.Error(), `requires tool "job"`) {
 		t.Fatalf("catalog drift error = %v", err)
 	}
 }

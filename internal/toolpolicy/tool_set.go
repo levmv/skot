@@ -12,22 +12,22 @@ import (
 )
 
 const (
-	ToolSetFull     = "full"
+	ToolSetDefault  = "default"
 	ToolSetEdit     = "edit"
 	ToolSetReadOnly = "read-only"
 )
 
 // The default set leads: it is what a session runs unless told otherwise.
-var defaultToolSetOrder = []string{ToolSetFull, ToolSetEdit, ToolSetReadOnly}
+var builtInToolSetOrder = []string{ToolSetDefault, ToolSetEdit, ToolSetReadOnly}
 
-var defaultToolSetTools = map[string][]string{
+var builtInToolSetTools = map[string][]string{
 	ToolSetReadOnly: {"read", "ls", "grep", "glob"},
 	ToolSetEdit:     {"read", "ls", "grep", "glob", "edit", "write"},
-	// Full deliberately omits ls: Bash provides richer directory inspection.
-	ToolSetFull: {"read", "grep", "glob", "edit", "write", "bash", "job"},
+	// Default deliberately omits ls: Bash provides richer directory inspection.
+	ToolSetDefault: {"read", "grep", "glob", "edit", "write", "bash", "job"},
 }
 
-var optionalDefaultTools = []string{"web_fetch", "web_search"}
+var optionalBuiltInTools = []string{"web_fetch", "web_search"}
 
 // ToolSets is a validated collection of exact, ordered tool-name lists. User
 // definitions replace built-in sets with the same normalized name and add sets
@@ -53,10 +53,10 @@ func NewToolSets(catalog []agent.Tool, overrides ...map[string][]string) (ToolSe
 		available[name] = tool
 	}
 
-	definitions := make(map[string][]string, len(defaultToolSetTools))
-	for name, tools := range defaultToolSetTools {
+	definitions := make(map[string][]string, len(builtInToolSetTools))
+	for name, tools := range builtInToolSetTools {
 		definitions[name] = append([]string(nil), tools...)
-		for _, optional := range optionalDefaultTools {
+		for _, optional := range optionalBuiltInTools {
 			if _, exists := available[optional]; exists {
 				definitions[name] = append(definitions[name], optional)
 			}
@@ -164,7 +164,7 @@ func (toolSets ToolSets) RequireTogether(required string, dependents map[string]
 func normalizeName(value string) (string, error) {
 	name := strings.ToLower(strings.TrimSpace(value))
 	if name == "" {
-		return ToolSetFull, nil
+		return ToolSetDefault, nil
 	}
 	if strings.ContainsAny(name, " \t\r\n") {
 		return "", fmt.Errorf("tool set name %q cannot contain whitespace", value)
@@ -194,8 +194,8 @@ func normalizeToolNames(toolSet string, input []string, available map[string]age
 
 func orderedNames(definitions map[string][]string) []string {
 	names := make([]string, 0, len(definitions))
-	seen := make(map[string]struct{}, len(defaultToolSetOrder))
-	for _, name := range defaultToolSetOrder {
+	seen := make(map[string]struct{}, len(builtInToolSetOrder))
+	for _, name := range builtInToolSetOrder {
 		if _, exists := definitions[name]; exists {
 			names = append(names, name)
 			seen[name] = struct{}{}

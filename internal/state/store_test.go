@@ -23,7 +23,7 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err := store.SetDefaultModelSelection("deepseek/next-model", " HIGH "); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultToolSet("edit"); err != nil {
+	if err := store.SetToolSetSelection("edit"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetDefaultSandbox("off"); err != nil {

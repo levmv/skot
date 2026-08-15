@@ -39,12 +39,12 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	standard, err := application.config.toolSets.Tools(application.config.tools, ToolSetFull)
+	standard, err := application.config.toolSets.Tools(application.config.tools, ToolSetDefault)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if childTestHasTool(standard, "agent") {
-		t.Fatal("agent tool leaked into the standard full tool set")
+		t.Fatal("agent tool leaked into the default tool set")
 	}
 	if _, err := application.Run(context.Background(), "parent", nil); err != nil {
 		t.Fatal(err)

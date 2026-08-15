@@ -170,7 +170,7 @@ func (supervisor *childSupervisor) configure(builder runtimeBuilder, instruction
 	toolSets, err := toolpolicy.NewToolSets(builder.tools, map[string][]string{
 		toolpolicy.ToolSetReadOnly: readOnly,
 		toolpolicy.ToolSetEdit:     readOnly,
-		toolpolicy.ToolSetFull:     readOnly,
+		toolpolicy.ToolSetDefault:  readOnly,
 	})
 	if err != nil {
 		return fmt.Errorf("configure child tool sets: %w", err)

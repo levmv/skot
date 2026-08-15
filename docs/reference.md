@@ -41,7 +41,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-system-prompt text` | `SK_SYSTEM_PROMPT` | Add system instructions. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |
 | `-root path` | `SK_ROOT` | Workspace root for file and process tools. Default: current directory. |
-| `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Default: `full`. |
+| `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |
 | `-tools-file path` | `SK_TOOLS_FILE` | Load custom program tool definitions. Default: `tools.json` in the Skot data directory. |
 | `-sandbox policy` | `SK_SANDBOX` | Select `auto`, `workspace`, `masked`, or `off`. Default: `auto`. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
@@ -127,7 +127,7 @@ rejected. A representative configuration is:
 | `model` | Persisted default model selected by the interactive UI. |
 | `reasoning_effort` | Persisted route-specific effort. |
 | `recent_models` | UI-managed recent-model list; normally not edited by hand. |
-| `tool_set` | Persisted default tool set. |
+| `tool_set` | Persisted tool set selection. |
 | `tool_sets` | Map of tool set names to exact ordered tool-name lists. A custom definition replaces a built-in set with the same name. |
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
 | `sandbox` | Persisted sandbox selection. |
@@ -186,7 +186,7 @@ that root; reads and searches are bounded, and writes are atomic.
 
 | Tool set | Tools |
 | --- | --- |
-| `full` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job` |
+| `default` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job` |
 | `edit` | `read`, `ls`, `grep`, `glob`, `edit`, `write` |
 | `read-only` | `read`, `ls`, `grep`, `glob` |
 

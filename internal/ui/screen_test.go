@@ -121,7 +121,7 @@ func (fake *fakeAgent) ToolSets() []string {
 	if len(fake.toolSets) != 0 {
 		return append([]string(nil), fake.toolSets...)
 	}
-	return []string{toolpolicy.ToolSetReadOnly, toolpolicy.ToolSetEdit, toolpolicy.ToolSetFull}
+	return []string{toolpolicy.ToolSetReadOnly, toolpolicy.ToolSetEdit, toolpolicy.ToolSetDefault}
 }
 
 func (fake *fakeAgent) ToolSetTools(toolSet string) []string {
@@ -356,11 +356,11 @@ func TestWorkingCommandsAreNotQueued(t *testing.T) {
 
 func TestToolSetCommandShowsAndSwitchesToolSet(t *testing.T) {
 	fake := &fakeAgent{toolSet: toolpolicy.ToolSetEdit, toolSets: []string{
-		toolpolicy.ToolSetFull, toolpolicy.ToolSetEdit, toolpolicy.ToolSetReadOnly, "review",
+		toolpolicy.ToolSetDefault, toolpolicy.ToolSetEdit, toolpolicy.ToolSetReadOnly, "review",
 	}, toolSetTools: map[string][]string{
 		toolpolicy.ToolSetReadOnly: {"read", "grep"},
 		toolpolicy.ToolSetEdit:     {"bash", "job"},
-		toolpolicy.ToolSetFull:     {"read", "write", "bash", "job"},
+		toolpolicy.ToolSetDefault:  {"read", "write", "bash", "job"},
 		"review":                   {"read", "custom"},
 	}}
 	model := testScreenModel(t, fake)
@@ -376,7 +376,7 @@ func TestToolSetCommandShowsAndSwitchesToolSet(t *testing.T) {
 		t.Fatalf("tool set picker without digit shortcuts = %#v", model.picker)
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Text: "1", Code: '1', BaseCode: '1'})
-	if fake.toolSet != toolpolicy.ToolSetFull || model.composer.value() != "" {
+	if fake.toolSet != toolpolicy.ToolSetDefault || model.composer.value() != "" {
 		t.Fatalf("tool set = %q, input = %q", fake.toolSet, model.composer.value())
 	}
 }
@@ -408,7 +408,7 @@ func TestModelCommandShowsAndSwitchesModel(t *testing.T) {
 }
 
 func TestCommandSuggestionsCompleteAndSelectArguments(t *testing.T) {
-	fake := &fakeAgent{toolSet: toolpolicy.ToolSetFull}
+	fake := &fakeAgent{toolSet: toolpolicy.ToolSetDefault}
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/tools e")
 	model.syncCommandSuggestions()

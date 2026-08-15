@@ -96,7 +96,7 @@ func (store *Store) SetDefaultModelSelection(model, reasoningEffort string) erro
 	})
 }
 
-func (store *Store) SetDefaultToolSet(toolSet string) error {
+func (store *Store) SetToolSetSelection(toolSet string) error {
 	return store.update(func(settings *Settings) { settings.ToolSet = strings.TrimSpace(toolSet) })
 }
 

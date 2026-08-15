@@ -13,7 +13,7 @@ const (
 	// persisted selection overrides it.
 	DefaultModelURI = "deepseek/deepseek-v4-flash"
 
-	ToolSetFull     = toolpolicy.ToolSetFull
+	ToolSetDefault  = toolpolicy.ToolSetDefault
 	ToolSetEdit     = toolpolicy.ToolSetEdit
 	ToolSetReadOnly = toolpolicy.ToolSetReadOnly
 

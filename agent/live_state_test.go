@@ -43,7 +43,7 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 	boundaryCommitted := false
 	runtime = newTestRuntime(t, Config{
 		Model: model, Journal: journal, Tools: []Tool{tool}, Instructions: "be exact",
-		Metadata: ConfigurationMetadata{ToolSet: "full"},
+		Metadata: ConfigurationMetadata{ToolSet: "default"},
 		ExternalWork: externalWorkFuncs{
 			pending: func(string) []BoundaryEvent {
 				if boundaryCommitted {

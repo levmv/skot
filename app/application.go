@@ -279,7 +279,7 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 	if err := runtime.SetTools(ctx, selected, toolSet); err != nil {
 		return err
 	}
-	if err := settings.SetDefaultToolSet(toolSet); err != nil {
+	if err := settings.SetToolSetSelection(toolSet); err != nil {
 		previous, selectErr := toolSetTools(toolSets, catalog, settings, oldToolSet)
 		rollbackErr := selectErr
 		if selectErr == nil {

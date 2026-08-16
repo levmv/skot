@@ -78,6 +78,39 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 	}
 }
 
+func TestLoginPickerSeparatesModelProvidersFromToolServices(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/model",
+		providers: []ProviderStatus{
+			{Name: "tavily", Source: "none", Description: "web search", ToolService: true},
+			{Name: "deepseek", Source: "auth store", Description: "model provider"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/login")
+	model, _ = model.submitInput()
+
+	if len(model.picker.items) != 2 || model.picker.items[0].value != "deepseek" ||
+		model.picker.items[1].value != "tavily" || !model.picker.items[1].dividerBefore {
+		t.Fatalf("login picker groups = %#v", model.picker.items)
+	}
+	rendered := model.renderPicker()
+	modelLine, dividerLine, toolLine := -1, -1, -1
+	for index, line := range rendered {
+		switch {
+		case strings.Contains(line, "deepseek"):
+			modelLine = index
+		case strings.Contains(line, "──"):
+			dividerLine = index
+		case strings.Contains(line, "tavily"):
+			toolLine = index
+		}
+	}
+	if modelLine < 0 || dividerLine <= modelLine || toolLine <= dividerLine {
+		t.Fatalf("login picker lines = %#v", rendered)
+	}
+}
+
 func TestStartupLoginPickerCanSwitchToConfiguredProvider(t *testing.T) {
 	fake := &fakeAgent{
 		model:       "deepseek/model",

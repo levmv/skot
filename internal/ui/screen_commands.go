@@ -905,16 +905,26 @@ func (m *screenModel) openLoginPicker() {
 		m.addBlock(screenBlockError, "login: "+err.Error())
 		return
 	}
-	items := make([]pickerItem, 0, len(m.providers))
+	modelItems := make([]pickerItem, 0, len(m.providers))
+	toolItems := make([]pickerItem, 0, len(m.providers))
 	for _, status := range m.providers {
 		description := status.Description + " · " + status.Source
 		if status.Source == "none" {
 			description = status.Description + " · not configured"
 		}
-		items = append(items, pickerItem{
+		item := pickerItem{
 			value: status.Name, label: status.Name, description: description,
-		})
+		}
+		if status.ToolService {
+			toolItems = append(toolItems, item)
+		} else {
+			modelItems = append(modelItems, item)
+		}
 	}
+	if len(modelItems) != 0 && len(toolItems) != 0 {
+		toolItems[0].dividerBefore = true
+	}
+	items := append(modelItems, toolItems...)
 	if len(items) == 0 {
 		m.addBlock(screenBlockError, "login: no providers are available")
 		return
@@ -1095,9 +1105,16 @@ func (m *screenModel) refreshModelChoices() {
 func (m screenModel) renderPicker() []string {
 	searchable := pickerNavigationFor(m.picker.kind) == navigationSearch
 	note := pickerNoteFor(m.picker.kind)
+	visible := m.picker.visibleIndices()
 	reservedLines := 5
 	if searchable {
 		reservedLines++
+	}
+	for _, index := range visible {
+		if m.picker.items[index].dividerBefore {
+			reservedLines++
+			break
+		}
 	}
 	if note != "" {
 		// The note gets a blank line of its own so it reads as a caveat about
@@ -1105,7 +1122,6 @@ func (m screenModel) renderPicker() []string {
 		reservedLines += 2
 	}
 	limit := min(10, max(1, m.height-reservedLines))
-	visible := m.picker.visibleIndices()
 	selectedPosition := 0
 	for position, index := range visible {
 		if index == m.picker.index {
@@ -1136,6 +1152,10 @@ func (m screenModel) renderPicker() []string {
 	for position := start; position < end; position++ {
 		index := visible[position]
 		item := m.picker.items[index]
+		if item.dividerBefore && position > start {
+			divider := m.mutedStyle.Render(strings.Repeat("─", m.contentWidth()))
+			lines = append(lines, strings.Repeat(" ", transcriptGutter)+divider)
+		}
 		marker := " "
 		if index == m.picker.index {
 			marker = userMarker

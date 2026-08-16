@@ -34,7 +34,7 @@ var providerCredentialCatalog = []providerCredentialSpec{
 	{name: "anthropic", environment: "ANTHROPIC_API_KEY", description: "model provider", credentialURL: "https://platform.claude.com/settings/keys", capabilities: credentialModel},
 	{name: "opencode-go", environment: "OPENCODE_API_KEY", description: "OpenCode Go subscription", credentialURL: "https://opencode.ai/auth", capabilities: credentialModel},
 	{name: "tavily", environment: "TAVILY_API_KEY", description: "web search", credentialURL: "https://app.tavily.com", capabilities: credentialWebSearch},
-	{name: "firecrawl", environment: "FIRECRAWL_API_KEY", description: "web fetch fallback", credentialURL: "https://www.firecrawl.dev/app/api-keys", capabilities: credentialWebFetch},
+	{name: "firecrawl", environment: "FIRECRAWL_API_KEY", description: "web fetch", credentialURL: "https://www.firecrawl.dev/app/api-keys", capabilities: credentialWebFetch},
 	{name: "exa", environment: "EXA_API_KEY", description: "web search and fetch", credentialURL: "https://dashboard.exa.ai/api-keys", capabilities: credentialWebSearch | credentialWebFetch},
 }
 
@@ -142,6 +142,7 @@ func providerStatuses(store *state.Store) ([]ProviderStatus, error) {
 			Source:        source,
 			Description:   spec.description,
 			CredentialURL: spec.credentialURL,
+			ToolService:   spec.capabilities&credentialModel == 0,
 		})
 	}
 	return statuses, nil

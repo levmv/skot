@@ -85,6 +85,7 @@ type ProviderStatus struct {
 	Source        string
 	Description   string
 	CredentialURL string
+	ToolService   bool
 }
 
 // ModelChoice is one locally known route presented to frontends. Unavailable

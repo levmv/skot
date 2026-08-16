@@ -119,15 +119,16 @@ type pickerItem struct {
 	description string
 	// activeDetail is shown only while the row is selected: facts that inform
 	// the choice already being made rather than the choice between rows.
-	activeDetail string
-	current      bool
-	dimmed       bool
-	custom       bool
-	source       string
-	modelURI     string
-	efforts      []string
-	effortIndex  int
-	details      string
+	activeDetail  string
+	current       bool
+	dimmed        bool
+	custom        bool
+	dividerBefore bool
+	source        string
+	modelURI      string
+	efforts       []string
+	effortIndex   int
+	details       string
 }
 
 // pickerNavigation is how a picker is driven beyond the arrow keys. Digits

@@ -93,7 +93,7 @@ Web tools use separate credentials:
 | --- | --- | --- |
 | Tavily | `TAVILY_API_KEY` | Web search |
 | Exa | `EXA_API_KEY` | Web search and fetch |
-| Firecrawl | `FIRECRAWL_API_KEY` | Web-fetch fallback |
+| Firecrawl | `FIRECRAWL_API_KEY` | Web fetch |
 
 An explicit `-model-api` or `-base-url` can make a route unverified. Skot
 retains conservative protocol defaults in that case and reports a compatibility

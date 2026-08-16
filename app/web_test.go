@@ -71,11 +71,16 @@ func TestProviderStatusesIncludeWebServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	descriptions := make(map[string]string, len(statuses))
+	toolServices := make(map[string]bool, len(statuses))
 	for _, status := range statuses {
 		descriptions[status.Name] = status.Description
+		toolServices[status.Name] = status.ToolService
 	}
-	if descriptions["tavily"] != "web search" || descriptions["firecrawl"] != "web fetch fallback" || descriptions["exa"] != "web search and fetch" {
+	if descriptions["tavily"] != "web search" || descriptions["firecrawl"] != "web fetch" || descriptions["exa"] != "web search and fetch" {
 		t.Fatalf("provider statuses = %#v", descriptions)
+	}
+	if toolServices["deepseek"] || !toolServices["tavily"] || !toolServices["firecrawl"] || !toolServices["exa"] {
+		t.Fatalf("tool service statuses = %#v", toolServices)
 	}
 }
 

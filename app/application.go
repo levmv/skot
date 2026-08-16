@@ -512,6 +512,15 @@ func (application *Application) SessionID() string {
 	return application.state.session.id
 }
 
+// HasUserTurn reports whether the current session has received a submitted
+// user input. Empty interactive sessions are not resumable after Close.
+func (application *Application) HasUserTurn() bool {
+	application.mu.RLock()
+	current := application.state.session
+	application.mu.RUnlock()
+	return current != nil && current.journal != nil && current.journal.HasUserTurn()
+}
+
 func (application *Application) ListSessions() ([]SessionSummary, error) {
 	home, root := application.config.home, application.config.root
 	summaries, err := session.List(home, root)

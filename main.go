@@ -169,6 +169,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, application.Close()) }()
+	if interactive {
+		// Registered after Close so it runs before it: Close drops the session,
+		// and the hint would then see no user turn.
+		defer writeInteractiveResumeHint(stderr, application)
+	}
 	for _, notice := range application.StartupNotices() {
 		fmt.Fprintln(stderr, "sk: "+notice)
 	}
@@ -233,10 +238,31 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.TotalTokens)
 	}
 	autoRetained := !sessionWasResumable && application.SessionID() != ""
-	if (config.saveSession || len(result.DetachedJobs) != 0 || autoRetained) && application.SessionID() != "" {
-		fmt.Fprintf(stderr, "Resume with: sk resume %s\n", application.ShortSessionID())
+	if config.saveSession || len(result.DetachedJobs) != 0 || autoRetained {
+		writeResumeHint(stderr, application.ShortSessionID())
 	}
 	return runErr
+}
+
+type interactiveSession interface {
+	HasUserTurn() bool
+	ShortSessionID() string
+}
+
+func writeInteractiveResumeHint(output io.Writer, session interactiveSession) {
+	if !session.HasUserTurn() {
+		return
+	}
+	writeResumeHint(output, session.ShortSessionID())
+}
+
+// writeResumeHint prints nothing for sessions Skot cannot address, such as an
+// external journal opened with -journal.
+func writeResumeHint(output io.Writer, id string) {
+	if id == "" {
+		return
+	}
+	fmt.Fprintf(output, "Resume with: sk resume %s\n", id)
 }
 
 func subtractUsage(total, previous agent.ModelUsage) agent.ModelUsage {

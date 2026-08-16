@@ -155,6 +155,20 @@ func (store *Store) TailRepaired() bool {
 	return store.tailRepaired
 }
 
+// HasUserTurn reports whether the journal contains a submitted user input.
+// Inspecting the record kinds keeps the answer valid for both live and reopened
+// sessions without depending on a caller's replay snapshot.
+func (store *Store) HasUserTurn() bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, record := range store.records {
+		if record.Kind == agent.RecordRunInputAdded {
+			return true
+		}
+	}
+	return false
+}
+
 // ClosePruningEmpty closes a newly-created managed session and removes its
 // journal and directory if no record was ever written.
 func (store *Store) ClosePruningEmpty() error {

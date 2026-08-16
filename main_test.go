@@ -51,6 +51,34 @@ func TestHelpListsAnthropicMessagesAsImplemented(t *testing.T) {
 	}
 }
 
+func TestWriteInteractiveResumeHint(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		session interactiveSessionStub
+		want    string
+	}{
+		{name: "empty session", session: interactiveSessionStub{id: "0123456789ab"}},
+		{name: "external journal", session: interactiveSessionStub{hasUserTurn: true}},
+		{name: "resumable session", session: interactiveSessionStub{hasUserTurn: true, id: "0123456789ab"}, want: "Resume with: sk resume 0123456789ab\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			writeInteractiveResumeHint(&output, test.session)
+			if output.String() != test.want {
+				t.Fatalf("output = %q, want %q", output.String(), test.want)
+			}
+		})
+	}
+}
+
+type interactiveSessionStub struct {
+	hasUserTurn bool
+	id          string
+}
+
+func (session interactiveSessionStub) HasUserTurn() bool      { return session.hasUserTurn }
+func (session interactiveSessionStub) ShortSessionID() string { return session.id }
+
 func TestVerboseEmitterReportsDurableStatusEvents(t *testing.T) {
 	var output bytes.Buffer
 	emit := verboseEmitter(true, &output)

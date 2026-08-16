@@ -790,7 +790,15 @@ func TestApplicationCustomBaseURLDoesNotRequireCredential(t *testing.T) {
 
 func TestApplicationClearSessionSwapsJournalAndPrunesEmptySession(t *testing.T) {
 	application, oldJournal := newSessionApplication(t)
+	if application.HasUserTurn() {
+		t.Fatal("new session has a user turn")
+	}
 	oldID := application.SessionID()
+	appendApplicationRecord(t, oldJournal, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "run"})
+	appendApplicationRecord(t, oldJournal, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "run", Text: "hello"})
+	if !application.HasUserTurn() {
+		t.Fatal("application missed its current user turn")
+	}
 	id, err := application.ClearSession(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -804,6 +812,9 @@ func TestApplicationClearSessionSwapsJournalAndPrunesEmptySession(t *testing.T) 
 	state, err := application.State(context.Background())
 	if err != nil || len(state.Items) != 0 || state.SessionID != "" {
 		t.Fatalf("new state = %#v, %v", state, err)
+	}
+	if application.HasUserTurn() {
+		t.Fatal("cleared session retained the previous user turn")
 	}
 	dir := filepath.Join(application.config.home, "sessions", id)
 	if err := application.Close(); err != nil {

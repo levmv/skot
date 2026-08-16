@@ -251,6 +251,49 @@ func TestClosePruningEmptyRemovesOnlyEmptyManagedSession(t *testing.T) {
 	}
 }
 
+func TestHasUserTurnTracksLiveAndReopenedJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.HasUserTurn() {
+		t.Fatal("empty journal has a user turn")
+	}
+	for _, pending := range []agent.PendingRecord{
+		{Kind: agent.RecordSessionStarted, Data: json.RawMessage(`{"schema_version":1,"session_id":"session"}`)},
+		{Kind: agent.RecordRunStarted, Data: json.RawMessage(`{"run_id":"run"}`)},
+	} {
+		if _, err := store.Append(context.Background(), pending); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.HasUserTurn() {
+		t.Fatal("session metadata has a user turn")
+	}
+	if _, err := store.Append(context.Background(), agent.PendingRecord{
+		Kind: agent.RecordRunInputAdded,
+		Data: json.RawMessage(`{"run_id":"run","text":"hello"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !store.HasUserTurn() {
+		t.Fatal("live journal missed its user turn")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !reopened.HasUserTurn() {
+		t.Fatal("reopened journal missed its user turn")
+	}
+}
+
 func TestCloseDiscardingRemovesNonemptyProvisionalSession(t *testing.T) {
 	home := t.TempDir()
 	store, id, err := Create(home)

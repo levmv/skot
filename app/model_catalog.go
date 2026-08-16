@@ -63,6 +63,7 @@ type resolvedModelRoute struct {
 	ContextWindow          int
 	ContextWindowEstimated bool
 	MaxOutputTokens        int
+	PromptCache            bool
 	ReasoningEffort        string
 	ReasoningEfforts       []string
 	ChatTraits             chatcompletions.RouteTraits
@@ -316,6 +317,9 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	if api == modelAPIAnthropicMessages && !customEndpoint && declaration.API == modelAPIAnthropicMessages {
 		maxOutputTokens = declaration.MaxOutputTokens
 	}
+	// Placing cache breakpoints is a route claim like the traits above: a custom
+	// compatible endpoint starts from the conservative generic behavior.
+	promptCache := api == modelAPIAnthropicMessages && !customEndpoint && providerDescription.promptCache
 
 	contextWindow, contextEstimated := 0, false
 	switch {
@@ -352,7 +356,7 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		URI: provider + "/" + model, Provider: provider, Model: model, APIModel: apiModel, API: api,
 		BaseURL: baseURL, Header: header, Credentialless: providerDescription.credentialless,
 		CustomEndpoint: customEndpoint, ContextWindow: contextWindow, ContextWindowEstimated: contextEstimated,
-		MaxOutputTokens: maxOutputTokens,
+		MaxOutputTokens: maxOutputTokens, PromptCache: promptCache,
 		ReasoningEffort: reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,
 		Compatibility: compatibility, ProviderStateContract: stateContract,

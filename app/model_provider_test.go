@@ -144,8 +144,11 @@ func TestOpenCodeGoKnownAnthropicRouteDoesNotFallBackToChatCompletions(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The subscription endpoint caches on its own, so Skot places no breakpoints
+	// of its own and leaves the protocol budget to it.
 	if route.API != modelAPIAnthropicMessages || route.Compatibility != modelCompatibilitySupported ||
-		route.ContextWindow != 1_000_000 || route.MaxOutputTokens != 131_072 || len(route.ReasoningEfforts) != 1 || route.ReasoningEfforts[0] != "" {
+		route.ContextWindow != 1_000_000 || route.MaxOutputTokens != 131_072 || route.PromptCache ||
+		len(route.ReasoningEfforts) != 1 || route.ReasoningEfforts[0] != "" {
 		t.Fatalf("Anthropic route = %#v", route)
 	}
 	redundantOverride, err := resolveModelRoute("opencode-go/minimax-m3", "", modelRouteOverrides{
@@ -175,17 +178,18 @@ func TestAnthropicProviderRoutesThroughNativeMessages(t *testing.T) {
 	}
 	if route.API != modelAPIAnthropicMessages || route.BaseURL != "https://api.anthropic.com/v1" ||
 		route.Compatibility != modelCompatibilitySupported || route.ContextWindow != 1_000_000 ||
-		route.ContextWindowEstimated || route.MaxOutputTokens != 128_000 {
+		route.ContextWindowEstimated || route.MaxOutputTokens != 128_000 || !route.PromptCache {
 		t.Fatalf("Anthropic route = %#v", route)
 	}
 	// Undeclared models stay usable on the provider default protocol; only the
-	// reviewed route facts are withheld.
+	// reviewed route facts are withheld. Caching belongs to the endpoint rather
+	// than the model, so it survives.
 	undeclared, err := resolveModelRoute("anthropic/claude-unreleased", "", modelRouteOverrides{}, modelRouteEnrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if undeclared.API != modelAPIAnthropicMessages || undeclared.Compatibility != modelCompatibilityUnverified ||
-		undeclared.MaxOutputTokens != 0 || !undeclared.ContextWindowEstimated {
+		undeclared.MaxOutputTokens != 0 || !undeclared.ContextWindowEstimated || !undeclared.PromptCache {
 		t.Fatalf("undeclared Anthropic route = %#v", undeclared)
 	}
 	custom, err := resolveModelRoute("anthropic/claude-opus-5", "", modelRouteOverrides{
@@ -195,7 +199,8 @@ func TestAnthropicProviderRoutesThroughNativeMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	if custom.BaseURL != "https://gateway.example/v1" || custom.API != modelAPIAnthropicMessages ||
-		custom.MaxOutputTokens != 0 || custom.ContextWindow != unknownModelContextWindow || !custom.ContextWindowEstimated {
+		custom.MaxOutputTokens != 0 || custom.ContextWindow != unknownModelContextWindow ||
+		!custom.ContextWindowEstimated || custom.PromptCache {
 		t.Fatalf("custom Anthropic route = %#v", custom)
 	}
 }

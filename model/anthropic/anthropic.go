@@ -59,10 +59,14 @@ type Config struct {
 	MaxTokens              int
 	ContextWindow          int
 	ContextWindowEstimated bool
-	BaseURL                string
-	HTTPClient             *http.Client
-	Authorizer             Authorizer
-	Header                 http.Header
+	// PromptCache marks endpoints that honor cache_control breakpoints. It stays
+	// off for compatible endpoints that place their own breakpoints, because the
+	// protocol allows only a few per request.
+	PromptCache bool
+	BaseURL     string
+	HTTPClient  *http.Client
+	Authorizer  Authorizer
+	Header      http.Header
 }
 
 type Backend struct {
@@ -72,6 +76,7 @@ type Backend struct {
 	maxTokens          int
 	contextWindow      int
 	contextEstimated   bool
+	promptCache        bool
 	baseURL            string
 	endpoint           string
 	client             *http.Client
@@ -118,7 +123,8 @@ func New(config Config) (*Backend, error) {
 	return &Backend{
 		provider: provider, model: model, apiModel: apiModel, maxTokens: maxTokens,
 		contextWindow: config.ContextWindow, contextEstimated: config.ContextWindowEstimated,
-		baseURL: baseURL, endpoint: baseURL + "/messages", client: client,
+		promptCache: config.PromptCache,
+		baseURL:     baseURL, endpoint: baseURL + "/messages", client: client,
 		authorizer: config.Authorizer, header: config.Header.Clone(),
 		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil

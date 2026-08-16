@@ -24,17 +24,22 @@ type message struct {
 }
 
 type contentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	Thinking  *string         `json:"thinking,omitempty"`
-	Signature string          `json:"signature,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   *string         `json:"content,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	Thinking     *string         `json:"thinking,omitempty"`
+	Signature    string          `json:"signature,omitempty"`
+	Data         json.RawMessage `json:"data,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
+	Content      *string         `json:"content,omitempty"`
+	IsError      bool            `json:"is_error,omitempty"`
+	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+}
+
+type cacheControl struct {
+	Type string `json:"type"`
 }
 
 type toolDefinition struct {
@@ -162,10 +167,28 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesReques
 		}
 		system += "Conversation summary:\n" + request.Summary
 	}
+	if backend.promptCache {
+		markPromptCacheBreakpoint(messages)
+	}
 	return messagesRequest{
 		Model: backend.apiModel, MaxTokens: backend.maxTokens, System: system,
 		Messages: messages, Tools: tools, Stream: true,
 	}, nil
+}
+
+// markPromptCacheBreakpoint caches everything the request sends before its final
+// block: tools, instructions, and the whole replayed history. A tool turn then
+// reads the previous turn's prefix and writes only what it appended, which is
+// what keeps a long agent loop affordable on metered Anthropic routes.
+func markPromptCacheBreakpoint(messages []message) {
+	if len(messages) == 0 {
+		return
+	}
+	blocks := messages[len(messages)-1].Content
+	if len(blocks) == 0 {
+		return
+	}
+	blocks[len(blocks)-1].CacheControl = &cacheControl{Type: "ephemeral"}
 }
 
 func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, error) {

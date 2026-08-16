@@ -615,6 +615,69 @@ func TestBuildRequestUsesDefaultMaxTokens(t *testing.T) {
 	}
 }
 
+func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
+	items := []agent.Item{
+		{Kind: agent.ItemUserText, Text: "read the file"},
+		{Kind: agent.ItemAssistantText, ResponseID: "response_1", Text: "checking"},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+			ID: "call_1", Name: "read_file", RawArguments: `{"path":"README.md"}`,
+		}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+	}
+
+	plain, err := plainRequest(newTestBackend(t, "http://example.invalid/v1"), items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if breakpoints(plain) != 0 {
+		t.Fatalf("unrequested cache breakpoints: %#v", plain.Messages)
+	}
+
+	backend, err := New(Config{
+		Provider: "test", Model: "test-model", MaxTokens: 1024, PromptCache: true,
+		BaseURL: "http://example.invalid/v1", Authorizer: APIKey("secret"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := plainRequest(backend, items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The protocol caps breakpoints per request, so exactly one must land, and it
+	// must be last: it caches every earlier block including tools and system.
+	if breakpoints(cached) != 1 {
+		t.Fatalf("cache breakpoints = %d, want 1", breakpoints(cached))
+	}
+	blocks := cached.Messages[len(cached.Messages)-1].Content
+	final := blocks[len(blocks)-1]
+	if final.Type != "tool_result" || final.CacheControl == nil || final.CacheControl.Type != "ephemeral" {
+		t.Fatalf("final block = %#v", final)
+	}
+
+	// An empty turn has nothing to anchor a breakpoint to.
+	empty, err := backend.buildRequest(agent.ModelRequest{})
+	if err != nil || breakpoints(empty) != 0 {
+		t.Fatalf("empty request/error = %#v/%v", empty, err)
+	}
+}
+
+func plainRequest(backend *Backend, items []agent.Item) (messagesRequest, error) {
+	return backend.buildRequest(agent.ModelRequest{Instructions: "instructions", Items: items})
+}
+
+func breakpoints(request messagesRequest) int {
+	count := 0
+	for _, message := range request.Messages {
+		for _, block := range message.Content {
+			if block.CacheControl != nil {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 func TestNewRejectsNegativeMaxTokens(t *testing.T) {
 	if _, err := New(Config{
 		Provider: "test", Model: "model", MaxTokens: -1,

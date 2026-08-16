@@ -409,7 +409,7 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 		}
 		backend, err = anthropic.New(anthropic.Config{
 			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
-			MaxTokens:     route.MaxOutputTokens,
+			MaxTokens: route.MaxOutputTokens, PromptCache: route.PromptCache,
 			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: apiKeyAuthorizer, Header: route.Header,
 		})

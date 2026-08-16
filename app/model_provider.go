@@ -7,10 +7,14 @@ import (
 )
 
 type providerSpec struct {
-	baseURL              string
-	header               http.Header
-	credentialless       bool
-	defaultAPI           modelAPI
+	baseURL        string
+	header         http.Header
+	credentialless bool
+	defaultAPI     modelAPI
+	// promptCache marks endpoints that expect the caller to place Anthropic
+	// cache_control breakpoints. Compatible endpoints that cache on their own
+	// leave it off so Skot does not compete for the few breakpoints allowed.
+	promptCache          bool
 	requireDeclaredModel bool
 }
 
@@ -23,8 +27,11 @@ const (
 )
 
 var modelProviderCatalog = map[string]providerSpec{
-	"deepseek":  {baseURL: "https://api.deepseek.com/v1", defaultAPI: modelAPIChatCompletions},
-	"anthropic": {baseURL: "https://api.anthropic.com/v1", defaultAPI: modelAPIAnthropicMessages},
+	"deepseek": {baseURL: "https://api.deepseek.com/v1", defaultAPI: modelAPIChatCompletions},
+	"anthropic": {
+		baseURL: "https://api.anthropic.com/v1", defaultAPI: modelAPIAnthropicMessages,
+		promptCache: true,
+	},
 	"openrouter": {
 		baseURL:    "https://openrouter.ai/api/v1",
 		defaultAPI: modelAPIChatCompletions,

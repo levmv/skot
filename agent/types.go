@@ -300,7 +300,7 @@ type RecordKind string
 // JournalSchemaVersion versions the required semantic projection of a journal,
 // not its exact set of record kinds or optional payload fields. Incompatible
 // semantic changes require an explicit migration rather than best-effort replay.
-const JournalSchemaVersion = 2
+const JournalSchemaVersion = 3
 
 const auxiliaryRecordKindPrefix = "aux/"
 
@@ -404,7 +404,7 @@ type RuntimePolicySnapshot struct {
 type ExecutionEnvironmentSnapshot struct {
 	Endpoint     string                `json:"endpoint,omitempty"`
 	Build        BuildSnapshot         `json:"build,omitzero"`
-	Sandbox      SandboxSnapshot       `json:"sandbox"`
+	Scope        ScopeSnapshot         `json:"scope"`
 	ProgramTools []ProgramToolSnapshot `json:"program_tools,omitempty"`
 }
 
@@ -433,14 +433,15 @@ type ProgramToolSnapshot struct {
 	EnvironmentNames []string `json:"environment_names,omitempty"`
 }
 
-// SandboxSnapshot describes an execution boundary owned and enforced outside
+// ScopeSnapshot describes an execution boundary owned and enforced outside
 // agent.Runtime. The runtime records it but does not interpret or implement it.
-type SandboxSnapshot struct {
-	RequestedPolicy string `json:"requested_policy,omitempty"`
-	EffectivePolicy string `json:"effective_policy,omitempty"`
-	Backend         string `json:"backend,omitempty"`
-	Container       string `json:"container,omitempty"`
-	Network         string `json:"network,omitempty"`
+type ScopeSnapshot struct {
+	RequestedScope     string `json:"requested_scope,omitempty"`
+	EffectiveScope     string `json:"effective_scope,omitempty"`
+	ProtectedPathCount int    `json:"protected_path_count,omitempty"`
+	Backend            string `json:"backend,omitempty"`
+	Container          string `json:"container,omitempty"`
+	Network            string `json:"network,omitempty"`
 }
 
 type RunInputAddedRecord struct {

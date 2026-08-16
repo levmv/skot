@@ -7,36 +7,36 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-type sandboxSwitchState struct {
+type scopeSwitchState struct {
 	pending bool
 	cancel  context.CancelFunc
-	// previous is the policy in force when the switch started, kept so the
+	// previous is the scope in force when the switch started, kept so the
 	// result can name where it came from once the async switch lands.
 	previous string
 }
 
-func (m *screenModel) startSandboxSwitch(policy string) tea.Cmd {
-	if m.sandbox.pending {
-		m.addBlock(screenBlockError, "sandbox: a policy switch is already in progress")
+func (m *screenModel) startScopeSwitch(scope string) tea.Cmd {
+	if m.scope.pending {
+		m.addBlock(screenBlockError, "scope: a switch is already in progress")
 		return nil
 	}
 	operationCtx, cancel := context.WithCancel(m.ctx)
 	concurrent := m.operation.isTurn()
-	previous := m.agent.CurrentSandbox()
-	m.sandbox = sandboxSwitchState{pending: true, cancel: cancel, previous: previous}
+	previous := m.agent.CurrentScope()
+	m.scope = scopeSwitchState{pending: true, cancel: cancel, previous: previous}
 	if !concurrent {
-		m.operation = activeOperation{kind: operationSandbox, startedAt: time.Now(), cancel: cancel}
+		m.operation = activeOperation{kind: operationScope, startedAt: time.Now(), cancel: cancel}
 	}
 	return func() tea.Msg {
-		err := m.agent.SwitchSandbox(operationCtx, policy)
-		current := m.agent.CurrentSandbox()
+		err := m.agent.SwitchScope(operationCtx, scope)
+		current := m.agent.CurrentScope()
 		notice := ""
 		if err == nil && current != previous {
-			notice = m.agent.SandboxNotice()
+			notice = m.agent.ScopeNotice()
 		}
-		return sandboxDoneMsg{
-			policy:     current,
-			summary:    m.agent.SecuritySummary(),
+		return scopeDoneMsg{
+			scope:      current,
+			summary:    m.agent.ScopeSummary(),
 			notice:     notice,
 			concurrent: concurrent,
 			err:        err,
@@ -44,25 +44,25 @@ func (m *screenModel) startSandboxSwitch(policy string) tea.Cmd {
 	}
 }
 
-func (m *screenModel) finishSandboxSwitch(message sandboxDoneMsg) {
-	if m.sandbox.cancel != nil {
-		m.sandbox.cancel()
+func (m *screenModel) finishScopeSwitch(message scopeDoneMsg) {
+	if m.scope.cancel != nil {
+		m.scope.cancel()
 	}
-	previous := m.sandbox.previous
-	m.sandbox = sandboxSwitchState{}
+	previous := m.scope.previous
+	m.scope = scopeSwitchState{}
 	if !message.concurrent {
 		m.operation.clear()
 	}
 	if message.err != nil {
-		m.addBlock(screenBlockError, "sandbox: "+message.err.Error())
+		m.addBlock(screenBlockError, "scope: "+message.err.Error())
 		return
 	}
-	text := formatSettingChange("sandbox policy", previous, message.policy) + "\n" + message.summary
+	text := formatSettingChange("filesystem scope", previous, message.scope) + "\n" + message.summary
 	if message.notice != "" {
 		text += "\nwarning: " + message.notice
 	}
 	if message.concurrent {
-		text += "\nnew processes use this policy; already running processes retain their launch policy"
+		text += "\nnew processes use this scope; already running processes retain their launch scope"
 	}
 	m.addBlock(screenBlockSystem, text)
 }

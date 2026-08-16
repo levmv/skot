@@ -10,56 +10,58 @@ import (
 	workspacetools "github.com/levmv/skot/tools"
 )
 
-func TestSecuritySummaryMakesEffectiveBoundaryVisible(t *testing.T) {
+func TestScopeSummaryMakesEffectiveBoundaryVisible(t *testing.T) {
 	host := securityState{
-		RequestedPolicy: workspacetools.SandboxAuto,
-		EffectivePolicy: workspacetools.SandboxWorkspace,
-		Backend:         "landlock",
+		RequestedScope: workspacetools.ScopeAuto,
+		EffectiveScope: workspacetools.ScopeWorkspace,
+		Backend:        "landlock",
 	}
-	if got := host.Summary(); got != "sandbox: workspace (auto)" {
+	if got := host.Summary(); got != "scope: workspace (auto)" {
 		t.Fatalf("host summary = %q", got)
 	}
 	container := securityState{
-		RequestedPolicy: workspacetools.SandboxAuto,
-		EffectivePolicy: workspacetools.SandboxMasked,
-		Backend:         "landlock",
-		Container:       "docker",
+		RequestedScope:     workspacetools.ScopeAuto,
+		EffectiveScope:     workspacetools.ScopeMachine,
+		Backend:            "landlock",
+		Container:          "docker",
+		ProtectedPathCount: 2,
 	}
-	if got := container.Summary(); got != "sandbox: masked (auto, docker)" {
+	if got := container.Summary(); got != "scope: machine (auto, docker) · protected paths: 2" {
 		t.Fatalf("container summary = %q", got)
 	}
 }
 
-func TestAutoResolvesToConcretePolicy(t *testing.T) {
-	if got := resolveSandboxPolicy(workspacetools.SandboxAuto, ""); got != workspacetools.SandboxWorkspace {
+func TestAutoResolvesToConcreteScope(t *testing.T) {
+	if got := resolveScope(workspacetools.ScopeAuto, ""); got != workspacetools.ScopeWorkspace {
 		t.Fatalf("host auto = %q", got)
 	}
-	if got := resolveSandboxPolicy(workspacetools.SandboxAuto, "docker"); got != workspacetools.SandboxMasked {
+	if got := resolveScope(workspacetools.ScopeAuto, "docker"); got != workspacetools.ScopeMachine {
 		t.Fatalf("container auto = %q", got)
 	}
-	for _, policy := range []string{workspacetools.SandboxWorkspace, workspacetools.SandboxMasked, workspacetools.SandboxOff} {
-		if got := resolveSandboxPolicy(policy, "docker"); got != policy {
-			t.Fatalf("explicit %q = %q", policy, got)
+	for _, scope := range []workspacetools.Scope{workspacetools.ScopeWorkspace, workspacetools.ScopeMachine} {
+		if got := resolveScope(scope, "docker"); got != scope {
+			t.Fatalf("explicit %q = %q", scope, got)
 		}
 	}
 }
 
-func TestSandboxFailsClosedAfterFailedProbe(t *testing.T) {
-	state := securityState{EffectivePolicy: workspacetools.SandboxWorkspace, Failure: "unavailable"}
+func TestScopeFailsClosedAfterFailedProbe(t *testing.T) {
+	state := securityState{EffectiveScope: workspacetools.ScopeWorkspace, Failure: "unavailable", BackendRequired: true}
 	if err := validateSecurity(state); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("validateSecurity() error = %v", err)
 	}
 	state.Backend = "landlock"
 	if err := validateSecurity(state); err != nil {
-		t.Fatalf("active sandbox rejected: %v", err)
+		t.Fatalf("active boundary rejected: %v", err)
 	}
 }
 
-func TestAutoSandboxRejectsFailedAvailableBackend(t *testing.T) {
+func TestAutoScopeRejectsFailedAvailableBackend(t *testing.T) {
 	state := securityState{
-		RequestedPolicy: workspacetools.SandboxAuto,
-		EffectivePolicy: workspacetools.SandboxWorkspace,
+		RequestedScope:  workspacetools.ScopeAuto,
+		EffectiveScope:  workspacetools.ScopeWorkspace,
 		Failure:         "workspace probe remained readable",
+		BackendRequired: true,
 	}
 	err := validateSecurity(state)
 	if err == nil || !strings.Contains(err.Error(), state.Failure) {
@@ -67,76 +69,100 @@ func TestAutoSandboxRejectsFailedAvailableBackend(t *testing.T) {
 	}
 }
 
-func TestSandboxOffMustBeExplicit(t *testing.T) {
+func TestMachineWithoutProtectedPathsNeedsNoBackend(t *testing.T) {
 	state := securityState{
-		RequestedPolicy: workspacetools.SandboxAuto,
-		EffectivePolicy: workspacetools.SandboxOff,
+		RequestedScope: workspacetools.ScopeAuto,
+		EffectiveScope: workspacetools.ScopeMachine,
 	}
-	if err := validateSecurity(state); err == nil || !strings.Contains(err.Error(), "explicitly") {
-		t.Fatalf("implicit off error = %v", err)
-	}
-	state.RequestedPolicy = workspacetools.SandboxOff
 	if err := validateSecurity(state); err != nil {
-		t.Fatalf("explicit off rejected: %v", err)
+		t.Fatalf("machine without restrictions rejected: %v", err)
+	}
+	state.ProtectedPathCount = 1
+	state.BackendRequired = true
+	state.Failure = "backend unavailable"
+	if err := validateSecurity(state); err == nil || !strings.Contains(err.Error(), state.Failure) {
+		t.Fatalf("machine protected paths did not fail closed: %v", err)
 	}
 }
 
-func TestSandboxProbeAllowsSkotHomeInsideWorkspace(t *testing.T) {
-	for _, policy := range []string{workspacetools.SandboxWorkspace, workspacetools.SandboxMasked} {
-		t.Run(policy, func(t *testing.T) {
-			root := t.TempDir()
-			home := filepath.Join(root, ".skot")
-			toolHome := workspacetools.WorkspaceToolHome(filepath.Join(root, ".cache", "skot", "tool-home"), root)
-			state := buildSecurityStateWithToolHome(context.Background(), policy, root, home, toolHome)
-			if state.Backend == "" || state.Failure != "" {
-				t.Fatalf("security state = %#v", state)
-			}
-		})
+func TestScopeProbeDoesNotDependOnSkotHome(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, ".skot")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	toolHome := workspacetools.WorkspaceToolHome(filepath.Join(root, ".cache", "skot", "tool-home"), root)
+	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.ScopeWorkspace, root, toolHome)
+	if state.Backend == "" || state.Failure != "" {
+		t.Fatalf("workspace state = %#v", state)
+	}
+	protected := filepath.Join(t.TempDir(), "secret")
+	state = buildSecurityStateWithToolHome(context.Background(), workspacetools.ScopeMachine, root, toolHome, []string{protected})
+	if state.Backend == "" || state.Failure != "" || state.ProtectedPathCount != 1 || !state.BackendRequired {
+		t.Fatalf("machine state = %#v", state)
 	}
 }
 
-func TestSandboxProbeRejectsToolHomeContainingWorkspace(t *testing.T) {
+func TestScopeProbeRejectsToolHomeContainingWorkspace(t *testing.T) {
 	toolHome := t.TempDir()
 	root := filepath.Join(toolHome, "workspace")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	state := buildSecurityStateWithToolHome(
-		context.Background(), workspacetools.SandboxWorkspace, root, t.TempDir(), toolHome,
+		context.Background(), workspacetools.ScopeWorkspace, root, toolHome,
 	)
 	if state.Backend != "" || !strings.Contains(state.Failure, "tool home must not contain") {
 		t.Fatalf("security state = %#v", state)
 	}
 }
 
-func TestOpenExplainsExplicitStartupOptOutAfterSandboxFailure(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(home, "workspace")
-	if err := os.Mkdir(root, 0o700); err != nil {
+func TestWorkspaceProtectedProbeUsesWorkspaceCarveout(t *testing.T) {
+	root := t.TempDir()
+	boundary := workspacetools.Boundary{
+		Scope: workspacetools.ScopeWorkspace, Workspace: root, ToolHome: t.TempDir(),
+		ProtectedPaths: []string{filepath.Join(t.TempDir(), "secret")},
+	}
+	probe, probeBoundary, err := createBoundaryProbe(boundary)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := Open(context.Background(), Config{
-		Home: home, Root: root,
-		Sandbox: workspacetools.SandboxWorkspace, SandboxExplicit: true,
+	t.Cleanup(func() {
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
 	})
-	if err == nil || !strings.Contains(err.Error(), "-sandbox off") {
-		t.Fatalf("startup error = %v", err)
+	if !securityPathContains(root, probe.Name()) {
+		t.Fatalf("workspace carve-out probe was created outside the workspace: %s", probe.Name())
+	}
+	if len(probeBoundary.ProtectedPaths) == 0 || probeBoundary.ProtectedPaths[len(probeBoundary.ProtectedPaths)-1] != probe.Name() {
+		t.Fatalf("probe path is not protected: %#v", probeBoundary.ProtectedPaths)
 	}
 }
 
-func TestSandboxWorkspaceNoticeDescribesLandlockRootLimitation(t *testing.T) {
+func TestWorkspaceFailureNamesMachineEscapeHatch(t *testing.T) {
+	err := validateSecurity(securityState{
+		EffectiveScope:  workspacetools.ScopeWorkspace,
+		Failure:         "no platform filesystem boundary is available",
+		BackendRequired: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "-scope=machine") || !strings.Contains(err.Error(), "SK_SCOPE=machine") {
+		t.Fatalf("scope error = %v", err)
+	}
+}
+
+func TestScopeWorkspaceNoticeDescribesLandlockRootLimitation(t *testing.T) {
 	root := t.TempDir()
-	home := filepath.Join(root, ".skot")
-	state := securityState{EffectivePolicy: workspacetools.SandboxWorkspace, Backend: "landlock"}
-	if got := sandboxWorkspaceNotice(state, root, home); !strings.Contains(got, "cannot list or create entries") {
+	protected := filepath.Join(root, "private")
+	state := securityState{EffectiveScope: workspacetools.ScopeWorkspace, Backend: "landlock"}
+	if got := protectedWorkspaceNotice(state, root, []string{protected}); !strings.Contains(got, "unable to list or create entries") {
 		t.Fatalf("notice = %q", got)
 	}
 	state.Backend = "seatbelt"
-	if got := sandboxWorkspaceNotice(state, root, home); got != "" {
+	if got := protectedWorkspaceNotice(state, root, []string{protected}); got != "" {
 		t.Fatalf("seatbelt notice = %q", got)
 	}
 	state.Backend = "landlock"
-	if got := sandboxWorkspaceNotice(state, root, t.TempDir()); got != "" {
+	if got := protectedWorkspaceNotice(state, root, []string{t.TempDir()}); got != "" {
 		t.Fatalf("disjoint notice = %q", got)
 	}
 }
@@ -162,30 +188,30 @@ func TestCanonicalSecurityPathResolvesMissingPathBelowSymlink(t *testing.T) {
 	}
 }
 
-func TestMaskedPassesRealSandboxProbe(t *testing.T) {
-	root, home, toolRoot := t.TempDir(), t.TempDir(), t.TempDir()
+func TestMachineWithoutProtectedPathsBypassesBackend(t *testing.T) {
+	root, toolRoot := t.TempDir(), t.TempDir()
 	toolHome := workspacetools.WorkspaceToolHome(toolRoot, root)
-	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.SandboxMasked, root, home, toolHome)
-	if state.Backend == "" || state.EffectivePolicy != workspacetools.SandboxMasked || state.Failure != "" {
+	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.ScopeMachine, root, toolHome)
+	if state.Backend != "" || state.EffectiveScope != workspacetools.ScopeMachine || state.Failure != "" || state.BackendRequired {
 		t.Fatalf("security state = %#v", state)
 	}
 }
 
-func TestFullSandboxPassesRealSandboxProbe(t *testing.T) {
-	root, home, toolRoot := t.TempDir(), t.TempDir(), t.TempDir()
+func TestWorkspacePassesRealBoundaryProbe(t *testing.T) {
+	root, toolRoot := t.TempDir(), t.TempDir()
 	toolHome := workspacetools.WorkspaceToolHome(toolRoot, root)
-	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.SandboxWorkspace, root, home, toolHome)
-	if state.Backend == "" || state.EffectivePolicy != workspacetools.SandboxWorkspace || state.Failure != "" {
+	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.ScopeWorkspace, root, toolHome)
+	if state.Backend == "" || state.EffectiveScope != workspacetools.ScopeWorkspace || state.Failure != "" || !state.BackendRequired {
 		t.Fatalf("security state = %#v", state)
 	}
 }
 
-func TestMaskedIgnoresUnusedToolHomeOverlap(t *testing.T) {
-	root, home := t.TempDir(), t.TempDir()
+func TestMachineWithoutProtectedPathsIgnoresUnusedToolHomeOverlap(t *testing.T) {
+	root := t.TempDir()
 	toolHome := filepath.Join(root, ".cache", "skot", "tool-home")
-	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.SandboxMasked, root, home, toolHome)
-	if state.Backend == "" || state.Failure != "" {
-		t.Fatalf("masked depends on unused tool home: %#v", state)
+	state := buildSecurityStateWithToolHome(context.Background(), workspacetools.ScopeMachine, root, toolHome)
+	if state.Backend != "" || state.Failure != "" {
+		t.Fatalf("machine depends on unused tool home: %#v", state)
 	}
 }
 

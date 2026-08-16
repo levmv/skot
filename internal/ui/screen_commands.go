@@ -57,7 +57,7 @@ func init() {
 		{name: "/login", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
 		{name: "/model", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
-		{name: "/sandbox", description: "show or switch model filesystem isolation", usage: "/sandbox [auto|workspace|masked|off]", maxArgs: 1, duringTurn: true, run: runSandboxCommand},
+		{name: "/scope", description: "show or switch model filesystem scope", usage: "/scope [auto|workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
 		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
 		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
@@ -68,11 +68,10 @@ func init() {
 	}
 }
 
-var sandboxPickerItems = []pickerItem{
-	{value: "auto", label: "auto", description: "workspace on a host, masked in a container"},
-	{value: "workspace", label: "workspace", description: "workspace and tool home only; protected paths stay hidden"},
-	{value: "masked", label: "masked", description: "ambient filesystem except protected paths"},
-	{value: "off", label: "off", description: "ambient model process authority"},
+var scopePickerItems = []pickerItem{
+	{value: "auto", label: "auto", description: "workspace on a host, machine inside a container"},
+	{value: "workspace", label: "workspace", description: "the workspace and a disposable tool home"},
+	{value: "machine", label: "machine", description: "the surrounding filesystem, minus protected paths"},
 }
 
 var themePickerItems = []pickerItem{
@@ -89,9 +88,9 @@ func (m *screenModel) syncCommandSuggestions() {
 		for _, toolSet := range m.agent.ToolSets() {
 			candidates = append(candidates, "/tools "+toolSet)
 		}
-	case strings.HasPrefix(value, "/sandbox "):
-		for _, item := range sandboxPickerItems {
-			candidates = append(candidates, "/sandbox "+item.value)
+	case strings.HasPrefix(value, "/scope "):
+		for _, item := range scopePickerItems {
+			candidates = append(candidates, "/scope "+item.value)
 		}
 	case strings.HasPrefix(value, "/theme "):
 		for _, item := range themePickerItems {
@@ -337,14 +336,14 @@ func runToolsCommand(m *screenModel, input string, args []string) tea.Cmd {
 	return nil
 }
 
-func runSandboxCommand(m *screenModel, input string, args []string) tea.Cmd {
+func runScopeCommand(m *screenModel, input string, args []string) tea.Cmd {
 	if len(args) == 0 {
 		m.composer.remember(input)
-		m.openSandboxPicker()
+		m.openScopePicker()
 		return nil
 	}
 	m.acceptCommand(input)
-	return m.startSandboxSwitch(args[0])
+	return m.startScopeSwitch(args[0])
 }
 
 func runThemeCommand(m *screenModel, input string, args []string) tea.Cmd {
@@ -556,9 +555,9 @@ func toolSetDescription(tools []string) string {
 	return strings.Join(tools, ", ")
 }
 
-func (m *screenModel) openSandboxPicker() {
-	items := append([]pickerItem(nil), sandboxPickerItems...)
-	m.openPicker(pickerSandbox, items, markCurrentPickerItem(items, m.agent.CurrentSandbox()))
+func (m *screenModel) openScopePicker() {
+	items := append([]pickerItem(nil), scopePickerItems...)
+	m.openPicker(pickerScope, items, markCurrentPickerItem(items, m.agent.CurrentScope()))
 }
 
 func (m *screenModel) openThemePicker() {
@@ -605,7 +604,7 @@ const currentPickerMark = "  ✓"
 // Search-filtered pickers are excluded, since the column would move while typing.
 func pickerAlignsDescriptions(kind pickerKind) bool {
 	switch kind {
-	case pickerToolSet, pickerSandbox, pickerTheme:
+	case pickerToolSet, pickerScope, pickerTheme:
 		return true
 	default:
 		return false
@@ -627,7 +626,7 @@ func pickerNavigationFor(kind pickerKind) pickerNavigation {
 	switch kind {
 	case pickerModel:
 		return navigationSearch
-	case pickerToolSet, pickerSandbox, pickerTheme, pickerLogin, pickerSession:
+	case pickerToolSet, pickerScope, pickerTheme, pickerLogin, pickerSession:
 		return navigationNumbers
 	default:
 		// Logout keeps arrows only: it is the one destructive picker, and rare
@@ -809,11 +808,11 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			m.refreshSessionStatus()
 			m.addBlock(screenBlockSystem, toolSetChangeNotice(before, m.agent.CurrentToolSet()))
 		}
-	case pickerSandbox:
+	case pickerScope:
 		if item.current {
 			return m, nil
 		}
-		return m, m.startSandboxSwitch(item.value)
+		return m, m.startScopeSwitch(item.value)
 	case pickerTheme:
 		if item.current && item.value != ThemeAuto {
 			return m, nil

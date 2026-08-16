@@ -17,10 +17,9 @@ const (
 	ToolSetEdit     = toolpolicy.ToolSetEdit
 	ToolSetReadOnly = toolpolicy.ToolSetReadOnly
 
-	SandboxAuto      = workspacetools.SandboxAuto
-	SandboxWorkspace = workspacetools.SandboxWorkspace
-	SandboxMasked    = workspacetools.SandboxMasked
-	SandboxOff       = workspacetools.SandboxOff
+	ScopeAuto      = workspacetools.ScopeAuto
+	ScopeWorkspace = workspacetools.ScopeWorkspace
+	ScopeMachine   = workspacetools.ScopeMachine
 
 	// Defaults bound one logical model request, not a full agent run. A new
 	// budget starts after every successful model response.
@@ -65,12 +64,11 @@ type Config struct {
 	ToolSetExplicit bool
 	// AgentModels adds model URIs which the opt-in agent tool may select for a
 	// child. Omitting a model always inherits the parent's current selection.
-	AgentModels     []string
-	Sandbox         string
-	SandboxExplicit bool
+	AgentModels   []string
+	Scope         string
+	ScopeExplicit bool
 	// ProtectedPaths adds model-inaccessible paths to those loaded from
-	// config.json. Relative paths are resolved from Root; Skot Home is always
-	// protected while the sandbox is workspace or masked.
+	// config.json. Relative paths are resolved from Root.
 	ProtectedPaths []string
 	JournalPath    string
 	Resume         bool

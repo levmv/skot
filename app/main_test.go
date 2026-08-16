@@ -8,7 +8,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if workspacetools.RunSandboxChildIfRequested() {
+	if workspacetools.RunBoundaryChildIfRequested() {
 		return
 	}
 	if workspacetools.RunJobWorkerIfRequested() {

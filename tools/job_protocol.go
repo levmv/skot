@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	jobProtocolVersion = 2
+	jobProtocolVersion = 3
 
 	jobMetadataFile  = "job.json"
 	jobControlFile   = "control"
@@ -40,7 +40,7 @@ type jobMetadata struct {
 	StartedAt      time.Time `json:"started_at"`
 	TimeoutMillis  int64     `json:"timeout_ms"`
 	SeparateStderr bool      `json:"separate_stderr,omitempty"`
-	SandboxPolicy  string    `json:"sandbox_policy,omitempty"`
+	Scope          Scope     `json:"scope,omitempty"`
 	Detach         bool      `json:"detach,omitempty"`
 }
 
@@ -154,6 +154,9 @@ func validateJobMetadata(metadata jobMetadata, jobDir, sessionID string) error {
 	}
 	if strings.TrimSpace(metadata.Command) == "" || metadata.StartedAt.IsZero() || metadata.TimeoutMillis <= 0 {
 		return errors.New("job timing metadata is invalid")
+	}
+	if err := validateConcreteScope(metadata.Scope); err != nil {
+		return fmt.Errorf("job filesystem scope is invalid: %w", err)
 	}
 	return nil
 }

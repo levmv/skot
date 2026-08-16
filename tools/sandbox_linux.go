@@ -35,41 +35,44 @@ func runSandboxChildIfRequested() bool {
 
 func sandboxBackend() string { return "landlock" }
 
-func sandboxedBashCommand(command, workdir string, sandbox Sandbox) (*exec.Cmd, error) {
-	if sandbox.Policy == SandboxOff {
+func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
+	if err := validateConcreteScope(boundary.Scope); err != nil {
+		return nil, err
+	}
+	if !boundary.NeedsBackend() {
 		return ambientBashCommand(command, workdir), nil
 	}
 	bash := systemBashPath()
 	if bash == "" {
 		return nil, errors.New("system Bash is unavailable")
 	}
-	return sandboxedProgramCommand(bash, []string{bash, "-lc", command}, workdir, sandbox, nil)
+	return sandboxedProgramCommand(bash, []string{bash, "-lc", command}, workdir, boundary, nil)
 }
 
-func sandboxedProgramCommand(program string, argv []string, workdir string, sandbox Sandbox, environment map[string]string) (*exec.Cmd, error) {
+func sandboxedProgramCommand(program string, argv []string, workdir string, boundary Boundary, environment map[string]string) (*exec.Cmd, error) {
 	argv = resolvedProgramArgv(program, argv)
-	if sandbox.Policy == SandboxOff {
-		return ambientProgramCommand(program, argv, workdir, environment), nil
+	if err := validateConcreteScope(boundary.Scope); err != nil {
+		return nil, err
 	}
-	if sandbox.Policy != SandboxWorkspace && sandbox.Policy != SandboxMasked {
-		return nil, fmt.Errorf("sandbox policy must be concrete, got %q", sandbox.Policy)
+	if !boundary.NeedsBackend() {
+		return ambientProgramCommand(program, argv, workdir, environment), nil
 	}
 	encodedArgv, err := json.Marshal(argv)
 	if err != nil {
-		return nil, fmt.Errorf("encode sandbox argv: %w", err)
+		return nil, fmt.Errorf("encode boundary argv: %w", err)
 	}
-	encodedSandbox, err := json.Marshal(sandbox)
+	encodedSandbox, err := json.Marshal(boundary)
 	if err != nil {
-		return nil, fmt.Errorf("encode sandbox configuration: %w", err)
+		return nil, fmt.Errorf("encode boundary configuration: %w", err)
 	}
 	cmd := exec.Command("/proc/self/exe", sandboxChildArg)
 	cmd.Dir = workdir
-	cmd.Env = sandboxControlEnv(encodedArgv, encodedSandbox, sandbox, environment)
+	cmd.Env = sandboxControlEnv(encodedArgv, encodedSandbox, boundary, environment)
 	return cmd, nil
 }
 
-func sandboxControlEnv(argv, encodedSandbox []byte, sandbox Sandbox, environment map[string]string) []string {
-	return append(mergeToolEnv(sandboxBaseEnv(sandbox), environment),
+func sandboxControlEnv(argv, encodedSandbox []byte, boundary Boundary, environment map[string]string) []string {
+	return append(mergeToolEnv(sandboxBaseEnv(boundary), environment),
 		envSandboxArgv+"="+string(argv),
 		envSandboxConfig+"="+string(encodedSandbox),
 	)
@@ -78,22 +81,22 @@ func sandboxControlEnv(argv, encodedSandbox []byte, sandbox Sandbox, environment
 func runSandboxedProcess() {
 	var argv []string
 	if err := json.Unmarshal([]byte(os.Getenv(envSandboxArgv)), &argv); err != nil || len(argv) == 0 || argv[0] == "" {
-		fmt.Fprintln(os.Stderr, "sandbox: invalid program arguments")
+		fmt.Fprintln(os.Stderr, "filesystem boundary: invalid program arguments")
 		os.Exit(126)
 	}
-	var sandbox Sandbox
-	if err := json.Unmarshal([]byte(os.Getenv(envSandboxConfig)), &sandbox); err != nil {
-		fmt.Fprintln(os.Stderr, "sandbox: invalid configuration")
+	var boundary Boundary
+	if err := json.Unmarshal([]byte(os.Getenv(envSandboxConfig)), &boundary); err != nil {
+		fmt.Fprintln(os.Stderr, "filesystem boundary: invalid configuration")
 		os.Exit(126)
 	}
 	environment := sandboxChildEnv(os.Environ())
 	runtime.LockOSThread()
-	if err := applyToolLandlock(sandbox); err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox: %v\n", err)
+	if err := applyToolLandlock(boundary); err != nil {
+		fmt.Fprintf(os.Stderr, "filesystem boundary: %v\n", err)
 		os.Exit(126)
 	}
 	if err := syscall.Exec(argv[0], argv, environment); err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox exec %s: %v\n", argv[0], err)
+		fmt.Fprintf(os.Stderr, "filesystem boundary exec %s: %v\n", argv[0], err)
 		os.Exit(126)
 	}
 }
@@ -123,24 +126,24 @@ var sandboxReadOnlyDirs = []string{
 	"/etc", "/nix", "/opt", "/snap", "/run/systemd/resolve",
 }
 
-func sandboxWritableDirs(sandbox Sandbox) []string {
-	return []string{sandbox.Workspace, sandbox.ToolHome}
+func sandboxWritableDirs(boundary Boundary) []string {
+	return []string{boundary.Workspace, boundary.ToolHome}
 }
 
-func applyToolLandlock(sandbox Sandbox) error {
-	switch sandbox.Policy {
-	case SandboxWorkspace:
-		readDirs, readFiles, err := landlockPathsExcept(sandboxReadOnlyDirs, sandbox.ProtectedPaths)
+func applyToolLandlock(boundary Boundary) error {
+	switch boundary.Scope {
+	case ScopeWorkspace:
+		readDirs, readFiles, err := landlockPathsExcept(sandboxReadOnlyDirs, boundary.ProtectedPaths)
 		if err != nil {
 			return err
 		}
-		writeDirs, writeFiles, err := landlockPathsExcept(sandboxWritableDirs(sandbox), sandbox.ProtectedPaths)
+		writeDirs, writeFiles, err := landlockPathsExcept(sandboxWritableDirs(boundary), boundary.ProtectedPaths)
 		if err != nil {
 			return err
 		}
 		var deviceFiles []string
 		for _, path := range []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"} {
-			if !protectedBy(sandbox.ProtectedPaths, path) {
+			if !protectedBy(boundary.ProtectedPaths, path) {
 				deviceFiles = append(deviceFiles, path)
 			}
 		}
@@ -152,8 +155,8 @@ func applyToolLandlock(sandbox Sandbox) error {
 		}
 		// ABI V3 is required so an ungranted file cannot still be truncated.
 		return landlock.V3.RestrictPaths(rules...)
-	case SandboxMasked:
-		dirs, files, err := landlockPathsExcept([]string{string(filepath.Separator)}, sandbox.ProtectedPaths)
+	case ScopeMachine:
+		dirs, files, err := landlockPathsExcept([]string{string(filepath.Separator)}, boundary.ProtectedPaths)
 		if err != nil {
 			return err
 		}
@@ -163,7 +166,7 @@ func applyToolLandlock(sandbox Sandbox) error {
 		}
 		return landlock.V3.RestrictPaths(rules...)
 	default:
-		return fmt.Errorf("unsupported concrete sandbox policy %q", sandbox.Policy)
+		return fmt.Errorf("unsupported concrete filesystem scope %q", boundary.Scope)
 	}
 }
 
@@ -197,7 +200,7 @@ func landlockPathsExcept(roots, protected []string) (dirs, files []string, err e
 			return nil
 		}
 		if statErr != nil {
-			return fmt.Errorf("inspect sandbox path %s: %w", path, statErr)
+			return fmt.Errorf("inspect boundary path %s: %w", path, statErr)
 		}
 		if !containsProtected || !info.IsDir() {
 			if info.IsDir() {
@@ -209,7 +212,7 @@ func landlockPathsExcept(roots, protected []string) (dirs, files []string, err e
 		}
 		entries, readErr := os.ReadDir(path)
 		if readErr != nil {
-			return fmt.Errorf("enumerate sandbox path %s: %w", path, readErr)
+			return fmt.Errorf("enumerate boundary path %s: %w", path, readErr)
 		}
 		for _, entry := range entries {
 			candidate := filepath.Join(path, entry.Name())

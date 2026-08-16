@@ -32,7 +32,7 @@ const (
 
 // RunJobWorkerIfRequested handles Skot's private re-exec mode. Applications
 // embedding ProcessManager must call it before normal argument parsing, just as
-// the Skot binary does for the sandbox child mode.
+// the Skot binary does for the filesystem-boundary child mode.
 func RunJobWorkerIfRequested() bool {
 	if len(os.Args) < 2 || os.Args[1] != jobWorkerArg {
 		return false

@@ -129,7 +129,7 @@ func (manager *ProcessManager) loadSupervisedJob(jobDir, sessionID string) (*pro
 		done:           make(chan struct{}),
 		status:         ProcessRunning,
 		startedAt:      metadata.StartedAt,
-		sandboxPolicy:  metadata.SandboxPolicy,
+		scope:          metadata.Scope,
 		separateStderr: metadata.SeparateStderr,
 		supervised:     true,
 		detached:       metadata.Detach,
@@ -178,7 +178,7 @@ func observeSupervisedJobState(jobDir, jobID string, probe func() (bool, error))
 	return result, terminal, false, nil
 }
 
-func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.Cmd, sandbox, id string) (*processJob, error) {
+func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.Cmd, scope Scope, id string) (*processJob, error) {
 	if spec.origin != processOriginModel {
 		return nil, errors.New("only model processes can use the supervised backend")
 	}
@@ -213,7 +213,7 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		StartedAt:      startedAt,
 		TimeoutMillis:  spec.timeout.Milliseconds(),
 		SeparateStderr: spec.separateStderr,
-		SandboxPolicy:  sandbox,
+		Scope:          scope,
 		Detach:         spec.detach,
 	}
 	if err := writeJSONAtomic(filepath.Join(jobDir, jobMetadataFile), metadata, 0o600); err != nil {
@@ -282,7 +282,7 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		done:           make(chan struct{}),
 		status:         ProcessRunning,
 		startedAt:      startedAt,
-		sandboxPolicy:  sandbox,
+		scope:          scope,
 		supervised:     true,
 		detached:       spec.detach,
 		separateStderr: spec.separateStderr,

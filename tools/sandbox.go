@@ -11,44 +11,48 @@ import (
 )
 
 const (
-	SandboxAuto      = "auto"
-	SandboxWorkspace = "workspace"
-	SandboxMasked    = "masked"
-	SandboxOff       = "off"
+	ScopeAuto      = "auto"
+	ScopeWorkspace = "workspace"
+	ScopeMachine   = "machine"
 )
 
-// Sandbox describes the concrete filesystem boundary applied to one
-// model-owned process. Policy is always concrete here: auto is resolved by the
+// Scope is the filesystem reach selected for model-owned processes.
+type Scope string
+
+// Boundary describes the concrete filesystem boundary applied to one
+// model-owned process. Scope is always concrete here: auto is resolved by the
 // application before a process reaches the tools package.
-type Sandbox struct {
-	Policy    string `json:"policy"`
+type Boundary struct {
+	Scope     Scope  `json:"scope"`
 	Workspace string `json:"workspace"`
 	ToolHome  string `json:"tool_home"`
 	// ProtectedPaths are inaccessible to model-owned processes under both
-	// workspace and masked policies.
+	// concrete scopes.
 	ProtectedPaths []string `json:"protected_paths,omitempty"`
 }
 
-// ValidateLayout checks the path relationships required by a concrete
-// sandbox policy.
-func (sandbox Sandbox) ValidateLayout() error {
-	if err := validateConcreteSandboxPolicy(sandbox.Policy); err != nil {
+// NeedsBackend reports whether this boundary installs a platform filesystem
+// policy. Machine scope without exclusions has no restriction to install.
+func (boundary Boundary) NeedsBackend() bool {
+	return boundary.Scope == ScopeWorkspace || len(boundary.ProtectedPaths) != 0
+}
+
+// ValidateLayout checks the path relationships required by a concrete scope.
+func (boundary Boundary) ValidateLayout() error {
+	if err := validateConcreteScope(boundary.Scope); err != nil {
 		return err
 	}
-	if sandbox.Policy == SandboxOff {
-		return nil
-	}
-	for _, path := range sandbox.ProtectedPaths {
-		if pathContains(path, sandbox.Workspace) {
+	for _, path := range boundary.ProtectedPaths {
+		if pathContains(path, boundary.Workspace) {
 			return fmt.Errorf("protected path %s contains the workspace", path)
 		}
 	}
-	if sandbox.Policy == SandboxWorkspace && pathContains(sandbox.ToolHome, sandbox.Workspace) {
+	if boundary.Scope == ScopeWorkspace && pathContains(boundary.ToolHome, boundary.Workspace) {
 		return fmt.Errorf("tool home must not contain the workspace")
 	}
-	if sandbox.Policy == SandboxWorkspace {
-		for _, path := range sandbox.ProtectedPaths {
-			if sandboxPathsOverlap(path, sandbox.ToolHome) {
+	if boundary.Scope == ScopeWorkspace {
+		for _, path := range boundary.ProtectedPaths {
+			if sandboxPathsOverlap(path, boundary.ToolHome) {
 				return fmt.Errorf("protected path %s overlaps tool home", path)
 			}
 		}
@@ -56,36 +60,36 @@ func (sandbox Sandbox) ValidateLayout() error {
 	return nil
 }
 
-func NormalizeSandboxPolicy(policy string) (string, error) {
-	policy = strings.ToLower(strings.TrimSpace(policy))
-	if policy == "" {
-		policy = SandboxAuto
+func NormalizeScope(value string) (Scope, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ScopeAuto, nil
 	}
-	switch policy {
-	case SandboxAuto, SandboxWorkspace, SandboxMasked, SandboxOff:
-		return policy, nil
+	switch Scope(value) {
+	case ScopeAuto, ScopeWorkspace, ScopeMachine:
+		return Scope(value), nil
 	default:
-		return "", fmt.Errorf("unknown sandbox policy %q (want auto, workspace, masked, or off)", policy)
+		return "", fmt.Errorf("unknown filesystem scope %q (want auto, workspace, or machine)", value)
 	}
 }
 
-func validateConcreteSandboxPolicy(policy string) error {
-	switch policy {
-	case SandboxWorkspace, SandboxMasked, SandboxOff:
+func validateConcreteScope(scope Scope) error {
+	switch scope {
+	case ScopeWorkspace, ScopeMachine:
 		return nil
 	default:
-		return fmt.Errorf("sandbox policy must be concrete, got %q", policy)
+		return fmt.Errorf("filesystem scope must be concrete, got %q", scope)
 	}
 }
 
-func RunSandboxChildIfRequested() bool { return runSandboxChildIfRequested() }
+func RunBoundaryChildIfRequested() bool { return runSandboxChildIfRequested() }
 
 func HardenSupervisor() { hardenSupervisor() }
 
-func SandboxBackend() string { return sandboxBackend() }
+func BoundaryBackend() string { return sandboxBackend() }
 
-func SandboxedBashCommand(command, workdir string, sandbox Sandbox) (*exec.Cmd, error) {
-	return sandboxedBashCommand(command, workdir, sandbox)
+func BoundaryBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
+	return sandboxedBashCommand(command, workdir, boundary)
 }
 
 // DefaultToolHomeRoot returns the disposable payload-data root. It is kept
@@ -149,11 +153,11 @@ func minimalToolEnv(home string) []string {
 	return environment
 }
 
-func sandboxBaseEnv(sandbox Sandbox) []string {
-	if sandbox.Policy == SandboxMasked || sandbox.Policy == SandboxOff {
+func sandboxBaseEnv(boundary Boundary) []string {
+	if boundary.Scope == ScopeMachine {
 		return os.Environ()
 	}
-	return minimalToolEnv(sandbox.ToolHome)
+	return minimalToolEnv(boundary.ToolHome)
 }
 
 func canonicalSandboxPath(path string) string {

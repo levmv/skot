@@ -8,7 +8,7 @@ import (
 )
 
 func TestReplayRequiresSupportedJournalSchemaVersion(t *testing.T) {
-	for _, version := range []int{0, JournalSchemaVersion + 1} {
+	for _, version := range []int{0, JournalSchemaVersion - 1, JournalSchemaVersion + 1} {
 		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
 			records := []Record{recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{
 				SchemaVersion: version,

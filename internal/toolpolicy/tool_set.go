@@ -32,7 +32,7 @@ var optionalBuiltInTools = []string{"web_fetch", "web_search"}
 // BuiltInOptions adjusts product-owned sets before exact user overrides are
 // applied.
 type BuiltInOptions struct {
-	// DefaultIncludesLS covers layouts where process sandboxing can prevent
+	// DefaultIncludesLS covers layouts where the process boundary can prevent
 	// Bash from enumerating the workspace root.
 	DefaultIncludesLS bool
 }

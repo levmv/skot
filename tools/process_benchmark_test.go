@@ -27,7 +27,7 @@ func BenchmarkProcessLifecycle(b *testing.B) {
 
 func benchmarkProcessLifecycle(b *testing.B, supervised bool, command string) {
 	root := b.TempDir()
-	manager, err := NewProcessManager(root, b.TempDir(), b.TempDir(), SandboxOff)
+	manager, err := NewProcessManager(root, b.TempDir(), b.TempDir(), ScopeMachine)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func benchmarkProcessLifecycle(b *testing.B, supervised bool, command string) {
 			origin:     processOriginModel,
 			sessionID:  "process-lifecycle-benchmark",
 			supervised: supervised,
-			build: func(string) (*exec.Cmd, error) {
+			build: func(Scope) (*exec.Cmd, error) {
 				process := exec.Command("bash", "-lc", command)
 				process.Dir = root
 				return process, nil

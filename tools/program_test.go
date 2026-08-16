@@ -72,7 +72,7 @@ func TestProgramToolGetsObjectOnStdinKeepsStderrSeparateAndAppliesEnvironmentOve
 	if err := os.Mkdir(workdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), SandboxOff)
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestResolvedProgramDisappearingIsFatal(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), SandboxOff)
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -35,8 +35,9 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 		Metadata: ConfigurationMetadata{
 			ToolSet: "read-only", AwaitRequiredJobs: true,
 			Build: BuildSnapshot{Version: "v1.2.3", Revision: "abc123", Modified: &modified},
-			Sandbox: SandboxSnapshot{
-				RequestedPolicy: "auto", EffectivePolicy: "masked", Container: "secret container", Network: "inherited",
+			Scope: ScopeSnapshot{
+				RequestedScope: "auto", EffectiveScope: "machine", ProtectedPathCount: 2,
+				Container: "secret container", Network: "inherited",
 			},
 		},
 	})
@@ -65,7 +66,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if configured.RuntimePolicy.ContextWindow != 64_000 || !configured.RuntimePolicy.ContextWindowEstimated || configured.RuntimePolicy.MaxModelAttempts != 3 || configured.RuntimePolicy.MaxToolIterations != 7 || configured.RuntimePolicy.MaxRequestBytes != 1_000_000 || configured.RuntimePolicy.MaxCompletionBytes != 100_000 || !configured.RuntimePolicy.AwaitRequiredJobs {
 		t.Fatalf("runtime policy snapshot = %#v", configured.RuntimePolicy)
 	}
-	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Sandbox.Container != "[redacted] container" {
+	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Scope.Container != "[redacted] container" {
 		t.Fatalf("execution environment snapshot = %#v", configured.Environment)
 	}
 	if configured.Environment.Build.Version != "v1.2.3" || configured.Environment.Build.Revision != "abc123" || configured.Environment.Build.Modified == nil || *configured.Environment.Build.Modified {
@@ -84,15 +85,15 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if got := countRecordKind(journal.snapshot(), RecordSessionConfigured); got != 2 {
 		t.Fatalf("configuration records after tools = %d, want 2", got)
 	}
-	sandbox := SandboxSnapshot{RequestedPolicy: "workspace", EffectivePolicy: "workspace", Backend: "landlock", Network: "inherited"}
-	if err := runtime.SetSandboxSnapshot(context.Background(), sandbox); err != nil {
+	scope := ScopeSnapshot{RequestedScope: "workspace", EffectiveScope: "workspace", Backend: "landlock", Network: "inherited"}
+	if err := runtime.SetScopeSnapshot(context.Background(), scope); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.SetSandboxSnapshot(context.Background(), sandbox); err != nil {
+	if err := runtime.SetScopeSnapshot(context.Background(), scope); err != nil {
 		t.Fatal(err)
 	}
 	if got := countRecordKind(journal.snapshot(), RecordSessionConfigured); got != 3 {
-		t.Fatalf("configuration records after sandbox = %d, want 3", got)
+		t.Fatalf("configuration records after scope = %d, want 3", got)
 	}
 
 	next := configurationModel{

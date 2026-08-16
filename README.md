@@ -10,7 +10,7 @@ in scripts.
   scrollback.
 - Durable conversations and background jobs that survive restarts.
 - Bounded file, search, Bash, job, web, and custom program tools.
-- Configurable tool sets and filesystem isolation for model-owned processes.
+- Configurable tool sets and filesystem scopes for model-owned processes.
 - Read-only child agents for parallel independent work.
 - Supports DeepSeek, Anthropic, OpenAI, OpenRouter, OpenCode Go, and Ollama.
 
@@ -72,13 +72,15 @@ SK_TOOLS=read-only sk -json "summarize this project" > result.json
 Skot uses `~/.skot` as its default data directory. Set `SK_HOME` or pass
 `-home` to use another directory.
 
-## Safety
+## Where the agent works
 
-Skot uses workspace boundaries and a filesystem sandbox to contain accidental
-damage. These safeguards are not designed to contain an agent deliberately
-trying to escape. For that threat model, run Skot inside a dedicated container
-or virtual machine. See the [security model](docs/reference.md#security-model)
-for details.
+Skot does not approve individual commands. Built-in file tools stay in the
+workspace, while model-owned processes run with either workspace or surrounding
+machine filesystem reach. Explicit protected paths can narrow either scope.
+This bounds filesystem authority; it does not filter network access or contain
+hostile code. Use a dedicated container or virtual machine for that threat
+model. See [Where the agent works](docs/reference.md#where-the-agent-works) for
+details.
 
 ## Documentation
 

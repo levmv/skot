@@ -16,70 +16,74 @@ import (
 )
 
 type securityState struct {
-	RequestedPolicy string
-	Backend         string
-	Failure         string
-	EffectivePolicy string
-	Container       string
+	RequestedScope     workspacetools.Scope
+	Backend            string
+	Failure            string
+	EffectiveScope     workspacetools.Scope
+	Container          string
+	ProtectedPathCount int
+	BackendRequired    bool
 }
 
-func (state securityState) snapshot() agent.SandboxSnapshot {
-	return agent.SandboxSnapshot{
-		RequestedPolicy: state.RequestedPolicy,
-		EffectivePolicy: state.EffectivePolicy,
-		Backend:         state.Backend,
-		Container:       state.Container,
-		Network:         "inherited",
+func (state securityState) snapshot() agent.ScopeSnapshot {
+	return agent.ScopeSnapshot{
+		RequestedScope:     string(state.RequestedScope),
+		EffectiveScope:     string(state.EffectiveScope),
+		ProtectedPathCount: state.ProtectedPathCount,
+		Backend:            state.Backend,
+		Container:          state.Container,
+		Network:            "inherited",
 	}
 }
 
-func buildSecurityStateWithToolHome(ctx context.Context, requested, root, home, toolHome string, protectedSets ...[]string) securityState {
+func buildSecurityStateWithToolHome(ctx context.Context, requested workspacetools.Scope, root, toolHome string, protectedSets ...[]string) securityState {
 	container := ""
-	if requested == workspacetools.SandboxAuto {
+	if requested == workspacetools.ScopeAuto {
 		container = detectContainer(ctx)
 	}
-	effective := resolveSandboxPolicy(requested, container)
-	state := securityState{RequestedPolicy: requested, EffectivePolicy: effective, Container: container}
-	if effective == workspacetools.SandboxOff {
-		return state
-	}
-	protected := []string{home}
+	effective := resolveScope(requested, container)
+	var protected []string
 	if len(protectedSets) > 0 {
 		protected = append([]string(nil), protectedSets[0]...)
 	}
-	sandbox := workspacetools.Sandbox{
-		Policy: effective, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
+	state := securityState{
+		RequestedScope: requested, EffectiveScope: effective, Container: container,
+		ProtectedPathCount: len(protected),
 	}
-	if err := sandbox.ValidateLayout(); err != nil {
-		return unavailableSandbox(state, err.Error())
+	boundary := workspacetools.Boundary{
+		Scope: effective, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
 	}
-	backend := workspacetools.SandboxBackend()
+	state.BackendRequired = boundary.NeedsBackend()
+	if err := boundary.ValidateLayout(); err != nil {
+		return unavailableBoundary(state, err.Error())
+	}
+	if !state.BackendRequired {
+		return state
+	}
+	backend := workspacetools.BoundaryBackend()
 	if backend == "" {
-		return unavailableSandbox(state, "no platform sandbox is available")
+		return unavailableBoundary(state, "no platform filesystem boundary is available")
 	}
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		return unavailableSandbox(state, "probe setup failed: "+err.Error())
-	}
-	probe, err := os.CreateTemp(home, ".sandbox-probe-")
+	probe, probeBoundary, err := createBoundaryProbe(boundary)
 	if err != nil {
-		return unavailableSandbox(state, "probe setup failed: "+err.Error())
+		return unavailableBoundary(state, "probe setup failed: "+err.Error())
 	}
 	probePath := probe.Name()
 	defer func() { _ = os.Remove(probePath) }()
 	if _, err := probe.WriteString("supervisor-only\n"); err != nil {
 		_ = probe.Close()
-		return unavailableSandbox(state, "probe setup failed: "+err.Error())
+		return unavailableBoundary(state, "probe setup failed: "+err.Error())
 	}
 	if err := probe.Close(); err != nil {
-		return unavailableSandbox(state, "probe setup failed: "+err.Error())
+		return unavailableBoundary(state, "probe setup failed: "+err.Error())
 	}
 	quotedProbe := bashQuote(probePath)
 	command := "if IFS= read -r _ < " + quotedProbe + " 2>/dev/null; then exit 42; fi; " +
 		"if : > " + quotedProbe + " 2>/dev/null; then exit 43; fi; " +
 		"if rm -f -- " + quotedProbe + " 2>/dev/null; then exit 44; fi; exit 0"
-	cmd, err := workspacetools.SandboxedBashCommand(command, root, sandbox)
+	cmd, err := workspacetools.BoundaryBashCommand(command, root, probeBoundary)
 	if err != nil {
-		return unavailableSandbox(state, "sandbox command failed: "+err.Error())
+		return unavailableBoundary(state, "boundary command failed: "+err.Error())
 	}
 	commandEnv := cmd.Env
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -93,9 +97,9 @@ func buildSecurityStateWithToolHome(ctx context.Context, requested, root, home, 
 	if err == nil {
 		if raw, readErr := os.ReadFile(probePath); readErr != nil || string(raw) != "supervisor-only\n" {
 			if readErr != nil {
-				return unavailableSandbox(state, "sandbox integrity probe changed private state: "+readErr.Error())
+				return unavailableBoundary(state, "filesystem probe changed supervisor state: "+readErr.Error())
 			}
-			return unavailableSandbox(state, "sandbox integrity probe changed private state")
+			return unavailableBoundary(state, "filesystem probe changed supervisor state")
 		}
 		state.Backend = backend
 		return state
@@ -104,50 +108,95 @@ func buildSecurityStateWithToolHome(ctx context.Context, requested, root, home, 
 	if errors.As(err, &exit) {
 		switch exit.ExitCode() {
 		case 42:
-			return unavailableSandbox(state, "sandbox probe read private state")
+			return unavailableBoundary(state, "filesystem probe read protected state")
 		case 43:
-			return unavailableSandbox(state, "sandbox probe truncated private state")
+			return unavailableBoundary(state, "filesystem probe truncated protected state")
 		case 44:
-			return unavailableSandbox(state, "sandbox probe removed private state")
+			return unavailableBoundary(state, "filesystem probe removed protected state")
 		}
 	}
-	reason := "sandbox probe failed: " + err.Error()
+	reason := "filesystem probe failed: " + err.Error()
 	if detail := strings.TrimSpace(diagnostic.String()); detail != "" {
 		reason += ": " + detail
 	}
-	return unavailableSandbox(state, reason)
+	return unavailableBoundary(state, reason)
 }
 
-func unavailableSandbox(state securityState, probe string) securityState {
+func createBoundaryProbe(boundary workspacetools.Boundary) (*os.File, workspacetools.Boundary, error) {
+	var failures []string
+	seen := make(map[string]struct{})
+	directories := []string{os.TempDir(), boundary.Workspace}
+	if boundary.Scope == workspacetools.ScopeWorkspace && len(boundary.ProtectedPaths) != 0 {
+		directories[0], directories[1] = directories[1], directories[0]
+	}
+	for _, directory := range directories {
+		directory = strings.TrimSpace(directory)
+		if directory == "" {
+			continue
+		}
+		if absolute, err := filepath.Abs(directory); err == nil {
+			directory = filepath.Clean(absolute)
+		}
+		if _, exists := seen[directory]; exists {
+			continue
+		}
+		seen[directory] = struct{}{}
+		probe, err := os.CreateTemp(directory, ".skot-boundary-probe-")
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		probeBoundary := boundary
+		probeBoundary.ProtectedPaths = append(append([]string(nil), boundary.ProtectedPaths...), probe.Name())
+		if err := probeBoundary.ValidateLayout(); err == nil {
+			return probe, probeBoundary, nil
+		} else {
+			failures = append(failures, err.Error())
+		}
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+	}
+	return nil, workspacetools.Boundary{}, errors.New(strings.Join(failures, "; "))
+}
+
+func unavailableBoundary(state securityState, probe string) securityState {
 	state.Failure = probe
 	return state
 }
 
-func sandboxWorkspaceNotice(state securityState, root, home string) string {
-	if !landlockNestedHomeLimitsWorkspaceRoot(state.Backend, root, home) {
+func protectedWorkspaceNotice(state securityState, root string, paths []string) string {
+	if !landlockProtectedPathsLimitWorkspaceRoot(state.Backend, root, paths) {
 		return ""
 	}
-	return "Skot home is protected inside the workspace; Bash and program tools cannot list or create entries directly in the workspace root; use the built-in file tools for root operations"
+	return "A protected path is inside the workspace; Bash and program tools may be unable to list or create entries in its ancestor directories on Linux; use the built-in file tools for those operations"
 }
 
-func landlockNestedHomeLimitsWorkspaceRoot(backend, root, home string) bool {
-	return backend == "landlock" && securityPathContains(root, home) && !securityPathContains(home, root)
+func landlockProtectedPathsLimitWorkspaceRoot(backend, root string, paths []string) bool {
+	if backend != "landlock" {
+		return false
+	}
+	for _, path := range paths {
+		if securityPathContains(root, path) && !securityPathContains(path, root) {
+			return true
+		}
+	}
+	return false
 }
 
-func resolveSandboxPolicy(requested, container string) string {
-	if requested != workspacetools.SandboxAuto {
+func resolveScope(requested workspacetools.Scope, container string) workspacetools.Scope {
+	if requested != workspacetools.ScopeAuto {
 		return requested
 	}
 	if container != "" {
-		return workspacetools.SandboxMasked
+		return workspacetools.ScopeMachine
 	}
-	return workspacetools.SandboxWorkspace
+	return workspacetools.ScopeWorkspace
 }
 
 func (state securityState) Summary() string {
-	text := "sandbox: " + state.EffectivePolicy
+	text := "scope: " + string(state.EffectiveScope)
 	var detail []string
-	if state.RequestedPolicy == workspacetools.SandboxAuto {
+	if state.RequestedScope == workspacetools.ScopeAuto {
 		detail = append(detail, "auto")
 	}
 	if state.Container != "" {
@@ -155,6 +204,9 @@ func (state securityState) Summary() string {
 	}
 	if len(detail) != 0 {
 		text += " (" + strings.Join(detail, ", ") + ")"
+	}
+	if state.ProtectedPathCount != 0 {
+		text += fmt.Sprintf(" · protected paths: %d", state.ProtectedPathCount)
 	}
 	return text
 }
@@ -297,14 +349,15 @@ func bashQuote(value string) string {
 }
 
 func validateSecurity(state securityState) error {
-	if state.EffectivePolicy == workspacetools.SandboxOff {
-		if state.RequestedPolicy != "" && state.RequestedPolicy != workspacetools.SandboxOff {
-			return errors.New("sandbox off must be selected explicitly")
-		}
+	if !state.BackendRequired {
 		return nil
 	}
 	if state.Backend != "" {
 		return nil
 	}
-	return fmt.Errorf("%s sandbox is unavailable: %s", state.EffectivePolicy, state.Failure)
+	message := fmt.Sprintf("%s scope is unavailable: %s", state.EffectiveScope, state.Failure)
+	if state.EffectiveScope == workspacetools.ScopeWorkspace && state.ProtectedPathCount == 0 {
+		message += "; set -scope=machine (or SK_SCOPE=machine) to run without a filesystem boundary"
+	}
+	return errors.New(message)
 }

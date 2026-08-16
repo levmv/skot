@@ -56,7 +56,7 @@ type Config struct {
 type ConfigurationMetadata struct {
 	ToolSet           string
 	Build             BuildSnapshot
-	Sandbox           SandboxSnapshot
+	Scope             ScopeSnapshot
 	AwaitRequiredJobs bool
 	ProgramTools      []ProgramToolSnapshot
 }
@@ -92,7 +92,7 @@ type Runtime struct {
 	sanitize          func(string) string
 	toolSet           string
 	build             BuildSnapshot
-	sandbox           SandboxSnapshot
+	scope             ScopeSnapshot
 	awaitRequiredJobs bool
 	programTools      []ProgramToolSnapshot
 }
@@ -170,7 +170,7 @@ func New(config Config) (*Runtime, error) {
 		sanitize:          sanitize,
 		toolSet:           strings.TrimSpace(config.Metadata.ToolSet),
 		build:             build,
-		sandbox:           sanitizeSandboxSnapshot(config.Metadata.Sandbox, sanitize),
+		scope:             sanitizeScopeSnapshot(config.Metadata.Scope, sanitize),
 		awaitRequiredJobs: config.Metadata.AwaitRequiredJobs,
 		programTools:      programTools,
 	}
@@ -302,7 +302,7 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 			return err
 		}
 	}
-	snapshot := runtime.effectiveConfigSnapshotLocked(modelInfo, runtime.tools, runtime.toolSet, runtime.sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(modelInfo, runtime.tools, runtime.toolSet, runtime.scope)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}
@@ -371,7 +371,7 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet stri
 		return err
 	}
 	runtime.publishSessionStatus(live.state)
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, tools, toolSet, runtime.sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, tools, toolSet, runtime.scope)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}

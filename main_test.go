@@ -24,7 +24,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if workspacetools.RunSandboxChildIfRequested() {
+	if workspacetools.RunBoundaryChildIfRequested() {
 		return
 	}
 	if workspacetools.RunJobWorkerIfRequested() {
@@ -350,7 +350,7 @@ func TestRunUsesAnthropicAdapterWithoutAProactiveCompatibilityWarning(t *testing
 	err := run(context.Background(), []string{
 		"-model", "deepseek/deepseek-v4-flash", "-model-api", "anthropic_messages",
 		"-base-url", server.URL,
-		"-sandbox", "off", "-home", t.TempDir(), "-root", t.TempDir(), "task",
+		"-scope", "machine", "-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +380,7 @@ func TestRunUsesResponsesAdapterWithoutAProactiveCompatibilityWarning(t *testing
 	var stdout, stderr bytes.Buffer
 	err := run(context.Background(), []string{
 		"-model", "deepseek/deepseek-v4-flash", "-model-api", "responses",
-		"-base-url", server.URL, "-sandbox", "off", "-home", t.TempDir(), "-root", t.TempDir(), "task",
+		"-base-url", server.URL, "-scope", "machine", "-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +569,7 @@ func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := run(context.Background(), []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
-		"-home", home, "-root", root, "-sandbox", "off", "delegate work",
+		"-home", home, "-root", root, "-scope", "machine", "delegate work",
 	}, bytes.NewReader(nil), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +634,7 @@ func TestRunKeepsOneShotSessionForDetachedJob(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := run(context.Background(), []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
-		"-home", home, "-root", root, "-sandbox", "off", "-json", "start detached work",
+		"-home", home, "-root", root, "-scope", "machine", "-json", "start detached work",
 	}, bytes.NewReader(nil), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +688,7 @@ func TestRunCustomBaseURLDoesNotRequireProviderCredential(t *testing.T) {
 		"-base-url", server.URL,
 		"-home", t.TempDir(),
 		"-root", t.TempDir(),
-		"-sandbox", "off",
+		"-scope", "machine",
 		"task",
 	}, bytes.NewReader(nil), &output, io.Discard); err != nil {
 		t.Fatal(err)
@@ -718,7 +718,7 @@ func TestRunUsesOllamaOpenAICompatibilityWithoutCredential(t *testing.T) {
 	var output bytes.Buffer
 	if err := run(context.Background(), []string{
 		"-model", "ollama/qwen3:8b", "-base-url", server.URL,
-		"-home", t.TempDir(), "-root", t.TempDir(), "-sandbox", "off", "task",
+		"-home", t.TempDir(), "-root", t.TempDir(), "-scope", "machine", "task",
 	}, bytes.NewReader(nil), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -748,7 +748,7 @@ func TestRunReadsSystemPromptFileFromFlagAndEnvironment(t *testing.T) {
 	}
 	common := []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
-		"-home", t.TempDir(), "-root", root, "-sandbox", "off",
+		"-home", t.TempDir(), "-root", root, "-scope", "machine",
 	}
 	flagArgs := append(append([]string{}, common...), "-system-prompt-file", promptPath, "flag task")
 	if err := run(context.Background(), flagArgs, bytes.NewReader(nil), io.Discard, io.Discard); err != nil {
@@ -785,7 +785,7 @@ func TestRunAddsApplicableAgentsInstructions(t *testing.T) {
 	}
 	if err := run(context.Background(), []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
-		"-home", t.TempDir(), "-root", root, "-sandbox", "off", "task",
+		"-home", t.TempDir(), "-root", root, "-scope", "machine", "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -835,7 +835,7 @@ func TestRunOneShotExposesBackgroundBash(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	if err := run(context.Background(), []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
-		"-home", t.TempDir(), "-root", t.TempDir(), "-sandbox", "off", "task",
+		"-home", t.TempDir(), "-root", t.TempDir(), "-scope", "machine", "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -1061,7 +1061,7 @@ func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 	var output bytes.Buffer
 	err := run(context.Background(), []string{
 		"-model", "deepseek/test-model", "-base-url", server.URL,
-		"-home", home, "-root", root, "-sandbox", "off", "-journal", journalPath,
+		"-home", home, "-root", root, "-scope", "machine", "-journal", journalPath,
 		"look it up",
 	}, bytes.NewReader(nil), &output, io.Discard)
 	if err != nil {
@@ -1144,7 +1144,7 @@ func TestRunExecutesModelBashAndPersistsProcessDetail(t *testing.T) {
 	var output bytes.Buffer
 	err := run(context.Background(), []string{
 		"-model", "deepseek/test-model", "-base-url", server.URL,
-		"-sandbox", "off", "-root", root, "-journal", journalPath, "run command",
+		"-scope", "machine", "-root", root, "-journal", journalPath, "run command",
 	}, bytes.NewReader(nil), &output, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -1232,7 +1232,7 @@ func TestRunDeliversBackgroundCompletionThroughJournal(t *testing.T) {
 	defer cancel()
 	if err := run(ctx, []string{
 		"-model", "deepseek/local-model", "-base-url", server.URL,
-		"-home", t.TempDir(), "-root", t.TempDir(), "-sandbox", "off",
+		"-home", t.TempDir(), "-root", t.TempDir(), "-scope", "machine",
 		"-journal", journalPath, "start background work",
 	}, bytes.NewReader(nil), &output, io.Discard); err != nil {
 		t.Fatal(err)

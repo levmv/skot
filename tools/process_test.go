@@ -45,9 +45,30 @@ func TestSessionJobsSnapshotsStartTimeWhileSorting(t *testing.T) {
 	wait.Wait()
 }
 
+func TestJobMetadataRequiresCurrentProtocolAndConcreteScope(t *testing.T) {
+	id := "job-metadata"
+	metadata := jobMetadata{
+		Version: jobProtocolVersion, JobID: id, SessionID: "session", Command: "true",
+		StartedAt: time.Now().UTC(), TimeoutMillis: 1, Scope: ScopeMachine,
+	}
+	jobDir := filepath.Join(t.TempDir(), id)
+	if err := validateJobMetadata(metadata, jobDir, metadata.SessionID); err != nil {
+		t.Fatalf("current metadata rejected: %v", err)
+	}
+	metadata.Version--
+	if err := validateJobMetadata(metadata, jobDir, metadata.SessionID); err == nil || !strings.Contains(err.Error(), "unsupported job protocol") {
+		t.Fatalf("old protocol error = %v", err)
+	}
+	metadata.Version = jobProtocolVersion
+	metadata.Scope = ScopeAuto
+	if err := validateJobMetadata(metadata, jobDir, metadata.SessionID); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("unresolved scope error = %v", err)
+	}
+}
+
 func TestBashReportsExitAndUsesIsolatedEnvironment(t *testing.T) {
 	manager := processManagerForTest(t)
-	if err := manager.SetSandboxAfter(SandboxWorkspace, nil); err != nil {
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", t.TempDir())
@@ -72,7 +93,7 @@ func TestProcessManagerCreatesPrivateToolTemp(t *testing.T) {
 	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("tool home was not lazy: %v", err)
 	}
-	if err := manager.SetSandboxAfter(SandboxWorkspace, nil); err != nil {
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(WorkspaceToolTemp(manager.toolHome))
@@ -86,7 +107,7 @@ func TestProcessManagerCreatesPrivateToolTemp(t *testing.T) {
 
 func TestUserShellDoesNotPrepareModelToolHome(t *testing.T) {
 	manager := processManagerForTest(t)
-	if err := manager.SetSandboxAfter(SandboxWorkspace, nil); err != nil {
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(manager.toolHome); err != nil {
@@ -100,7 +121,7 @@ func TestUserShellDoesNotPrepareModelToolHome(t *testing.T) {
 	}
 }
 
-func TestBashSandboxOffHidesSupervisorEnvironmentFromModel(t *testing.T) {
+func TestBashScopeMachineHidesSupervisorEnvironmentFromModel(t *testing.T) {
 	manager := processManagerForTest(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -117,9 +138,26 @@ func TestBashSandboxOffHidesSupervisorEnvironmentFromModel(t *testing.T) {
 	}
 }
 
+func TestMachineScopeDoesNotSpecialCaseStateHome(t *testing.T) {
+	root, stateHome := t.TempDir(), t.TempDir()
+	secret := filepath.Join(stateHome, "auth.json")
+	if err := os.WriteFile(secret, []byte("visible state\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProcessManager(root, stateHome, t.TempDir(), ScopeMachine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	result := runProcessResult(t, manager.bash, bashArgs{Command: "cat " + shellQuoteForProcessTest(secret)})
+	if !strings.Contains(result.Content, "visible state") {
+		t.Fatalf("machine scope did not expose state home: %q", result.Content)
+	}
+}
+
 func TestProcessManagerRunShellInheritsAmbientEnvironment(t *testing.T) {
 	manager := processManagerForTest(t)
-	if err := manager.SetSandboxAfter(SandboxWorkspace, nil); err != nil {
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -487,7 +525,7 @@ func TestAttachRecordsMissingWorkerAsAbandoned(t *testing.T) {
 	}
 	metadata := jobMetadata{
 		Version: jobProtocolVersion, JobID: id, SessionID: sessionID, Command: "sleep 30",
-		StartedAt: time.Now().UTC(), TimeoutMillis: int64((time.Minute) / time.Millisecond),
+		StartedAt: time.Now().UTC(), TimeoutMillis: int64((time.Minute) / time.Millisecond), Scope: ScopeMachine,
 	}
 	if err := writeJSONAtomic(filepath.Join(jobDir, jobMetadataFile), metadata, 0o600); err != nil {
 		t.Fatal(err)
@@ -595,7 +633,7 @@ func TestSupervisedWorkerWritesItsFailureToJobLocalLog(t *testing.T) {
 		Path: missingProgram,
 		Args: []string{"missing-program"},
 		Dir:  workdir,
-	}, SandboxOff, "job-worker-log")
+	}, ScopeMachine, "job-worker-log")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,6 +669,7 @@ func TestWorkerLogsTerminalResultFailureAfterPayloadCompletes(t *testing.T) {
 		Command:       "wait then finish",
 		StartedAt:     time.Now().UTC(),
 		TimeoutMillis: int64(time.Minute / time.Millisecond),
+		Scope:         ScopeMachine,
 	}
 	if err := writeJSONAtomic(filepath.Join(jobDir, jobMetadataFile), metadata, 0o600); err != nil {
 		t.Fatal(err)
@@ -905,7 +944,7 @@ func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
 	}
 	metadata := jobMetadata{
 		Version: jobProtocolVersion, JobID: id, SessionID: sessionID, Command: "sleep 30",
-		StartedAt: time.Now().UTC(), TimeoutMillis: int64(time.Minute / time.Millisecond),
+		StartedAt: time.Now().UTC(), TimeoutMillis: int64(time.Minute / time.Millisecond), Scope: ScopeMachine,
 	}
 	if err := writeJSONAtomic(filepath.Join(jobDir, jobMetadataFile), metadata, 0o600); err != nil {
 		t.Fatal(err)
@@ -1229,49 +1268,49 @@ func TestProcessManagerCloseSessionStopsAndForgetsOnlyThatSessionsJobs(t *testin
 	}
 }
 
-func TestRunningProcessesRetainSandboxPolicyFromLaunch(t *testing.T) {
+func TestRunningProcessesRetainScopeFromLaunch(t *testing.T) {
 	manager := processManagerForTest(t)
 	started := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30", Background: true})
 	id := jobIDFromText(t, started.Content)
-	if meta := processResultForTest(t, started); meta.SandboxPolicy != SandboxOff {
-		t.Fatalf("launch sandbox = %q", meta.SandboxPolicy)
+	if meta := processResultForTest(t, started); meta.Scope != ScopeMachine {
+		t.Fatalf("launch sandbox = %q", meta.Scope)
 	}
-	if err := manager.SetSandboxAfter(SandboxWorkspace, nil); err != nil {
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
-	if policies := manager.RunningSandboxPolicies(); policies[SandboxOff] != 1 || policies[SandboxWorkspace] != 0 {
+	if policies := manager.RunningScopes(); policies[ScopeMachine] != 1 || policies[ScopeWorkspace] != 0 {
 		t.Fatalf("running sandbox policies = %#v", policies)
 	}
-	if status, ok := manager.Status(id); !ok || status.SandboxPolicy != SandboxOff {
+	if status, ok := manager.Status(id); !ok || status.Scope != ScopeMachine {
 		t.Fatalf("running job status = %#v, %t", status, ok)
 	}
 }
 
 func TestSandboxChangeCommitsBeforeBecomingVisibleToLaunches(t *testing.T) {
-	manager, err := NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), SandboxOff)
+	manager, err := NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	called := false
-	if err := manager.SetSandboxAfter(SandboxWorkspace, func() error {
+	if err := manager.SetScopeAfter(ScopeWorkspace, func() error {
 		called = true
-		if manager.sandbox != SandboxOff {
-			t.Fatalf("sandbox became visible before commit: %q", manager.sandbox)
+		if manager.scope != ScopeMachine {
+			t.Fatalf("sandbox became visible before commit: %q", manager.scope)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !called || manager.sandbox != SandboxWorkspace {
-		t.Fatalf("called/sandbox = %v/%q", called, manager.sandbox)
+	if !called || manager.scope != ScopeWorkspace {
+		t.Fatalf("called/sandbox = %v/%q", called, manager.scope)
 	}
 	want := errors.New("journal unavailable")
-	if err := manager.SetSandboxAfter(SandboxOff, func() error { return want }); !errors.Is(err, want) {
+	if err := manager.SetScopeAfter(ScopeMachine, func() error { return want }); !errors.Is(err, want) {
 		t.Fatalf("callback error = %v", err)
 	}
-	if manager.sandbox != SandboxWorkspace {
-		t.Fatalf("failed commit changed sandbox to %q", manager.sandbox)
+	if manager.scope != ScopeWorkspace {
+		t.Fatalf("failed commit changed sandbox to %q", manager.scope)
 	}
 }
 
@@ -1320,7 +1359,7 @@ func TestBashRejectsWorkdirOutsideWorkspace(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), SandboxOff)
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1341,7 +1380,7 @@ func newProcessManagerForTest(t *testing.T, root, home string) *ProcessManager {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is unavailable")
 	}
-	manager, err := NewProcessManager(root, home, home+"-tool-home", SandboxOff)
+	manager, err := NewProcessManager(root, home, home+"-tool-home", ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}

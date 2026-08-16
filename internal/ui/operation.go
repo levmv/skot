@@ -13,7 +13,7 @@ const (
 	operationNone operationKind = iota
 	operationTurn
 	operationShell
-	operationSandbox
+	operationScope
 	operationCompaction
 )
 
@@ -40,8 +40,8 @@ func (operation activeOperation) label() string {
 	switch operation.kind {
 	case operationShell:
 		return "Running shell"
-	case operationSandbox:
-		return "Checking sandbox"
+	case operationScope:
+		return "Checking filesystem scope"
 	case operationCompaction:
 		return "Compacting context"
 	default:

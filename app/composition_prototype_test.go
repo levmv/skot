@@ -244,7 +244,7 @@ func openCompositionChild(home, root, baseURL, journalPath string) (*app.Applica
 		ModelURI: "deepseek/composition-probe", ModelExplicit: true,
 		BaseURL: baseURL, ContextWindow: 32 * 1024,
 		ToolSet: app.ToolSetReadOnly, ToolSetExplicit: true,
-		Sandbox: app.SandboxOff, SandboxExplicit: true,
+		Scope: app.ScopeMachine, ScopeExplicit: true,
 		JournalPath: journalPath,
 	})
 }

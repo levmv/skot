@@ -118,7 +118,7 @@ func TestWorkspaceToolsHideProtectedPathsAndAliases(t *testing.T) {
 	if err := os.Symlink("private", filepath.Join(root, "private-alias")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	policy, err := NewProtectedPathPolicy(root, []string{"private"}, true)
+	policy, err := NewProtectedPathPolicy(root, []string{"private"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,15 +156,6 @@ func TestWorkspaceToolsHideProtectedPathsAndAliases(t *testing.T) {
 		t.Fatalf("glob result = %q", glob)
 	}
 
-	policy.SetEnabled(false)
-	read := mustRunTool(t, tools, "read", `{"path":"private/secret.txt"}`)
-	if !strings.Contains(read, "needle secret") {
-		t.Fatalf("off read result = %q", read)
-	}
-	list = mustRunTool(t, tools, "ls", `{}`)
-	if !strings.Contains(list, "private/") || !strings.Contains(list, "private-alias") {
-		t.Fatalf("off ls result = %q", list)
-	}
 }
 
 func TestEditAndWriteUseHashesAndAtomicReplacement(t *testing.T) {

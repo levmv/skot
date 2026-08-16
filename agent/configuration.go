@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools []Tool, toolSet string, sandbox SandboxSnapshot) EffectiveConfigSnapshot {
+func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools []Tool, toolSet string, scope ScopeSnapshot) EffectiveConfigSnapshot {
 	toolSpecs := make([]ToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		toolSpecs = append(toolSpecs, cloneToolSpec(tool.Spec))
@@ -38,7 +38,7 @@ func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools
 		Environment: ExecutionEnvironmentSnapshot{
 			Endpoint:     runtime.sanitize(strings.TrimSpace(modelInfo.Endpoint)),
 			Build:        runtime.build,
-			Sandbox:      sandbox,
+			Scope:        scope,
 			ProgramTools: activeProgramToolSnapshots(runtime.programTools, tools),
 		},
 	}
@@ -89,7 +89,7 @@ func (runtime *Runtime) recordEffectiveConfigurationAndApply(ctx context.Context
 func (runtime *Runtime) recordCurrentEffectiveConfigurationAndApply(ctx context.Context, reducer *stateReducer) error {
 	runtime.configMu.RLock()
 	defer runtime.configMu.RUnlock()
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, runtime.sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, runtime.scope)
 	return runtime.recordEffectiveConfigurationAndApply(ctx, reducer, snapshot)
 }
 
@@ -140,6 +140,9 @@ func validateEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) error {
 	}
 	if snapshot.RuntimePolicy.MaxRequestBytes < 0 || snapshot.RuntimePolicy.MaxCompletionBytes < 0 {
 		return errors.New("configured model byte limits cannot be negative")
+	}
+	if snapshot.Environment.Scope.ProtectedPathCount < 0 {
+		return errors.New("configured protected path count cannot be negative")
 	}
 	seen := make(map[string]struct{}, len(snapshot.ModelContext.Tools))
 	for _, tool := range snapshot.ModelContext.Tools {
@@ -227,38 +230,38 @@ func cloneToolSpecs(specs []ToolSpec) []ToolSpec {
 	return cloned
 }
 
-func sanitizeSandboxSnapshot(snapshot SandboxSnapshot, sanitize func(string) string) SandboxSnapshot {
-	snapshot.RequestedPolicy = sanitize(strings.TrimSpace(snapshot.RequestedPolicy))
-	snapshot.EffectivePolicy = sanitize(strings.TrimSpace(snapshot.EffectivePolicy))
+func sanitizeScopeSnapshot(snapshot ScopeSnapshot, sanitize func(string) string) ScopeSnapshot {
+	snapshot.RequestedScope = sanitize(strings.TrimSpace(snapshot.RequestedScope))
+	snapshot.EffectiveScope = sanitize(strings.TrimSpace(snapshot.EffectiveScope))
 	snapshot.Backend = sanitize(strings.TrimSpace(snapshot.Backend))
 	snapshot.Container = sanitize(strings.TrimSpace(snapshot.Container))
 	snapshot.Network = sanitize(strings.TrimSpace(snapshot.Network))
 	return snapshot
 }
 
-// SetSandboxSnapshot records a boundary enforced by the embedding application.
-// It deliberately does not apply or validate sandbox policy inside agent.Runtime.
+// SetScopeSnapshot records a boundary enforced by the embedding application.
+// It deliberately does not apply or validate filesystem scope inside agent.Runtime.
 // Unlike model and tool reconfiguration this may happen during an active run;
 // already launched work retains the boundary recorded in its own tool details.
-func (runtime *Runtime) SetSandboxSnapshot(ctx context.Context, sandbox SandboxSnapshot) error {
-	sandbox = sanitizeSandboxSnapshot(sandbox, runtime.sanitize)
+func (runtime *Runtime) SetScopeSnapshot(ctx context.Context, scope ScopeSnapshot) error {
+	scope = sanitizeScopeSnapshot(scope, runtime.sanitize)
 	runtime.configMu.Lock()
 	defer runtime.configMu.Unlock()
-	if sandbox == runtime.sandbox {
+	if scope == runtime.scope {
 		return nil
 	}
 	records, err := runtime.journal.Records(ctx)
 	if err != nil {
-		return fmt.Errorf("read journal before sandbox snapshot: %w", err)
+		return fmt.Errorf("read journal before scope snapshot: %w", err)
 	}
 	live, err := reduceRecords(records)
 	if err != nil {
 		return err
 	}
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, sandbox)
+	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, scope)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}
-	runtime.sandbox = sandbox
+	runtime.scope = scope
 	return nil
 }

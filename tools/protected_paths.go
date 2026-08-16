@@ -7,23 +7,19 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 )
 
-// ProtectedPathPolicy is the shared filesystem deny-list for model-owned
-// operations. Paths are immutable after construction; enforcement can be
-// toggled when the application switches between a sandboxed policy and off.
+// ProtectedPathPolicy is the immutable shared filesystem deny-list for
+// model-owned operations.
 type ProtectedPathPolicy struct {
-	mu      sync.RWMutex
-	enabled bool
-	paths   []string
+	paths []string
 }
 
 // NewProtectedPathPolicy resolves literal protected paths. Absolute paths are
 // used as-is, ~/ is relative to the user's real home, and other paths are
 // relative to the workspace root. Missing suffixes are allowed so a path stays
 // protected if it is created later.
-func NewProtectedPathPolicy(root string, values []string, enabled bool) (*ProtectedPathPolicy, error) {
+func NewProtectedPathPolicy(root string, values []string) (*ProtectedPathPolicy, error) {
 	root, err := ResolveWorkspaceRoot(root)
 	if err != nil {
 		return nil, err
@@ -70,7 +66,7 @@ func NewProtectedPathPolicy(root string, values []string, enabled bool) (*Protec
 		paths = append(paths, value)
 	}
 	paths = compactProtectedPaths(paths)
-	return &ProtectedPathPolicy{enabled: enabled, paths: paths}, nil
+	return &ProtectedPathPolicy{paths: paths}, nil
 }
 
 func compactProtectedPaths(paths []string) []string {
@@ -97,33 +93,12 @@ func compactProtectedPaths(paths []string) []string {
 	return compacted
 }
 
-// Paths returns the canonical effective list, including Skot state when the
-// application constructed the policy. It does not depend on Enabled.
+// Paths returns the canonical effective list.
 func (policy *ProtectedPathPolicy) Paths() []string {
 	if policy == nil {
 		return nil
 	}
-	policy.mu.RLock()
-	defer policy.mu.RUnlock()
 	return append([]string(nil), policy.paths...)
-}
-
-func (policy *ProtectedPathPolicy) SetEnabled(enabled bool) {
-	if policy == nil {
-		return
-	}
-	policy.mu.Lock()
-	policy.enabled = enabled
-	policy.mu.Unlock()
-}
-
-func (policy *ProtectedPathPolicy) Enabled() bool {
-	if policy == nil {
-		return false
-	}
-	policy.mu.RLock()
-	defer policy.mu.RUnlock()
-	return policy.enabled
 }
 
 // Protects reports whether path itself is inside a protected tree. An ancestor
@@ -131,11 +106,6 @@ func (policy *ProtectedPathPolicy) Enabled() bool {
 // ancestor while filtering the protected child.
 func (policy *ProtectedPathPolicy) Protects(path string) bool {
 	if policy == nil {
-		return false
-	}
-	policy.mu.RLock()
-	defer policy.mu.RUnlock()
-	if !policy.enabled {
 		return false
 	}
 	return protectedBy(policy.paths, path)
@@ -155,7 +125,5 @@ func (policy *ProtectedPathPolicy) contains(path string) bool {
 	if policy == nil {
 		return false
 	}
-	policy.mu.RLock()
-	defer policy.mu.RUnlock()
 	return protectedBy(policy.paths, path)
 }

@@ -6,7 +6,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if RunSandboxChildIfRequested() {
+	if RunBoundaryChildIfRequested() {
 		return
 	}
 	if RunJobWorkerIfRequested() {

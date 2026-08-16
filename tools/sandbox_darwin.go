@@ -15,26 +15,26 @@ func runSandboxChildIfRequested() bool { return false }
 
 func sandboxBackend() string { return "seatbelt" }
 
-func sandboxedBashCommand(command, workdir string, sandbox Sandbox) (*exec.Cmd, error) {
-	return sandboxedProgramCommand("/bin/bash", []string{"/bin/bash", "-lc", command}, workdir, sandbox, nil)
+func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
+	return sandboxedProgramCommand("/bin/bash", []string{"/bin/bash", "-lc", command}, workdir, boundary, nil)
 }
 
-func sandboxedProgramCommand(program string, argv []string, workdir string, sandbox Sandbox, environment map[string]string) (*exec.Cmd, error) {
+func sandboxedProgramCommand(program string, argv []string, workdir string, boundary Boundary, environment map[string]string) (*exec.Cmd, error) {
 	argv = resolvedProgramArgv(program, argv)
-	if sandbox.Policy == SandboxOff {
-		return ambientProgramCommand(program, argv, workdir, environment), nil
+	if err := validateConcreteScope(boundary.Scope); err != nil {
+		return nil, err
 	}
-	if sandbox.Policy != SandboxWorkspace && sandbox.Policy != SandboxMasked {
-		return nil, fmt.Errorf("sandbox policy must be concrete, got %q", sandbox.Policy)
+	if !boundary.NeedsBackend() {
+		return ambientProgramCommand(program, argv, workdir, environment), nil
 	}
 	if _, err := os.Stat(sandboxExecPath); err != nil {
 		return nil, errors.New("macOS sandbox-exec is unavailable")
 	}
-	arguments := []string{"-p", seatbeltProfile(sandbox)}
+	arguments := []string{"-p", seatbeltProfile(boundary)}
 	arguments = append(arguments, argv...)
 	cmd := exec.Command(sandboxExecPath, arguments...)
 	cmd.Dir = workdir
-	cmd.Env = mergeToolEnv(sandboxBaseEnv(sandbox), environment)
+	cmd.Env = mergeToolEnv(sandboxBaseEnv(boundary), environment)
 	return cmd, nil
 }
 
@@ -44,25 +44,25 @@ var sandboxReadOnlyDirs = []string{
 	"/private/var/select", "/sbin", "/usr",
 }
 
-func sandboxWritableDirs(sandbox Sandbox) []string {
-	return []string{canonicalSandboxPath(sandbox.Workspace), canonicalSandboxPath(sandbox.ToolHome)}
+func sandboxWritableDirs(boundary Boundary) []string {
+	return []string{canonicalSandboxPath(boundary.Workspace), canonicalSandboxPath(boundary.ToolHome)}
 }
 
 func hardenSupervisor() {}
 
-func seatbeltProfile(sandbox Sandbox) string {
+func seatbeltProfile(boundary Boundary) string {
 	var profile string
-	if sandbox.Policy == SandboxMasked {
+	if boundary.Scope == ScopeMachine {
 		profile = "(version 1)\n(allow default)\n"
 	} else {
 		profile = fmt.Sprintf(fullSeatbeltProfile,
-			canonicalSandboxPath(sandbox.Workspace),
-			canonicalSandboxPath(sandbox.ToolHome),
-			canonicalSandboxPath(sandbox.Workspace),
-			canonicalSandboxPath(sandbox.ToolHome),
+			canonicalSandboxPath(boundary.Workspace),
+			canonicalSandboxPath(boundary.ToolHome),
+			canonicalSandboxPath(boundary.Workspace),
+			canonicalSandboxPath(boundary.ToolHome),
 		)
 	}
-	for _, path := range sandbox.ProtectedPaths {
+	for _, path := range boundary.ProtectedPaths {
 		path = canonicalSandboxPath(path)
 		profile += fmt.Sprintf("(deny file-read* file-write* (literal %q))\n", path)
 		profile += fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", path)

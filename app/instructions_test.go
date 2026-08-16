@@ -112,7 +112,7 @@ func TestLoadInstructionsSkipsProtectedDirectPathAndAlias(t *testing.T) {
 	if err := os.Symlink(filepath.Join(protected, "AGENTS.md"), filepath.Join(root, "AGENTS.md")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	policy, err := workspacetools.NewProtectedPathPolicy(root, []string{"private"}, true)
+	policy, err := workspacetools.NewProtectedPathPolicy(root, []string{"private"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,10 +122,5 @@ func TestLoadInstructionsSkipsProtectedDirectPathAndAlias(t *testing.T) {
 	}
 	if len(prompts) != 0 {
 		t.Fatalf("protected instructions = %#v", prompts)
-	}
-	policy.SetEnabled(false)
-	prompts, err = loadInstructions(root, policy)
-	if err != nil || len(prompts) != 1 || !strings.Contains(prompts[0], "private rules") {
-		t.Fatalf("off instructions/error = %#v / %v", prompts, err)
 	}
 }

@@ -58,7 +58,7 @@ const (
 type ProcessResult struct {
 	JobID            string `json:"job_id,omitempty"`
 	Status           string `json:"status"`
-	SandboxPolicy    string `json:"sandbox_policy,omitempty"`
+	Scope            Scope  `json:"scope,omitempty"`
 	ExitCode         *int   `json:"exit_code,omitempty"`
 	DurationMillis   int64  `json:"duration_ms"`
 	OutputBytes      int64  `json:"output_bytes"`
@@ -83,7 +83,7 @@ type ProcessManager struct {
 	jobHome                string
 	logLimit               int64
 	bashYield              time.Duration
-	sandbox                string
+	scope                  Scope
 	hiddenModelEnvironment map[string]struct{}
 
 	mu       sync.Mutex
@@ -117,7 +117,7 @@ type processJob struct {
 	completionSeen   bool
 	userInitiated    bool
 	joinRequired     bool
-	sandboxPolicy    string
+	scope            Scope
 	separateStderr   bool
 	supervised       bool
 	detached         bool
@@ -137,7 +137,7 @@ type jobState struct {
 	completionSeen   bool
 	userInitiated    bool
 	joinRequired     bool
-	sandboxPolicy    string
+	scope            Scope
 	separateStderr   bool
 	supervised       bool
 	detached         bool
@@ -157,7 +157,7 @@ func (job *processJob) snapshot() jobState {
 		completionSeen:   job.completionSeen,
 		userInitiated:    job.userInitiated,
 		joinRequired:     job.joinRequired,
-		sandboxPolicy:    job.sandboxPolicy,
+		scope:            job.scope,
 		separateStderr:   job.separateStderr,
 		supervised:       job.supervised,
 		detached:         job.detached,
@@ -180,7 +180,7 @@ type processSpec struct {
 	supervised     bool
 	detach         bool
 	environment    map[string]string
-	build          func(sandbox string) (*exec.Cmd, error)
+	build          func(scope Scope) (*exec.Cmd, error)
 }
 
 type jobBuffer struct {
@@ -212,8 +212,8 @@ type jobResultOptions struct {
 	truncated     bool
 }
 
-func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protections ...*ProtectedPathPolicy) (*ProcessManager, error) {
-	if err := validateConcreteSandboxPolicy(sandbox); err != nil {
+func NewProcessManager(root, stateHome, toolHomeRoot string, scope Scope, protections ...*ProtectedPathPolicy) (*ProcessManager, error) {
+	if err := validateConcreteScope(scope); err != nil {
 		return nil, err
 	}
 	if len(protections) > 1 {
@@ -229,13 +229,10 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 		protection = protections[0]
 	}
 	if protection == nil {
-		protection, err = NewProtectedPathPolicy(root, []string{stateHome}, sandbox != SandboxOff)
+		protection, err = NewProtectedPathPolicy(root, nil)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if !protection.contains(stateHome) {
-		return nil, errors.New("protected paths must include Skot state home")
 	}
 	workspace, err := newWorkspaceWithProtection(root, protection)
 	if err != nil {
@@ -245,11 +242,10 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 		return nil, errors.New("bash is unavailable")
 	}
 	toolHome := canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, workspace.root))
-	layout := Sandbox{Policy: sandbox, Workspace: workspace.root, ToolHome: toolHome, ProtectedPaths: protection.Paths()}
+	layout := Boundary{Scope: scope, Workspace: workspace.root, ToolHome: toolHome, ProtectedPaths: protection.Paths()}
 	if err := layout.ValidateLayout(); err != nil {
 		return nil, err
 	}
-	protection.SetEnabled(sandbox != SandboxOff)
 	jobHome := filepath.Join(stateHome, "jobs")
 	if err := os.MkdirAll(jobHome, 0o700); err != nil {
 		return nil, fmt.Errorf("create job home: %w", err)
@@ -264,7 +260,7 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 		jobHome:        jobHome,
 		logLimit:       defaultCommandLogLimit,
 		bashYield:      defaultBashYield,
-		sandbox:        sandbox,
+		scope:          scope,
 		jobs:           make(map[string]*processJob),
 		closedCh:       make(chan struct{}),
 		loadedSessions: make(map[string]struct{}),
@@ -272,9 +268,9 @@ func NewProcessManager(root, stateHome, toolHomeRoot, sandbox string, protection
 	}, nil
 }
 
-func (manager *ProcessManager) processSandbox(policy string) Sandbox {
-	return Sandbox{
-		Policy: policy, Workspace: manager.workspace.root,
+func (manager *ProcessManager) processBoundary(scope Scope) Boundary {
+	return Boundary{
+		Scope: scope, Workspace: manager.workspace.root,
 		ToolHome: manager.toolHome, ProtectedPaths: manager.protection.Paths(),
 	}
 }
@@ -318,7 +314,7 @@ func (manager *ProcessManager) Tools() []agent.Tool {
 		{
 			Spec: agent.ToolSpec{
 				Name:         "bash",
-				Description:  "Run Bash in the workspace with environment and filesystem access determined by the current sandbox policy, process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors.",
+				Description:  "Run Bash in the workspace with environment and filesystem access determined by the current scope, process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors.",
 				InputSchema:  json.RawMessage(bashSchema),
 				ParallelSafe: false,
 			},
@@ -378,13 +374,13 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 		origin:     origin,
 		sessionID:  sessionID,
 		supervised: args.Background,
-		build: func(sandbox string) (*exec.Cmd, error) {
+		build: func(scope Scope) (*exec.Cmd, error) {
 			if origin == processOriginUser {
 				command := ambientBashCommand(args.Command, workdir)
 				command.Env = os.Environ()
 				return command, nil
 			}
-			return sandboxedBashCommand(args.Command, workdir, manager.processSandbox(sandbox))
+			return sandboxedBashCommand(args.Command, workdir, manager.processBoundary(scope))
 		},
 	})
 	if err != nil {
@@ -537,20 +533,20 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		manager.mu.Unlock()
 		return nil, errors.New("process manager is closed")
 	}
-	sandbox := manager.sandbox
+	scope := manager.scope
 	hiddenModelEnvironment := maps.Clone(manager.hiddenModelEnvironment)
 	manager.mu.Unlock()
 	if spec.origin != processOriginModel && spec.origin != processOriginUser {
 		return nil, fmt.Errorf("unknown process origin %d", spec.origin)
 	}
 	if spec.origin == processOriginModel {
-		if err := manager.processSandbox(sandbox).ValidateLayout(); err != nil {
+		if err := manager.processBoundary(scope).ValidateLayout(); err != nil {
 			return nil, err
 		}
-		if sandbox != SandboxOff && manager.protection.contains(spec.workdir) {
+		if manager.protection.contains(spec.workdir) {
 			return nil, errors.New("process workdir is protected")
 		}
-		if sandbox == SandboxWorkspace {
+		if scope == ScopeWorkspace {
 			if err := manager.ensureToolHome(); err != nil {
 				return nil, err
 			}
@@ -567,7 +563,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	process, err := spec.build(sandbox)
+	process, err := spec.build(scope)
 	if err != nil {
 		return nil, fmt.Errorf("prepare process: %w", err)
 	}
@@ -579,7 +575,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 	}
 	process.Dir = spec.workdir
 	if spec.supervised {
-		return manager.startSupervised(spec, process, sandbox, id)
+		return manager.startSupervised(spec, process, scope, id)
 	}
 	process.Stdin = spec.stdin
 	configureProcessGroup(process)
@@ -609,7 +605,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		separateStderr: spec.separateStderr,
 	}
 	if spec.origin == processOriginModel {
-		job.sandboxPolicy = sandbox
+		job.scope = scope
 	}
 	manager.mu.Lock()
 	if manager.closed {
@@ -779,13 +775,13 @@ func (manager *ProcessManager) DetachedJobs(sessionID string) []string {
 	return ids
 }
 
-// SetSandboxAfter makes beforeApply and the policy change one linearized
+// SetScopeAfter makes beforeApply and the scope change one linearized
 // boundary with process launch. A model process which acquired its launch
-// policy before the callback keeps the old policy; every process acquiring it
+// scope before the callback keeps the old scope; every process acquiring it
 // after a successful return gets the new one. A callback failure leaves the
 // manager unchanged.
-func (manager *ProcessManager) SetSandboxAfter(policy string, beforeApply func() error) error {
-	if err := validateConcreteSandboxPolicy(policy); err != nil {
+func (manager *ProcessManager) SetScopeAfter(scope Scope, beforeApply func() error) error {
+	if err := validateConcreteScope(scope); err != nil {
 		return err
 	}
 	manager.mu.Lock()
@@ -793,10 +789,10 @@ func (manager *ProcessManager) SetSandboxAfter(policy string, beforeApply func()
 	if manager.closed {
 		return errors.New("process manager is closed")
 	}
-	if err := manager.processSandbox(policy).ValidateLayout(); err != nil {
+	if err := manager.processBoundary(scope).ValidateLayout(); err != nil {
 		return err
 	}
-	if policy == SandboxWorkspace {
+	if scope == ScopeWorkspace {
 		if err := manager.ensureToolHome(); err != nil {
 			return err
 		}
@@ -806,22 +802,21 @@ func (manager *ProcessManager) SetSandboxAfter(policy string, beforeApply func()
 			return err
 		}
 	}
-	manager.protection.SetEnabled(policy != SandboxOff)
-	manager.sandbox = policy
+	manager.scope = scope
 	return nil
 }
 
-// RunningSandboxPolicies reports the launch policy of currently running model
-// processes. Changing the manager policy only affects later process starts.
-func (manager *ProcessManager) RunningSandboxPolicies() map[string]int {
-	policies := make(map[string]int)
+// RunningScopes reports the launch scope of currently running model processes.
+// Changing the manager scope only affects later process starts.
+func (manager *ProcessManager) RunningScopes() map[Scope]int {
+	scopes := make(map[Scope]int)
 	for _, job := range manager.allJobs() {
 		state := job.snapshot()
-		if state.status == ProcessRunning && state.sandboxPolicy != "" {
-			policies[state.sandboxPolicy]++
+		if state.status == ProcessRunning && state.scope != "" {
+			scopes[state.scope]++
 		}
 	}
-	return policies
+	return scopes
 }
 
 func (manager *ProcessManager) stop(ctx context.Context, id, reason string) (*processJob, error) {
@@ -1127,7 +1122,7 @@ func (manager *ProcessManager) processResult(job *processJob, managed bool) Proc
 	state := job.snapshot()
 	result := ProcessResult{
 		Status:           state.status,
-		SandboxPolicy:    state.sandboxPolicy,
+		Scope:            state.scope,
 		ExitCode:         state.exitCode,
 		DurationMillis:   jobDuration(state.startedAt, state.finishedAt).Milliseconds(),
 		UserInitiated:    state.userInitiated,

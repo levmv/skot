@@ -21,14 +21,14 @@ import (
 	workspacetools "github.com/levmv/skot/tools"
 )
 
-func TestApplicationSwitchesAndPersistsRequestedSandbox(t *testing.T) {
+func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 	settings, err := state.Open(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.SandboxMasked)
+	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,30 +45,30 @@ func TestApplicationSwitchesAndPersistsRequestedSandbox(t *testing.T) {
 	application := &Application{
 		config: applicationConfig{settings: settings, root: root, home: home},
 		state: applicationState{
-			session:          newLiveSession("", runtime, nil, false),
-			processes:        processes,
-			requestedSandbox: workspacetools.SandboxAuto,
-			security:         securityState{RequestedPolicy: workspacetools.SandboxAuto, EffectivePolicy: workspacetools.SandboxMasked, Backend: "landlock", Container: "docker"},
+			session:        newLiveSession("", runtime, nil, false),
+			processes:      processes,
+			requestedScope: workspacetools.ScopeAuto,
+			security:       securityState{RequestedScope: workspacetools.ScopeAuto, EffectiveScope: workspacetools.ScopeMachine, Backend: "landlock", Container: "docker"},
 		},
 	}
 
-	if err := application.SwitchSandbox(context.Background(), workspacetools.SandboxOff); err != nil {
+	if err := application.SwitchScope(context.Background(), workspacetools.ScopeMachine); err != nil {
 		t.Fatal(err)
 	}
-	if application.CurrentSandbox() != workspacetools.SandboxOff || application.SecuritySummary() != "sandbox: off" {
-		t.Fatalf("sandbox = %q, security = %q", application.CurrentSandbox(), application.SecuritySummary())
+	if application.CurrentScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine" {
+		t.Fatalf("scope = %q, summary = %q", application.CurrentScope(), application.ScopeSummary())
 	}
 	stored, err := settings.Settings()
-	if err != nil || stored.Sandbox != workspacetools.SandboxOff {
-		t.Fatalf("stored sandbox = %q, %v", stored.Sandbox, err)
+	if err != nil || stored.Scope != workspacetools.ScopeMachine {
+		t.Fatalf("stored scope = %q, %v", stored.Scope, err)
 	}
 	if _, err := processes.RunShell(context.Background(), "true"); err != nil {
 		t.Fatalf("process manager unusable after switch: %v", err)
 	}
 }
 
-func TestApplicationSupportsNestedHomeAcrossSandboxSwitch(t *testing.T) {
-	if workspacetools.SandboxBackend() != "landlock" {
+func TestApplicationGivesNestedHomeNoSpecialStatus(t *testing.T) {
+	if workspacetools.BoundaryBackend() != "landlock" {
 		t.Skip("nested-home process limitation is specific to Landlock")
 	}
 	root := t.TempDir()
@@ -76,23 +76,23 @@ func TestApplicationSupportsNestedHomeAcrossSandboxSwitch(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, ".cache"))
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: root, Interactive: true,
-		Sandbox: SandboxOff, SandboxExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = application.Close() })
-	if notice := application.SandboxNotice(); notice != "" {
-		t.Fatalf("off notice = %q", notice)
+	if slices.Contains(application.config.protectedPaths, canonicalSecurityPath(home)) {
+		t.Fatalf("Skot home became protected: %#v", application.config.protectedPaths)
 	}
-	if tools := application.ToolSetTools(toolpolicy.ToolSetDefault); !slices.Contains(tools, "ls") {
-		t.Fatalf("nested-home default tools = %#v", tools)
+	if tools := application.ToolSetTools(toolpolicy.ToolSetDefault); slices.Contains(tools, "ls") {
+		t.Fatalf("nested home changed default tools = %#v", tools)
 	}
-	if err := application.SwitchSandbox(context.Background(), SandboxWorkspace); err != nil {
+	if err := application.SwitchScope(context.Background(), ScopeWorkspace); err != nil {
 		t.Fatal(err)
 	}
-	if notice := application.SandboxNotice(); !strings.Contains(notice, "cannot list or create entries") {
-		t.Fatalf("workspace notice = %q", notice)
+	if notice := application.ScopeNotice(); notice != "" {
+		t.Fatalf("nested home produced a scope notice = %q", notice)
 	}
 }
 
@@ -100,7 +100,7 @@ func TestApplicationSwitchesAndPersistsTheme(t *testing.T) {
 	home := t.TempDir()
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), Interactive: true,
-		Sandbox: SandboxOff, SandboxExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestOpenLoadsPersistedTheme(t *testing.T) {
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: root, Interactive: true,
-		Sandbox: SandboxOff, SandboxExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestOpenIgnoresThemeOutsideInteractiveUI(t *testing.T) {
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: root, ModelURI: "ollama/qwen3:8b", ModelExplicit: true,
-		Sandbox: SandboxOff, SandboxExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestOpenResetsInvalidInteractiveThemeToAuto(t *testing.T) {
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), Interactive: true,
-		Sandbox: SandboxOff, SandboxExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
-		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	if snapshot.ModelContext.ToolSet != toolpolicy.ToolSetReadOnly || len(snapshot.ModelContext.Tools) == 0 || snapshot.ModelContext.CompactionInstructions == "" {
 		t.Fatalf("model context = %#v", snapshot.ModelContext)
 	}
-	if snapshot.Environment.Endpoint != "https://api.deepseek.com/v1" || snapshot.Environment.Sandbox.RequestedPolicy != workspacetools.SandboxOff || snapshot.Environment.Sandbox.EffectivePolicy != workspacetools.SandboxOff || snapshot.Environment.Sandbox.Network != "inherited" {
+	if snapshot.Environment.Endpoint != "https://api.deepseek.com/v1" || snapshot.Environment.Scope.RequestedScope != workspacetools.ScopeMachine || snapshot.Environment.Scope.EffectiveScope != workspacetools.ScopeMachine || snapshot.Environment.Scope.Network != "inherited" {
 		t.Fatalf("environment = %#v", snapshot.Environment)
 	}
 	if snapshot.RuntimePolicy.AwaitRequiredJobs || snapshot.RuntimePolicy.ContextWindow != 1_000_000 || snapshot.RuntimePolicy.MaxRequestBytes == 0 || snapshot.RuntimePolicy.MaxCompletionBytes == 0 || snapshot.RuntimePolicy.MaxModelAttempts != -1 || snapshot.RuntimePolicy.RetryBudget != DefaultRetryBudget.String() || snapshot.RuntimePolicy.StreamIdleTimeout != DefaultStreamIdleTimeout.String() || snapshot.RuntimePolicy.MaxToolIterations != agent.DefaultMaxToolIterations {
@@ -230,8 +230,8 @@ func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	}
 }
 
-func TestOpenMergesConfiguredProtectedPathsAndSandboxSwitchEnforcesThem(t *testing.T) {
-	if workspacetools.SandboxBackend() == "" {
+func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testing.T) {
+	if workspacetools.BoundaryBackend() == "" {
 		t.Skip("platform sandbox is unavailable")
 	}
 	home, root := t.TempDir(), t.TempDir()
@@ -243,7 +243,7 @@ func TestOpenMergesConfiguredProtectedPathsAndSandboxSwitchEnforcesThem(t *testi
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: root, ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Sandbox: SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: ScopeMachine, ScopeExplicit: true, Interactive: true,
 		ProtectedPaths: []string{"api-secret"},
 	})
 	if err != nil {
@@ -251,7 +251,6 @@ func TestOpenMergesConfiguredProtectedPathsAndSandboxSwitchEnforcesThem(t *testi
 	}
 	t.Cleanup(func() { _ = application.Close() })
 	wantPaths := []string{
-		canonicalSecurityPath(home),
 		canonicalSecurityPath(filepath.Join(root, "settings-secret")),
 		canonicalSecurityPath(filepath.Join(root, "api-secret")),
 	}
@@ -269,14 +268,14 @@ func TestOpenMergesConfiguredProtectedPathsAndSandboxSwitchEnforcesThem(t *testi
 		}
 		return errors.New("read tool not found")
 	}
-	if err := read(); err != nil {
-		t.Fatalf("off read rejected: %v", err)
+	if err := read(); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("machine read error = %v", err)
 	}
-	if err := application.SwitchSandbox(context.Background(), SandboxMasked); err != nil {
+	if err := application.SwitchScope(context.Background(), ScopeWorkspace); err != nil {
 		t.Fatal(err)
 	}
 	if err := read(); err == nil || !strings.Contains(err.Error(), "protected") {
-		t.Fatalf("masked read error = %v", err)
+		t.Fatalf("workspace read error = %v", err)
 	}
 }
 
@@ -286,7 +285,7 @@ func TestOpenConfiguresAndOwnsCompleteToolCatalog(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
-		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 		ToolSets: map[string][]string{
 			toolpolicy.ToolSetReadOnly: {"ls", "grep", "glob"},
 			toolpolicy.ToolSetEdit:     {"ls", "grep", "glob", "edit", "write"},
@@ -377,7 +376,7 @@ func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *test
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
-		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +423,7 @@ func TestOpenRejectsBackgroundProgramToolSetWithoutJob(t *testing.T) {
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: "worker-only", ToolSetExplicit: true,
 		ToolSets: map[string][]string{"worker-only": {"worker"}},
-		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope:    workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
 	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
 		t.Fatalf("error = %v", err)
@@ -439,7 +438,7 @@ func TestOpenRejectsBashToolSetWithoutJob(t *testing.T) {
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: "shell-only", ToolSetExplicit: true,
 		ToolSets: map[string][]string{"shell-only": {"read", "bash"}},
-		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope:    workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
 	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
 		t.Fatalf("error = %v", err)
@@ -450,7 +449,7 @@ func TestOpenValidatesCompleteCatalogBeforeToolSetFiltering(t *testing.T) {
 	_, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
-		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
 			return append(catalog, applicationTool("bash")), nil
 		},
@@ -463,7 +462,7 @@ func TestOpenValidatesCompleteCatalogBeforeToolSetFiltering(t *testing.T) {
 func TestOpenAllowsDeliberatelyEmptyToolCatalog(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 		ToolSets: map[string][]string{
 			toolpolicy.ToolSetReadOnly: nil,
 			toolpolicy.ToolSetEdit:     nil,
@@ -498,7 +497,7 @@ func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
 		ToolSets: configuredToolSets,
-		Sandbox:  workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope:    workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 		ConfigureTools: func(catalog []agent.Tool) ([]agent.Tool, error) {
 			return append(catalog, applicationTool("custom")), nil
 		},
@@ -558,19 +557,19 @@ func TestOpenRejectsNegativeModelRequestDurations(t *testing.T) {
 	}
 }
 
-func TestApplicationRejectsUnknownSandboxWithoutChangingState(t *testing.T) {
-	application := &Application{state: applicationState{requestedSandbox: workspacetools.SandboxAuto}}
-	if err := application.SwitchSandbox(context.Background(), "magic"); err == nil {
-		t.Fatal("unknown sandbox accepted")
+func TestApplicationRejectsUnknownScopeWithoutChangingState(t *testing.T) {
+	application := &Application{state: applicationState{requestedScope: workspacetools.ScopeAuto}}
+	if err := application.SwitchScope(context.Background(), "magic"); err == nil {
+		t.Fatal("unknown scope accepted")
 	}
-	if application.CurrentSandbox() != workspacetools.SandboxAuto {
-		t.Fatalf("sandbox changed to %q", application.CurrentSandbox())
+	if application.CurrentScope() != workspacetools.ScopeAuto {
+		t.Fatalf("scope changed to %q", application.CurrentScope())
 	}
 }
 
-func TestSecuritySummaryReportsRunningProcessesWithEarlierSandboxPolicy(t *testing.T) {
+func TestScopeSummaryReportsRunningProcessesWithEarlierScope(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
-	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.SandboxOff)
+	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,19 +579,19 @@ func TestSecuritySummaryReportsRunningProcessesWithEarlierSandboxPolicy(t *testi
 	if _, err := tool.Run(ctx, `{"command":"sleep 30","background":true}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := processes.SetSandboxAfter(workspacetools.SandboxWorkspace, nil); err != nil {
+	if err := processes.SetScopeAfter(workspacetools.ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	application := &Application{
 		state: applicationState{
 			processes: processes,
 			security: securityState{
-				RequestedPolicy: workspacetools.SandboxWorkspace,
-				EffectivePolicy: workspacetools.SandboxWorkspace,
+				RequestedScope: workspacetools.ScopeWorkspace,
+				EffectiveScope: workspacetools.ScopeWorkspace,
 			},
 		},
 	}
-	if summary := application.SecuritySummary(); !strings.Contains(summary, "running processes retain launch policy: off (1)") {
+	if summary := application.ScopeSummary(); !strings.Contains(summary, "running processes retain launch scope: machine (1)") {
 		t.Fatalf("security summary = %q", summary)
 	}
 }
@@ -670,7 +669,7 @@ func TestOpenAppliesModelAPIOverrideBeforeReasoningEffortValidation(t *testing.T
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "opencode-go/future-model", ModelExplicit: true,
 		ModelAPI: "responses", ReasoningEffort: "high", ReasoningEffortExplicit: true,
-		Sandbox: workspacetools.SandboxOff, SandboxExplicit: true, Interactive: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1013,7 +1012,7 @@ func TestApplicationReselectUsesCurrentOpenRouterContextWhenLookupFails(t *testi
 func TestOpenDoesNotTurnInternalRouteReviewStateIntoAStartupWarning(t *testing.T) {
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/unreviewed-model",
-		Interactive: true, Sandbox: workspacetools.SandboxOff, SandboxExplicit: true,
+		Interactive: true, Scope: workspacetools.ScopeMachine, ScopeExplicit: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1112,7 +1111,7 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.SandboxOff)
+	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1154,7 +1153,7 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 		},
 		state: applicationState{
 			session: newLiveSession(id, runtime, journal, true), processes: processes,
-			toolSet: toolpolicy.ToolSetDefault, requestedSandbox: workspacetools.SandboxOff,
+			toolSet: toolpolicy.ToolSetDefault, requestedScope: workspacetools.ScopeMachine,
 		},
 	}, journal
 }

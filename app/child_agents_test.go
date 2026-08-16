@@ -320,8 +320,8 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 		t.Fatal("resumed child is absent from application tool status")
 	}
 
-	sandbox := agent.SandboxSnapshot{RequestedPolicy: "test", EffectivePolicy: "test", Backend: "test"}
-	if err := application.state.children.setSandboxSnapshot(context.Background(), sandbox); err != nil {
+	sandbox := agent.ScopeSnapshot{RequestedScope: "test", EffectiveScope: "test", Backend: "test"}
+	if err := application.state.children.setScopeSnapshot(context.Background(), sandbox); err != nil {
 		t.Fatal(err)
 	}
 	child := application.state.children.children[firstParentID][childID]
@@ -329,7 +329,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Configured == nil || state.Configured.Environment.Sandbox != sandbox {
+	if state.Configured == nil || state.Configured.Environment.Scope != sandbox {
 		t.Fatalf("child sandbox snapshot = %#v", state.Configured)
 	}
 }
@@ -544,7 +544,7 @@ func childTestConfig(home, root, baseURL string, interactive bool) Config {
 		ModelURI: "deepseek/child-test", ModelExplicit: true,
 		BaseURL: baseURL, ContextWindow: 32 * 1024,
 		ToolSet: "delegate", ToolSetExplicit: true, ToolSets: childTestToolSets(),
-		Sandbox: SandboxOff, SandboxExplicit: true, Interactive: interactive,
+		Scope: ScopeMachine, ScopeExplicit: true, Interactive: interactive,
 	}
 }
 

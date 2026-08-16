@@ -420,11 +420,11 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 			supervised:     background || declaration.Detach,
 			detach:         declaration.Detach,
 			environment:    declaration.Env,
-			build: func(policy string) (*exec.Cmd, error) {
-				if policy != SandboxOff && manager.protection.contains(program) {
+			build: func(scope Scope) (*exec.Cmd, error) {
+				if manager.protection.contains(program) {
 					return nil, errors.New("program is protected")
 				}
-				return sandboxedProgramCommand(program, declaration.Command, workdir, manager.processSandbox(policy), declaration.Env)
+				return sandboxedProgramCommand(program, declaration.Command, workdir, manager.processBoundary(scope), declaration.Env)
 			},
 		})
 		if err != nil {
@@ -480,7 +480,7 @@ func (manager *ProcessManager) programLaunchFailure(job *processJob) string {
 	if state.status == ProcessNotStarted {
 		return strings.TrimSpace(state.errText)
 	}
-	if state.sandboxPolicy == "" || state.sandboxPolicy == SandboxOff || state.exitCode == nil || *state.exitCode != 126 {
+	if state.scope == "" || state.exitCode == nil || *state.exitCode != 126 {
 		return ""
 	}
 	var stderr []byte
@@ -492,7 +492,10 @@ func (manager *ProcessManager) programLaunchFailure(job *processJob) string {
 		return ""
 	}
 	message := strings.TrimSpace(string(stderr))
-	for _, prefix := range []string{"sandbox:", "sandbox exec ", "sandbox-exec:"} {
+	for _, prefix := range []string{
+		"filesystem boundary:", "filesystem boundary exec ",
+		"sandbox-exec:",
+	} {
 		if strings.HasPrefix(message, prefix) {
 			return message
 		}

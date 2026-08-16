@@ -39,7 +39,7 @@ type cliConfig struct {
 	root              string
 	toolSet           string
 	saveSession       bool
-	sandbox           string
+	scope             string
 	verbose           bool
 	jsonOutput        bool
 	showVersion       bool
@@ -53,7 +53,7 @@ type cliInvocation struct {
 }
 
 func main() {
-	if workspacetools.RunSandboxChildIfRequested() {
+	if workspacetools.RunBoundaryChildIfRequested() {
 		return
 	}
 	if workspacetools.RunJobWorkerIfRequested() {
@@ -95,7 +95,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.root, "root", envOr("SK_ROOT", "."), "workspace root for file tools")
 	flags.StringVar(&config.toolSet, "tools", envOr("SK_TOOLS", app.ToolSetDefault), "tool set available to the model")
 	flags.BoolVar(&config.saveSession, "save-session", false, "keep a resumable session for a one-shot invocation")
-	flags.StringVar(&config.sandbox, "sandbox", envOr("SK_SANDBOX", app.SandboxAuto), "model filesystem isolation: auto, workspace, masked, or off")
+	flags.StringVar(&config.scope, "scope", envOr("SK_SCOPE", string(app.ScopeAuto)), "model filesystem scope: auto, workspace, or machine")
 	flags.BoolVar(&config.verbose, "v", false, "show model attempts and status")
 	flags.BoolVar(&config.jsonOutput, "json", false, "emit one versioned JSON result on stdout")
 	flags.BoolVar(&config.showVersion, "version", false, "print the Skot version and exit")
@@ -145,7 +145,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	modelExplicit := setFlags["model"] || strings.TrimSpace(os.Getenv("SK_MODEL")) != ""
 	reasoningEffortExplicit := setFlags["reasoning-effort"] || strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")) != ""
 	toolSetExplicit := setFlags["tools"] || strings.TrimSpace(os.Getenv("SK_TOOLS")) != ""
-	sandboxExplicit := setFlags["sandbox"] || strings.TrimSpace(os.Getenv("SK_SANDBOX")) != ""
+	scopeExplicit := setFlags["scope"] || strings.TrimSpace(os.Getenv("SK_SCOPE")) != ""
 	inFile, outFile, terminalScreen := ui.CanUseScreen(stdin, stdout)
 	interactive := len(invocation.args) == 0 && terminalScreen
 	var prompt string
@@ -165,7 +165,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		RetryBudget: retryBudget, StreamIdleTimeout: streamIdleTimeout, MaxToolIterations: maxToolIterations, SystemPrompt: config.systemPrompt,
 		ToolsFile: config.toolsFile,
 		ToolSet:   config.toolSet, ToolSetExplicit: toolSetExplicit,
-		Sandbox: config.sandbox, SandboxExplicit: sandboxExplicit,
+		Scope: config.scope, ScopeExplicit: scopeExplicit,
 		JournalPath: config.journalPath, Resume: invocation.resume, ResumePrefix: invocation.sessionPrefix,
 		SaveSession: config.saveSession, Interactive: interactive,
 	})
@@ -187,7 +187,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			ReasoningEffort: application.CurrentReasoningEffort(),
 			Root:            application.Root(),
 			ToolSet:         application.CurrentToolSet(),
-			Security:        application.SecuritySummary(),
+			ScopeSummary:    application.ScopeSummary(),
 		}, inFile, outFile)
 	}
 	measureUsage := config.verbose || config.jsonOutput

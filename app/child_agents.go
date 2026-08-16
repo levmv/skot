@@ -215,42 +215,42 @@ func (supervisor *childSupervisor) setModelSelection(model, effort string) {
 	}
 }
 
-func (supervisor *childSupervisor) setSessionDefaults(model, effort, instructions string, sandbox agent.SandboxSnapshot) {
+func (supervisor *childSupervisor) setSessionDefaults(model, effort, instructions string, scope agent.ScopeSnapshot) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	if !supervisor.closed {
 		supervisor.defaultModel = model
 		supervisor.defaultEffort = effort
 		supervisor.instructions = instructions
-		supervisor.builder.sandbox = sandbox
+		supervisor.builder.scope = scope
 	}
 }
 
-func (supervisor *childSupervisor) setSandboxSnapshot(ctx context.Context, sandbox agent.SandboxSnapshot) error {
+func (supervisor *childSupervisor) setScopeSnapshot(ctx context.Context, scope agent.ScopeSnapshot) error {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	if supervisor.closed {
 		return errors.New("child supervisor is closed")
 	}
-	previous := supervisor.builder.sandbox
-	if previous == sandbox {
+	previous := supervisor.builder.scope
+	if previous == scope {
 		return nil
 	}
 	var updated []*agent.Runtime
 	for _, group := range supervisor.children {
 		for _, child := range group {
-			if err := child.runtime.SetSandboxSnapshot(ctx, sandbox); err != nil {
+			if err := child.runtime.SetScopeSnapshot(ctx, scope); err != nil {
 				rollbackCtx := context.WithoutCancel(ctx)
 				var rollbackErr error
 				for _, runtime := range updated {
-					rollbackErr = errors.Join(rollbackErr, runtime.SetSandboxSnapshot(rollbackCtx, previous))
+					rollbackErr = errors.Join(rollbackErr, runtime.SetScopeSnapshot(rollbackCtx, previous))
 				}
 				return errors.Join(err, rollbackErr)
 			}
 			updated = append(updated, child.runtime)
 		}
 	}
-	supervisor.builder.sandbox = sandbox
+	supervisor.builder.scope = scope
 	return nil
 }
 
@@ -838,11 +838,11 @@ func (supervisor *childSupervisor) Preload(ctx context.Context, parentID string)
 	return supervisor.preloadWith(ctx, parentID, builder, instructions)
 }
 
-func (supervisor *childSupervisor) PreloadSession(ctx context.Context, parentID, instructions string, sandbox agent.SandboxSnapshot) error {
+func (supervisor *childSupervisor) PreloadSession(ctx context.Context, parentID, instructions string, scope agent.ScopeSnapshot) error {
 	supervisor.mu.Lock()
 	builder := supervisor.builder
 	supervisor.mu.Unlock()
-	builder.sandbox = sandbox
+	builder.scope = scope
 	return supervisor.preloadWith(ctx, parentID, builder, instructions)
 }
 

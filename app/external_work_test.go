@@ -11,7 +11,7 @@ import (
 )
 
 func TestCommittedProcessToolResultSuppressesDuplicateCompletion(t *testing.T) {
-	manager, err := workspacetools.NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), workspacetools.SandboxOff)
+	manager, err := workspacetools.NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), workspacetools.ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
 	}

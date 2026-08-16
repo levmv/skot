@@ -79,21 +79,21 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if !config.ToolSetExplicit && strings.TrimSpace(settings.ToolSet) != "" {
 		config.ToolSet = settings.ToolSet
 	}
-	if !config.SandboxExplicit && strings.TrimSpace(settings.Sandbox) != "" {
-		config.Sandbox = settings.Sandbox
+	if !config.ScopeExplicit && strings.TrimSpace(settings.Scope) != "" {
+		config.Scope = settings.Scope
 	}
 	if strings.TrimSpace(config.ModelURI) == "" {
 		config.ModelURI = DefaultModelURI
 	}
-	config.Sandbox, err = workspacetools.NormalizeSandboxPolicy(config.Sandbox)
+	scope, err := workspacetools.NormalizeScope(config.Scope)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(err)
 	}
+	config.Scope = string(scope)
 
 	configuredProtectedPaths := append([]string(nil), settings.ProtectedPaths...)
 	configuredProtectedPaths = append(configuredProtectedPaths, config.ProtectedPaths...)
-	configuredProtectedPaths = append([]string{home}, configuredProtectedPaths...)
-	protection, err := workspacetools.NewProtectedPathPolicy(config.Root, configuredProtectedPaths, false)
+	protection, err := workspacetools.NewProtectedPathPolicy(config.Root, configuredProtectedPaths)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize protected paths: %w", err))
 	}
@@ -104,20 +104,19 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
 	}
 	toolHome := workspacetools.WorkspaceToolHome(toolHomeRoot, root)
-	security := buildSecurityStateWithToolHome(ctx, config.Sandbox, root, home, toolHome, protection.Paths())
+	security := buildSecurityStateWithToolHome(ctx, scope, root, toolHome, protection.Paths())
 	if err := validateSecurity(security); err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("%w; choose -sandbox off explicitly to run without it", err))
+		return nil, agent.MarkInvalidRequest(err)
 	}
-	if notice := sandboxWorkspaceNotice(security, root, home); notice != "" {
+	if notice := protectedWorkspaceNotice(security, root, protection.Paths()); notice != "" {
 		notices = append(notices, notice)
 	}
-	protection.SetEnabled(security.EffectivePolicy != workspacetools.SandboxOff)
 	projectInstructions, err := loadInstructions(root, protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
 	instructions := effectiveInstructions(config.SystemPrompt, root, projectInstructions)
-	processes, err := workspacetools.NewProcessManager(root, home, toolHomeRoot, security.EffectivePolicy, protection)
+	processes, err := workspacetools.NewProcessManager(root, home, toolHomeRoot, security.EffectiveScope, protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
@@ -129,10 +128,10 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	resources := &openResources{processes: processes, children: children}
 	catalog = append(catalog, children.tool())
-	// Derive this from platform and layout rather than the current policy so a
-	// runtime sandbox switch does not silently change the active tool set.
+	// Derive this from platform and layout rather than the current scope so a
+	// runtime scope switch does not silently change the active tool set.
 	builtInOptions := toolpolicy.BuiltInOptions{
-		DefaultIncludesLS: landlockNestedHomeLimitsWorkspaceRoot(workspacetools.SandboxBackend(), root, home),
+		DefaultIncludesLS: landlockProtectedPathsLimitWorkspaceRoot(workspacetools.BoundaryBackend(), root, protection.Paths()),
 	}
 	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes, builtInOptions)
 	if err != nil {
@@ -209,7 +208,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		workspace:         root,
 		requestPolicy:     modelRequestPolicy(config.RetryBudget, config.StreamIdleTimeout),
 		maxToolIterations: config.MaxToolIterations,
-		sandbox:           security.snapshot(),
+		scope:             security.snapshot(),
 		awaitRequiredJobs: !config.Interactive,
 		sanitize:          masker.Redact,
 	}
@@ -261,14 +260,14 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			awaitRequiredJobs: !config.Interactive,
 		},
 		state: applicationState{
-			session:          currentSession,
-			processes:        processes,
-			children:         children,
-			toolSet:          config.ToolSet,
-			requestedSandbox: config.Sandbox,
-			theme:            theme,
-			security:         security,
-			startupNotices:   notices,
+			session:        currentSession,
+			processes:      processes,
+			children:       children,
+			toolSet:        config.ToolSet,
+			requestedScope: scope,
+			theme:          theme,
+			security:       security,
+			startupNotices: notices,
 		},
 	}, nil
 }

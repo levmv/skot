@@ -25,9 +25,9 @@ import (
 type Application struct {
 	config applicationConfig
 
-	mu        sync.RWMutex
-	sandboxMu sync.Mutex
-	state     applicationState
+	mu      sync.RWMutex
+	scopeMu sync.Mutex
+	state   applicationState
 }
 
 // applicationConfig is immutable after Open returns. In particular, session
@@ -59,14 +59,14 @@ type applicationConfig struct {
 // applicationState is protected by Application.mu. It contains exactly the
 // state that can change after Open, including resources cleared by Close.
 type applicationState struct {
-	session          *liveSession
-	processes        *workspacetools.ProcessManager
-	children         *childSupervisor
-	toolSet          string
-	requestedSandbox string
-	theme            string
-	security         securityState
-	startupNotices   []string
+	session        *liveSession
+	processes      *workspacetools.ProcessManager
+	children       *childSupervisor
+	toolSet        string
+	requestedScope workspacetools.Scope
+	theme          string
+	security       securityState
+	startupNotices []string
 }
 
 func (application *Application) Run(ctx context.Context, input string, emit agent.EmitFunc) (agent.RunResult, error) {
@@ -356,10 +356,10 @@ func (application *Application) Compact(ctx context.Context, keepRecent int) (ag
 	return runtime.Compact(ctx, keepRecent)
 }
 
-func (application *Application) CurrentSandbox() string {
+func (application *Application) CurrentScope() string {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
-	return application.state.requestedSandbox
+	return string(application.state.requestedScope)
 }
 
 func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Model, error) {
@@ -633,7 +633,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		workspace:         root,
 		requestPolicy:     modelRequestPolicy(retryBudget, streamIdleTimeout),
 		maxToolIterations: maxToolIterations,
-		sandbox:           security.snapshot(),
+		scope:             security.snapshot(),
 		awaitRequiredJobs: awaitRequiredJobs,
 		sanitize:          masker.Redact,
 		externalWork: applicationExternalWork{
@@ -718,7 +718,7 @@ func (application *Application) runtimeOrNil() *agent.Runtime {
 	return application.state.session.runtime
 }
 
-func (application *Application) SecuritySummary() string {
+func (application *Application) ScopeSummary() string {
 	application.mu.RLock()
 	security, processes := application.state.security, application.state.processes
 	application.mu.RUnlock()
@@ -726,49 +726,48 @@ func (application *Application) SecuritySummary() string {
 	if processes == nil {
 		return summary
 	}
-	policies := processes.RunningSandboxPolicies()
+	scopes := processes.RunningScopes()
 	var retained []string
-	for _, policy := range []string{workspacetools.SandboxWorkspace, workspacetools.SandboxMasked, workspacetools.SandboxOff} {
-		if count := policies[policy]; count > 0 && policy != security.EffectivePolicy {
-			retained = append(retained, fmt.Sprintf("%s (%d)", policy, count))
+	for _, scope := range []workspacetools.Scope{workspacetools.ScopeWorkspace, workspacetools.ScopeMachine} {
+		if count := scopes[scope]; count > 0 && scope != security.EffectiveScope {
+			retained = append(retained, fmt.Sprintf("%s (%d)", scope, count))
 		}
 	}
 	if len(retained) != 0 {
-		summary += " · running processes retain launch policy: " + strings.Join(retained, ", ")
+		summary += " · running processes retain launch scope: " + strings.Join(retained, ", ")
 	}
 	return summary
 }
 
-// SandboxNotice describes a current sandbox limitation that is useful at
-// startup or immediately after changing policy, but too noisy for
-// SecuritySummary.
-func (application *Application) SandboxNotice() string {
+// ScopeNotice describes a current filesystem-boundary limitation that is
+// useful at startup or immediately after changing scope, but too noisy for
+// ScopeSummary.
+func (application *Application) ScopeNotice() string {
 	application.mu.RLock()
 	security := application.state.security
 	application.mu.RUnlock()
-	return sandboxWorkspaceNotice(security, application.config.root, application.config.home)
+	return protectedWorkspaceNotice(security, application.config.root, application.config.protectedPaths)
 }
 
-func (application *Application) SwitchSandbox(ctx context.Context, value string) error {
-	application.sandboxMu.Lock()
-	defer application.sandboxMu.Unlock()
+func (application *Application) SwitchScope(ctx context.Context, value string) error {
+	application.scopeMu.Lock()
+	defer application.scopeMu.Unlock()
 
-	policy, err := workspacetools.NormalizeSandboxPolicy(value)
+	requested, err := workspacetools.NormalizeScope(value)
 	if err != nil {
 		return err
 	}
 	application.mu.RLock()
-	if policy == application.state.requestedSandbox {
+	if requested == application.state.requestedScope {
 		application.mu.RUnlock()
 		return nil
 	}
 	processes := application.state.processes
 	currentSession := application.state.session
-	oldPolicy := application.state.requestedSandbox
+	oldScope := application.state.requestedScope
 	application.mu.RUnlock()
 	settings := application.config.settings
 	root := application.config.root
-	home := application.config.home
 	toolHome := application.config.toolHome
 	protectedPaths := application.config.protectedPaths
 	if processes == nil || settings == nil || currentSession == nil || currentSession.runtime == nil {
@@ -776,35 +775,35 @@ func (application *Application) SwitchSandbox(ctx context.Context, value string)
 	}
 	runtime := currentSession.runtime
 
-	security := buildSecurityStateWithToolHome(ctx, policy, root, home, toolHome, protectedPaths)
+	security := buildSecurityStateWithToolHome(ctx, requested, root, toolHome, protectedPaths)
 	if err := validateSecurity(security); err != nil {
-		return fmt.Errorf("cannot switch sandbox: %w", err)
+		return fmt.Errorf("cannot switch scope: %w", err)
 	}
 
 	application.mu.Lock()
 	defer application.mu.Unlock()
 	if application.state.processes != processes || application.state.session != currentSession {
-		return fmt.Errorf("runtime changed while switching sandbox")
+		return fmt.Errorf("runtime changed while switching scope")
 	}
-	if err := settings.SetDefaultSandbox(policy); err != nil {
-		return fmt.Errorf("save sandbox policy: %w", err)
+	if err := settings.SetDefaultScope(string(requested)); err != nil {
+		return fmt.Errorf("save filesystem scope: %w", err)
 	}
-	if err := processes.SetSandboxAfter(security.EffectivePolicy, func() error {
+	if err := processes.SetScopeAfter(security.EffectiveScope, func() error {
 		previous := application.state.security.snapshot()
-		if err := runtime.SetSandboxSnapshot(ctx, security.snapshot()); err != nil {
+		if err := runtime.SetScopeSnapshot(ctx, security.snapshot()); err != nil {
 			return err
 		}
 		if children := application.state.children; children != nil {
-			if err := children.setSandboxSnapshot(ctx, security.snapshot()); err != nil {
-				return errors.Join(err, runtime.SetSandboxSnapshot(context.WithoutCancel(ctx), previous))
+			if err := children.setScopeSnapshot(ctx, security.snapshot()); err != nil {
+				return errors.Join(err, runtime.SetScopeSnapshot(context.WithoutCancel(ctx), previous))
 			}
 		}
 		return nil
 	}); err != nil {
-		settingsErr := settings.SetDefaultSandbox(oldPolicy)
+		settingsErr := settings.SetDefaultScope(string(oldScope))
 		return errors.Join(err, settingsErr)
 	}
-	application.state.requestedSandbox = policy
+	application.state.requestedScope = requested
 	application.state.security = security
 	return nil
 }

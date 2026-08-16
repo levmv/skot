@@ -16,7 +16,7 @@ import (
 )
 
 func TestLinuxSandboxDoesNotGrantSharedTemp(t *testing.T) {
-	for _, dir := range sandboxWritableDirs(Sandbox{Workspace: "/workspace", ToolHome: "/tool-home"}) {
+	for _, dir := range sandboxWritableDirs(Boundary{Workspace: "/workspace", ToolHome: "/tool-home"}) {
 		if dir == "/tmp" || dir == "/var/tmp" {
 			t.Fatalf("shared temporary directory is writable: %q", dir)
 		}
@@ -29,7 +29,7 @@ func TestSandboxedProgramDisappearingAfterPreflightIsFatal(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), SandboxWorkspace)
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +59,8 @@ func TestSandboxedProgramGetsDeclaredButNotAmbientEnvironment(t *testing.T) {
 		t.Skip("sh is unavailable")
 	}
 	t.Setenv("SK_PROGRAM_OUTSIDE", "must-not-leak")
-	cmd, err := sandboxedProgramCommand(sh, []string{sh, "-c", "env"}, root, Sandbox{
-		Policy: SandboxWorkspace, Workspace: root, ProtectedPaths: []string{t.TempDir()}, ToolHome: toolHome,
+	cmd, err := sandboxedProgramCommand(sh, []string{sh, "-c", "env"}, root, Boundary{
+		Scope: ScopeWorkspace, Workspace: root, ProtectedPaths: []string{t.TempDir()}, ToolHome: toolHome,
 	}, map[string]string{"SK_PROGRAM_DECLARED": "visible"})
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestSandboxedProgramGetsDeclaredButNotAmbientEnvironment(t *testing.T) {
 }
 
 func TestResolvedBareProgramRunsThroughSandboxChild(t *testing.T) {
-	manager, err := NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), SandboxWorkspace)
+	manager, err := NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +108,8 @@ func TestSandboxedBashNestedWorkdirCanAccessWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	toolHome := t.TempDir()
-	cmd, err := sandboxedBashCommand("cat ../source.txt > ../copy.txt", workdir, Sandbox{
-		Policy: SandboxWorkspace, Workspace: root, ProtectedPaths: []string{t.TempDir()}, ToolHome: toolHome,
+	cmd, err := sandboxedBashCommand("cat ../source.txt > ../copy.txt", workdir, Boundary{
+		Scope: ScopeWorkspace, Workspace: root, ProtectedPaths: []string{t.TempDir()}, ToolHome: toolHome,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -147,8 +147,8 @@ func TestSandboxedToolTempStaysInsideToolHome(t *testing.T) {
 
 	command := `printf scratch > "$TMPDIR/scratch.txt"; ` +
 		"if cat " + shellQuoteForTest(outsidePath) + " >/dev/null 2>&1; then exit 41; fi"
-	cmd, err := sandboxedBashCommand(command, root, Sandbox{
-		Policy: SandboxWorkspace, Workspace: root, ProtectedPaths: []string{t.TempDir()}, ToolHome: toolHome,
+	cmd, err := sandboxedBashCommand(command, root, Boundary{
+		Scope: ScopeWorkspace, Workspace: root, ProtectedPaths: []string{t.TempDir()}, ToolHome: toolHome,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestSandboxedToolTempStaysInsideToolHome(t *testing.T) {
 	}
 }
 
-func TestMaskedHidesStateAndPreservesAmbientHome(t *testing.T) {
+func TestMachineProtectedPathsPreserveAmbientHome(t *testing.T) {
 	workspace, stateHome, toolHome := t.TempDir(), t.TempDir(), t.TempDir()
 	ambientHome := t.TempDir()
 	t.Setenv("HOME", ambientHome)
@@ -184,8 +184,8 @@ func TestMaskedHidesStateAndPreservesAmbientHome(t *testing.T) {
 		"if cat " + shellQuoteForTest(procSecret) + " >/dev/null 2>&1; then exit 45; fi; " +
 		"if cat " + shellQuoteForTest(parentProcSecret) + " >/dev/null 2>&1; then exit 46; fi; " +
 		`printf '%s' "$HOME" > observed-home; printf masked > workspace-write`
-	cmd, err := sandboxedBashCommand(command, workspace, Sandbox{
-		Policy: SandboxMasked, Workspace: workspace, ProtectedPaths: []string{stateHome}, ToolHome: toolHome,
+	cmd, err := sandboxedBashCommand(command, workspace, Boundary{
+		Scope: ScopeMachine, Workspace: workspace, ProtectedPaths: []string{stateHome}, ToolHome: toolHome,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -204,13 +204,17 @@ func TestMaskedHidesStateAndPreservesAmbientHome(t *testing.T) {
 	}
 }
 
-func TestMaskedSurvivesSupervisedLaunch(t *testing.T) {
+func TestMachineProtectedPathsSurviveSupervisedLaunch(t *testing.T) {
 	workspace, stateHome, toolRoot := t.TempDir(), t.TempDir(), t.TempDir()
 	secret := filepath.Join(stateHome, "events.jsonl")
 	if err := os.WriteFile(secret, []byte("journal\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProcessManager(workspace, stateHome, toolRoot, SandboxMasked)
+	policy, err := NewProtectedPathPolicy(workspace, []string{stateHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProcessManager(workspace, stateHome, toolRoot, ScopeMachine, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +242,8 @@ func TestFullSandboxCannotTruncatePrivateState(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := "if : > " + shellQuoteForTest(secret) + " 2>/dev/null; then exit 41; fi; exit 0"
-	cmd, err := sandboxedBashCommand(command, workspace, Sandbox{
-		Policy: SandboxWorkspace, Workspace: workspace, ProtectedPaths: []string{stateHome}, ToolHome: toolHome,
+	cmd, err := sandboxedBashCommand(command, workspace, Boundary{
+		Scope: ScopeWorkspace, Workspace: workspace, ProtectedPaths: []string{stateHome}, ToolHome: toolHome,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -274,11 +278,11 @@ func TestWorkspaceSandboxCarvesProtectedWorkspacePaths(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	policy, err := NewProtectedPathPolicy(workspace, []string{stateHome, "private"}, true)
+	policy, err := NewProtectedPathPolicy(workspace, []string{stateHome, "private"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProcessManager(workspace, stateHome, toolRoot, SandboxWorkspace, policy)
+	manager, err := NewProcessManager(workspace, stateHome, toolRoot, ScopeWorkspace, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +307,7 @@ func TestWorkspaceSandboxCarvesProtectedWorkspacePaths(t *testing.T) {
 	}
 }
 
-func TestMaskedSandboxHidesMultipleProtectedPaths(t *testing.T) {
+func TestMachineScopeHidesMultipleProtectedPaths(t *testing.T) {
 	workspace, stateHome, toolRoot := t.TempDir(), t.TempDir(), t.TempDir()
 	otherRoot := t.TempDir()
 	protectedDir := filepath.Join(otherRoot, "private")
@@ -316,11 +320,11 @@ func TestMaskedSandboxHidesMultipleProtectedPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	policy, err := NewProtectedPathPolicy(workspace, []string{stateHome, protectedDir, protectedFile}, true)
+	policy, err := NewProtectedPathPolicy(workspace, []string{stateHome, protectedDir, protectedFile})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewProcessManager(workspace, stateHome, toolRoot, SandboxMasked, policy)
+	manager, err := NewProcessManager(workspace, stateHome, toolRoot, ScopeMachine, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,9 +341,9 @@ func TestMaskedSandboxHidesMultipleProtectedPaths(t *testing.T) {
 	}
 }
 
-func TestSandboxesCarveStateHomeInsideWorkspace(t *testing.T) {
-	for _, policy := range []string{SandboxWorkspace, SandboxMasked} {
-		t.Run(policy, func(t *testing.T) {
+func TestStateHomeInsideWorkspaceHasNoSpecialStatus(t *testing.T) {
+	for _, scope := range []Scope{ScopeWorkspace, ScopeMachine} {
+		t.Run(string(scope), func(t *testing.T) {
 			workspace := t.TempDir()
 			stateHome := filepath.Join(workspace, ".skot")
 			public := filepath.Join(workspace, "project")
@@ -354,16 +358,13 @@ func TestSandboxesCarveStateHomeInsideWorkspace(t *testing.T) {
 				t.Fatal(err)
 			}
 			toolHomeRoot := filepath.Join(workspace, ".cache", "skot", "tool-home")
-			manager, err := NewProcessManager(workspace, stateHome, toolHomeRoot, policy)
+			manager, err := NewProcessManager(workspace, stateHome, toolHomeRoot, scope)
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = manager.Close() })
 
-			command := "if cat .skot/auth.json >/dev/null 2>&1; then exit 41; fi; " +
-				"if ls . >/dev/null 2>&1; then exit 42; fi; " +
-				"if : > root-created 2>/dev/null; then exit 43; fi; " +
-				"printf visible > project/result.txt"
+			command := "cat .skot/auth.json > project/result.txt; printf visible > root-created"
 			result := runProcessResult(t, manager.bash, bashArgs{Command: command})
 			metadata := processResultForTest(t, result)
 			if metadata.Status != ProcessCompleted {
@@ -372,11 +373,11 @@ func TestSandboxesCarveStateHomeInsideWorkspace(t *testing.T) {
 			if raw, err := os.ReadFile(secret); err != nil || string(raw) != "secret\n" {
 				t.Fatalf("private state = %q, %v", raw, err)
 			}
-			if raw, err := os.ReadFile(filepath.Join(public, "result.txt")); err != nil || string(raw) != "visible" {
+			if raw, err := os.ReadFile(filepath.Join(public, "result.txt")); err != nil || string(raw) != "secret\n" {
 				t.Fatalf("public result = %q, %v", raw, err)
 			}
-			if _, err := os.Stat(filepath.Join(workspace, "root-created")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("workspace root entry was created: %v", err)
+			if raw, err := os.ReadFile(filepath.Join(workspace, "root-created")); err != nil || string(raw) != "visible" {
+				t.Fatalf("workspace root entry = %q, %v", raw, err)
 			}
 		})
 	}

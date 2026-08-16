@@ -26,7 +26,7 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err := store.SetToolSetSelection("edit"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultSandbox("off"); err != nil {
+	if err := store.SetDefaultScope("machine"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetThemeSelection(" DARK "); err != nil {
@@ -40,7 +40,7 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.ToolSet != "edit" || settings.Sandbox != "off" || settings.Theme != ThemeDark {
+	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.ToolSet != "edit" || settings.Scope != "machine" || settings.Theme != ThemeDark {
 		t.Fatalf("settings = %#v", settings)
 	}
 	if got := strings.Join(settings.ToolSets["review"], ","); got != "read,grep" {
@@ -93,12 +93,19 @@ func TestStoreRejectsSymlinkedConfigFile(t *testing.T) {
 }
 
 func TestStoreRejectsUnknownConfigFields(t *testing.T) {
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"protected_path":[".env"]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(home); err == nil || !strings.Contains(err.Error(), `unknown field "protected_path"`) {
-		t.Fatalf("error = %v", err)
+	for field, raw := range map[string]string{
+		"protected_path": `{"protected_path":[".env"]}`,
+		"sandbox":        `{"sandbox":"off"}`,
+	} {
+		t.Run(field, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(home); err == nil || !strings.Contains(err.Error(), `unknown field "`+field+`"`) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
 

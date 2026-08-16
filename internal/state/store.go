@@ -21,7 +21,7 @@ type Settings struct {
 	ToolSet         string              `json:"tool_set,omitempty"`
 	ToolSets        map[string][]string `json:"tool_sets,omitempty"`
 	AgentModels     []string            `json:"agent_models,omitempty"`
-	Sandbox         string              `json:"sandbox,omitempty"`
+	Scope           string              `json:"scope,omitempty"`
 	Theme           string              `json:"theme,omitempty"`
 	ProtectedPaths  []string            `json:"protected_paths,omitempty"`
 }
@@ -118,8 +118,8 @@ func (store *Store) SetToolSetSelection(toolSet string) error {
 	return store.update(func(settings *Settings) { settings.ToolSet = strings.TrimSpace(toolSet) })
 }
 
-func (store *Store) SetDefaultSandbox(policy string) error {
-	return store.update(func(settings *Settings) { settings.Sandbox = strings.TrimSpace(policy) })
+func (store *Store) SetDefaultScope(scope string) error {
+	return store.update(func(settings *Settings) { settings.Scope = strings.TrimSpace(scope) })
 }
 
 func (store *Store) SetThemeSelection(value string) error {

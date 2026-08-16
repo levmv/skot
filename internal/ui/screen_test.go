@@ -34,10 +34,10 @@ type fakeAgent struct {
 	modelErr         error
 	knownModels      []string
 	modelChoices     []ModelChoice
-	sandbox          string
-	security         string
-	sandboxNotice    string
-	sandboxErr       error
+	scope            string
+	scopeSummary     string
+	scopeNotice      string
+	scopeErr         error
 	theme            string
 	themeErr         error
 	contextReport    agent.ContextReport
@@ -184,24 +184,24 @@ func (fake *fakeAgent) ReasoningEfforts(uri string) []string {
 	return []string{"", "high"}
 }
 
-func (fake *fakeAgent) CurrentSandbox() string { return fake.sandbox }
+func (fake *fakeAgent) CurrentScope() string { return fake.scope }
 
-func (fake *fakeAgent) SecuritySummary() string { return fake.security }
+func (fake *fakeAgent) ScopeSummary() string { return fake.scopeSummary }
 
-func (fake *fakeAgent) SandboxNotice() string { return fake.sandboxNotice }
+func (fake *fakeAgent) ScopeNotice() string { return fake.scopeNotice }
 
-func (fake *fakeAgent) SwitchSandbox(_ context.Context, policy string) error {
-	if fake.sandboxErr != nil {
-		return fake.sandboxErr
+func (fake *fakeAgent) SwitchScope(_ context.Context, policy string) error {
+	if fake.scopeErr != nil {
+		return fake.scopeErr
 	}
-	fake.sandbox = policy
+	fake.scope = policy
 	effective := policy
 	detail := ""
 	if policy == "auto" {
 		effective = "workspace"
 		detail = " (auto)"
 	}
-	fake.security = "sandbox: " + effective + detail
+	fake.scopeSummary = "scope: " + effective + detail
 	return nil
 }
 

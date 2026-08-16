@@ -430,22 +430,7 @@ func (m screenModel) renderSystemText(text string) string {
 }
 
 func (m screenModel) renderSystemLine(line string) string {
-	const (
-		sandboxOff = "sandbox: off"
-		off        = "off"
-	)
-	var rendered strings.Builder
-	for {
-		index := strings.Index(line, sandboxOff)
-		if index < 0 {
-			rendered.WriteString(m.mutedStyle.Render(line))
-			return rendered.String()
-		}
-		offIndex := index + len(sandboxOff) - len(off)
-		rendered.WriteString(m.mutedStyle.Render(line[:offIndex]))
-		rendered.WriteString(m.errorStyle.Render(off))
-		line = line[index+len(sandboxOff):]
-	}
+	return m.mutedStyle.Render(line)
 }
 
 func (m screenModel) renderAssistantBlock(text string) []string {

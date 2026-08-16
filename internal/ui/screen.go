@@ -53,10 +53,10 @@ type ConfigurationAgent interface {
 	ModelChoices() []app.ModelChoice
 	SwitchModel(context.Context, string, string) error
 	CurrentReasoningEffort() string
-	CurrentSandbox() string
-	SecuritySummary() string
-	SandboxNotice() string
-	SwitchSandbox(context.Context, string) error
+	CurrentScope() string
+	ScopeSummary() string
+	ScopeNotice() string
+	SwitchScope(context.Context, string) error
 	CurrentTheme() string
 	SwitchTheme(string) error
 }
@@ -97,7 +97,7 @@ type Config struct {
 	ReasoningEffort string
 	Root            string
 	ToolSet         string
-	Security        string
+	ScopeSummary    string
 }
 
 type pickerKind uint8
@@ -106,7 +106,7 @@ const (
 	pickerNone pickerKind = iota
 	pickerModel
 	pickerToolSet
-	pickerSandbox
+	pickerScope
 	pickerTheme
 	pickerLogin
 	pickerLogout
@@ -162,8 +162,8 @@ type shellDoneMsg struct {
 	err    error
 }
 
-type sandboxDoneMsg struct {
-	policy     string
+type scopeDoneMsg struct {
+	scope      string
 	summary    string
 	notice     string
 	concurrent bool
@@ -199,7 +199,7 @@ type screenModel struct {
 	height    int
 	quitting  bool
 	operation activeOperation
-	sandbox   sandboxSwitchState
+	scope     scopeSwitchState
 
 	renderer     *inlineRenderer
 	renderErr    error
@@ -328,10 +328,10 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 	m.applyTerminalTheme(darkTheme)
 	m.syncCommandSuggestions()
 	// The banner and the security line are one startup notice rather than two
-	// events, so they share a block: separating them would give the sandbox
+	// events, so they share a block: separating them would give the scope
 	// detail the same weight as the greeting.
 	startup := "Skot · type / for commands, ! for shell"
-	if security := strings.TrimSpace(config.Security); security != "" {
+	if security := strings.TrimSpace(config.ScopeSummary); security != "" {
 		startup += "\n" + security
 	}
 	m.addBlock(screenBlockSystem, startup)
@@ -442,8 +442,8 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		m.finishShell(msg.result, msg.err, time.Now())
 		m.refreshTranscript()
 		return m, nil
-	case sandboxDoneMsg:
-		m.finishSandboxSwitch(msg)
+	case scopeDoneMsg:
+		m.finishScopeSwitch(msg)
 		m.refreshTranscript()
 		return m, nil
 	case compactionDoneMsg:

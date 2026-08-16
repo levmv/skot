@@ -34,7 +34,7 @@ type runtimeBuilder struct {
 	workspace         string
 	requestPolicy     agent.ModelRequestPolicy
 	maxToolIterations int
-	sandbox           agent.SandboxSnapshot
+	scope             agent.ScopeSnapshot
 	awaitRequiredJobs bool
 	sanitize          func(string) string
 	externalWork      agent.ExternalWork
@@ -87,7 +87,7 @@ func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtime
 		ExternalWork:      externalWork,
 		Sanitize:          builder.sanitize,
 		Metadata: agent.ConfigurationMetadata{
-			ToolSet: builder.toolSet, Sandbox: builder.sandbox, AwaitRequiredJobs: builder.awaitRequiredJobs,
+			ToolSet: builder.toolSet, Scope: builder.scope, AwaitRequiredJobs: builder.awaitRequiredJobs,
 			Build: builder.applicationBuild, ProgramTools: builder.programTools,
 		},
 	})

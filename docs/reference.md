@@ -24,10 +24,12 @@ running executable. Drafts and prereleases are never selected, and an older
 release never replaces a newer running build. Existing processes continue with the old version until restarted.
 Development builds report an error instead of overwriting themselves.
 
-Use `--` when prompt text could otherwise be parsed as a flag:
+Use `--` when prompt text could otherwise be parsed as a flag or begins with a
+reserved command name such as `resume` or `update`:
 
 ```sh
 sk -- "-review the command-line parser"
+sk -- resume this discussion
 ```
 
 ### CLI flags and environment variables
@@ -153,13 +155,14 @@ child agent, or it leaves detached work running.
 ```sh
 sk -save-session "fix the failing tests"
 sk resume
-sk resume 01k2
-sk resume 01k2 "continue the fix"
+sk resume 0f3a
+sk resume 0f3a "continue the fix"
 ```
 
 Session selection is scoped to the canonical workspace path. A short ID may be
 used when it identifies exactly one session. Bare `resume` chooses the most
-recent session for that workspace.
+recent session for that workspace. Displayed session IDs and their prefixes use
+lowercase hexadecimal characters; a non-hex argument after `resume` is rejected.
 
 ### Journal compatibility
 

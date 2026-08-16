@@ -252,6 +252,20 @@ func ShortID(id string) string {
 	return value
 }
 
+// LooksLikeIDPrefix reports whether prefix could address a session. IDs are
+// hex, so a prefix holding any other character can never match one, which in
+// practice means it is the second word of a prompt starting with a command
+// name rather than a session the caller expected to find.
+func LooksLikeIDPrefix(prefix string) bool {
+	prefix = strings.TrimPrefix(strings.TrimSpace(prefix), "session_")
+	for _, char := range prefix {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return false
+		}
+	}
+	return true
+}
+
 func newSessionID() (string, error) {
 	var data [16]byte
 	if _, err := rand.Read(data[:]); err != nil {

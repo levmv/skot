@@ -59,7 +59,7 @@ ephemeral unless they are explicitly saved or leave detached work running.
 ```sh
 sk -save-session "fix the failing tests"
 sk resume                         # latest session for this workspace
-sk resume 01k2 "continue the fix" # ID or unambiguous prefix
+sk resume 0f3a "continue the fix" # ID or unambiguous prefix
 ```
 
 For scripts, pass a prompt as arguments or through stdin. The normal answer goes

@@ -17,6 +17,7 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/ui"
 	workspacetools "github.com/levmv/skot/tools"
 )
@@ -111,9 +112,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	invocation := parseInvocation(flags.Args(), explicitPrompt)
 	if invocation.update {
 		if len(invocation.args) != 0 {
-			return agent.MarkInvalidRequest(errors.New("update does not accept arguments"))
+			return agent.MarkInvalidRequest(errors.New("update does not accept arguments; put -- before the text to send it as a prompt"))
 		}
 		return runUpdateCommand(ctx, stdout)
+	}
+	if invocation.resume && !session.LooksLikeIDPrefix(invocation.sessionPrefix) {
+		return agent.MarkInvalidRequest(fmt.Errorf("%q is not a session ID; put -- before the text to send it as a prompt", invocation.sessionPrefix))
 	}
 	retryBudget, err := parsePositiveDuration(config.retryBudget, "retry budget")
 	if err != nil {

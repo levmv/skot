@@ -866,6 +866,35 @@ func TestParseInvocationDistinguishesResumeCommandFromPrompt(t *testing.T) {
 	}
 }
 
+func TestRunHintsFlagTerminatorForCommandWordPrompts(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "resume prefix that cannot address a session",
+			args: []string{"resume", "this", "discussion"},
+			want: `"this" is not a session ID; put -- before the text to send it as a prompt`,
+		},
+		{
+			name: "update with trailing words",
+			args: []string{"-v", "update", "the", "dependencies"},
+			want: "update does not accept arguments; put -- before the text to send it as a prompt",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := run(context.Background(), test.args, bytes.NewReader(nil), io.Discard, io.Discard)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("run() error = %v", err)
+			}
+			if !errors.Is(err, agent.ErrInvalidRequest) {
+				t.Fatalf("run() error is not an invalid request: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunFlagTerminatorTreatsResumeAsPrompt(t *testing.T) {
 	var request chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, raw *http.Request) {

@@ -77,6 +77,19 @@ func TestCatalogRejectsCrossWorkspaceAndAmbiguousPrefix(t *testing.T) {
 	}
 }
 
+func TestLooksLikeIDPrefixSeparatesAddressableSessionsFromPromptWords(t *testing.T) {
+	for _, prefix := range []string{"", "0f3a", "session_0f3a", " 0f3a ", "added"} {
+		if !LooksLikeIDPrefix(prefix) {
+			t.Errorf("LooksLikeIDPrefix(%q) = false", prefix)
+		}
+	}
+	for _, prefix := range []string{"this", "the", "my", "0F3A", "0f3a-x", "this discussion"} {
+		if LooksLikeIDPrefix(prefix) {
+			t.Errorf("LooksLikeIDPrefix(%q) = true", prefix)
+		}
+	}
+}
+
 func TestCatalogMatchesCanonicalWorkspaceAlias(t *testing.T) {
 	home := t.TempDir()
 	parent := t.TempDir()

@@ -25,6 +25,7 @@ func TestScopeSummaryMakesEffectiveBoundaryVisible(t *testing.T) {
 		Backend:            "landlock",
 		Container:          "docker",
 		ProtectedPathCount: 2,
+		BackendRequired:    true,
 	}
 	if got := container.Summary(); got != "scope: machine (auto, docker) · protected paths: 2" {
 		t.Fatalf("container summary = %q", got)
@@ -82,6 +83,16 @@ func TestMachineWithoutProtectedPathsNeedsNoBackend(t *testing.T) {
 	state.Failure = "backend unavailable"
 	if err := validateSecurity(state); err == nil || !strings.Contains(err.Error(), state.Failure) {
 		t.Fatalf("machine protected paths did not fail closed: %v", err)
+	}
+}
+
+func TestMachineWithoutProtectedPathsReportsNoBoundary(t *testing.T) {
+	state := securityState{
+		RequestedScope: workspacetools.ScopeMachine,
+		EffectiveScope: workspacetools.ScopeMachine,
+	}
+	if got := state.Summary(); got != "scope: machine · no additional filesystem boundary" {
+		t.Fatalf("summary = %q", got)
 	}
 }
 
@@ -154,16 +165,38 @@ func TestScopeWorkspaceNoticeDescribesLandlockRootLimitation(t *testing.T) {
 	root := t.TempDir()
 	protected := filepath.Join(root, "private")
 	state := securityState{EffectiveScope: workspacetools.ScopeWorkspace, Backend: "landlock"}
-	if got := protectedWorkspaceNotice(state, root, []string{protected}); !strings.Contains(got, "unable to list or create entries") {
+	if got := protectedPathsNotice(state, root, []string{protected}); got == "" {
 		t.Fatalf("notice = %q", got)
 	}
 	state.Backend = "seatbelt"
-	if got := protectedWorkspaceNotice(state, root, []string{protected}); got != "" {
+	if got := protectedPathsNotice(state, root, []string{protected}); got != "" {
 		t.Fatalf("seatbelt notice = %q", got)
 	}
 	state.Backend = "landlock"
-	if got := protectedWorkspaceNotice(state, root, []string{t.TempDir()}); got != "" {
-		t.Fatalf("disjoint notice = %q", got)
+	if got := protectedPathsNotice(state, root, []string{t.TempDir()}); got != "" {
+		t.Fatalf("disjoint protected-path notice = %q", got)
+	}
+}
+
+func TestMachineProtectedPathNeedsBuiltInLSAndExplainsBackend(t *testing.T) {
+	protected := filepath.Join(t.TempDir(), "secret")
+	if !landlockProtectedPathsNeedBuiltInLS("landlock", []string{protected}) {
+		t.Fatal("external protected path did not retain built-in ls")
+	}
+	if landlockProtectedPathsNeedBuiltInLS("seatbelt", []string{protected}) || landlockProtectedPathsNeedBuiltInLS("landlock", nil) {
+		t.Fatal("built-in ls predicate ignored backend or empty paths")
+	}
+	state := securityState{
+		EffectiveScope: workspacetools.ScopeMachine, Backend: "landlock",
+		ProtectedPathCount: 1, BackendRequired: true,
+	}
+	if notice := protectedPathsNotice(state, t.TempDir(), []string{protected}); !strings.Contains(notice, "ancestor directories") {
+		t.Fatalf("machine notice = %q", notice)
+	}
+	state.Backend = ""
+	state.Failure = "backend unavailable"
+	if err := validateSecurity(state); err == nil || !strings.Contains(err.Error(), "protected_paths require") {
+		t.Fatalf("machine backend error = %v", err)
 	}
 }
 

@@ -2,11 +2,14 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/levmv/skot/agent"
 )
 
 func TestProtectedPathPolicyResolvesAndCompactsPaths(t *testing.T) {
@@ -37,7 +40,7 @@ func TestProtectedPathPolicyResolvesAndCompactsPaths(t *testing.T) {
 	}
 }
 
-func TestProcessManagerKeepsProtectedPathsAcrossScopeSwitch(t *testing.T) {
+func TestUserShellIgnoresModelProtectedPaths(t *testing.T) {
 	root, state := t.TempDir(), t.TempDir()
 	secret := filepath.Join(root, "private", "secret.txt")
 	mustWriteFile(t, secret, "secret\n")
@@ -50,24 +53,9 @@ func TestProcessManagerKeepsProtectedPathsAcrossScopeSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	if _, _, err := manager.workspace.resolveReadableFile("private/secret.txt"); err == nil || !strings.Contains(err.Error(), "protected") {
-		t.Fatalf("machine read error = %v", err)
-	}
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := manager.workspace.resolveReadableFile("private/secret.txt"); err == nil || !strings.Contains(err.Error(), "protected") {
-		t.Fatalf("workspace read error = %v", err)
-	}
 	userOutput, err := manager.RunShell(context.Background(), "cat private/secret.txt")
 	if err != nil || !strings.Contains(userOutput.Content, "secret") {
 		t.Fatalf("user shell output/error = %q / %v", userOutput.Content, err)
-	}
-	if err := manager.SetScopeAfter(ScopeMachine, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := manager.workspace.resolveReadableFile("private/secret.txt"); err == nil || !strings.Contains(err.Error(), "protected") {
-		t.Fatalf("restored machine read error = %v", err)
 	}
 }
 
@@ -120,6 +108,42 @@ func TestConfiguredProgramProtectionDoesNotDependOnScope(t *testing.T) {
 	})
 	if _, err := manager.ResolveProgramTools([]ProgramTool{declaration}); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("protected program resolution error = %v", err)
+	}
+}
+
+func TestConfiguredProgramRetargetedIntoProtectedPathIsFatal(t *testing.T) {
+	root, state, private := t.TempDir(), t.TempDir(), t.TempDir()
+	program := filepath.Join(root, "program")
+	privateProgram := filepath.Join(private, "program")
+	for _, path := range []string{program, privateProgram} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy, err := NewProtectedPathPolicy(root, []string{private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProcessManager(root, state, t.TempDir(), ScopeMachine, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	declaration := normalizedProgramTool(t, ProgramTool{
+		Name: "retargeted_program", Description: "retargeted program", Command: []string{"./program"},
+	})
+	resolved, err := manager.ResolveProgramTools([]ProgramTool{declaration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(program); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(privateProgram, program); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := resolved[0].Tool.Run(context.Background(), `{}`); !errors.Is(err, agent.ErrToolFatal) {
+		t.Fatalf("retargeted protected program error = %v", err)
 	}
 }
 

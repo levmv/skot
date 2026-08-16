@@ -746,7 +746,7 @@ func (application *Application) ScopeNotice() string {
 	application.mu.RLock()
 	security := application.state.security
 	application.mu.RUnlock()
-	return protectedWorkspaceNotice(security, application.config.root, application.config.protectedPaths)
+	return protectedPathsNotice(security, application.config.root, application.config.protectedPaths)
 }
 
 func (application *Application) SwitchScope(ctx context.Context, value string) error {

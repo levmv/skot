@@ -70,7 +70,7 @@ func TestScopeCommandCanSwitchDuringTurn(t *testing.T) {
 	if model.operation.kind != operationTurn || model.scope.pending || fake.scope != "workspace" {
 		t.Fatalf("operation=%#v state=%#v scope=%q", model.operation, model.scope, fake.scope)
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "new processes use this scope") {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "new tool calls use this scope; work already running is unchanged") {
 		t.Fatalf("result block = %q", got)
 	}
 }

@@ -55,7 +55,7 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	if err := application.SwitchScope(context.Background(), workspacetools.ScopeMachine); err != nil {
 		t.Fatal(err)
 	}
-	if application.CurrentScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine" {
+	if application.CurrentScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine · no additional filesystem boundary" {
 		t.Fatalf("scope = %q, summary = %q", application.CurrentScope(), application.ScopeSummary())
 	}
 	stored, err := settings.Settings()
@@ -276,6 +276,74 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 	}
 	if err := read(); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("workspace read error = %v", err)
+	}
+}
+
+func TestOpenSharesScopeSwitchWithBuiltInFileTools(t *testing.T) {
+	if workspacetools.BoundaryBackend() == "" {
+		t.Skip("platform filesystem boundary is unavailable")
+	}
+	home, root, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	external := filepath.Join(outside, "external.txt")
+	if err := os.WriteFile(external, []byte("external\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, Interactive: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	var read agent.Tool
+	for _, tool := range application.config.tools {
+		if tool.Spec.Name == "read" {
+			read = tool
+			break
+		}
+	}
+	if read.Run == nil {
+		t.Fatal("read tool not found")
+	}
+	application.state.children.mu.Lock()
+	childCatalog := append([]agent.Tool(nil), application.state.children.builder.tools...)
+	application.state.children.mu.Unlock()
+	var childRead agent.Tool
+	for _, tool := range childCatalog {
+		if tool.Spec.Name == "read" {
+			childRead = tool
+			break
+		}
+	}
+	if childRead.Run == nil {
+		t.Fatal("child read tool not found")
+	}
+	arguments, err := json.Marshal(map[string]string{"path": external})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := read.Run(context.Background(), string(arguments)); err != nil || !strings.Contains(output.Content, "external") {
+		t.Fatalf("machine read = %q, %v", output.Content, err)
+	}
+	if _, err := childRead.Run(context.Background(), string(arguments)); err != nil {
+		t.Fatalf("child machine read: %v", err)
+	}
+	if err := application.SwitchScope(context.Background(), ScopeWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read.Run(context.Background(), string(arguments)); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("workspace read error = %v", err)
+	}
+	if _, err := childRead.Run(context.Background(), string(arguments)); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("child workspace read error = %v", err)
+	}
+	if err := application.SwitchScope(context.Background(), ScopeMachine); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read.Run(context.Background(), string(arguments)); err != nil {
+		t.Fatalf("restored machine read: %v", err)
 	}
 }
 

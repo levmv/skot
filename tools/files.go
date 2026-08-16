@@ -38,7 +38,8 @@ func (workspace *workspace) read(ctx context.Context, raw string) (agent.ToolOut
 	if err := decodeArgs(raw, &args); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	abs, display, err := workspace.resolveReadableFile(args.Path)
+	policy := workspace.access.snapshot()
+	abs, display, err := policy.resolveReadableFile(args.Path)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -159,11 +160,12 @@ func (workspace *workspace) grep(ctx context.Context, raw string) (agent.ToolOut
 	if strings.TrimSpace(args.Pattern) == "" {
 		return agent.ToolOutput{}, errors.New("pattern is required")
 	}
-	_, display, err := workspace.resolvePath(args.Path)
+	policy := workspace.access.snapshot()
+	plan, err := workspace.planSearch(policy, args.Path, false)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
-	lines, truncated, oversizedLines, err := workspace.runGrep(ctx, args.Pattern, args.Include, display)
+	lines, truncated, oversizedLines, err := workspace.runGrep(ctx, args.Pattern, args.Include, plan)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -187,14 +189,14 @@ func (workspace *workspace) grep(ctx context.Context, raw string) (agent.ToolOut
 	return agent.ToolOutput{Content: output.String()}, nil
 }
 
-func (workspace *workspace) runGrep(ctx context.Context, pattern, include, display string) ([]string, bool, int, error) {
-	query := filesearch.SearchQuery{Path: display, Pattern: pattern, PreviewBytes: 300}
+func (workspace *workspace) runGrep(ctx context.Context, pattern, include string, plan searchPlan) ([]string, bool, int, error) {
+	query := filesearch.SearchQuery{Path: plan.queryPath, Pattern: pattern, PreviewBytes: 300}
 	if strings.TrimSpace(include) != "" {
 		query.Include = include
 	}
 	var lines []string
 	usedBytes := 0
-	stats, err := workspace.searcher.Search(ctx, query, func(match filesearch.Match) error {
+	stats, err := plan.searcher.Search(ctx, query, func(match filesearch.Match) error {
 		if len(lines) >= maxGrepMatches {
 			return filesearch.ErrStop
 		}
@@ -202,7 +204,7 @@ func (workspace *workspace) runGrep(ctx context.Context, pattern, include, displ
 		if match.LineTruncated {
 			text += " [... omitted end of long line]"
 		}
-		line := fmt.Sprintf("%s:%d:%s", formatSearchPath(match.Path, display), match.Line, text)
+		line := fmt.Sprintf("%s:%d:%s", plan.display(match.Path), match.Line, text)
 		if usedBytes+len(line)+1 > maxSearchOutput {
 			return filesearch.ErrStop
 		}
@@ -227,11 +229,12 @@ func (workspace *workspace) glob(ctx context.Context, raw string) (agent.ToolOut
 	if strings.TrimSpace(args.Pattern) == "" {
 		return agent.ToolOutput{}, errors.New("pattern is required")
 	}
-	_, display, err := workspace.resolvePath(args.Path)
+	policy := workspace.access.snapshot()
+	plan, err := workspace.planSearch(policy, args.Path, true)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
-	paths, truncated, err := workspace.runGlob(ctx, args.Pattern, display)
+	paths, truncated, err := workspace.runGlob(ctx, args.Pattern, plan)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -249,14 +252,14 @@ func (workspace *workspace) glob(ctx context.Context, raw string) (agent.ToolOut
 	return agent.ToolOutput{Content: output.String()}, nil
 }
 
-func (workspace *workspace) runGlob(ctx context.Context, pattern, display string) ([]string, bool, error) {
+func (workspace *workspace) runGlob(ctx context.Context, pattern string, plan searchPlan) ([]string, bool, error) {
 	var paths []string
 	usedBytes := 0
-	stats, err := workspace.searcher.Files(ctx, filesearch.FilesQuery{Path: display, Glob: pattern}, func(file filesearch.File) error {
+	stats, err := plan.searcher.Files(ctx, filesearch.FilesQuery{Path: plan.queryPath, Glob: pattern}, func(file filesearch.File) error {
 		if len(paths) >= maxGlobMatches {
 			return filesearch.ErrStop
 		}
-		path := formatSearchPath(file.Path, display)
+		path := plan.display(file.Path)
 		if usedBytes+len(path)+1 > maxSearchOutput {
 			return filesearch.ErrStop
 		}
@@ -268,6 +271,53 @@ func (workspace *workspace) runGlob(ctx context.Context, pattern, display string
 		return nil, false, err
 	}
 	return paths, stats.Stopped, nil
+}
+
+type searchPlan struct {
+	searcher       *filesearch.Searcher
+	queryPath      string
+	absoluteOutput bool
+}
+
+func (workspace *workspace) planSearch(policy *filesystemPolicy, path string, directoryOnly bool) (searchPlan, error) {
+	resolved, display, info, err := policy.resolveExistingPath(path, true)
+	if err != nil {
+		return searchPlan{}, err
+	}
+	if directoryOnly && !info.IsDir() {
+		return searchPlan{}, fmt.Errorf("%s is not a directory", display)
+	}
+	if isWithinRoot(policy.workspace, resolved) {
+		queryPath := display
+		absoluteOutput := filepath.IsAbs(filepath.FromSlash(display))
+		if absoluteOutput {
+			relative, relativeErr := filepath.Rel(policy.workspace, resolved)
+			if relativeErr != nil {
+				return searchPlan{}, relativeErr
+			}
+			queryPath = filepath.ToSlash(relative)
+		}
+		return searchPlan{
+			searcher: workspace.searcher, queryPath: queryPath,
+			absoluteOutput: absoluteOutput,
+		}, nil
+	}
+	root, queryPath := resolved, "."
+	if !info.IsDir() {
+		root, queryPath = filepath.Dir(resolved), filepath.Base(resolved)
+	}
+	searcher, err := filesearch.New(root, filesearch.Options{Exclude: policy.protection.Protects})
+	if err != nil {
+		return searchPlan{}, err
+	}
+	return searchPlan{searcher: searcher, queryPath: queryPath, absoluteOutput: true}, nil
+}
+
+func (plan searchPlan) display(path string) string {
+	if !plan.absoluteOutput {
+		return formatSearchPath(path, plan.queryPath)
+	}
+	return filepath.ToSlash(filepath.Join(plan.searcher.Root(), filepath.FromSlash(path)))
 }
 
 func formatSearchPath(path, queryPath string) string {
@@ -292,7 +342,8 @@ func (workspace *workspace) edit(ctx context.Context, raw string) (agent.ToolOut
 	if !utf8.ValidString(args.OldText) || !utf8.ValidString(args.NewText) {
 		return agent.ToolOutput{}, errors.New("old_text and new_text must be valid UTF-8")
 	}
-	abs, display, err := workspace.resolveReadableFile(args.Path)
+	policy := workspace.access.snapshot()
+	abs, display, err := policy.resolveReadableFile(args.Path)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -346,7 +397,8 @@ func (workspace *workspace) write(ctx context.Context, raw string) (agent.ToolOu
 	if err := ctx.Err(); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	target, err := workspace.resolveWriteTarget(args.Path)
+	policy := workspace.access.snapshot()
+	target, err := workspace.resolveWriteTarget(policy, args.Path)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -391,25 +443,35 @@ type writeTarget struct {
 	digest  [32]byte
 }
 
-func (workspace *workspace) resolveWriteTarget(path string) (writeTarget, error) {
-	abs, display, err := workspace.resolvePath(path)
+func (workspace *workspace) resolveWriteTarget(policy *filesystemPolicy, path string) (writeTarget, error) {
+	abs, display, err := policy.resolvePath(path)
 	if err != nil {
 		return writeTarget{}, err
 	}
 	if display == "." {
 		return writeTarget{}, errors.New("file path is required")
 	}
-	if workspace.protected(abs) {
-		return writeTarget{}, fmt.Errorf("path is protected: %s", display)
+	if err := policy.checkProtected(abs, display); err != nil {
+		return writeTarget{}, err
 	}
+	lexical := abs
 	parent := filepath.Dir(abs)
-	realParent, parentErr := ensureWritableParent(workspace.root, parent, workspace.protected)
+	realParent, parentErr := ensureWritableParent(parent, func(path string) error {
+		if err := policy.checkScope(path); err != nil {
+			return err
+		}
+		return policy.checkProtected(path, policy.displayPath(path))
+	})
 	if parentErr != nil {
 		return writeTarget{}, fmt.Errorf("prepare parent for %s: %w", display, parentErr)
 	}
 	abs = filepath.Join(realParent, filepath.Base(abs))
-	if workspace.protected(abs) {
-		return writeTarget{}, fmt.Errorf("path is protected: %s", display)
+	display = policy.displayActionPath(lexical, abs)
+	if err := policy.checkScope(abs); err != nil {
+		return writeTarget{}, err
+	}
+	if err := policy.checkProtected(abs, display); err != nil {
+		return writeTarget{}, err
 	}
 	info, statErr := os.Lstat(abs)
 	if errors.Is(statErr, os.ErrNotExist) {
@@ -423,11 +485,12 @@ func (workspace *workspace) resolveWriteTarget(path string) (writeTarget, error)
 		if err != nil {
 			return writeTarget{}, err
 		}
-		if !isWithinRoot(workspace.root, target) {
-			return writeTarget{}, fmt.Errorf("symlink target escapes workspace root: %s", display)
+		if err := policy.checkScope(target); err != nil {
+			return writeTarget{}, fmt.Errorf("symlink target %w", err)
 		}
-		if workspace.protected(target) {
-			return writeTarget{}, fmt.Errorf("path is protected: %s", display)
+		display = policy.displayActionPath(lexical, target)
+		if err := policy.checkProtected(target, display); err != nil {
+			return writeTarget{}, err
 		}
 		abs = target
 		info, err = os.Stat(abs)
@@ -448,7 +511,7 @@ func (workspace *workspace) resolveWriteTarget(path string) (writeTarget, error)
 	}, nil
 }
 
-func ensureWritableParent(root, parent string, protected func(string) bool) (string, error) {
+func ensureWritableParent(parent string, validate func(string) error) (string, error) {
 	probe := parent
 	var missing []string
 	for {
@@ -473,16 +536,17 @@ func ensureWritableParent(root, parent string, protected func(string) bool) (str
 	if err != nil {
 		return "", err
 	}
-	if !isWithinRoot(root, realParent) {
-		return "", errors.New("parent symlink escapes workspace root")
-	}
-	if protected != nil && protected(realParent) {
-		return "", errors.New("parent path is protected")
+	if validate != nil {
+		if err := validate(realParent); err != nil {
+			return "", err
+		}
 	}
 	for index := len(missing) - 1; index >= 0; index-- {
 		next := filepath.Join(realParent, missing[index])
-		if protected != nil && protected(next) {
-			return "", errors.New("parent path is protected")
+		if validate != nil {
+			if err := validate(next); err != nil {
+				return "", err
+			}
 		}
 		if err := os.Mkdir(next, 0o755); err != nil {
 			if !errors.Is(err, os.ErrExist) {

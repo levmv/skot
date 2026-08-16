@@ -16,7 +16,7 @@ const (
 	ScopeMachine   = "machine"
 )
 
-// Scope is the filesystem reach selected for model-owned processes.
+// Scope is the filesystem reach selected for model-owned operations.
 type Scope string
 
 // Boundary describes the concrete filesystem boundary applied to one

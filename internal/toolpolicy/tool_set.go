@@ -33,7 +33,7 @@ var optionalBuiltInTools = []string{"web_fetch", "web_search"}
 // applied.
 type BuiltInOptions struct {
 	// DefaultIncludesLS covers layouts where the process boundary can prevent
-	// Bash from enumerating the workspace root.
+	// Bash from enumerating an allowed root around a protected subtree.
 	DefaultIncludesLS bool
 }
 

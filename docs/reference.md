@@ -49,10 +49,10 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-max-tool-iterations n` | `SK_MAX_TOOL_ITERATIONS` | Emergency model-to-tool cycle limit. Default: `128`; use `unlimited` to disable it. |
 | `-system-prompt text` | `SK_SYSTEM_PROMPT` | Replace the built-in system instructions. Use `{{workspace_root}}` to insert the workspace root. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |
-| `-root path` | `SK_ROOT` | Workspace root for file and process tools. Default: current directory. |
+| `-root path` | `SK_ROOT` | Primary workspace and default path base for model-owned file and process tools. Default: current directory. |
 | `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |
 | `-tools-file path` | `SK_TOOLS_FILE` | Load custom program tool definitions. Default: `tools.json` in the Skot data directory. |
-| `-scope value` | `SK_SCOPE` | Select the model-process filesystem scope: `auto`, `workspace`, or `machine`. Default: `auto`. |
+| `-scope value` | `SK_SCOPE` | Select the filesystem reach of built-in file tools and model-owned processes: `auto`, `workspace`, or `machine`. Default: `auto`. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
 | `-journal path` | — | Use an explicit JSONL session journal. |
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
@@ -140,7 +140,7 @@ rejected. A representative configuration is:
 | `tool_set` | Persisted tool set selection. |
 | `tool_sets` | Map of tool set names to exact ordered tool-name lists. A custom definition replaces a built-in set with the same name. |
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
-| `scope` | Persisted model-process filesystem scope: `auto`, `workspace`, or `machine`. |
+| `scope` | Persisted filesystem scope for built-in file tools and model-owned processes: `auto`, `workspace`, or `machine`. |
 | `theme` | Persisted interactive terminal theme: `auto`, `light`, or `dark`. An unrecognized saved value is reset to `auto` at interactive startup. |
 | `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
 
@@ -188,7 +188,7 @@ invariants requires a new schema version and an explicit migration.
 | `/login [provider]` | Store a provider or service key. |
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
-| `/scope [auto|workspace|machine]` | Show or switch the model-process filesystem scope. |
+| `/scope [auto|workspace|machine]` | Show or switch the filesystem scope for built-in file tools and model-owned processes. |
 | `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
@@ -201,15 +201,16 @@ cancels the active turn, Alt+Up recalls queued input, and Ctrl+C exits.
 `! command` runs a shell command and includes its result in the conversation.
 `!! command` runs it privately. Both are user-owned commands and therefore use
 the user's normal environment and filesystem permissions rather than the
-model-process scope.
+model-owned filesystem scope.
 
 Skot loads applicable `AGENTS.md` instructions from the workspace root down
 to the current directory.
 
 ## Tools and tool sets
 
-Built-in file tools operate inside `-root`. Paths and symlinks may not escape
-that root; reads and searches are bounded, and writes are atomic.
+Built-in file tools use the current filesystem scope, bound their reads and
+searches, and write atomically. See [Filesystem access](#filesystem-access)
+for path and scope rules.
 
 | Tool set | Tools |
 | --- | --- |
@@ -221,10 +222,10 @@ All built-in tool sets include bounded public `web_fetch`. They include
 `web_search` when a Tavily or Exa key is available. A custom tool set is an
 exact tool list, not a set of additions to a built-in set.
 
-On Linux, `default` also includes `ls` when a protected path is inside the
-workspace. Landlock may then prevent process tools from listing an ancestor;
-the built-in tool keeps that operation available, including after a runtime
-scope switch. Explicit custom tool sets remain exact.
+On Linux, `default` also includes `ls` whenever protected paths are configured.
+The process boundary may make some ancestor-directory operations unavailable;
+the built-in tool keeps directory listing available. Explicit custom tool sets
+remain exact.
 
 ### Child agents
 
@@ -325,35 +326,44 @@ requests the same compaction explicitly.
 `-max-tool-iterations` is an emergency fuse for repeated tool cycles; when it
 is reached, Skot asks the model for a final answer without offering tools.
 
-## Where the agent works
+## Filesystem access
 
 Skot does not approve individual commands. Every tool in the active tool set
 may act without confirmation. Filesystem reach is bounded structurally:
 
 - a tool set decides which capabilities the model has;
-- built-in file tools always stay inside the workspace root;
-- model-owned Bash and program processes use the selected filesystem scope;
+- one selected scope controls both built-in file tools and model-owned Bash or
+  program processes;
 - `protected_paths` removes explicitly named trees from both kinds of tools.
 
-This bounds filesystem authority. It does not filter network egress or contain
-code actively trying to escape. Run Skot inside a dedicated container or
-virtual machine when the model or the code it runs is untrusted. User-owned
-`!` and `!!` commands intentionally use the user's ordinary environment and
-filesystem permissions.
+Built-in tools enforce these paths inside Skot. Model-owned processes receive
+an operating-system filesystem boundary whenever the selected policy needs
+one. Neither layer filters network egress or makes hostile code safe to run.
+Use a dedicated container or virtual machine when the model or the code it runs
+is untrusted. User-owned `!` and `!!` commands intentionally use the user's
+ordinary environment and filesystem permissions.
 
 ### Filesystem scopes
 
 - `auto` (default) resolves to `workspace` on a host and `machine` inside a
   detected container;
-- `workspace` gives model-owned processes the workspace, required runtime
-  files, and a disposable per-workspace tool home;
-- `machine` gives model-owned processes the surrounding filesystem, minus any
-  explicit protected paths. Inside a container, “machine” means that
-  container's filesystem boundary, not the host filesystem.
+- `workspace` keeps built-in file operations inside the workspace and gives
+  model-owned processes the workspace, required runtime files, and a disposable
+  per-workspace tool home;
+- `machine` lets explicit built-in file paths and model-owned processes reach
+  the surrounding filesystem, minus any explicit protected paths. Inside a
+  container, “machine” means that container's filesystem boundary, not the host
+  filesystem.
 
-`auto` is resolved before a process starts; the process layer only receives
-`workspace` or `machine`. `/scope` changes the scope for later process starts.
-Already-running processes retain the scope with which they were launched.
+Content exposed to model-owned tools may be included in requests to the selected
+model provider. `read-only` prevents writes and command execution; it is not a
+confidentiality boundary for readable data.
+
+An absolute path inside the workspace is valid in either concrete scope.
+Relative paths always start at the workspace, so `../sibling` reaches outside
+it only in `machine`. `auto` resolves to a concrete scope before use. `/scope`
+affects new file-tool calls and process launches; calls and processes already
+running are unchanged.
 
 `workspace` uses a minimal environment, sets `HOME` to the disposable tool
 home, and keeps `TMPDIR` inside it. `machine` preserves the ambient environment
@@ -362,12 +372,12 @@ provider-key variables from model-owned process environments. This filtering
 reduces accidental disclosure through output and logs; it is not a credential
 boundary.
 
-`workspace` always requires a platform filesystem backend. `machine` requires
-one only when protected paths are configured; with an empty list there is no
-restriction to install and the payload starts directly. Any required boundary
-must pass a read/truncate/remove probe. Startup stops rather than silently
-widening access when the backend is unavailable or the probe fails. On Linux,
-installed boundaries require Landlock ABI V3; macOS uses Seatbelt.
+Process launches in `workspace` always require a platform filesystem backend.
+In `machine`, they require one only when protected paths are configured.
+Built-in file tools enforce their path policy independently. Skot verifies any
+required process boundary at startup and stops rather than silently widening
+access if it is unavailable or ineffective. On Linux, installed boundaries
+require Landlock ABI V3; macOS uses Seatbelt.
 
 ### Protected paths
 

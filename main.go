@@ -92,7 +92,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.toolsFile, "tools-file", strings.TrimSpace(os.Getenv("SK_TOOLS_FILE")), "external program tool definitions (default: tools.json in the Skot data directory)")
 	flags.StringVar(&config.home, "home", defaultHome, "Skot data directory for settings, credentials, sessions, and tools")
 	flags.StringVar(&config.journalPath, "journal", "", "JSONL session journal to keep and resume")
-	flags.StringVar(&config.root, "root", envOr("SK_ROOT", "."), "workspace root for file tools")
+	flags.StringVar(&config.root, "root", envOr("SK_ROOT", "."), "workspace root")
 	flags.StringVar(&config.toolSet, "tools", envOr("SK_TOOLS", app.ToolSetDefault), "tool set available to the model")
 	flags.BoolVar(&config.saveSession, "save-session", false, "keep a resumable session for a one-shot invocation")
 	flags.StringVar(&config.scope, "scope", envOr("SK_SCOPE", string(app.ScopeAuto)), "model filesystem scope: auto, workspace, or machine")

@@ -311,20 +311,21 @@ func (manager *ProcessManager) ResolveProgramTools(declarations []ProgramTool) (
 }
 
 func (manager *ProcessManager) resolveProgram(name string) (string, error) {
+	policy := manager.access.snapshot()
 	if !strings.ContainsRune(name, filepath.Separator) && !strings.ContainsRune(name, '/') {
 		resolved, err := exec.LookPath(name)
 		if err != nil {
 			return "", fmt.Errorf("program %q is not on PATH: %w", name, err)
 		}
 		resolved = canonicalSandboxPath(resolved)
-		if manager.protection.Protects(resolved) {
+		if policy.protection.Protects(resolved) {
 			return "", fmt.Errorf("program %q is protected", name)
 		}
 		return resolved, nil
 	}
 	resolved := name
 	if !filepath.IsAbs(resolved) {
-		absolute, _, info, err := manager.workspace.resolveExistingPath(resolved)
+		absolute, _, info, err := policy.workspaceOnly().resolveExistingPath(resolved, true)
 		if err != nil {
 			return "", fmt.Errorf("program %q: %w", name, err)
 		}
@@ -340,7 +341,7 @@ func (manager *ProcessManager) resolveProgram(name string) (string, error) {
 	if info.IsDir() || info.Mode()&0o111 == 0 {
 		return "", fmt.Errorf("program %q is not executable", name)
 	}
-	if manager.protection.Protects(resolved) {
+	if policy.protection.Protects(resolved) {
 		return "", fmt.Errorf("program %q is protected", name)
 	}
 	return resolved, nil
@@ -385,9 +386,6 @@ func takeProgramBackground(raw []byte) ([]byte, bool, error) {
 
 func (manager *ProcessManager) programRunner(declaration ProgramTool, program string) func(context.Context, string) (agent.ToolOutput, error) {
 	return func(ctx context.Context, raw string) (agent.ToolOutput, error) {
-		if manager.protection.Protects(program) {
-			return agent.ToolOutput{}, fmt.Errorf("%w: %s: program is protected", agent.ErrToolFatal, declaration.Name)
-		}
 		arguments, err := validateProgramArguments(raw)
 		if err != nil {
 			return agent.ToolOutput{}, err
@@ -399,19 +397,11 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 				return agent.ToolOutput{}, err
 			}
 		}
-		workdir, display, info, err := manager.workspace.resolveExistingPath(declaration.Workdir)
-		if err != nil {
-			return agent.ToolOutput{}, err
-		}
-		if !info.IsDir() {
-			return agent.ToolOutput{}, fmt.Errorf("workdir %s is not a directory", display)
-		}
 		if err := ctx.Err(); err != nil {
 			return agent.ToolOutput{}, err
 		}
 		job, err := manager.start(processSpec{
 			command:        declaration.Name,
-			workdir:        workdir,
 			timeout:        declaration.timeout(),
 			origin:         processOriginModel,
 			sessionID:      agent.ToolSessionID(ctx),
@@ -420,11 +410,21 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 			supervised:     background || declaration.Detach,
 			detach:         declaration.Detach,
 			environment:    declaration.Env,
-			build: func(scope Scope) (*exec.Cmd, error) {
-				if manager.protection.contains(program) {
+			prepare: func(policy *filesystemPolicy) (string, error) {
+				workdir, display, info, err := policy.workspaceOnly().resolveExistingPath(declaration.Workdir, true)
+				if err != nil {
+					return "", err
+				}
+				if !info.IsDir() {
+					return "", fmt.Errorf("workdir %s is not a directory", display)
+				}
+				return workdir, nil
+			},
+			build: func(policy *filesystemPolicy, workdir string) (*exec.Cmd, error) {
+				if policy.protection.contains(program) {
 					return nil, errors.New("program is protected")
 				}
-				return sandboxedProgramCommand(program, declaration.Command, workdir, manager.processBoundary(scope), declaration.Env)
+				return sandboxedProgramCommand(program, declaration.Command, workdir, policy.processBoundary(manager.toolHome), declaration.Env)
 			},
 		})
 		if err != nil {

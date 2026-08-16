@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -35,6 +36,16 @@ func TestWorkspaceToolsExposeStandaloneCatalog(t *testing.T) {
 	}
 	if _, err := agent.New(agent.Config{Model: inertModel{}, Journal: inertJournal{}, Tools: tools}); err != nil {
 		t.Fatalf("agent rejected tool catalog: %v", err)
+	}
+}
+
+func TestSharedFilesystemConstructorsRejectUninitializedAccess(t *testing.T) {
+	access := &FilesystemAccess{}
+	if _, _, err := NewWorkspaceToolsWithAccess(access); err == nil || !strings.Contains(err.Error(), "uninitialized") {
+		t.Fatalf("workspace tools error = %v", err)
+	}
+	if _, err := NewProcessManagerWithAccess(access, t.TempDir(), t.TempDir()); err == nil || !strings.Contains(err.Error(), "uninitialized") {
+		t.Fatalf("process manager error = %v", err)
 	}
 }
 
@@ -92,12 +103,20 @@ func TestWorkspaceToolsConfineReadsAndWrites(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	workspace, err := newWorkspace(root)
+	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := workspace.resolvePath("../outside"); err == nil {
-		t.Fatal("parent traversal was accepted")
+	workspace, err := newWorkspaceWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativeOutside, err := filepath.Rel(root, filepath.Join(outside, "secret.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.read(context.Background(), jsonArgs(t, map[string]any{"path": relativeOutside})); err == nil {
+		t.Fatal("read accepted parent traversal outside the workspace")
 	}
 	if _, err := workspace.read(context.Background(), `{"path":"escape/secret.txt"}`); err == nil {
 		t.Fatal("read through escaping symlink was accepted")
@@ -107,6 +126,243 @@ func TestWorkspaceToolsConfineReadsAndWrites(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "new")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("outside directory was created: %v", err)
+	}
+}
+
+func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	inside := filepath.Join(root, "inside.txt")
+	external := filepath.Join(outside, "external.txt")
+	mustWriteFile(t, inside, "workspace only\n")
+	mustWriteFile(t, external, "external needle\n")
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalExternal := filepath.ToSlash(canonicalSandboxPath(external))
+
+	read := mustRunTool(t, tools, "read", jsonArgs(t, map[string]any{"path": external}))
+	if !strings.Contains(read, "external needle") {
+		t.Fatalf("external read = %q", read)
+	}
+	symlinkRead := mustRunTool(t, tools, "read", `{"path":"escape/external.txt"}`)
+	if !strings.Contains(symlinkRead, "external needle") {
+		t.Fatalf("external symlink read = %q", symlinkRead)
+	}
+	relativeExternal, err := filepath.Rel(root, external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read := mustRunTool(t, tools, "read", jsonArgs(t, map[string]any{"path": relativeExternal})); !strings.Contains(read, "external needle") {
+		t.Fatalf("relative escape read = %q", read)
+	}
+	list := mustRunTool(t, tools, "ls", jsonArgs(t, map[string]any{"path": outside}))
+	if !strings.Contains(list, "external.txt") {
+		t.Fatalf("external ls = %q", list)
+	}
+	grep := mustRunTool(t, tools, "grep", jsonArgs(t, map[string]any{"pattern": "needle", "path": outside}))
+	if !strings.Contains(grep, canonicalExternal+":1:external needle") {
+		t.Fatalf("external grep = %q", grep)
+	}
+	grepFile := mustRunTool(t, tools, "grep", jsonArgs(t, map[string]any{"pattern": "needle", "path": external}))
+	if !strings.Contains(grepFile, canonicalExternal+":1:external needle") {
+		t.Fatalf("external-file grep = %q", grepFile)
+	}
+	glob := mustRunTool(t, tools, "glob", jsonArgs(t, map[string]any{"pattern": "*.txt", "path": outside}))
+	if !strings.Contains(glob, canonicalExternal) {
+		t.Fatalf("external glob = %q", glob)
+	}
+	if omitted := mustRunTool(t, tools, "grep", `{"pattern":"external needle"}`); omitted != "no matches\n" {
+		t.Fatalf("omitted grep left workspace = %q", omitted)
+	}
+
+	edit, err := runTool(tools, "edit", jsonArgs(t, map[string]any{
+		"path": external, "old_text": "external", "new_text": "changed",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, ok := FileChangeMetaFromDetail(edit.Details[0])
+	if !ok || change.Path != canonicalExternal {
+		t.Fatalf("external edit detail = %#v, ok=%v", change, ok)
+	}
+	created := filepath.Join(outside, "nested", "created.txt")
+	write, err := runTool(tools, "write", jsonArgs(t, map[string]any{"path": created, "content": "created\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, ok = FileChangeMetaFromDetail(write.Details[0])
+	if !ok || change.Path != filepath.ToSlash(canonicalSandboxPath(created)) {
+		t.Fatalf("external write detail = %#v, ok=%v", change, ok)
+	}
+	throughAlias := filepath.Join(outside, "through-alias.txt")
+	write, err = runTool(tools, "write", `{"path":"escape/through-alias.txt","content":"alias\n"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, ok = FileChangeMetaFromDetail(write.Details[0])
+	if !ok || change.Path != filepath.ToSlash(canonicalSandboxPath(throughAlias)) {
+		t.Fatalf("external alias write detail = %#v, ok=%v", change, ok)
+	}
+}
+
+func TestMachineScopeSearchesThroughExternalAliasIntoWorkspace(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	inside := filepath.Join(root, "inside.txt")
+	mustWriteFile(t, inside, "workspace backlink\n")
+	alias := filepath.Join(outside, "workspace-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grep := mustRunTool(t, tools, "grep", jsonArgs(t, map[string]any{
+		"pattern": "backlink", "path": alias,
+	}))
+	want := filepath.ToSlash(canonicalSandboxPath(inside)) + ":1:workspace backlink"
+	if !strings.Contains(grep, want) {
+		t.Fatalf("external-alias grep = %q; want %q", grep, want)
+	}
+}
+
+func TestWorkspaceScopeAcceptsAbsoluteInsideAndRejectsExternalPaths(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	inside := filepath.Join(root, "inside.txt")
+	external := filepath.Join(outside, "external.txt")
+	mustWriteFile(t, inside, "inside\n")
+	mustWriteFile(t, external, "outside\n")
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	workspaceAlias := filepath.Join(outside, "workspace-alias")
+	if err := os.Symlink(root, workspaceAlias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read := mustRunTool(t, tools, "read", jsonArgs(t, map[string]any{"path": inside})); !strings.Contains(read, "inside") {
+		t.Fatalf("absolute in-workspace read = %q", read)
+	}
+	if read := mustRunTool(t, tools, "read", jsonArgs(t, map[string]any{"path": filepath.Join(workspaceAlias, "inside.txt")})); !strings.Contains(read, "inside") {
+		t.Fatalf("absolute workspace-alias read = %q", read)
+	}
+	createdInside := filepath.Join(canonicalSandboxPath(root), "created.txt")
+	write, err := runTool(tools, "write", jsonArgs(t, map[string]any{"path": createdInside, "content": "inside\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, ok := FileChangeMetaFromDetail(write.Details[0])
+	if !ok || change.Path != "created.txt" {
+		t.Fatalf("absolute in-workspace write detail = %#v, ok=%v", change, ok)
+	}
+
+	for _, test := range []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "read", args: map[string]any{"path": external}},
+		{name: "read", args: map[string]any{"path": "escape/external.txt"}},
+		{name: "ls", args: map[string]any{"path": outside}},
+		{name: "grep", args: map[string]any{"pattern": "outside", "path": outside}},
+		{name: "glob", args: map[string]any{"pattern": "*.txt", "path": outside}},
+		{name: "edit", args: map[string]any{"path": external, "old_text": "outside", "new_text": "changed"}},
+		{name: "write", args: map[string]any{"path": filepath.Join(outside, "new.txt"), "content": "bad"}},
+	} {
+		if _, err := runTool(tools, test.name, jsonArgs(t, test.args)); err == nil || !strings.Contains(err.Error(), "scope") {
+			t.Fatalf("%s external error = %v", test.name, err)
+		}
+	}
+}
+
+func TestSharedFilesystemAccessSwitchesFileTools(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	external := filepath.Join(outside, "external.txt")
+	mustWriteFile(t, external, "external\n")
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProcessManagerWithAccess(access, t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if _, err := runTool(tools, "read", jsonArgs(t, map[string]any{"path": external})); err != nil {
+		t.Fatalf("machine read: %v", err)
+	}
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTool(tools, "read", jsonArgs(t, map[string]any{"path": external})); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("file tools did not observe switched scope: %v", err)
+	}
+}
+
+func TestMachineScopeStillFiltersExternalProtectedPaths(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	secretDir := filepath.Join(outside, "private")
+	secret := filepath.Join(secretDir, "secret.txt")
+	public := filepath.Join(outside, "public.txt")
+	mustWriteFile(t, secret, "needle secret\n")
+	mustWriteFile(t, public, "needle public\n")
+	protection, err := NewProtectedPathPolicy(root, []string{secretDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, err := NewFilesystemAccess(root, ScopeMachine, protection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTool(tools, "read", jsonArgs(t, map[string]any{"path": secret})); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("protected external read error = %v", err)
+	}
+	if _, err := runTool(tools, "write", jsonArgs(t, map[string]any{
+		"path": filepath.Join(secretDir, "missing", "new.txt"), "content": "secret",
+	})); err == nil || !strings.Contains(err.Error(), "protected") {
+		t.Fatalf("protected external write error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(secretDir, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("protected write created parent: %v", err)
+	}
+	list := mustRunTool(t, tools, "ls", jsonArgs(t, map[string]any{"path": outside}))
+	if !strings.Contains(list, "public.txt") || strings.Contains(list, "private") {
+		t.Fatalf("external protected ls = %q", list)
+	}
+	canonicalPublic := filepath.ToSlash(canonicalSandboxPath(public))
+	grep := mustRunTool(t, tools, "grep", jsonArgs(t, map[string]any{"pattern": "needle", "path": outside}))
+	if !strings.Contains(grep, canonicalPublic) || strings.Contains(grep, "secret.txt") {
+		t.Fatalf("external protected grep = %q", grep)
+	}
+	glob := mustRunTool(t, tools, "glob", jsonArgs(t, map[string]any{"pattern": "**/*.txt", "path": outside}))
+	if !strings.Contains(glob, canonicalPublic) || strings.Contains(glob, "secret.txt") {
+		t.Fatalf("external protected glob = %q", glob)
 	}
 }
 
@@ -244,6 +500,15 @@ func mustWriteFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func jsonArgs(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 type inertModel struct{}

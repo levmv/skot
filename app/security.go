@@ -164,23 +164,27 @@ func unavailableBoundary(state securityState, probe string) securityState {
 	return state
 }
 
-func protectedWorkspaceNotice(state securityState, root string, paths []string) string {
-	if !landlockProtectedPathsLimitWorkspaceRoot(state.Backend, root, paths) {
+func protectedPathsNotice(state securityState, root string, paths []string) string {
+	if state.Backend != "landlock" {
 		return ""
 	}
-	return "A protected path is inside the workspace; Bash and program tools may be unable to list or create entries in its ancestor directories on Linux; use the built-in file tools for those operations"
-}
-
-func landlockProtectedPathsLimitWorkspaceRoot(backend, root string, paths []string) bool {
-	if backend != "landlock" {
-		return false
-	}
-	for _, path := range paths {
-		if securityPathContains(root, path) && !securityPathContains(path, root) {
-			return true
+	affected := state.EffectiveScope == workspacetools.ScopeMachine && len(paths) != 0
+	if state.EffectiveScope == workspacetools.ScopeWorkspace {
+		for _, path := range paths {
+			if securityPathContains(root, path) && !securityPathContains(path, root) {
+				affected = true
+				break
+			}
 		}
 	}
-	return false
+	if !affected {
+		return ""
+	}
+	return "On Linux, protected paths may prevent Bash and program tools from listing or creating entries in ancestor directories; use the built-in file tools for those operations"
+}
+
+func landlockProtectedPathsNeedBuiltInLS(backend string, paths []string) bool {
+	return backend == "landlock" && len(paths) != 0
 }
 
 func resolveScope(requested workspacetools.Scope, container string) workspacetools.Scope {
@@ -207,6 +211,9 @@ func (state securityState) Summary() string {
 	}
 	if state.ProtectedPathCount != 0 {
 		text += fmt.Sprintf(" · protected paths: %d", state.ProtectedPathCount)
+	}
+	if state.EffectiveScope == workspacetools.ScopeMachine && !state.BackendRequired {
+		text += " · no additional filesystem boundary"
 	}
 	return text
 }
@@ -358,6 +365,8 @@ func validateSecurity(state securityState) error {
 	message := fmt.Sprintf("%s scope is unavailable: %s", state.EffectiveScope, state.Failure)
 	if state.EffectiveScope == workspacetools.ScopeWorkspace && state.ProtectedPathCount == 0 {
 		message += "; set -scope=machine (or SK_SCOPE=machine) to run without a filesystem boundary"
+	} else if state.EffectiveScope == workspacetools.ScopeMachine && state.ProtectedPathCount != 0 {
+		message += "; protected_paths require an active filesystem boundary even in machine scope"
 	}
 	return errors.New(message)
 }

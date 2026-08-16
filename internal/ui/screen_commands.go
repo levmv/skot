@@ -57,7 +57,7 @@ func init() {
 		{name: "/login", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
 		{name: "/model", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
-		{name: "/scope", description: "show or switch model filesystem scope", usage: "/scope [auto|workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
+		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [auto|workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
 		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
 		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
@@ -70,8 +70,8 @@ func init() {
 
 var scopePickerItems = []pickerItem{
 	{value: "auto", label: "auto", description: "workspace on a host, machine inside a container"},
-	{value: "workspace", label: "workspace", description: "the workspace and a disposable tool home"},
-	{value: "machine", label: "machine", description: "the surrounding filesystem, minus protected paths"},
+	{value: "workspace", label: "workspace", description: "keep model-owned file access in the workspace"},
+	{value: "machine", label: "machine", description: "allow model-owned file access outside the workspace"},
 }
 
 var themePickerItems = []pickerItem{

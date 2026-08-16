@@ -62,7 +62,7 @@ func (m *screenModel) finishScopeSwitch(message scopeDoneMsg) {
 		text += "\nwarning: " + message.notice
 	}
 	if message.concurrent {
-		text += "\nnew processes use this scope; already running processes retain their launch scope"
+		text += "\nnew tool calls use this scope; work already running is unchanged"
 	}
 	m.addBlock(screenBlockSystem, text)
 }

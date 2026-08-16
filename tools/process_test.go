@@ -1286,7 +1286,7 @@ func TestRunningProcessesRetainScopeFromLaunch(t *testing.T) {
 	}
 }
 
-func TestSandboxChangeCommitsBeforeBecomingVisibleToLaunches(t *testing.T) {
+func TestFilesystemPolicyPublishesAfterSuccessfulCallback(t *testing.T) {
 	manager, err := NewProcessManager(t.TempDir(), t.TempDir(), t.TempDir(), ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
@@ -1295,22 +1295,22 @@ func TestSandboxChangeCommitsBeforeBecomingVisibleToLaunches(t *testing.T) {
 	called := false
 	if err := manager.SetScopeAfter(ScopeWorkspace, func() error {
 		called = true
-		if manager.scope != ScopeMachine {
-			t.Fatalf("sandbox became visible before commit: %q", manager.scope)
+		if scope := manager.access.snapshot().scope; scope != ScopeMachine {
+			t.Fatalf("policy became visible before callback completed: %q", scope)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !called || manager.scope != ScopeWorkspace {
-		t.Fatalf("called/sandbox = %v/%q", called, manager.scope)
+	if scope := manager.access.snapshot().scope; !called || scope != ScopeWorkspace {
+		t.Fatalf("called/policy = %v/%q", called, scope)
 	}
 	want := errors.New("journal unavailable")
 	if err := manager.SetScopeAfter(ScopeMachine, func() error { return want }); !errors.Is(err, want) {
 		t.Fatalf("callback error = %v", err)
 	}
-	if manager.scope != ScopeWorkspace {
-		t.Fatalf("failed commit changed sandbox to %q", manager.scope)
+	if scope := manager.access.snapshot().scope; scope != ScopeWorkspace {
+		t.Fatalf("failed callback changed policy to %q", scope)
 	}
 }
 
@@ -1353,13 +1353,13 @@ func TestAwaitRequiredJobsJoinsOnlyYieldedForegroundWork(t *testing.T) {
 	}
 }
 
-func TestBashRejectsWorkdirOutsideWorkspace(t *testing.T) {
+func TestBashWorkspaceScopeRejectsWorkdirOutsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1367,6 +1367,96 @@ func TestBashRejectsWorkdirOutsideWorkspace(t *testing.T) {
 	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: "escape"})
 	if _, err := manager.bash(context.Background(), string(raw)); err == nil {
 		t.Fatal("bash accepted an escaping workdir")
+	}
+}
+
+func TestBashWorkspaceScopeAcceptsAbsoluteWorkdirInsideWorkspace(t *testing.T) {
+	if BoundaryBackend() == "" {
+		t.Skip("platform filesystem boundary is unavailable")
+	}
+	root := t.TempDir()
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: root})
+	output, err := manager.bash(context.Background(), string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.Content, canonicalSandboxPath(root)) {
+		t.Fatalf("absolute in-workspace workdir output = %q", output.Content)
+	}
+}
+
+func TestBashMachineScopeAcceptsExplicitExternalWorkdir(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: outside})
+	output, err := manager.bash(context.Background(), string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.Content, canonicalSandboxPath(outside)) {
+		t.Fatalf("external-workdir output = %q", output.Content)
+	}
+}
+
+func TestProcessLaunchRetainsPolicyCapturedUnderManagerGate(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	acquired := make(chan Scope, 1)
+	release := make(chan struct{})
+	result := make(chan struct {
+		job *processJob
+		err error
+	}, 1)
+	go func() {
+		job, startErr := manager.start(processSpec{
+			command: "true", timeout: time.Minute, origin: processOriginModel,
+			prepare: func(policy *filesystemPolicy) (string, error) {
+				acquired <- policy.scope
+				<-release
+				return outside, nil
+			},
+			build: func(_ *filesystemPolicy, workdir string) (*exec.Cmd, error) {
+				command := exec.Command("sh", "-c", "true")
+				command.Dir = workdir
+				return command, nil
+			},
+		})
+		result <- struct {
+			job *processJob
+			err error
+		}{job: job, err: startErr}
+	}()
+	if scope := <-acquired; scope != ScopeMachine {
+		t.Fatalf("captured scope = %q", scope)
+	}
+	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	started := <-result
+	if started.err != nil {
+		t.Fatal(started.err)
+	}
+	<-started.job.done
+	if state := started.job.snapshot(); state.scope != ScopeMachine || state.status != ProcessCompleted {
+		t.Fatalf("launched job = %#v", state)
+	}
+	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: outside})
+	if _, err := manager.bash(context.Background(), string(raw)); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("later launch did not use workspace scope: %v", err)
 	}
 }
 

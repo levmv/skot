@@ -77,13 +77,11 @@ type CompletionEvent struct {
 }
 
 type ProcessManager struct {
-	workspace              *workspace
-	protection             *ProtectedPathPolicy
+	access                 *FilesystemAccess
 	toolHome               string
 	jobHome                string
 	logLimit               int64
 	bashYield              time.Duration
-	scope                  Scope
 	hiddenModelEnvironment map[string]struct{}
 
 	mu       sync.Mutex
@@ -180,7 +178,8 @@ type processSpec struct {
 	supervised     bool
 	detach         bool
 	environment    map[string]string
-	build          func(scope Scope) (*exec.Cmd, error)
+	prepare        func(policy *filesystemPolicy) (string, error)
+	build          func(policy *filesystemPolicy, workdir string) (*exec.Cmd, error)
 }
 
 type jobBuffer struct {
@@ -212,37 +211,39 @@ type jobResultOptions struct {
 	truncated     bool
 }
 
+// NewProcessManager builds a standalone manager. Use
+// NewProcessManagerWithAccess when file tools must share its live scope.
 func NewProcessManager(root, stateHome, toolHomeRoot string, scope Scope, protections ...*ProtectedPathPolicy) (*ProcessManager, error) {
-	if err := validateConcreteScope(scope); err != nil {
-		return nil, err
-	}
 	if len(protections) > 1 {
 		return nil, errors.New("at most one protected-path policy may be supplied")
 	}
-	root, err := ResolveWorkspaceRoot(root)
-	if err != nil {
-		return nil, err
-	}
-	stateHome = canonicalSandboxPath(stateHome)
 	var protection *ProtectedPathPolicy
 	if len(protections) == 1 {
 		protection = protections[0]
 	}
-	if protection == nil {
-		protection, err = NewProtectedPathPolicy(root, nil)
-		if err != nil {
-			return nil, err
-		}
-	}
-	workspace, err := newWorkspaceWithProtection(root, protection)
+	access, err := NewFilesystemAccess(root, scope, protection)
 	if err != nil {
 		return nil, err
 	}
+	return NewProcessManagerWithAccess(access, stateHome, toolHomeRoot)
+}
+
+// NewProcessManagerWithAccess builds process tools on the same filesystem
+// authority state used by built-in file tools.
+func NewProcessManagerWithAccess(access *FilesystemAccess, stateHome, toolHomeRoot string) (*ProcessManager, error) {
+	if access == nil {
+		return nil, errors.New("filesystem access is nil")
+	}
+	policy := access.current.Load()
+	if policy == nil {
+		return nil, errors.New("filesystem access is uninitialized")
+	}
+	stateHome = canonicalSandboxPath(stateHome)
 	if _, err := exec.LookPath("bash"); err != nil {
 		return nil, errors.New("bash is unavailable")
 	}
-	toolHome := canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, workspace.root))
-	layout := Boundary{Scope: scope, Workspace: workspace.root, ToolHome: toolHome, ProtectedPaths: protection.Paths()}
+	toolHome := canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, policy.workspace))
+	layout := policy.processBoundary(toolHome)
 	if err := layout.ValidateLayout(); err != nil {
 		return nil, err
 	}
@@ -254,25 +255,16 @@ func NewProcessManager(root, stateHome, toolHomeRoot string, scope Scope, protec
 		return nil, fmt.Errorf("restrict job home: %w", err)
 	}
 	return &ProcessManager{
-		workspace:      workspace,
-		protection:     protection,
+		access:         access,
 		toolHome:       toolHome,
 		jobHome:        jobHome,
 		logLimit:       defaultCommandLogLimit,
 		bashYield:      defaultBashYield,
-		scope:          scope,
 		jobs:           make(map[string]*processJob),
 		closedCh:       make(chan struct{}),
 		loadedSessions: make(map[string]struct{}),
 		attachNotices:  make(map[string][]string),
 	}, nil
-}
-
-func (manager *ProcessManager) processBoundary(scope Scope) Boundary {
-	return Boundary{
-		Scope: scope, Workspace: manager.workspace.root,
-		ToolHome: manager.toolHome, ProtectedPaths: manager.protection.Paths(),
-	}
 }
 
 func (manager *ProcessManager) ensureToolHome() error {
@@ -309,12 +301,12 @@ func (manager *ProcessManager) HideModelEnvironment(names ...string) {
 }
 
 func (manager *ProcessManager) Tools() []agent.Tool {
-	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory relative to the workspace root. Defaults to the root."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
+	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory. Relative paths start at the workspace; any path resolving outside it requires machine scope. Defaults to the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
 	return []agent.Tool{
 		{
 			Spec: agent.ToolSpec{
 				Name:         "bash",
-				Description:  "Run Bash in the workspace with environment and filesystem access determined by the current scope, process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors.",
+				Description:  "Run Bash with environment, starting directory, and filesystem access determined by the current scope, process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors.",
 				InputSchema:  json.RawMessage(bashSchema),
 				ParallelSafe: false,
 			},
@@ -355,32 +347,39 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 	if args.TimeoutSeconds < 0 || args.TimeoutSeconds > int(maxBashTimeout/time.Second) {
 		return agent.ToolOutput{}, fmt.Errorf("timeout must be between 1 and %d seconds", int(maxBashTimeout/time.Second))
 	}
-	enforceProtection := origin == processOriginModel
-	workdir, display, info, err := manager.workspace.resolveExistingPathWithProtection(args.Workdir, enforceProtection)
-	if err != nil {
-		return agent.ToolOutput{}, err
-	}
-	if !info.IsDir() {
-		return agent.ToolOutput{}, fmt.Errorf("workdir %s is not a directory", display)
-	}
 	timeout := defaultBashTimeout
 	if args.TimeoutSeconds > 0 {
 		timeout = time.Duration(args.TimeoutSeconds) * time.Second
 	}
 	job, err := manager.start(processSpec{
 		command:    args.Command,
-		workdir:    workdir,
 		timeout:    timeout,
 		origin:     origin,
 		sessionID:  sessionID,
 		supervised: args.Background,
-		build: func(scope Scope) (*exec.Cmd, error) {
+		prepare: func(policy *filesystemPolicy) (string, error) {
+			workdirPolicy := policy
+			enforceProtection := true
+			if origin == processOriginUser {
+				workdirPolicy = policy.workspaceOnly()
+				enforceProtection = false
+			}
+			workdir, display, info, err := workdirPolicy.resolveExistingPath(args.Workdir, enforceProtection)
+			if err != nil {
+				return "", err
+			}
+			if !info.IsDir() {
+				return "", fmt.Errorf("workdir %s is not a directory", display)
+			}
+			return workdir, nil
+		},
+		build: func(policy *filesystemPolicy, workdir string) (*exec.Cmd, error) {
 			if origin == processOriginUser {
 				command := ambientBashCommand(args.Command, workdir)
 				command.Env = os.Environ()
 				return command, nil
 			}
-			return sandboxedBashCommand(args.Command, workdir, manager.processBoundary(scope))
+			return sandboxedBashCommand(args.Command, workdir, policy.processBoundary(manager.toolHome))
 		},
 	})
 	if err != nil {
@@ -533,20 +532,17 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		manager.mu.Unlock()
 		return nil, errors.New("process manager is closed")
 	}
-	scope := manager.scope
+	policy := manager.access.snapshot()
 	hiddenModelEnvironment := maps.Clone(manager.hiddenModelEnvironment)
 	manager.mu.Unlock()
 	if spec.origin != processOriginModel && spec.origin != processOriginUser {
 		return nil, fmt.Errorf("unknown process origin %d", spec.origin)
 	}
 	if spec.origin == processOriginModel {
-		if err := manager.processBoundary(scope).ValidateLayout(); err != nil {
+		if err := policy.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
 			return nil, err
 		}
-		if manager.protection.contains(spec.workdir) {
-			return nil, errors.New("process workdir is protected")
-		}
-		if scope == ScopeWorkspace {
+		if policy.scope == ScopeWorkspace {
 			if err := manager.ensureToolHome(); err != nil {
 				return nil, err
 			}
@@ -558,12 +554,30 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 	if spec.timeout <= 0 {
 		return nil, errors.New("process timeout must be positive")
 	}
+	if spec.prepare != nil {
+		workdir, err := spec.prepare(policy)
+		if err != nil {
+			return nil, err
+		}
+		spec.workdir = workdir
+	}
+	if strings.TrimSpace(spec.workdir) == "" {
+		return nil, errors.New("process workdir is required")
+	}
+	if spec.origin == processOriginModel {
+		if err := policy.checkScope(spec.workdir); err != nil {
+			return nil, err
+		}
+		if err := policy.checkProtected(spec.workdir, policy.displayPath(spec.workdir)); err != nil {
+			return nil, errors.New("process workdir is protected")
+		}
+	}
 
 	id, err := newJobID()
 	if err != nil {
 		return nil, err
 	}
-	process, err := spec.build(scope)
+	process, err := spec.build(policy, spec.workdir)
 	if err != nil {
 		return nil, fmt.Errorf("prepare process: %w", err)
 	}
@@ -575,7 +589,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 	}
 	process.Dir = spec.workdir
 	if spec.supervised {
-		return manager.startSupervised(spec, process, scope, id)
+		return manager.startSupervised(spec, process, policy.scope, id)
 	}
 	process.Stdin = spec.stdin
 	configureProcessGroup(process)
@@ -605,7 +619,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		separateStderr: spec.separateStderr,
 	}
 	if spec.origin == processOriginModel {
-		job.scope = scope
+		job.scope = policy.scope
 	}
 	manager.mu.Lock()
 	if manager.closed {
@@ -775,21 +789,21 @@ func (manager *ProcessManager) DetachedJobs(sessionID string) []string {
 	return ids
 }
 
-// SetScopeAfter makes beforeApply and the scope change one linearized
-// boundary with process launch. A model process which acquired its launch
-// scope before the callback keeps the old scope; every process acquiring it
-// after a successful return gets the new one. A callback failure leaves the
-// manager unchanged.
+// SetScopeAfter makes beforeApply and publishing the shared filesystem policy
+// one linearized boundary with process launch. A model process which acquired
+// its launch policy before the callback keeps it; later process and file-tool
+// calls get the new policy. A callback failure leaves access unchanged.
 func (manager *ProcessManager) SetScopeAfter(scope Scope, beforeApply func() error) error {
-	if err := validateConcreteScope(scope); err != nil {
-		return err
-	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.closed {
 		return errors.New("process manager is closed")
 	}
-	if err := manager.processBoundary(scope).ValidateLayout(); err != nil {
+	next, err := manager.access.policyForScope(scope)
+	if err != nil {
+		return err
+	}
+	if err := next.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
 		return err
 	}
 	if scope == ScopeWorkspace {
@@ -802,12 +816,12 @@ func (manager *ProcessManager) SetScopeAfter(scope Scope, beforeApply func() err
 			return err
 		}
 	}
-	manager.scope = scope
+	manager.access.current.Store(next)
 	return nil
 }
 
 // RunningScopes reports the launch scope of currently running model processes.
-// Changing the manager scope only affects later process starts.
+// Changing the shared scope only affects later process starts.
 func (manager *ProcessManager) RunningScopes() map[Scope]int {
 	scopes := make(map[Scope]int)
 	for _, job := range manager.allJobs() {

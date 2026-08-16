@@ -91,32 +91,40 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	config.Scope = string(scope)
 
+	root, err := workspacetools.ResolveWorkspaceRoot(config.Root)
+	if err != nil {
+		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
+	}
 	configuredProtectedPaths := append([]string(nil), settings.ProtectedPaths...)
 	configuredProtectedPaths = append(configuredProtectedPaths, config.ProtectedPaths...)
-	protection, err := workspacetools.NewProtectedPathPolicy(config.Root, configuredProtectedPaths)
+	protection, err := workspacetools.NewProtectedPathPolicy(root, configuredProtectedPaths)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize protected paths: %w", err))
 	}
 
 	masker := newSecretMasker(settingsStore)
-	catalog, root, err := workspacetools.NewWorkspaceToolsWithProtection(config.Root, protection)
-	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
-	}
 	toolHome := workspacetools.WorkspaceToolHome(toolHomeRoot, root)
 	security := buildSecurityStateWithToolHome(ctx, scope, root, toolHome, protection.Paths())
 	if err := validateSecurity(security); err != nil {
 		return nil, agent.MarkInvalidRequest(err)
 	}
-	if notice := protectedWorkspaceNotice(security, root, protection.Paths()); notice != "" {
+	if notice := protectedPathsNotice(security, root, protection.Paths()); notice != "" {
 		notices = append(notices, notice)
+	}
+	access, err := workspacetools.NewFilesystemAccess(root, security.EffectiveScope, protection)
+	if err != nil {
+		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize filesystem policy: %w", err))
+	}
+	catalog, _, err := workspacetools.NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
 	}
 	projectInstructions, err := loadInstructions(root, protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
 	instructions := effectiveInstructions(config.SystemPrompt, root, projectInstructions)
-	processes, err := workspacetools.NewProcessManager(root, home, toolHomeRoot, security.EffectiveScope, protection)
+	processes, err := workspacetools.NewProcessManagerWithAccess(access, home, toolHomeRoot)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
@@ -131,7 +139,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	// Derive this from platform and layout rather than the current scope so a
 	// runtime scope switch does not silently change the active tool set.
 	builtInOptions := toolpolicy.BuiltInOptions{
-		DefaultIncludesLS: landlockProtectedPathsLimitWorkspaceRoot(workspacetools.BoundaryBackend(), root, protection.Paths()),
+		DefaultIncludesLS: landlockProtectedPathsNeedBuiltInLS(workspacetools.BoundaryBackend(), protection.Paths()),
 	}
 	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes, builtInOptions)
 	if err != nil {

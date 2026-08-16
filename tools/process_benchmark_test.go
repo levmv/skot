@@ -42,7 +42,7 @@ func benchmarkProcessLifecycle(b *testing.B, supervised bool, command string) {
 			origin:     processOriginModel,
 			sessionID:  "process-lifecycle-benchmark",
 			supervised: supervised,
-			build: func(Scope) (*exec.Cmd, error) {
+			build: func(*filesystemPolicy, string) (*exec.Cmd, error) {
 				process := exec.Command("bash", "-lc", command)
 				process.Dir = root
 				return process, nil

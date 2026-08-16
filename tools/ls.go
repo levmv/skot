@@ -30,7 +30,8 @@ func (workspace *workspace) ls(ctx context.Context, raw string) (agent.ToolOutpu
 	if err := decodeArgs(raw, &args); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	abs, display, info, err := workspace.resolveExistingPath(args.Path)
+	policy := workspace.access.snapshot()
+	abs, display, info, err := policy.resolveExistingPath(args.Path, true)
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -44,7 +45,7 @@ func (workspace *workspace) ls(ctx context.Context, raw string) (agent.ToolOutpu
 	visible := entries[:0]
 	for _, entry := range entries {
 		entryPath := filepath.Join(abs, entry.Name())
-		if workspace.protected(entryPath) {
+		if policy.protection.Protects(entryPath) {
 			continue
 		}
 		entryInfo, infoErr := entry.Info()
@@ -52,7 +53,7 @@ func (workspace *workspace) ls(ctx context.Context, raw string) (agent.ToolOutpu
 			return agent.ToolOutput{}, fmt.Errorf("inspect entry %s: %w", displayPath(entry.Name()), infoErr)
 		}
 		if entryInfo.Mode()&os.ModeSymlink != 0 {
-			if resolved, resolveErr := filepath.EvalSymlinks(entryPath); resolveErr == nil && workspace.protected(resolved) {
+			if resolved, resolveErr := filepath.EvalSymlinks(entryPath); resolveErr == nil && policy.protection.Protects(resolved) {
 				continue
 			}
 		}

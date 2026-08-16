@@ -331,6 +331,41 @@ func TestSubmitWhileWorkingQueuesInput(t *testing.T) {
 	}
 }
 
+func TestCommandMenuRemainsVisibleWhileWorking(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.operation.kind = operationTurn
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "/", Code: '/', BaseCode: '/'})
+
+	if model.composer.value() != "/" || !model.commandSuggestionsVisible() {
+		t.Fatalf("input = %q, command menu visible = %v", model.composer.value(), model.commandSuggestionsVisible())
+	}
+	if rendered := strings.Join(model.renderCommandSuggestions(), "\n"); !strings.Contains(rendered, "/help") {
+		t.Fatalf("command menu = %q", rendered)
+	}
+}
+
+func TestCommandMenuUsesPlainLabelsAndAccentsTheSelection(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("SK_COLOR", "always")
+	model := testScreenModel(t, &fakeAgent{})
+	model.composer.setValue("/")
+	model.syncCommandSuggestions()
+
+	rendered := model.renderCommandSuggestions()
+	if len(rendered) < 2 || !strings.Contains(rendered[0], model.accentStyle.Render("/help")) ||
+		!strings.Contains(rendered[0], model.mutedStyle.Render(" show keys")) ||
+		!strings.Contains(rendered[1], "/clear") || strings.Contains(rendered[1], model.mutedStyle.Render("/clear")) {
+		t.Fatalf("command menu = %#v", rendered)
+	}
+
+	model.moveCommandSuggestion(1)
+	rendered = model.renderCommandSuggestions()
+	if strings.Contains(rendered[0], model.accentStyle.Render("/help")) ||
+		!strings.Contains(rendered[1], model.accentStyle.Render("/clear")) {
+		t.Fatalf("moved command selection = %#v", rendered)
+	}
+}
+
 func TestQueuedLineShowsLatestInputAndCount(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{queued: []string{"first", "latest"}})
 	if got := strings.TrimSpace(model.queuedLine()); got != "queued 2 · latest: latest" {

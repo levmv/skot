@@ -121,7 +121,7 @@ func (m *screenModel) syncCommandSuggestions() {
 
 func (m screenModel) commandSuggestionsVisible() bool {
 	value := strings.TrimSpace(m.composer.value())
-	return !m.operation.isTurn() && m.loginProvider == "" && !m.operation.isMaintenance() && !m.picker.active() && strings.HasPrefix(value, "/") && m.composer.hasSuggestions()
+	return m.loginProvider == "" && !m.operation.isMaintenance() && !m.picker.active() && strings.HasPrefix(value, "/") && m.composer.hasSuggestions()
 }
 
 func (m screenModel) currentCommandSuggestion() string {
@@ -161,11 +161,17 @@ func (m screenModel) renderCommandSuggestions() []string {
 		if index == selected {
 			marker = userMarker
 		}
-		detail := candidate
-		if description := commandDescription(candidate); description != "" {
-			detail = fmt.Sprintf("%-10s %s", candidate, description)
+		label := sanitizeTerminalText(candidate)
+		if index == selected {
+			label = m.accentStyle.Render(label)
 		}
-		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+truncateANSI(m.mutedStyle.Render(detail), m.contentWidth()))
+		if description := commandDescription(candidate); description != "" {
+			if pad := 10 - visibleLen(label); pad > 0 {
+				label += strings.Repeat(" ", pad)
+			}
+			label += m.mutedStyle.Render(" " + sanitizeTerminalText(description))
+		}
+		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+truncateANSI(label, m.contentWidth()))
 	}
 	return lines
 }

@@ -11,6 +11,85 @@ die() {
 	exit 1
 }
 
+default_path_profile() {
+	shell_name=${SHELL:-}
+	shell_name=${shell_name##*/}
+	case "$shell_name" in
+	zsh) printf '%s\n' "${ZDOTDIR:-$HOME}/.zshrc" ;;
+	bash)
+		if [ "$os" = "darwin" ]; then
+			printf '%s\n' "${HOME}/.bash_profile"
+		else
+			printf '%s\n' "${HOME}/.bashrc"
+		fi
+		;;
+	sh | dash | ksh) printf '%s\n' "${HOME}/.profile" ;;
+	*) return 1 ;;
+	esac
+}
+
+print_path_activation() {
+	printf 'Open a new terminal, or run:\n  export PATH="$HOME/.local/bin:$PATH"\n'
+}
+
+offer_default_path_update() {
+	profile=$(default_path_profile) || return 1
+
+	path_line='export PATH="$HOME/.local/bin:$PATH"'
+	if [ -f "$profile" ] && grep -Fqx "$path_line" "$profile"; then
+		printf '\n%s is configured in %s but is not active in this shell.\n' "$install_dir" "$profile"
+		print_path_activation
+		return 0
+	fi
+
+	if [ -n "${CI:-}" ]; then
+		return 1
+	fi
+	if ! ( : </dev/tty ) 2>/dev/null; then
+		return 1
+	fi
+	printf '\n%s is not on PATH.\nAdd it to %s? [Y/n] ' "$install_dir" "$profile" >/dev/tty
+	answer=
+	if ! IFS= read -r answer </dev/tty; then
+		return 1
+	fi
+	case "$answer" in
+	"" | y | Y | yes | Yes | YES) ;;
+	*) return 1 ;;
+	esac
+
+	{
+		if [ -s "$profile" ]; then
+			printf '\n'
+		fi
+		printf '# Skot\n%s\n' "$path_line"
+	} >>"$profile" || return 1
+	printf 'Added %s to PATH in %s.\n' "$install_dir" "$profile"
+	print_path_activation
+}
+
+print_manual_path_setup() {
+	printf '\n%s is not on PATH.\n' "$install_dir"
+	if [ -n "${HOME:-}" ] && [ "$install_dir" = "${HOME}/.local/bin" ]; then
+		shell_name=${SHELL:-}
+		shell_name=${shell_name##*/}
+		case "$shell_name" in
+		fish) printf 'Run:\n  fish_add_path "$HOME/.local/bin"\n' ;;
+		*)
+			if profile=$(default_path_profile); then
+				printf 'Add this line to %s:\n' "$profile"
+			else
+				printf 'Add this line to your shell profile:\n'
+			fi
+			printf '  export PATH="$HOME/.local/bin:$PATH"\n'
+			;;
+		esac
+	else
+		printf 'Add this directory to your shell PATH.\n'
+	fi
+	printf 'Until then, run Skot with:\n  "%s/sk"\n' "$install_dir"
+}
+
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
 case "$(uname -s)" in
@@ -94,5 +173,11 @@ staged=""
 printf 'Installed Skot %s to %s/sk\n' "$tag" "$install_dir"
 case ":${PATH:-}:" in
 	*":${install_dir}:"*) ;;
-	*) printf 'Add %s to PATH to run sk.\n' "$install_dir" ;;
+	*)
+		if [ -n "${HOME:-}" ] && [ "$install_dir" = "${HOME}/.local/bin" ] && offer_default_path_update; then
+			:
+		else
+			print_manual_path_setup
+		fi
+		;;
 esac

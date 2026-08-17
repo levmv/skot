@@ -334,7 +334,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 	}
 }
 
-func TestChildRunsFromJournalUsesTheFinalModelResponse(t *testing.T) {
+func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 	journal, err := session.Open(filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -355,11 +355,26 @@ func TestChildRunsFromJournalUsesTheFinalModelResponse(t *testing.T) {
 	if err != nil || result.Answer != "" {
 		t.Fatalf("runtime result = %#v, %v", result, err)
 	}
-	runs, err := childRunsFromJournal(context.Background(), journal)
+	if _, err := runtime.Run(context.Background(), "second", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Compact(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), "third", nil); err != nil {
+		t.Fatal(err)
+	}
+	records, err := journal.Records(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 1 || runs[0].Answer != "" || runs[0].Usage.TotalTokens != 12 || runs[0].Usage.ReasoningTokens != 5 {
+	state, err := agent.Replay(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := restoreChildRuns(records, state.Blocks)
+	if len(runs) != 3 || runs[0].Answer != "" || runs[0].Usage.TotalTokens != 12 || runs[0].Usage.ReasoningTokens != 5 ||
+		runs[1].Usage.TotalTokens != 7 || runs[2].Usage.TotalTokens != 7+9 {
 		t.Fatalf("replayed child runs = %#v", runs)
 	}
 	if reply := assistantReply([]agent.Item{{Kind: agent.ItemAssistantText, Text: "first"}, {Kind: agent.ItemAssistantText, Text: "second"}}); reply != "first\nsecond" {
@@ -521,7 +536,13 @@ func (model *childReplayModel) Info() agent.ModelInfo {
 	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "child-replay"}
 }
 
-func (model *childReplayModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+func (model *childReplayModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+	if len(request.Tools) == 0 {
+		return agent.ModelResponse{
+			Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "summary"}},
+			Usage: agent.ModelUsage{ReasoningTokens: 4, TotalTokens: 9},
+		}, nil
+	}
 	model.calls++
 	if model.calls == 1 {
 		return agent.ModelResponse{

@@ -890,6 +890,7 @@ func (supervisor *childSupervisor) openChildLocked(ctx context.Context, dir, par
 	if err != nil {
 		return fail(fmt.Errorf("replay journal: %w", err))
 	}
+	runs := restoreChildRuns(records, replayed.Blocks)
 	runtime, err := builder.build(ctx, runtimeBuildParams{
 		journal: journal, sessionID: metadata.SessionID, modelURI: metadata.Model,
 		reasoningEffort: metadata.ReasoningEffort, instructions: instructions, resumedState: &replayed,
@@ -897,34 +898,22 @@ func (supervisor *childSupervisor) openChildLocked(ctx context.Context, dir, par
 	if err != nil {
 		return fail(err)
 	}
-	runs, err := childRunsFromJournal(ctx, journal)
-	if err != nil {
-		return fail(err)
-	}
 	return &childAgent{metadata: metadata, dir: dir, journal: journal, runtime: runtime, runs: runs}, nil
 }
 
-func childRunsFromJournal(ctx context.Context, journal *session.Store) ([]*childRun, error) {
-	records, err := journal.Records(ctx)
-	if err != nil {
-		return nil, err
-	}
-	state, err := agent.Replay(records)
-	if err != nil {
-		return nil, err
-	}
-	runs := make([]*childRun, 0, len(state.Blocks))
-	previousEnd := uint64(0)
-	for _, block := range state.Blocks {
+func restoreChildRuns(records []agent.Record, blocks []agent.ConversationBlock) []*childRun {
+	runs := make([]*childRun, 0, len(blocks))
+	recordIndex := 0
+	for _, block := range blocks {
 		run := &childRun{
 			RunID: block.RunID, Status: block.Status,
 			Error:            truncateUTF8(block.Error, productlimits.MaxChildAgentResultBytes),
 			ToolLimitReached: block.ToolLimitReached,
 		}
-		for _, record := range records {
-			if record.Sequence <= previousEnd || record.Sequence > block.EndSequence {
-				continue
-			}
+		// Start at the preceding block boundary so compaction performed before
+		// RunStarted contributes its usage to the run that follows it.
+		for recordIndex < len(records) && records[recordIndex].Sequence <= block.EndSequence {
+			record := records[recordIndex]
 			switch record.Kind {
 			case agent.RecordRunStarted:
 				var payload agent.RunStartedRecord
@@ -948,11 +937,11 @@ func childRunsFromJournal(ctx context.Context, journal *session.Store) ([]*child
 					run.FinishedAt = record.Time
 				}
 			}
+			recordIndex++
 		}
 		runs = append(runs, run)
-		previousEnd = block.EndSequence
 	}
-	return runs, nil
+	return runs
 }
 
 func assistantReply(items []agent.Item) string {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -138,30 +136,5 @@ func TestSearchWebFallsBackNormalizesAndDeduplicates(t *testing.T) {
 	}
 	if provider != "second" || len(results) != 2 || results[0].Title != "One" || results[0].Snippet != "a b" || results[1].URL != "https://example.test/two" {
 		t.Fatalf("provider=%q results=%#v", provider, results)
-	}
-}
-
-func TestHackerNewsFetchUsesBoundedDiscussionReader(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		switch request.URL.Path {
-		case "/item/42.json":
-			_, _ = writer.Write([]byte(`{"id":42,"type":"story","by":"alice","time":1700000000,"title":"A story","url":"https://example.test/story","score":7,"descendants":1,"kids":[43]}`))
-		case "/item/43.json":
-			_, _ = writer.Write([]byte(`{"id":43,"type":"comment","by":"bob","text":"Useful <b>comment</b>"}`))
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
-	defer server.Close()
-	backend := newHackerNewsFetchBackend()
-	backend.client.apiBase = server.URL
-	backend.client.client = server.Client()
-	result, err := backend.Fetch(context.Background(), webFetchRequest{URL: "https://news.ycombinator.com/item?id=42"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.URL != "https://news.ycombinator.com/item?id=42" || result.Title != "A story" || !strings.Contains(result.Text, "bob [item 43]: Useful comment") {
-		t.Fatalf("HN result = %#v", result)
 	}
 }

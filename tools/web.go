@@ -95,11 +95,6 @@ type webFetchBackend interface {
 	Fetch(context.Context, webFetchRequest) (webFetchResult, error)
 }
 
-type matchingWebFetchBackend interface {
-	webFetchBackend
-	Match(webFetchRequest) bool
-}
-
 func (service *webService) fetch(ctx context.Context, raw string) (agent.ToolOutput, error) {
 	var args webFetchArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -140,7 +135,7 @@ func (service *webService) fetch(ctx context.Context, raw string) (agent.ToolOut
 }
 
 func (service *webService) fetchBackends() ([]webFetchBackend, error) {
-	backends := []webFetchBackend{newHackerNewsFetchBackend()}
+	var backends []webFetchBackend
 	for _, provider := range []string{"firecrawl", "exa"} {
 		token, err := lookupWebCredential(service.credential, provider)
 		if err != nil {
@@ -160,13 +155,11 @@ func (service *webService) fetchBackends() ([]webFetchBackend, error) {
 }
 
 func fetchWeb(ctx context.Context, request webFetchRequest, backends []webFetchBackend) (webFetchResult, error) {
+	if len(backends) == 0 {
+		return webFetchResult{}, errors.New("web fetch has no configured backends")
+	}
 	failures := make([]string, 0, len(backends))
-	matched := 0
 	for _, backend := range backends {
-		if conditional, ok := backend.(matchingWebFetchBackend); ok && !conditional.Match(request) {
-			continue
-		}
-		matched++
 		result, err := backend.Fetch(ctx, request)
 		if ctx.Err() != nil {
 			return webFetchResult{}, ctx.Err()
@@ -191,9 +184,6 @@ func fetchWeb(ctx context.Context, request webFetchRequest, backends []webFetchB
 			result.Truncated = true
 		}
 		return result, nil
-	}
-	if matched == 0 {
-		return webFetchResult{}, errors.New("web fetch has no backend for this URL")
 	}
 	return webFetchResult{}, fmt.Errorf("web fetch failed: %s", strings.Join(failures, "; "))
 }

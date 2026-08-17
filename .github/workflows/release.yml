@@ -51,7 +51,7 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Skot $GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
             --notes "Licenses: [MIT](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/LICENSE) · [Third-party notices](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/NOTICE)" \
             --generate-notes \
             --verify-tag

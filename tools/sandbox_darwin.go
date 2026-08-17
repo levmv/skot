@@ -40,16 +40,6 @@ func sandboxedProgramCommand(program string, argv []string, workdir string, boun
 	return cmd, nil
 }
 
-var sandboxReadOnlyDirs = []string{
-	"/Applications", "/Library", "/System", "/bin", "/dev", "/etc", "/nix",
-	"/opt", "/private/etc", "/private/var/db/dyld", "/private/var/db/timezone",
-	"/private/var/select", "/sbin", "/usr",
-}
-
-func sandboxWritableDirs(boundary Boundary) []string {
-	return []string{canonicalpath.Resolve(boundary.Workspace), canonicalpath.Resolve(boundary.ToolHome)}
-}
-
 func hardenSupervisor() {}
 
 func seatbeltProfile(boundary Boundary) string {

@@ -32,6 +32,10 @@ jobs:
       - name: Run tests and vet
         run: make test vet
 
+      - name: Run macOS static analysis
+        if: runner.os == 'macOS'
+        run: make staticcheck
+
   hygiene:
     name: Hygiene
     runs-on: ubuntu-latest

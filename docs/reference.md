@@ -117,9 +117,10 @@ directory. It contains:
 - `tools.json` — the default custom program tool catalog;
 - `sessions/` — managed session journals and child-agent state.
 
-The directory is created with mode `0700`; Skot-managed state files use mode
-`0600`. Session journals contain conversation and workspace data and should
-also be treated as private.
+A missing data directory is created with mode `0700`; an existing
+`-home`/`SK_HOME` directory keeps its mode. Skot-managed state files are created
+with mode `0600`. Session journals contain conversation and workspace data and
+should also be treated as private.
 
 Model-owned processes in `workspace` scope use a separate disposable home under
 the platform user cache, not under the Skot data directory. On Linux its root

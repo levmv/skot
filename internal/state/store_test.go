@@ -51,18 +51,25 @@ func TestStoreLoadsAuthoredConfigAndKeepsLegacyInteractiveFieldsInert(t *testing
 	}
 }
 
-func TestStoreRejectsSharedConfigPermissionsWithoutChangingThem(t *testing.T) {
+func TestStoreRepairsSharedConfigWithoutChangingHomePermissions(t *testing.T) {
 	home := t.TempDir()
+	if err := os.Chmod(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(home, "config.json")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(home); err == nil || !strings.Contains(err.Error(), "permissions 0640") {
-		t.Fatalf("error = %v", err)
+	if _, err := Open(home); err != nil {
+		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o640 {
+	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode = %v, %v", info, err)
+	}
+	info, err = os.Stat(home)
+	if err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("home mode = %v, %v", info, err)
 	}
 }
 

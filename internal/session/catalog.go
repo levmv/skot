@@ -16,6 +16,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/privatefs"
 )
 
 const journalName = "events.jsonl"
@@ -48,9 +49,10 @@ func Create(home string) (*Store, string, error) {
 		return nil, "", err
 	}
 	sessionsDir := filepath.Join(home, "sessions")
-	if err := ensurePrivateDirectory(sessionsDir, "sessions directory"); err != nil {
+	if err := privatefs.EnsureDirectory(sessionsDir, "sessions directory"); err != nil {
 		return nil, "", err
 	}
+	privatefs.TryRestrictPermissions(sessionsDir)
 	for attempt := 0; attempt < 8; attempt++ {
 		id, err := newSessionID()
 		if err != nil {
@@ -87,6 +89,10 @@ func OpenManaged(home, id string) (*Store, error) {
 		}
 		return nil, fmt.Errorf("stat session %q: %w", id, err)
 	}
+	if err := privatefs.RequireRegularFile(path, "managed session journal"); err != nil {
+		return nil, err
+	}
+	privatefs.TryRestrictPermissions(path)
 	return Open(path)
 }
 

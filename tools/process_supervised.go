@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/privatefs"
 )
 
 const (
@@ -44,9 +45,10 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 	if _, loaded := manager.loadedSessions[sessionID]; loaded {
 		return nil
 	}
-	if err := inspectPrivateDirectory(manager.jobHome, "job home"); err != nil {
+	if err := privatefs.InspectDirectory(manager.jobHome, "job home"); err != nil {
 		return err
 	}
+	privatefs.TryRestrictPermissions(manager.jobHome)
 
 	home := sessionJobHome(manager.jobHome, sessionID)
 	entries, err := os.ReadDir(home)
@@ -203,12 +205,14 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 	}
 	startedAt := time.Now().UTC()
 	jobDir := jobDirectory(manager.jobHome, spec.sessionID, id)
-	if err := ensurePrivateDirectory(manager.jobHome, "job home"); err != nil {
+	if err := privatefs.EnsureDirectory(manager.jobHome, "job home"); err != nil {
 		return nil, err
 	}
-	if err := ensurePrivateDirectory(filepath.Dir(jobDir), "session job home"); err != nil {
+	privatefs.TryRestrictPermissions(manager.jobHome)
+	if err := privatefs.EnsureDirectory(filepath.Dir(jobDir), "session job home"); err != nil {
 		return nil, err
 	}
+	privatefs.TryRestrictPermissions(filepath.Dir(jobDir))
 	if err := os.Mkdir(jobDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create durable job: %w", err)
 	}

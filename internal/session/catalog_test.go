@@ -133,6 +133,32 @@ func TestCatalogSkipsUnsupportedSessionSchema(t *testing.T) {
 	}
 }
 
+func TestOpenManagedRepairsSharedJournalPermissions(t *testing.T) {
+	home := t.TempDir()
+	store, id, err := Create(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "sessions", id, journalName)
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenManaged(home, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("journal mode = %v, %v", info, err)
+	}
+}
+
 func createCatalogSession(t *testing.T, home, workspace, input string) string {
 	t.Helper()
 	store, id, err := Create(home)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/privatefs"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/toolpolicy"
 )
@@ -492,9 +493,10 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 		return nil, err
 	}
 	parentDir := filepath.Join(supervisor.home, "agents", parentID)
-	if err := ensurePrivateDirectory(parentDir, "child agent parent directory"); err != nil {
+	if err := privatefs.EnsureDirectory(parentDir, "child agent parent directory"); err != nil {
 		return nil, err
 	}
+	privatefs.TryRestrictPermissions(parentDir)
 	stagingDir, err := os.MkdirTemp(parentDir, "."+agentID+"-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary child agent directory: %w", err)
@@ -1341,16 +1343,10 @@ func readChildMetadata(path string) (childMetadata, error) {
 }
 
 func inspectChildStateFile(path, label string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("inspect child agent %s: %w", label, err)
+	if err := privatefs.RequireRegularFile(path, "child agent "+label); err != nil {
+		return err
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("child agent %s is not a regular file", label)
-	}
-	if permissions := info.Mode().Perm(); permissions&0o077 != 0 {
-		return fmt.Errorf("child agent %s permissions %04o grant access to group or other users; expected 0600 or stricter", label, permissions)
-	}
+	privatefs.TryRestrictPermissions(path)
 	return nil
 }
 

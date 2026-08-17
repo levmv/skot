@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/levmv/skot/internal/privatefs"
 	"golang.org/x/sys/unix"
 )
 
@@ -28,9 +29,7 @@ func acquireInteractiveLock(path string, timeout time.Duration) (*os.File, error
 	if info.Mode&unix.S_IFMT != unix.S_IFREG {
 		return fail(errors.New("interactive state lock must be a regular file"))
 	}
-	if permissions := os.FileMode(info.Mode).Perm(); permissions&0o077 != 0 {
-		return fail(fmt.Errorf("interactive state lock permissions %04o grant access to group or other users; expected 0600 or stricter", permissions))
-	}
+	privatefs.TryRestrictOpenFile(file)
 	deadline := time.Now().Add(timeout)
 	for {
 		err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)

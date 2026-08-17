@@ -66,7 +66,7 @@ func TestInteractiveStoreReadPreservesStricterPermissions(t *testing.T) {
 	}
 }
 
-func TestInteractiveStoreRejectsSharedLockPermissionsWithoutChangingThem(t *testing.T) {
+func TestInteractiveStoreRepairsSharedLockPermissions(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	path := filepath.Join(home, "interactive.lock")
 	if err := os.WriteFile(path, nil, 0o640); err != nil {
@@ -76,11 +76,11 @@ func TestInteractiveStoreRejectsSharedLockPermissionsWithoutChangingThem(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetThemeSelection("dark"); err == nil || !strings.Contains(err.Error(), "permissions 0640") {
-		t.Fatalf("error = %v", err)
+	if err := store.SetThemeSelection("dark"); err != nil {
+		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o640 {
+	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("lock mode = %v, %v", info, err)
 	}
 }

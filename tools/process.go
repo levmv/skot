@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/privatefs"
 )
 
 const (
@@ -306,13 +307,15 @@ func (manager *ProcessManager) ensureToolHome(policy *filesystemPolicy) error {
 	if err != nil {
 		return err
 	}
-	if err := ensurePrivateDirectory(toolHome, "tool home"); err != nil {
+	if err := privatefs.EnsureDirectory(toolHome, "tool home"); err != nil {
 		return err
 	}
+	privatefs.TryRestrictPermissions(toolHome)
 	toolTemp := WorkspaceToolTemp(toolHome)
-	if err := ensurePrivateDirectory(toolTemp, "tool temp"); err != nil {
+	if err := privatefs.EnsureDirectory(toolTemp, "tool temp"); err != nil {
 		return err
 	}
+	privatefs.TryRestrictPermissions(toolTemp)
 	return nil
 }
 

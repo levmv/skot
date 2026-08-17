@@ -47,12 +47,14 @@ func Open(path string) (*Store, error) {
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("inspect journal permissions: %w", err)
+		return nil, fmt.Errorf("inspect journal: %w", err)
 	}
-	if permissions := info.Mode().Perm(); permissions&0o077 != 0 {
+	if !info.Mode().IsRegular() {
 		_ = file.Close()
-		return nil, fmt.Errorf("journal permissions %04o grant access to group or other users; expected 0600 or stricter", permissions)
+		return nil, errors.New("journal must be a regular file")
 	}
+	// Open also backs an explicit -journal path, whose existing mode belongs to
+	// the user. Managed callers tighten their journals before opening them here.
 	if err := acquireStoreLock(file); err != nil {
 		_ = file.Close()
 		if errors.Is(err, errStoreWouldBlock) {

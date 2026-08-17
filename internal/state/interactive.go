@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/levmv/skot/internal/privatefs"
 	"github.com/levmv/skot/internal/session"
 )
 
@@ -85,7 +86,7 @@ func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
 	if workspace == "." || !filepath.IsAbs(workspace) {
 		return nil, errors.New("interactive workspace must be an absolute path")
 	}
-	if err := inspectStateDirectory(dir, "Skot home"); err != nil {
+	if err := inspectHome(dir); err != nil {
 		return nil, err
 	}
 	store := &InteractiveStore{
@@ -93,9 +94,10 @@ func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
 		lockPath: filepath.Join(dir, "interactive.lock"), workspace: workspace,
 		lockTimeout: defaultLockTimeout,
 	}
-	if err := inspectStoreFile(store.path, interactiveStateLabel); err != nil {
+	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
 		return nil, err
 	}
+	privatefs.TryRestrictPermissions(store.path)
 	if _, err := store.loadDocument(); err != nil {
 		return nil, err
 	}
@@ -105,9 +107,10 @@ func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
 func (store *InteractiveStore) Settings() (InteractiveSettings, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := inspectStoreFile(store.path, interactiveStateLabel); err != nil {
+	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
 		return InteractiveSettings{}, err
 	}
+	privatefs.TryRestrictPermissions(store.path)
 	document, err := store.loadDocument()
 	if err != nil {
 		return InteractiveSettings{}, err
@@ -188,7 +191,7 @@ func (store *InteractiveStore) SetThemeSelection(value string) error {
 func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (returnErr error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := ensureStateDirectory(store.dir, "Skot home"); err != nil {
+	if err := ensureHome(store.dir); err != nil {
 		return err
 	}
 	lock, err := acquireInteractiveLock(store.lockPath, store.lockTimeout)
@@ -196,9 +199,10 @@ func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (r
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, releaseInteractiveLock(lock)) }()
-	if err := inspectStoreFile(store.path, interactiveStateLabel); err != nil {
+	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
 		return err
 	}
+	privatefs.TryRestrictPermissions(store.path)
 	document, err := store.loadDocument()
 	if err != nil {
 		return err

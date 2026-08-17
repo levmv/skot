@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/levmv/skot/internal/privatefs"
 	"github.com/levmv/skot/internal/session"
 )
 
@@ -108,16 +109,18 @@ func Open(home string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := inspectStateDirectory(dir, "Skot home"); err != nil {
+	if err := inspectHome(dir); err != nil {
 		return nil, err
 	}
 	store := &Store{dir: dir, path: filepath.Join(dir, "config.json"), authPath: filepath.Join(dir, "auth.json")}
-	if err := inspectStoreFile(store.path, "config file"); err != nil {
+	if err := privatefs.InspectRegularFile(store.path, "config file"); err != nil {
 		return nil, err
 	}
-	if err := inspectStoreFile(store.authPath, "credential store"); err != nil {
+	privatefs.TryRestrictPermissions(store.path)
+	if err := privatefs.InspectRegularFile(store.authPath, "credential store"); err != nil {
 		return nil, err
 	}
+	privatefs.TryRestrictPermissions(store.authPath)
 	if _, err := store.Settings(); err != nil {
 		return nil, err
 	}
@@ -267,7 +270,7 @@ func saveJSONAtomic(dir, path, label string, value any) error {
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", label, err)
 	}
-	if err := ensureStateDirectory(dir, "Skot home"); err != nil {
+	if err := ensureHome(dir); err != nil {
 		return err
 	}
 	file, err := os.CreateTemp(dir, "."+label+"-*.tmp")
@@ -308,44 +311,6 @@ func syncDirectory(path string) error {
 	}
 	defer directory.Close()
 	return directory.Sync()
-}
-
-func inspectStoreFile(path, label string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", label, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("%s must be a regular file", label)
-	}
-	if permissions := info.Mode().Perm(); permissions&0o077 != 0 {
-		return fmt.Errorf("%s permissions %04o grant access to group or other users; expected 0600 or stricter", label, permissions)
-	}
-	return nil
-}
-
-func inspectStateDirectory(path, label string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", label, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("%s must be a directory", label)
-	}
-	return nil
-}
-
-func ensureStateDirectory(path, label string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", label, err)
-	}
-	return inspectStateDirectory(path, label)
 }
 
 func normalizeProvider(provider string) string {

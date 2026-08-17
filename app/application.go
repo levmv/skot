@@ -43,7 +43,6 @@ type applicationConfig struct {
 	systemPrompt      string
 	root              string
 	home              string
-	toolHome          string
 	protectedPaths    []string
 	protection        *workspacetools.ProtectedPathPolicy
 	baseURL           string
@@ -780,14 +779,24 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 	currentSession := application.state.session
 	application.mu.RUnlock()
 	root := application.config.root
-	toolHome := application.config.toolHome
 	protectedPaths := application.config.protectedPaths
 	if processes == nil || currentSession == nil || currentSession.runtime == nil {
 		return fmt.Errorf("application is closed")
 	}
 	runtime := currentSession.runtime
 
-	security := buildSecurityStateWithToolHome(ctx, requested, root, toolHome, protectedPaths)
+	security := resolveSecurityState(ctx, requested, protectedPaths)
+	if toolSetNeedsProcessBoundary(application.config.toolSets, application.config.programTools, application.CurrentToolSet()) {
+		toolHome := ""
+		if security.EffectiveScope == workspacetools.ScopeWorkspace {
+			var err error
+			toolHome, err = processes.ToolHome()
+			if err != nil {
+				return fmt.Errorf("cannot switch scope: %w", err)
+			}
+		}
+		security = buildProcessSecurityState(ctx, security, root, toolHome, protectedPaths)
+	}
 	if err := validateSecurity(security); err != nil {
 		return fmt.Errorf("cannot switch scope: %w", err)
 	}

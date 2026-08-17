@@ -44,9 +44,14 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open journal: %w", err)
 	}
-	if err := file.Chmod(0o600); err != nil {
+	info, err := file.Stat()
+	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("restrict journal permissions: %w", err)
+		return nil, fmt.Errorf("inspect journal permissions: %w", err)
+	}
+	if permissions := info.Mode().Perm(); permissions&0o077 != 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("journal permissions %04o grant access to group or other users; expected 0600 or stricter", permissions)
 	}
 	if err := acquireStoreLock(file); err != nil {
 		_ = file.Close()

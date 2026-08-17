@@ -48,11 +48,8 @@ func Create(home string) (*Store, string, error) {
 		return nil, "", err
 	}
 	sessionsDir := filepath.Join(home, "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("create sessions directory: %w", err)
-	}
-	if err := os.Chmod(sessionsDir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("restrict sessions directory: %w", err)
+	if err := ensurePrivateDirectory(sessionsDir, "sessions directory"); err != nil {
+		return nil, "", err
 	}
 	for attempt := 0; attempt < 8; attempt++ {
 		id, err := newSessionID()

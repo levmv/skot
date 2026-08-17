@@ -945,6 +945,72 @@ func TestOpenRejectsNegativeModelRequestDurations(t *testing.T) {
 	}
 }
 
+func TestOpenHeadlessReadOnlyDoesNotProvisionProcessCapabilities(t *testing.T) {
+	for _, scope := range []string{string(workspacetools.ScopeMachine), string(workspacetools.ScopeWorkspace)} {
+		t.Run(scope, func(t *testing.T) {
+			homeParent := t.TempDir()
+			home := filepath.Join(homeParent, "home")
+			t.Setenv("PATH", "/definitely-missing")
+			t.Setenv("HOME", "")
+			t.Setenv("XDG_CACHE_HOME", "")
+			application, err := Open(context.Background(), Config{
+				Home: home, Root: t.TempDir(), ModelURI: "ollama/test", ModelExplicit: true,
+				ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true, Scope: scope, ScopeExplicit: true,
+			})
+			if err != nil {
+				t.Fatalf("read-only startup depends on process environment: %v", err)
+			}
+			if err := application.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"jobs"} {
+				if _, err := os.Stat(filepath.Join(home, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("read-only startup created %s: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenInvalidToolSetLeavesMissingHomeUntouched(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	_, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), ModelURI: "ollama/test", ModelExplicit: true,
+		ToolSet: "invalid", ToolSetExplicit: true, Scope: string(workspacetools.ScopeMachine), ScopeExplicit: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown tool set") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid tool set created home: %v", err)
+	}
+}
+
+func TestOpenReadOnlyValidationPreservesExistingModes(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(home, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
+	_, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), ModelURI: "ollama/test", ModelExplicit: true,
+		ToolSet: "invalid", ToolSetExplicit: true, Scope: string(workspacetools.ScopeMachine), ScopeExplicit: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown tool set") {
+		t.Fatalf("error = %v", err)
+	}
+	for path, want := range map[string]os.FileMode{home: 0o500, configPath: 0o400} {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Mode().Perm() != want {
+			t.Fatalf("mode %s = %v, %v; want %04o", path, info, statErr, want)
+		}
+	}
+}
+
 func TestApplicationRejectsUnknownScopeWithoutChangingState(t *testing.T) {
 	application := &Application{state: applicationState{requestedScope: workspacetools.ScopeAuto}}
 	if err := application.SwitchScope(context.Background(), "magic"); err == nil {

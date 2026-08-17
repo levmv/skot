@@ -492,19 +492,12 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 		return nil, err
 	}
 	parentDir := filepath.Join(supervisor.home, "agents", parentID)
-	if err := os.MkdirAll(parentDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create child agent parent directory: %w", err)
-	}
-	if err := os.Chmod(parentDir, 0o700); err != nil {
-		return nil, fmt.Errorf("restrict child agent parent directory: %w", err)
+	if err := ensurePrivateDirectory(parentDir, "child agent parent directory"); err != nil {
+		return nil, err
 	}
 	stagingDir, err := os.MkdirTemp(parentDir, "."+agentID+"-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary child agent directory: %w", err)
-	}
-	if err := os.Chmod(stagingDir, 0o700); err != nil {
-		_ = os.Remove(stagingDir)
-		return nil, fmt.Errorf("restrict temporary child agent directory: %w", err)
 	}
 	metadata := childMetadata{
 		Version: childMetadataVersion, AgentID: agentID, ParentSessionID: parentID,
@@ -1355,8 +1348,8 @@ func inspectChildStateFile(path, label string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("child agent %s is not a regular file", label)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("restrict child agent %s: %w", label, err)
+	if permissions := info.Mode().Perm(); permissions&0o077 != 0 {
+		return fmt.Errorf("child agent %s permissions %04o grant access to group or other users; expected 0600 or stricter", label, permissions)
 	}
 	return nil
 }

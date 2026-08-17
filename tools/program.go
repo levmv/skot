@@ -424,7 +424,7 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 				if policy.protection.contains(program) {
 					return nil, errors.New("program is protected")
 				}
-				return sandboxedProgramCommand(program, declaration.Command, workdir, policy.processBoundary(manager.toolHome), declaration.Env)
+				return sandboxedProgramCommand(program, declaration.Command, workdir, policy.processBoundary(manager.currentToolHome()), declaration.Env)
 			},
 		})
 		if err != nil {

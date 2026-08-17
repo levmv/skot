@@ -44,6 +44,9 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 	if _, loaded := manager.loadedSessions[sessionID]; loaded {
 		return nil
 	}
+	if err := inspectPrivateDirectory(manager.jobHome, "job home"); err != nil {
+		return err
+	}
 
 	home := sessionJobHome(manager.jobHome, sessionID)
 	entries, err := os.ReadDir(home)
@@ -196,8 +199,11 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 	}
 	startedAt := time.Now().UTC()
 	jobDir := jobDirectory(manager.jobHome, spec.sessionID, id)
-	if err := os.MkdirAll(filepath.Dir(jobDir), 0o700); err != nil {
-		return nil, fmt.Errorf("create session job home: %w", err)
+	if err := ensurePrivateDirectory(manager.jobHome, "job home"); err != nil {
+		return nil, err
+	}
+	if err := ensurePrivateDirectory(filepath.Dir(jobDir), "session job home"); err != nil {
+		return nil, err
 	}
 	if err := os.Mkdir(jobDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create durable job: %w", err)

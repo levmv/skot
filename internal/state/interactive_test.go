@@ -47,6 +47,44 @@ func TestInteractiveStoreReadOnlyOpenCreatesNeitherStateNorLock(t *testing.T) {
 	}
 }
 
+func TestInteractiveStoreReadPreservesStricterPermissions(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	path := filepath.Join(home, "interactive.json")
+	if err := os.WriteFile(path, []byte(`{"version":1}`), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Settings(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o400 {
+		t.Fatalf("interactive mode = %v, %v", info, err)
+	}
+}
+
+func TestInteractiveStoreRejectsSharedLockPermissionsWithoutChangingThem(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	path := filepath.Join(home, "interactive.lock")
+	if err := os.WriteFile(path, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetThemeSelection("dark"); err == nil || !strings.Contains(err.Error(), "permissions 0640") {
+		t.Fatalf("error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("lock mode = %v, %v", info, err)
+	}
+}
+
 func TestInteractiveStorePersistsExplicitProviderDefaultAndWorkspaceMap(t *testing.T) {
 	home, firstRoot, secondRoot := t.TempDir(), t.TempDir(), t.TempDir()
 	if _, err := Open(home); err != nil {

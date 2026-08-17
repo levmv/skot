@@ -37,6 +37,11 @@ func (state securityState) snapshot() agent.ScopeSnapshot {
 }
 
 func buildSecurityStateWithToolHome(ctx context.Context, requested workspacetools.Scope, root, toolHome string, protectedSets ...[]string) securityState {
+	state := resolveSecurityState(ctx, requested, protectedSets...)
+	return buildProcessSecurityState(ctx, state, root, toolHome, protectedSets...)
+}
+
+func resolveSecurityState(ctx context.Context, requested workspacetools.Scope, protectedSets ...[]string) securityState {
 	container := ""
 	if requested == workspacetools.ScopeAuto {
 		container = detectContainer(ctx)
@@ -50,8 +55,16 @@ func buildSecurityStateWithToolHome(ctx context.Context, requested workspacetool
 		RequestedScope: requested, EffectiveScope: effective, Container: container,
 		ProtectedPathCount: len(protected),
 	}
+	return state
+}
+
+func buildProcessSecurityState(ctx context.Context, state securityState, root, toolHome string, protectedSets ...[]string) securityState {
+	var protected []string
+	if len(protectedSets) > 0 {
+		protected = append([]string(nil), protectedSets[0]...)
+	}
 	boundary := workspacetools.Boundary{
-		Scope: effective, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
+		Scope: state.EffectiveScope, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
 	}
 	state.BackendRequired = boundary.NeedsBackend()
 	if err := boundary.ValidateLayout(); err != nil {

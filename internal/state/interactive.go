@@ -85,10 +85,8 @@ func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
 	if workspace == "." || !filepath.IsAbs(workspace) {
 		return nil, errors.New("interactive workspace must be an absolute path")
 	}
-	if info, err := os.Stat(dir); err != nil {
-		return nil, fmt.Errorf("inspect skot home: %w", err)
-	} else if !info.IsDir() {
-		return nil, errors.New("skot home must be a directory")
+	if err := inspectStateDirectory(dir, "Skot home"); err != nil {
+		return nil, err
 	}
 	store := &InteractiveStore{
 		dir: dir, path: filepath.Join(dir, "interactive.json"),
@@ -190,6 +188,9 @@ func (store *InteractiveStore) SetThemeSelection(value string) error {
 func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (returnErr error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if err := ensureStateDirectory(store.dir, "Skot home"); err != nil {
+		return err
+	}
 	lock, err := acquireInteractiveLock(store.lockPath, store.lockTimeout)
 	if err != nil {
 		return err

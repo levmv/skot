@@ -11,7 +11,7 @@ import (
 func TestStoreLoadsAuthoredConfigAndKeepsLegacyInteractiveFieldsInert(t *testing.T) {
 	home := t.TempDir()
 	raw := `{"tool_sets":{"review":["read","grep"]},"agent_models":["openai/gpt-5-mini"],"protected_paths":[".env","~/private"],"model":"old/model","reasoning_effort":"high","recent_models":["older/model"],"tool_set":"edit","scope":"machine","theme":"dark"}`
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(raw), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(raw), 0o400); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(home)
@@ -46,8 +46,23 @@ func TestStoreLoadsAuthoredConfigAndKeepsLegacyInteractiveFieldsInert(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if info.Mode().Perm() != 0o400 {
 		t.Fatalf("config mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestStoreRejectsSharedConfigPermissionsWithoutChangingThem(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(home); err == nil || !strings.Contains(err.Error(), "permissions 0640") {
+		t.Fatalf("error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("config mode = %v, %v", info, err)
 	}
 }
 

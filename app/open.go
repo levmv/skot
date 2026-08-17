@@ -57,10 +57,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
 	}
-	toolHomeRoot, err := workspacetools.DefaultToolHomeRoot()
-	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
-	}
 	var notices []string
 	theme := state.ThemeAuto
 	var interactiveStore *state.InteractiveStore
@@ -112,14 +108,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 
 	masker := newSecretMasker(settingsStore)
-	toolHome := workspacetools.WorkspaceToolHome(toolHomeRoot, root)
-	security := buildSecurityStateWithToolHome(ctx, scope, root, toolHome, protection.Paths())
-	if err := validateSecurity(security); err != nil {
-		return nil, agent.MarkInvalidRequest(err)
-	}
-	if notice := protectedPathsNotice(security, root, protection.Paths()); notice != "" {
-		notices = append(notices, notice)
-	}
+	security := resolveSecurityState(ctx, scope, protection.Paths())
 	access, err := workspacetools.NewFilesystemAccess(root, security.EffectiveScope, protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize filesystem policy: %w", err))
@@ -133,7 +122,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
 	instructions := effectiveInstructions(config.SystemPrompt, root, projectInstructions)
-	processes, err := workspacetools.NewProcessManagerWithAccess(access, home, toolHomeRoot)
+	processes, err := workspacetools.NewProcessManagerWithAccess(access, home, "")
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
@@ -166,6 +155,22 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return resources.fail(agent.MarkInvalidRequest(err))
 	}
 	config.ToolSet = selectedToolSet
+	if config.Interactive || toolSetNeedsProcessBoundary(toolSets, programSnapshots, config.ToolSet) {
+		toolHome := ""
+		if security.EffectiveScope == workspacetools.ScopeWorkspace {
+			toolHome, err = processes.ToolHome()
+			if err != nil {
+				return resources.fail(agent.MarkInvalidRequest(err))
+			}
+		}
+		security = buildProcessSecurityState(ctx, security, root, toolHome, protection.Paths())
+		if err := validateSecurity(security); err != nil {
+			return resources.fail(agent.MarkInvalidRequest(err))
+		}
+	}
+	if notice := protectedPathsNotice(security, root, protection.Paths()); notice != "" {
+		notices = append(notices, notice)
+	}
 
 	opened, err := openInitialSession(config, home, root)
 	resources.session = newLiveSession(opened.id, nil, opened.journal, opened.managed)
@@ -277,7 +282,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			systemPrompt:      config.SystemPrompt,
 			root:              root,
 			home:              home,
-			toolHome:          toolHome,
 			protectedPaths:    protection.Paths(),
 			protection:        protection,
 			baseURL:           config.BaseURL,

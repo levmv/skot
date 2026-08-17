@@ -28,8 +28,8 @@ func acquireInteractiveLock(path string, timeout time.Duration) (*os.File, error
 	if info.Mode&unix.S_IFMT != unix.S_IFREG {
 		return fail(errors.New("interactive state lock must be a regular file"))
 	}
-	if err := unix.Fchmod(fd, 0o600); err != nil {
-		return fail(fmt.Errorf("restrict interactive state lock: %w", err))
+	if permissions := os.FileMode(info.Mode).Perm(); permissions&0o077 != 0 {
+		return fail(fmt.Errorf("interactive state lock permissions %04o grant access to group or other users; expected 0600 or stricter", permissions))
 	}
 	deadline := time.Now().Add(timeout)
 	for {

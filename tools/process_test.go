@@ -96,12 +96,34 @@ func TestProcessManagerCreatesPrivateToolTemp(t *testing.T) {
 	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scope switch created tool home: %v", err)
+	}
+	runProcessResult(t, manager.bash, bashArgs{Command: "true"})
 	info, err := os.Stat(WorkspaceToolTemp(manager.toolHome))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info.IsDir() || info.Mode().Perm() != 0o700 {
 		t.Fatalf("tool temp mode = %v", info.Mode())
+	}
+}
+
+func TestProcessManagerWithoutExplicitToolRootHasNoAmbientCacheDependency(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	manager, err := NewProcessManagerWithAccess(access, home, "")
+	if err != nil {
+		t.Fatalf("unused cache root blocked process manager: %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if _, err := os.Stat(filepath.Join(home, "jobs")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("constructor created job home: %v", err)
 	}
 }
 

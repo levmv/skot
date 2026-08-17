@@ -79,10 +79,12 @@ type CompletionEvent struct {
 type ProcessManager struct {
 	access                 *FilesystemAccess
 	toolHome               string
+	toolHomeRoot           string
 	jobHome                string
 	logLimit               int64
 	bashYield              time.Duration
 	hiddenModelEnvironment map[string]struct{}
+	toolHomeMu             sync.Mutex
 
 	mu       sync.Mutex
 	jobs     map[string]*processJob
@@ -239,24 +241,20 @@ func NewProcessManagerWithAccess(access *FilesystemAccess, stateHome, toolHomeRo
 		return nil, errors.New("filesystem access is uninitialized")
 	}
 	stateHome = canonicalSandboxPath(stateHome)
-	if _, err := exec.LookPath("bash"); err != nil {
-		return nil, errors.New("bash is unavailable")
-	}
-	toolHome := canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, policy.workspace))
-	layout := policy.processBoundary(toolHome)
-	if err := layout.ValidateLayout(); err != nil {
-		return nil, err
-	}
 	jobHome := filepath.Join(stateHome, "jobs")
-	if err := os.MkdirAll(jobHome, 0o700); err != nil {
-		return nil, fmt.Errorf("create job home: %w", err)
-	}
-	if err := os.Chmod(jobHome, 0o700); err != nil {
-		return nil, fmt.Errorf("restrict job home: %w", err)
+	toolHomeRoot = strings.TrimSpace(toolHomeRoot)
+	toolHome := ""
+	if toolHomeRoot != "" {
+		toolHomeRoot = canonicalSandboxPath(toolHomeRoot)
+		toolHome = canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, policy.workspace))
+		if err := policy.processBoundary(toolHome).ValidateLayout(); err != nil {
+			return nil, err
+		}
 	}
 	return &ProcessManager{
 		access:         access,
 		toolHome:       toolHome,
+		toolHomeRoot:   toolHomeRoot,
 		jobHome:        jobHome,
 		logLimit:       defaultCommandLogLimit,
 		bashYield:      defaultBashYield,
@@ -267,19 +265,53 @@ func NewProcessManagerWithAccess(access *FilesystemAccess, stateHome, toolHomeRo
 	}, nil
 }
 
-func (manager *ProcessManager) ensureToolHome() error {
-	if err := os.MkdirAll(manager.toolHome, 0o700); err != nil {
-		return fmt.Errorf("create tool home: %w", err)
+// ToolHome resolves the disposable workspace home without creating it. An
+// empty toolHomeRoot passed to the constructor selects the platform cache root
+// only when a process capability actually needs the path.
+func (manager *ProcessManager) ToolHome() (string, error) {
+	policy := manager.access.snapshot()
+	return manager.resolveToolHome(policy)
+}
+
+func (manager *ProcessManager) resolveToolHome(policy *filesystemPolicy) (string, error) {
+	manager.toolHomeMu.Lock()
+	defer manager.toolHomeMu.Unlock()
+	if manager.toolHome == "" {
+		root := manager.toolHomeRoot
+		if root == "" {
+			var err error
+			root, err = DefaultToolHomeRoot()
+			if err != nil {
+				return "", err
+			}
+			root = canonicalSandboxPath(root)
+			manager.toolHomeRoot = root
+		}
+		manager.toolHome = canonicalSandboxPath(WorkspaceToolHome(root, policy.workspace))
 	}
-	if err := os.Chmod(manager.toolHome, 0o700); err != nil {
-		return fmt.Errorf("restrict tool home: %w", err)
+	if err := policy.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
+		return "", err
 	}
-	toolTemp := WorkspaceToolTemp(manager.toolHome)
-	if err := os.MkdirAll(toolTemp, 0o700); err != nil {
-		return fmt.Errorf("create tool temp: %w", err)
+	return manager.toolHome, nil
+}
+
+func (manager *ProcessManager) currentToolHome() string {
+	manager.toolHomeMu.Lock()
+	defer manager.toolHomeMu.Unlock()
+	return manager.toolHome
+}
+
+func (manager *ProcessManager) ensureToolHome(policy *filesystemPolicy) error {
+	toolHome, err := manager.resolveToolHome(policy)
+	if err != nil {
+		return err
 	}
-	if err := os.Chmod(toolTemp, 0o700); err != nil {
-		return fmt.Errorf("restrict tool temp: %w", err)
+	if err := ensurePrivateDirectory(toolHome, "tool home"); err != nil {
+		return err
+	}
+	toolTemp := WorkspaceToolTemp(toolHome)
+	if err := ensurePrivateDirectory(toolTemp, "tool temp"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -379,7 +411,7 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 				command.Env = os.Environ()
 				return command, nil
 			}
-			return sandboxedBashCommand(args.Command, workdir, policy.processBoundary(manager.toolHome))
+			return sandboxedBashCommand(args.Command, workdir, policy.processBoundary(manager.currentToolHome()))
 		},
 	})
 	if err != nil {
@@ -539,13 +571,13 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		return nil, fmt.Errorf("unknown process origin %d", spec.origin)
 	}
 	if spec.origin == processOriginModel {
-		if err := policy.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
-			return nil, err
-		}
 		if policy.scope == ScopeWorkspace {
-			if err := manager.ensureToolHome(); err != nil {
+			if err := manager.ensureToolHome(policy); err != nil {
 				return nil, err
 			}
+		}
+		if err := policy.processBoundary(manager.currentToolHome()).ValidateLayout(); err != nil {
+			return nil, err
 		}
 	}
 	if spec.build == nil {
@@ -803,11 +835,8 @@ func (manager *ProcessManager) SetScopeAfter(scope Scope, beforeApply func() err
 	if err != nil {
 		return err
 	}
-	if err := next.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
-		return err
-	}
-	if scope == ScopeWorkspace {
-		if err := manager.ensureToolHome(); err != nil {
+	if toolHome := manager.currentToolHome(); toolHome != "" {
+		if err := next.processBoundary(toolHome).ValidateLayout(); err != nil {
 			return err
 		}
 	}

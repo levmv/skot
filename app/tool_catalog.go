@@ -110,6 +110,20 @@ func toolSetTools(toolSets toolpolicy.ToolSets, tools []agent.Tool, credentials 
 	return filtered, nil
 }
 
+func toolSetNeedsProcessBoundary(toolSets toolpolicy.ToolSets, programs []agent.ProgramToolSnapshot, toolSet string) bool {
+	processTools := make(map[string]struct{}, len(programs)+1)
+	processTools["bash"] = struct{}{}
+	for _, program := range programs {
+		processTools[program.Name] = struct{}{}
+	}
+	for _, name := range toolSets.ToolNames(toolSet) {
+		if _, exists := processTools[name]; exists {
+			return true
+		}
+	}
+	return false
+}
+
 func webCredentialLookup(credentials *state.Store) workspacetools.WebCredentialLookup {
 	return func(provider string) (string, error) {
 		token, _, err := credentialForProvider(credentials, provider)

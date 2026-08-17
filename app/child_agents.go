@@ -879,21 +879,14 @@ func (supervisor *childSupervisor) openChildLocked(ctx context.Context, dir, par
 	fail := func(cause error) (*childAgent, error) {
 		return nil, errors.Join(cause, journal.Close())
 	}
-	if err := agent.Reconcile(ctx, journal); err != nil {
+	sessionState, records, err := agent.Reconcile(ctx, journal)
+	if err != nil {
 		return fail(fmt.Errorf("reconcile journal: %w", err))
 	}
-	records, err := journal.Records(ctx)
-	if err != nil {
-		return fail(fmt.Errorf("read journal: %w", err))
-	}
-	replayed, err := agent.Replay(records)
-	if err != nil {
-		return fail(fmt.Errorf("replay journal: %w", err))
-	}
-	runs := restoreChildRuns(records, replayed.Blocks)
+	runs := restoreChildRuns(records, sessionState.Blocks)
 	runtime, err := builder.build(ctx, runtimeBuildParams{
 		journal: journal, sessionID: metadata.SessionID, modelURI: metadata.Model,
-		reasoningEffort: metadata.ReasoningEffort, instructions: instructions, resumedState: &replayed,
+		reasoningEffort: metadata.ReasoningEffort, instructions: instructions, resumedState: &sessionState,
 	})
 	if err != nil {
 		return fail(err)

@@ -1236,7 +1236,7 @@ func TestReconcileRejectsFinishedRunWithPendingTool(t *testing.T) {
 	})
 	mustAppend(t, journal, RecordRunFinished, RunFinishedRecord{RunID: runID, Status: RunCancelled, Error: context.Canceled.Error()})
 
-	if err := Reconcile(context.Background(), journal); err == nil || !strings.Contains(err.Error(), "with pending tool call") {
+	if _, _, err := Reconcile(context.Background(), journal); err == nil || !strings.Contains(err.Error(), "with pending tool call") {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	if records := journal.snapshot(); len(records) != 6 {
@@ -1260,10 +1260,10 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 		Items:   []Item{{Kind: ItemToolCall, ResponseID: "response_interrupted", ToolCall: &call}},
 	})
 
-	if err := Reconcile(context.Background(), journal); err != nil {
+	state, records, err := Reconcile(context.Background(), journal)
+	if err != nil {
 		t.Fatal(err)
 	}
-	records := journal.snapshot()
 	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordRunFinished)
 	result, err := decodeRecord[ToolResultRecord](records[5])
 	if err != nil {
@@ -1278,10 +1278,6 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 	}
 	if finished.Status != RunInterrupted {
 		t.Fatalf("finished = %#v", finished)
-	}
-	state, err := Replay(records)
-	if err != nil {
-		t.Fatal(err)
 	}
 	if len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 {
 		t.Fatalf("unfinished state after reconciliation = %#v", state)
@@ -1363,7 +1359,7 @@ func TestRuntimeJournalFailureLeavesRecoverableUnfinishedRun(t *testing.T) {
 		!strings.Contains(err.Error(), "restart Skot") || !strings.Contains(err.Error(), "/clear") {
 		t.Fatalf("unfinished-run guidance = %v", err)
 	}
-	if err := Reconcile(context.Background(), journal); err != nil {
+	if _, _, err := Reconcile(context.Background(), journal); err != nil {
 		t.Fatal(err)
 	}
 	state, err := Replay(journal.snapshot())

@@ -158,32 +158,40 @@ func validateProviderOwnership(item Item, selection ModelSelectedRecord) error {
 	return nil
 }
 
-func Reconcile(ctx context.Context, journal Journal) error {
+// Reconcile validates a journal, marks unfinished work as interrupted, and
+// returns the resulting state together with the records used to derive it.
+func Reconcile(ctx context.Context, journal Journal) (State, []Record, error) {
 	records, err := journal.Records(ctx)
 	if err != nil {
-		return fmt.Errorf("read journal for reconciliation: %w", err)
+		return State{}, nil, fmt.Errorf("read journal for reconciliation: %w", err)
 	}
-	state, err := Replay(records)
+	reducer, err := reduceRecords(records)
 	if err != nil {
-		return err
+		return State{}, nil, err
 	}
-	for _, pending := range state.PendingTools {
+	for len(reducer.state.PendingTools) != 0 {
+		pending := reducer.state.PendingTools[0]
 		result := ToolResult{
 			CallID:  pending.Call.ID,
 			Content: fmt.Sprintf("tool %s outcome is unknown after an interrupted session; the call was not replayed", pending.Call.Name),
 			Error:   true,
 			Unknown: true,
 		}
-		if _, err := appendRecord(ctx, journal, RecordToolResult, ToolResultRecord{RunID: pending.RunID, Result: result}); err != nil {
-			return err
+		record, err := appendRecordAndApply(ctx, journal, reducer, RecordToolResult, ToolResultRecord{RunID: pending.RunID, Result: result})
+		if err != nil {
+			return State{}, nil, err
 		}
+		records = append(records, record)
 	}
-	for _, runID := range state.ActiveRuns {
-		if _, err := appendRecord(ctx, journal, RecordRunFinished, RunFinishedRecord{RunID: runID, Status: RunInterrupted}); err != nil {
-			return err
+	for len(reducer.state.ActiveRuns) != 0 {
+		runID := reducer.state.ActiveRuns[0]
+		record, err := appendRecordAndApply(ctx, journal, reducer, RecordRunFinished, RunFinishedRecord{RunID: runID, Status: RunInterrupted})
+		if err != nil {
+			return State{}, nil, err
 		}
+		records = append(records, record)
 	}
-	return nil
+	return reducer.state, records, nil
 }
 
 func unfinishedWorkError(action string) error {

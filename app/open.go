@@ -197,32 +197,25 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if journal.TailRepaired() {
 		notices = append(notices, "repaired an incomplete journal tail; the interrupted final record was discarded")
 	}
-	if err := agent.Reconcile(ctx, journal); err != nil {
+	sessionState, _, err := agent.Reconcile(ctx, journal)
+	if err != nil {
 		return cleanup(fmt.Errorf("reconcile session: %w", err))
 	}
 	runtimeSessionID := sessionID
-	var replayedState *agent.State
+	var resumedState *agent.State
 	if runtimeSessionID == "" || config.Resume {
-		records, err := journal.Records(ctx)
-		if err != nil {
-			return cleanup(fmt.Errorf("read resumed session: %w", err))
-		}
-		replayed, err := agent.Replay(records)
-		if err != nil {
-			return cleanup(fmt.Errorf("replay resumed session: %w", err))
-		}
-		replayedState = &replayed
+		resumedState = &sessionState
 		if runtimeSessionID == "" {
-			runtimeSessionID = replayed.SessionID
+			runtimeSessionID = sessionState.SessionID
 		}
 	}
 	sessionModelSelected := false
 	if !config.ModelExplicit {
-		if replayedState != nil && replayedState.Selection.Model != "" {
-			config.ModelURI = replayedState.Selection.Provider + "/" + replayedState.Selection.Model
+		if resumedState != nil && resumedState.Selection.Model != "" {
+			config.ModelURI = resumedState.Selection.Provider + "/" + resumedState.Selection.Model
 			sessionModelSelected = true
 			if !config.ReasoningEffortExplicit {
-				config.ReasoningEffort = replayedState.Selection.ReasoningEffort
+				config.ReasoningEffort = resumedState.Selection.ReasoningEffort
 			}
 		}
 	}
@@ -273,7 +266,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		modelOptions: modelBackendOptions{
 			requireCredential: !config.Interactive,
 		},
-		resumedState: replayedState,
+		resumedState: resumedState,
 	})
 	if err != nil {
 		return cleanup(err)

@@ -585,27 +585,18 @@ func (application *Application) ResumeSession(ctx context.Context, idOrPrefix st
 	if err != nil {
 		return "", err
 	}
-	if err := agent.Reconcile(ctx, journal); err != nil {
+	sessionState, _, err := agent.Reconcile(ctx, journal)
+	if err != nil {
 		_ = journal.Close()
 		return "", fmt.Errorf("reconcile session: %w", err)
 	}
-	records, err := journal.Records(ctx)
-	if err != nil {
-		_ = journal.Close()
-		return "", fmt.Errorf("read session: %w", err)
-	}
-	replayed, err := agent.Replay(records)
-	if err != nil {
-		_ = journal.Close()
-		return "", fmt.Errorf("replay session: %w", err)
-	}
 	modelURI := application.CurrentModel()
 	reasoningEffort := application.CurrentReasoningEffort()
-	if replayed.Selection.Model != "" {
-		modelURI = replayed.Selection.Provider + "/" + replayed.Selection.Model
-		reasoningEffort = replayed.Selection.ReasoningEffort
+	if sessionState.Selection.Model != "" {
+		modelURI = sessionState.Selection.Provider + "/" + sessionState.Selection.Model
+		reasoningEffort = sessionState.Selection.ReasoningEffort
 	}
-	if err := application.installSession(ctx, journal, summary.ID, modelURI, reasoningEffort, &replayed); err != nil {
+	if err := application.installSession(ctx, journal, summary.ID, modelURI, reasoningEffort, &sessionState); err != nil {
 		_ = journal.Close()
 		return "", err
 	}

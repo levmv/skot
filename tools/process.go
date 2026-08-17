@@ -470,7 +470,11 @@ func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolO
 	action := strings.ToLower(strings.TrimSpace(args.Action))
 	sessionID := agent.ToolSessionID(ctx)
 	if action == "list" {
-		return agent.ToolOutput{Content: manager.listJobs(sessionID)}, nil
+		content, err := manager.listJobs(sessionID)
+		if err != nil {
+			return agent.ToolOutput{}, err
+		}
+		return agent.ToolOutput{Content: content}, nil
 	}
 	if action != "output" && action != "wait" && action != "stop" {
 		return agent.ToolOutput{}, errors.New("action must be one of: list, output, wait, stop")
@@ -521,11 +525,13 @@ func waitForJob(ctx context.Context, job *processJob, timeoutSeconds int) error 
 	}
 }
 
-func (manager *ProcessManager) listJobs(sessionID string) string {
-	_ = manager.AttachSession(sessionID)
+func (manager *ProcessManager) listJobs(sessionID string) (string, error) {
+	if err := manager.AttachSession(sessionID); err != nil {
+		return "", fmt.Errorf("attach session jobs: %w", err)
+	}
 	jobs := manager.sessionJobs(sessionID)
 	if len(jobs) == 0 {
-		return "no managed jobs\n"
+		return "no managed jobs\n", nil
 	}
 	var text strings.Builder
 	for _, job := range jobs {
@@ -544,7 +550,7 @@ func (manager *ProcessManager) listJobs(sessionID string) string {
 		}
 		fmt.Fprintf(&text, " %s\n", summarizeCommand(job.command))
 	}
-	return text.String()
+	return text.String(), nil
 }
 
 func summarizeCommand(command string) string {
@@ -731,9 +737,11 @@ func (manager *ProcessManager) StatusDetails(jobID string) ([]agent.Detail, bool
 	return []agent.Detail{detail}, true
 }
 
+// PendingCompletionEvents reports jobs already registered with the manager.
+// Application lifecycle code attaches a durable session before exposing its
+// runtime; callers adopting jobs directly must call AttachSession first.
 func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []CompletionEvent {
 	sessionID = strings.TrimSpace(sessionID)
-	_ = manager.AttachSession(sessionID)
 	jobs := manager.sessionJobs(sessionID)
 	var events []CompletionEvent
 	for _, job := range jobs {
@@ -805,10 +813,10 @@ func (manager *ProcessManager) MarkCompletionDelivered(jobID string) {
 }
 
 // DetachedJobs reports supervised work which is deliberately left running at
-// a clean session or application boundary.
+// a clean session or application boundary. It inspects the current registry;
+// callers adopting jobs directly must call AttachSession first.
 func (manager *ProcessManager) DetachedJobs(sessionID string) []string {
 	sessionID = strings.TrimSpace(sessionID)
-	_ = manager.AttachSession(sessionID)
 	jobs := manager.sessionJobs(sessionID)
 	var ids []string
 	for _, job := range jobs {

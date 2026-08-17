@@ -8,7 +8,9 @@ import (
 // Application services such as settings, tools, credentials, and process
 // policy remain outside it and may eventually be shared by several sessions.
 type liveSession struct {
-	id          string
+	// managedID is assigned by the application's session create/resume path.
+	// Explicit journals leave it empty even though their runtime has an ID.
+	managedID   string
 	runtime     *agent.Runtime
 	journal     sessionJournal
 	managed     bool
@@ -25,8 +27,8 @@ type sessionJournal interface {
 	CloseDiscarding() error
 }
 
-func newLiveSession(id string, runtime *agent.Runtime, journal sessionJournal, managed bool) *liveSession {
-	return &liveSession{id: id, runtime: runtime, journal: journal, managed: managed}
+func newLiveSession(managedID string, runtime *agent.Runtime, journal sessionJournal, managed bool) *liveSession {
+	return &liveSession{managedID: managedID, runtime: runtime, journal: journal, managed: managed}
 }
 
 func (current *liveSession) close() error {

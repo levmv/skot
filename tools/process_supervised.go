@@ -118,26 +118,14 @@ func (manager *ProcessManager) AttachSessionNotices(sessionID string) []string {
 }
 
 func (manager *ProcessManager) loadSupervisedJob(jobDir, sessionID string) (*processJob, error) {
-	var metadata jobMetadata
-	if err := readJSONFile(filepath.Join(jobDir, jobMetadataFile), &metadata); err != nil {
-		return nil, fmt.Errorf("read metadata: %w", err)
+	metadata, err := loadJobMetadata(jobDir)
+	if err != nil {
+		return nil, fmt.Errorf("load metadata: %w", err)
 	}
-	if err := validateJobMetadata(metadata, jobDir, sessionID); err != nil {
+	if err := validateJobSessionOwnership(metadata, sessionID); err != nil {
 		return nil, err
 	}
-	job := &processJob{
-		id:             metadata.JobID,
-		sessionID:      metadata.SessionID,
-		command:        metadata.Command,
-		done:           make(chan struct{}),
-		status:         ProcessRunning,
-		startedAt:      metadata.StartedAt,
-		scope:          metadata.Scope,
-		separateStderr: metadata.SeparateStderr,
-		supervised:     true,
-		detached:       metadata.Detach,
-		jobDir:         jobDir,
-	}
+	job := supervisedJobFromMetadata(metadata, jobDir)
 	result, terminal, live, err := observeSupervisedJobState(jobDir, job.id, func() (bool, error) {
 		return manager.probeSupervisedJob(job)
 	})
@@ -153,6 +141,22 @@ func (manager *ProcessManager) loadSupervisedJob(jobDir, sessionID string) (*pro
 	}
 	manager.deriveAbandoned(job, "worker disappeared without a terminal result")
 	return job, nil
+}
+
+func supervisedJobFromMetadata(metadata jobMetadata, jobDir string) *processJob {
+	return &processJob{
+		id:             metadata.JobID,
+		sessionID:      metadata.SessionID,
+		command:        metadata.Command,
+		done:           make(chan struct{}),
+		status:         ProcessRunning,
+		startedAt:      metadata.StartedAt,
+		scope:          metadata.Scope,
+		separateStderr: metadata.SeparateStderr,
+		supervised:     true,
+		detached:       metadata.Detach,
+		jobDir:         jobDir,
+	}
 }
 
 // observeSupervisedJobState closes the result-before-reader-close race during
@@ -238,17 +242,14 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		return control.Close()
 	}
 	launch := jobWorkerSpec{
-		Version:        jobProtocolVersion,
-		JobDir:         jobDir,
-		JobID:          id,
-		TimeoutMillis:  spec.timeout.Milliseconds(),
-		LogLimit:       manager.logLimit,
-		Program:        process.Path,
-		Args:           append([]string(nil), process.Args...),
-		Env:            append([]string(nil), process.Env...),
-		Dir:            process.Dir,
-		Stdin:          stdin,
-		SeparateStderr: spec.separateStderr,
+		Version:  jobWorkerProtocolVersion,
+		JobDir:   jobDir,
+		LogLimit: manager.logLimit,
+		Program:  process.Path,
+		Args:     append([]string(nil), process.Args...),
+		Env:      append([]string(nil), process.Env...),
+		Dir:      process.Dir,
+		Stdin:    stdin,
 	}
 	payload, err := json.Marshal(launch)
 	if err != nil {
@@ -281,19 +282,7 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 	wait := make(chan error, 1)
 	go func() { wait <- worker.Wait() }()
 
-	job := &processJob{
-		id:             id,
-		sessionID:      strings.TrimSpace(spec.sessionID),
-		command:        spec.command,
-		done:           make(chan struct{}),
-		status:         ProcessRunning,
-		startedAt:      startedAt,
-		scope:          scope,
-		supervised:     true,
-		detached:       spec.detach,
-		separateStderr: spec.separateStderr,
-		jobDir:         jobDir,
-	}
+	job := supervisedJobFromMetadata(metadata, jobDir)
 	if controlCloseErr != nil {
 		cause := fmt.Errorf("close manager job control reader: %w", controlCloseErr)
 		stopErr := manager.requestJobStop(job)

@@ -67,15 +67,9 @@ func runJobWorker(input io.Reader) error {
 		return err
 	}
 
-	var metadata jobMetadata
-	if err := readJSONFile(filepath.Join(spec.JobDir, jobMetadataFile), &metadata); err != nil {
-		return fmt.Errorf("read job metadata: %w", err)
-	}
-	if err := validateJobMetadata(metadata, spec.JobDir, metadata.SessionID); err != nil || metadata.JobID != spec.JobID {
-		if err == nil {
-			err = errors.New("launch job id does not match metadata")
-		}
-		return err
+	metadata, err := loadJobMetadata(spec.JobDir)
+	if err != nil {
+		return fmt.Errorf("load job metadata: %w", err)
 	}
 	control, dummyWriter, err := inheritJobControl(jobControlPath(spec.JobDir))
 	if err != nil {
@@ -90,14 +84,14 @@ func runJobWorker(input io.Reader) error {
 
 	stdout, err := newDurableTailWriter(filepath.Join(spec.JobDir, jobStdoutFile), spec.LogLimit)
 	if err != nil {
-		return finishUnstartedWorker(spec, fmt.Errorf("open stdout log: %w", err))
+		return finishUnstartedWorker(spec.JobDir, metadata.JobID, fmt.Errorf("open stdout log: %w", err))
 	}
 	var stderr *durableTailWriter
-	if spec.SeparateStderr {
+	if metadata.SeparateStderr {
 		stderr, err = newDurableTailWriter(filepath.Join(spec.JobDir, jobStderrFile), spec.LogLimit)
 		if err != nil {
 			_ = stdout.Close()
-			return finishUnstartedWorker(spec, fmt.Errorf("open stderr log: %w", err))
+			return finishUnstartedWorker(spec.JobDir, metadata.JobID, fmt.Errorf("open stderr log: %w", err))
 		}
 	}
 
@@ -123,11 +117,12 @@ func runJobWorker(input io.Reader) error {
 		if stderr != nil {
 			_ = stderr.Close()
 		}
-		return finishUnstartedWorker(spec, fmt.Errorf("start process: %w", err))
+		return finishUnstartedWorker(spec.JobDir, metadata.JobID, fmt.Errorf("start process: %w", err))
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
-	timer := time.NewTimer(time.Duration(spec.TimeoutMillis) * time.Millisecond)
+	timeout := time.Duration(metadata.TimeoutMillis) * time.Millisecond
+	timer := time.NewTimer(timeout)
 	var waitErr error
 	status := ProcessUnknown
 	stopReason := ""
@@ -137,7 +132,7 @@ func runJobWorker(input io.Reader) error {
 		timer.Stop()
 	case <-timer.C:
 		status = ProcessTimedOut
-		stopReason = "timeout after " + (time.Duration(spec.TimeoutMillis) * time.Millisecond).String()
+		stopReason = "timeout after " + timeout.String()
 		managedProcesses, waitErr = waitWhileKillingProcessGroup(command, wait)
 	case <-stopRequests:
 		timer.Stop()
@@ -167,7 +162,7 @@ func runJobWorker(input io.Reader) error {
 	}
 	result := jobTerminalResult{
 		Version:          jobProtocolVersion,
-		JobID:            spec.JobID,
+		JobID:            metadata.JobID,
 		Started:          true,
 		Status:           status,
 		ExitCode:         processExitCode(waitErr),
@@ -195,13 +190,13 @@ func runJobWorker(input io.Reader) error {
 }
 
 func validateWorkerSpec(spec jobWorkerSpec) error {
-	if spec.Version != jobProtocolVersion || spec.JobID == "" {
+	if spec.Version != jobWorkerProtocolVersion {
 		return errors.New("invalid worker protocol metadata")
 	}
-	if !filepath.IsAbs(spec.JobDir) || filepath.Base(filepath.Clean(spec.JobDir)) != spec.JobID {
+	if !filepath.IsAbs(spec.JobDir) {
 		return errors.New("invalid worker job directory")
 	}
-	if spec.TimeoutMillis <= 0 || spec.LogLimit <= 0 {
+	if spec.LogLimit <= 0 {
 		return errors.New("invalid worker limits")
 	}
 	if spec.Program == "" || len(spec.Args) == 0 || spec.Args[0] == "" || spec.Dir == "" {
@@ -210,15 +205,15 @@ func validateWorkerSpec(spec jobWorkerSpec) error {
 	return nil
 }
 
-func finishUnstartedWorker(spec jobWorkerSpec, cause error) error {
+func finishUnstartedWorker(jobDir, jobID string, cause error) error {
 	result := jobTerminalResult{
 		Version:    jobProtocolVersion,
-		JobID:      spec.JobID,
+		JobID:      jobID,
 		Status:     ProcessNotStarted,
 		Error:      cause.Error(),
 		FinishedAt: time.Now().UTC(),
 	}
-	if err := writeJSONAtomic(filepath.Join(spec.JobDir, jobResultFile), result, 0o600); err != nil {
+	if err := writeJSONAtomic(filepath.Join(jobDir, jobResultFile), result, 0o600); err != nil {
 		return errors.Join(cause, fmt.Errorf("write launch failure: %w", err))
 	}
 	return cause

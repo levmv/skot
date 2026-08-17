@@ -98,7 +98,7 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 	children := application.state.children
 	application.mu.RUnlock()
 	currentIsRuntime := current != nil && current.runtime == runtime
-	retainedChildren := currentIsRuntime && children != nil && children.HasChildren(current.id)
+	retainedChildren := currentIsRuntime && children != nil && children.HasChildren(runtime.CurrentSessionID())
 	if (len(result.DetachedJobs) != 0 || retainedChildren) && currentIsRuntime && current.memory {
 		return result, errors.Join(runErr, errors.New("in-memory one-shot created unexpected durable external work"))
 	}
@@ -535,7 +535,7 @@ func (application *Application) SessionID() string {
 	if application.state.session == nil || application.state.session.provisional {
 		return ""
 	}
-	return application.state.session.id
+	return application.state.session.managedID
 }
 
 // HasUserTurn reports whether the current session has received a submitted
@@ -630,10 +630,18 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	security := application.state.security
 	toolSet := application.state.toolSet
 	currentSession := application.state.session
+	var currentRuntime *agent.Runtime
+	if currentSession != nil {
+		currentRuntime = currentSession.runtime
+	}
 	application.mu.RUnlock()
 	if currentSession == nil || settings == nil || processes == nil {
 		return errors.New("application is closed")
 	}
+	if currentRuntime == nil {
+		return errors.New("current session runtime is unavailable")
+	}
+	currentRuntimeID := currentRuntime.CurrentSessionID()
 	tools, programTools, err := bindProgramToolsForSet(
 		tools, toolSets, toolSet, application.config.programDeclarations,
 		application.config.programToolsFile, processes,
@@ -646,10 +654,6 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		return fmt.Errorf("load project instructions: %w", err)
 	}
 	instructions := effectiveInstructions(systemPrompt, root, projectInstructions)
-	if err := processes.AttachSession(id); err != nil {
-		return fmt.Errorf("attach durable jobs: %w", err)
-	}
-	attachNotices := processes.AttachSessionNotices(id)
 	builder := runtimeBuilder{
 		baseURL:           baseURL,
 		modelAPI:          application.config.modelAPI,
@@ -685,7 +689,14 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 			return fmt.Errorf("load child agents: %w", err)
 		}
 	}
-	if err := processes.CloseSession(currentSession.id); err != nil {
+	if err := processes.AttachSession(id); err != nil {
+		if children != nil {
+			_ = children.ReleaseParent(id)
+		}
+		return fmt.Errorf("attach durable jobs: %w", err)
+	}
+	attachNotices := processes.AttachSessionNotices(id)
+	if err := processes.CloseSession(currentRuntimeID); err != nil {
 		if children != nil {
 			_ = children.ReleaseParent(id)
 		}
@@ -707,7 +718,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	}
 	application.mu.Unlock()
 	if children != nil {
-		_ = children.ReleaseParent(currentSession.id)
+		_ = children.ReleaseParent(currentRuntimeID)
 	}
 	_ = currentSession.close()
 	return nil

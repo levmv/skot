@@ -52,16 +52,16 @@ func TestJobMetadataRequiresCurrentProtocolAndConcreteScope(t *testing.T) {
 		StartedAt: time.Now().UTC(), TimeoutMillis: 1, Scope: ScopeMachine,
 	}
 	jobDir := filepath.Join(t.TempDir(), id)
-	if err := validateJobMetadata(metadata, jobDir, metadata.SessionID); err != nil {
+	if err := validateJobMetadata(metadata, jobDir); err != nil {
 		t.Fatalf("current metadata rejected: %v", err)
 	}
 	metadata.Version--
-	if err := validateJobMetadata(metadata, jobDir, metadata.SessionID); err == nil || !strings.Contains(err.Error(), "unsupported job protocol") {
+	if err := validateJobMetadata(metadata, jobDir); err == nil || !strings.Contains(err.Error(), "unsupported job protocol") {
 		t.Fatalf("old protocol error = %v", err)
 	}
 	metadata.Version = jobProtocolVersion
 	metadata.Scope = ScopeAuto
-	if err := validateJobMetadata(metadata, jobDir, metadata.SessionID); err == nil || !strings.Contains(err.Error(), "scope") {
+	if err := validateJobMetadata(metadata, jobDir); err == nil || !strings.Contains(err.Error(), "scope") {
 		t.Fatalf("unresolved scope error = %v", err)
 	}
 }
@@ -382,6 +382,25 @@ func TestJobListReportsManagedJobsInStartOrder(t *testing.T) {
 	}
 	if strings.Index(listed.Content, runningID) > strings.Index(listed.Content, finishedID) {
 		t.Fatalf("jobs are not in start order: %q", listed.Content)
+	}
+}
+
+func TestJobListReturnsRegistryAttachFailure(t *testing.T) {
+	manager := processManagerForTest(t)
+	if err := os.WriteFile(manager.jobHome, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(jobArgs{Action: "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := agent.WithToolSessionID(context.Background(), "session-list-error")
+	output, err := manager.job(ctx, string(raw))
+	if err == nil || !strings.Contains(err.Error(), "attach session jobs") || !strings.Contains(err.Error(), "job home must be a directory") {
+		t.Fatalf("job list attach error = %v", err)
+	}
+	if output.Content != "" {
+		t.Fatalf("job list returned content with attach failure: %q", output.Content)
 	}
 }
 
@@ -795,15 +814,13 @@ func TestWorkerLogsTerminalResultFailureAfterPayloadCompletes(t *testing.T) {
 		"; while [ ! -f " + shellQuoteForProcessTest(releaseMarker) + " ]; do sleep 0.01; done" +
 		"; printf finished > " + shellQuoteForProcessTest(finishedMarker)
 	launch, err := json.Marshal(jobWorkerSpec{
-		Version:       jobProtocolVersion,
-		JobDir:        jobDir,
-		JobID:         jobID,
-		TimeoutMillis: int64(time.Minute / time.Millisecond),
-		LogLimit:      64,
-		Program:       shell,
-		Args:          []string{"sh", "-c", command},
-		Env:           os.Environ(),
-		Dir:           root,
+		Version:  jobWorkerProtocolVersion,
+		JobDir:   jobDir,
+		LogLimit: 64,
+		Program:  shell,
+		Args:     []string{"sh", "-c", command},
+		Env:      os.Environ(),
+		Dir:      root,
 	})
 	if err != nil {
 		_ = workerLog.Close()

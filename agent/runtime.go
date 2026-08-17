@@ -245,6 +245,14 @@ func (runtime *Runtime) CurrentModel() string {
 	return modelURI(runtime.modelInfo)
 }
 
+// CurrentSessionID returns the configured journal identity or the identity
+// established when the first run initializes or resumes a journal.
+func (runtime *Runtime) CurrentSessionID() string {
+	runtime.configMu.RLock()
+	defer runtime.configMu.RUnlock()
+	return runtime.sessionID
+}
+
 func (runtime *Runtime) CurrentReasoningEffort() string {
 	runtime.configMu.RLock()
 	defer runtime.configMu.RUnlock()
@@ -958,6 +966,11 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 		}
 	} else if runtime.sessionID != "" && state.SessionID != runtime.sessionID {
 		return fmt.Errorf("journal session ID is %q, want %q", state.SessionID, runtime.sessionID)
+	}
+	if runtime.sessionID == "" {
+		runtime.configMu.Lock()
+		runtime.sessionID = state.SessionID
+		runtime.configMu.Unlock()
 	}
 	if runtime.workspace != "" && state.Workspace != "" && state.Workspace != runtime.workspace {
 		return fmt.Errorf("session workspace is %q, not %q", state.Workspace, runtime.workspace)

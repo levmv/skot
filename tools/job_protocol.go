@@ -16,6 +16,9 @@ import (
 
 const (
 	jobProtocolVersion = 3
+	// jobWorkerProtocolVersion versions the private stdin document exchanged
+	// by a ProcessManager and its re-exec worker independently of durable state.
+	jobWorkerProtocolVersion = 1
 
 	jobMetadataFile  = "job.json"
 	jobControlFile   = "control"
@@ -32,6 +35,10 @@ const (
 	jobControlMaxRead = 256
 )
 
+// jobMetadata is the durable descriptor used to adopt a job after its original
+// ProcessManager disappears. It includes the display command, but not the
+// execution environment or stdin; those belong to jobWorkerSpec and are never
+// persisted by the job protocol.
 type jobMetadata struct {
 	Version        int       `json:"version"`
 	JobID          string    `json:"job_id"`
@@ -44,18 +51,19 @@ type jobMetadata struct {
 	Detach         bool      `json:"detach,omitempty"`
 }
 
+// jobWorkerSpec is the ephemeral half of a supervised launch. It is sent to a
+// private re-exec over stdin and may contain secrets, so it must not be written
+// into the durable job directory. Values shared with adoption come from the
+// validated jobMetadata descriptor instead of being copied here.
 type jobWorkerSpec struct {
-	Version        int      `json:"version"`
-	JobDir         string   `json:"job_dir"`
-	JobID          string   `json:"job_id"`
-	TimeoutMillis  int64    `json:"timeout_ms"`
-	LogLimit       int64    `json:"log_limit"`
-	Program        string   `json:"program"`
-	Args           []string `json:"args"`
-	Env            []string `json:"env"`
-	Dir            string   `json:"dir"`
-	Stdin          []byte   `json:"stdin,omitempty"`
-	SeparateStderr bool     `json:"separate_stderr,omitempty"`
+	Version  int      `json:"version"`
+	JobDir   string   `json:"job_dir"`
+	LogLimit int64    `json:"log_limit"`
+	Program  string   `json:"program"`
+	Args     []string `json:"args"`
+	Env      []string `json:"env"`
+	Dir      string   `json:"dir"`
+	Stdin    []byte   `json:"stdin,omitempty"`
 }
 
 type jobTerminalResult struct {
@@ -142,21 +150,36 @@ func readJSONFile(path string, target any) error {
 	return nil
 }
 
-func validateJobMetadata(metadata jobMetadata, jobDir, sessionID string) error {
+func loadJobMetadata(jobDir string) (jobMetadata, error) {
+	var metadata jobMetadata
+	if err := readJSONFile(filepath.Join(jobDir, jobMetadataFile), &metadata); err != nil {
+		return jobMetadata{}, err
+	}
+	if err := validateJobMetadata(metadata, jobDir); err != nil {
+		return jobMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func validateJobMetadata(metadata jobMetadata, jobDir string) error {
 	if metadata.Version != jobProtocolVersion {
 		return fmt.Errorf("unsupported job protocol version %d", metadata.Version)
 	}
 	if metadata.JobID == "" || filepath.Base(jobDir) != metadata.JobID {
 		return errors.New("job id does not match its directory")
 	}
-	if metadata.SessionID != strings.TrimSpace(sessionID) {
-		return fmt.Errorf("job belongs to session %q", metadata.SessionID)
-	}
 	if strings.TrimSpace(metadata.Command) == "" || metadata.StartedAt.IsZero() || metadata.TimeoutMillis <= 0 {
 		return errors.New("job timing metadata is invalid")
 	}
 	if err := validateConcreteScope(metadata.Scope); err != nil {
 		return fmt.Errorf("job filesystem scope is invalid: %w", err)
+	}
+	return nil
+}
+
+func validateJobSessionOwnership(metadata jobMetadata, sessionID string) error {
+	if metadata.SessionID != strings.TrimSpace(sessionID) {
+		return fmt.Errorf("job belongs to session %q", metadata.SessionID)
 	}
 	return nil
 }

@@ -482,15 +482,16 @@ func TestOpenInvalidWorkspaceToolSetFallsBackWithoutRewritingPreference(t *testi
 	}
 }
 
-func TestOpenExistingJournalRestoresSessionModelButEmptyJournalUsesFreshDefaults(t *testing.T) {
+func TestOpenExistingJournalRestoresModelAndJobsButEmptyJournalUsesFreshDefaults(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
+	sessionID := "session_0123456789abcdef0123456789abcdef"
 	existingPath := filepath.Join(t.TempDir(), "existing.jsonl")
 	existing, err := session.Open(existingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	appendApplicationRecord(t, existing, agent.RecordSessionStarted, agent.SessionStartedRecord{
-		SchemaVersion: agent.JournalSchemaVersion, SessionID: "session_0123456789abcdef0123456789abcdef", Workspace: root,
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: sessionID, Workspace: root,
 	})
 	appendApplicationRecord(t, existing, agent.RecordModelSelected, agent.ModelSelectedRecord{
 		Backend: "chat_completions", Provider: "ollama", Model: "saved", Epoch: "saved-epoch",
@@ -508,7 +509,50 @@ func TestOpenExistingJournalRestoresSessionModelButEmptyJournalUsesFreshDefaults
 	if continued.CurrentModel() != "ollama/saved" {
 		t.Fatalf("continued journal model = %q", continued.CurrentModel())
 	}
+	ctx := agent.WithToolSessionID(context.Background(), sessionID)
+	started, err := continued.state.processes.Tools()[0].Run(ctx, `{"command":"printf durable","background":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(started.Details) != 1 {
+		t.Fatalf("background process details = %#v", started.Details)
+	}
+	process, ok := workspacetools.ProcessResultFromDetail(started.Details[0])
+	if !ok || process.JobID == "" {
+		t.Fatalf("background process = %#v, %t", process, ok)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, found := continued.state.processes.Status(process.JobID)
+		if found && status.Status != workspacetools.ProcessRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background process did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if err := continued.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := Open(context.Background(), Config{
+		Home: home, Root: root, JournalPath: existingPath, ModelURI: "ollama/fresh",
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := resumed.state.processes.PendingCompletionEvents(sessionID)
+	if len(events) != 1 || events[0].JobID != process.JobID {
+		t.Fatalf("continued journal completion events = %#v", events)
+	}
+	if _, err := resumed.ClearSession(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := resumed.state.processes.Status(process.JobID); found {
+		t.Fatal("cleared explicit journal retained its previous background job")
+	}
+	if err := resumed.Close(); err != nil {
 		t.Fatal(err)
 	}
 

@@ -180,7 +180,11 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 
 	memorySession := freshHeadlessMemorySession(config, toolSets)
 	opened, err := openInitialSession(config, home, root, memorySession)
-	resources.session = newLiveSession(opened.id, nil, opened.journal, opened.managed)
+	managedID := ""
+	if opened.managed {
+		managedID = opened.id
+	}
+	resources.session = newLiveSession(managedID, nil, opened.journal, opened.managed)
 	resources.session.provisional = opened.provisional
 	resources.session.memory = opened.memory
 	if err != nil {
@@ -212,10 +216,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			runtimeSessionID = replayed.SessionID
 		}
 	}
-	if err := processes.AttachSession(sessionID); err != nil {
-		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
-	}
-	notices = append(notices, processes.AttachSessionNotices(sessionID)...)
 	sessionModelSelected := false
 	if !config.ModelExplicit {
 		if replayedState != nil && replayedState.Selection.Model != "" {
@@ -266,7 +266,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	runtime, _, err := builder.buildWithRoute(ctx, runtimeBuildParams{
 		journal:         journal,
-		sessionID:       sessionID,
+		sessionID:       runtimeSessionID,
 		modelURI:        config.ModelURI,
 		reasoningEffort: config.ReasoningEffort,
 		instructions:    instructions,
@@ -278,6 +278,10 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return cleanup(err)
 	}
+	if err := processes.AttachSession(runtimeSessionID); err != nil {
+		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
+	}
+	notices = append(notices, processes.AttachSessionNotices(runtimeSessionID)...)
 	currentSession.runtime = runtime
 	return &Application{
 		config: applicationConfig{

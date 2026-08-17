@@ -52,6 +52,14 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if got := countRecordKind(journal.snapshot(), RecordSessionConfigured); got != 1 {
 		t.Fatalf("initial configuration records = %d, want 1", got)
 	}
+	equivalentRead := read
+	equivalentRead.Spec.InputSchema = json.RawMessage(`{ "type": "object" }`)
+	if err := runtime.SetTools(context.Background(), []Tool{equivalentRead}, "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRecordKind(journal.snapshot(), RecordSessionConfigured); got != 1 {
+		t.Fatalf("configuration records after equivalent schema = %d, want 1", got)
+	}
 	state, err := runtime.State(context.Background())
 	if err != nil {
 		t.Fatal(err)

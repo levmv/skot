@@ -62,8 +62,9 @@ type ConfigurationMetadata struct {
 }
 
 type Runtime struct {
-	// runMu serializes journal/model/tool operations. Configuration writers
-	// acquire runMu before configMu, so one run observes one coherent setup.
+	// runMu excludes concurrent turns, shell/maintenance operations, and
+	// model/tool configuration. Model/tool changes acquire it before configMu,
+	// so a turn observes one coherent model/tool setup.
 	runMu sync.Mutex
 	// statusMu protects only the last fully calculated session status. Status
 	// calculation happens before taking this lock so readers never wait on a
@@ -73,8 +74,9 @@ type Runtime struct {
 	statusSequence uint64
 	// queueMu owns pendingInputs independently of a running turn.
 	queueMu sync.Mutex
-	// configMu synchronizes short observer reads with configuration changes.
-	// Operational reads happen under runMu; writers always hold both locks.
+	// configMu synchronizes observer reads with configuration changes.
+	// Scope changes deliberately take it without runMu so subsequently started
+	// work in an active turn can observe the new boundary.
 	configMu          sync.RWMutex
 	pendingInputs     []string
 	model             Model

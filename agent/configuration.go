@@ -98,6 +98,8 @@ func (runtime *Runtime) recordCurrentEffectiveConfigurationAndApply(ctx context.
 }
 
 func equalEffectiveConfigSnapshots(left, right EffectiveConfigSnapshot) bool {
+	// Compare the journal encoding so formatting-only differences in RawMessage
+	// tool schemas do not create new session configuration records.
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)

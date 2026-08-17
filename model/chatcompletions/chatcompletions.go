@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -326,24 +325,6 @@ func decodeHTTPError(provider, model string, response *http.Response) error {
 	return modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
 		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
 		Message: message, Code: code, Type: errorType,
-		RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		RetryAfter: modelhttp.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
 	})
-}
-
-func parseRetryAfter(value string, now time.Time) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil {
-		if seconds > 0 {
-			return time.Duration(seconds) * time.Second
-		}
-		return 0
-	}
-	when, err := http.ParseTime(value)
-	if err != nil || !when.After(now) {
-		return 0
-	}
-	return when.Sub(now)
 }

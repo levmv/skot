@@ -22,6 +22,10 @@ import (
 // live session owns one agent runtime and its persistence lifetime; clearing or
 // resuming replaces that session as a unit. This pre-v1 API is intentionally
 // product-specific and is not yet a compatibility promise.
+//
+// Callers must serialize session replacement and model or tool reconfiguration
+// with Run and with one another. SwitchScope is the exception: it may overlap
+// an active Run and affects only subsequently started tool calls and processes.
 type Application struct {
 	config applicationConfig
 

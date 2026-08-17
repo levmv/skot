@@ -5,6 +5,7 @@ package modelhttp
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,4 +32,24 @@ func DefaultClient() *http.Client {
 		return &http.Client{Transport: cloned}
 	}
 	return &http.Client{}
+}
+
+// ParseRetryAfter accepts the delay-seconds and HTTP-date forms defined for
+// Retry-After. Invalid, non-positive, and elapsed values have no retry delay.
+func ParseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		return 0
+	}
+	when, err := http.ParseTime(value)
+	if err != nil || !when.After(now) {
+		return 0
+	}
+	return when.Sub(now)
 }

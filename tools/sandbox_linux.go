@@ -142,7 +142,7 @@ func applyToolLandlock(boundary Boundary) error {
 			return err
 		}
 		var deviceFiles []string
-		for _, path := range []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"} {
+		for _, path := range []string{"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom"} {
 			if !protectedBy(boundary.ProtectedPaths, path) {
 				deviceFiles = append(deviceFiles, path)
 			}

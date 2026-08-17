@@ -200,6 +200,83 @@ func TestProcessManagerRunShellInheritsAmbientEnvironment(t *testing.T) {
 	}
 }
 
+func TestModelProcessesDoNotShareSupervisorSession(t *testing.T) {
+	manager := processManagerForTest(t)
+	parentSID, err := unix.Getsid(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := "export SKOT_TEST_PROCESS_IDENTITY=1; exec " + shellQuoteForProcessTest(executable) + " -test.run=^TestProcessIdentityHelper$"
+
+	direct := runProcessResult(t, manager.bash, bashArgs{Command: command})
+	assertIsolatedProcessSession(t, direct.Content, parentSID)
+
+	started := runProcessResult(t, manager.bash, bashArgs{Command: command, Background: true})
+	job := manager.get(jobIDFromText(t, started.Content))
+	select {
+	case <-job.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervised process did not finish")
+	}
+	background, _ := manager.jobOutput(job, defaultCommandPreview)
+	assertIsolatedProcessSession(t, string(background), parentSID)
+
+	user, err := manager.RunShell(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, userSID := processIdentityForTest(t, user.Content)
+	if userSID != parentSID {
+		t.Fatalf("user shell session = %d, want supervisor session %d", userSID, parentSID)
+	}
+}
+
+func TestProcessIdentityHelper(t *testing.T) {
+	if os.Getenv("SKOT_TEST_PROCESS_IDENTITY") != "1" {
+		return
+	}
+	sid, err := unix.Getsid(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := "identity " + strconv.Itoa(os.Getpid()) + " " + strconv.Itoa(unix.Getpgrp()) + " " + strconv.Itoa(sid) + "\n"
+	if _, err := os.Stdout.WriteString(line); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertIsolatedProcessSession(t *testing.T, output string, parentSID int) {
+	t.Helper()
+	pid, pgid, sid := processIdentityForTest(t, output)
+	if pid != pgid || pid != sid {
+		t.Fatalf("model process identity = pid %d, pgid %d, sid %d", pid, pgid, sid)
+	}
+	if sid == parentSID {
+		t.Fatalf("model process retained supervisor session %d", parentSID)
+	}
+}
+
+func processIdentityForTest(t *testing.T, output string) (pid, pgid, sid int) {
+	t.Helper()
+	match := regexp.MustCompile(`(?m)identity\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s*$`).FindStringSubmatch(output)
+	if len(match) != 4 {
+		t.Fatalf("process identity missing from %q", output)
+	}
+	values := []*int{&pid, &pgid, &sid}
+	for index := range values {
+		parsed, err := strconv.Atoi(match[index+1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		*values[index] = parsed
+	}
+	return pid, pgid, sid
+}
+
 func TestProcessManagerRunShellCancellationCleansUpProcess(t *testing.T) {
 	manager := processManagerForTest(t)
 	ctx, cancel := context.WithCancel(context.Background())

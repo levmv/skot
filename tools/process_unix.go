@@ -11,6 +11,10 @@ func configureProcessGroup(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+func configureProcessSession(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}
+
 func killProcessGroup(command *exec.Cmd) error {
 	if command == nil || command.Process == nil {
 		return nil

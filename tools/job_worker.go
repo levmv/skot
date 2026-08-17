@@ -113,7 +113,10 @@ func runJobWorker(input io.Reader) error {
 	if stderr != nil {
 		command.Stderr = stderr
 	}
-	configureProcessGroup(command)
+	// The supervised backend accepts only model-owned processes. Keep its
+	// trusted worker in Skot's session, but detach the payload from Skot's
+	// controlling terminal before it can execute model-selected code.
+	configureProcessSession(command)
 	startedAt := time.Now().UTC()
 	if err := command.Start(); err != nil {
 		_ = stdout.Close()

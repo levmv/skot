@@ -624,7 +624,11 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		return manager.startSupervised(spec, process, policy.scope, id)
 	}
 	process.Stdin = spec.stdin
-	configureProcessGroup(process)
+	if spec.origin == processOriginModel {
+		configureProcessSession(process)
+	} else {
+		configureProcessGroup(process)
+	}
 	log := &jobBuffer{limit: manager.logLimit}
 	process.Stdout = log
 	var errLog *jobBuffer

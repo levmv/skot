@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 const sandboxExecPath = "/usr/bin/sandbox-exec"
@@ -45,7 +47,7 @@ var sandboxReadOnlyDirs = []string{
 }
 
 func sandboxWritableDirs(boundary Boundary) []string {
-	return []string{canonicalSandboxPath(boundary.Workspace), canonicalSandboxPath(boundary.ToolHome)}
+	return []string{canonicalpath.Resolve(boundary.Workspace), canonicalpath.Resolve(boundary.ToolHome)}
 }
 
 func hardenSupervisor() {}
@@ -56,14 +58,14 @@ func seatbeltProfile(boundary Boundary) string {
 		profile = "(version 1)\n(allow default)\n"
 	} else {
 		profile = fmt.Sprintf(fullSeatbeltProfile,
-			canonicalSandboxPath(boundary.Workspace),
-			canonicalSandboxPath(boundary.ToolHome),
-			canonicalSandboxPath(boundary.Workspace),
-			canonicalSandboxPath(boundary.ToolHome),
+			canonicalpath.Resolve(boundary.Workspace),
+			canonicalpath.Resolve(boundary.ToolHome),
+			canonicalpath.Resolve(boundary.Workspace),
+			canonicalpath.Resolve(boundary.ToolHome),
 		)
 	}
 	for _, path := range boundary.ProtectedPaths {
-		path = canonicalSandboxPath(path)
+		path = canonicalpath.Resolve(path)
 		profile += fmt.Sprintf("(deny file-read* file-write* (literal %q))\n", path)
 		profile += fmt.Sprintf("(deny file-read* file-write* (subpath %q))\n", path)
 	}

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 // FilesystemAccess owns the atomically published filesystem policy shared by
@@ -81,7 +83,7 @@ func (policy *filesystemPolicy) validate() error {
 		return errors.New("filesystem policy protection is nil")
 	}
 	for _, path := range policy.protection.Paths() {
-		if pathContains(path, policy.workspace) {
+		if canonicalpath.Contains(path, policy.workspace) {
 			return fmt.Errorf("protected path %s contains the workspace", path)
 		}
 	}
@@ -108,7 +110,7 @@ func (policy *filesystemPolicy) processBoundary(toolHome string) Boundary {
 }
 
 func (policy *filesystemPolicy) checkScope(path string) error {
-	path = canonicalSandboxPath(path)
+	path = canonicalpath.Resolve(path)
 	if policy.scope == ScopeMachine || isWithinRoot(policy.workspace, path) {
 		return nil
 	}

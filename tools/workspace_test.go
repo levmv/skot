@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 func TestWorkspaceToolsExposeStandaloneCatalog(t *testing.T) {
@@ -146,7 +147,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalExternal := filepath.ToSlash(canonicalSandboxPath(external))
+	canonicalExternal := filepath.ToSlash(canonicalpath.Resolve(external))
 
 	read := mustRunTool(t, tools, "read", jsonArgs(t, map[string]any{"path": external}))
 	if !strings.Contains(read, "external needle") {
@@ -199,7 +200,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	change, ok = FileChangeMetaFromDetail(write.Details[0])
-	if !ok || change.Path != filepath.ToSlash(canonicalSandboxPath(created)) {
+	if !ok || change.Path != filepath.ToSlash(canonicalpath.Resolve(created)) {
 		t.Fatalf("external write detail = %#v, ok=%v", change, ok)
 	}
 	throughAlias := filepath.Join(outside, "through-alias.txt")
@@ -208,7 +209,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	change, ok = FileChangeMetaFromDetail(write.Details[0])
-	if !ok || change.Path != filepath.ToSlash(canonicalSandboxPath(throughAlias)) {
+	if !ok || change.Path != filepath.ToSlash(canonicalpath.Resolve(throughAlias)) {
 		t.Fatalf("external alias write detail = %#v, ok=%v", change, ok)
 	}
 }
@@ -232,7 +233,7 @@ func TestMachineScopeSearchesThroughExternalAliasIntoWorkspace(t *testing.T) {
 	grep := mustRunTool(t, tools, "grep", jsonArgs(t, map[string]any{
 		"pattern": "backlink", "path": alias,
 	}))
-	want := filepath.ToSlash(canonicalSandboxPath(inside)) + ":1:workspace backlink"
+	want := filepath.ToSlash(canonicalpath.Resolve(inside)) + ":1:workspace backlink"
 	if !strings.Contains(grep, want) {
 		t.Fatalf("external-alias grep = %q; want %q", grep, want)
 	}
@@ -265,7 +266,7 @@ func TestWorkspaceScopeAcceptsAbsoluteInsideAndRejectsExternalPaths(t *testing.T
 	if read := mustRunTool(t, tools, "read", jsonArgs(t, map[string]any{"path": filepath.Join(workspaceAlias, "inside.txt")})); !strings.Contains(read, "inside") {
 		t.Fatalf("absolute workspace-alias read = %q", read)
 	}
-	createdInside := filepath.Join(canonicalSandboxPath(root), "created.txt")
+	createdInside := filepath.Join(canonicalpath.Resolve(root), "created.txt")
 	write, err := runTool(tools, "write", jsonArgs(t, map[string]any{"path": createdInside, "content": "inside\n"}))
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +356,7 @@ func TestMachineScopeStillFiltersExternalProtectedPaths(t *testing.T) {
 	if !strings.Contains(list, "public.txt") || strings.Contains(list, "private") {
 		t.Fatalf("external protected ls = %q", list)
 	}
-	canonicalPublic := filepath.ToSlash(canonicalSandboxPath(public))
+	canonicalPublic := filepath.ToSlash(canonicalpath.Resolve(public))
 	grep := mustRunTool(t, tools, "grep", jsonArgs(t, map[string]any{"pattern": "needle", "path": outside}))
 	if !strings.Contains(grep, canonicalPublic) || strings.Contains(grep, "secret.txt") {
 		t.Fatalf("external protected grep = %q", grep)

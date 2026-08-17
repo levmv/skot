@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/levmv/skot/internal/canonicalpath"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -142,7 +143,7 @@ func TestWorkspaceProtectedProbeUsesWorkspaceCarveout(t *testing.T) {
 		_ = probe.Close()
 		_ = os.Remove(probe.Name())
 	})
-	if !securityPathContains(root, probe.Name()) {
+	if !canonicalpath.Contains(root, probe.Name()) {
 		t.Fatalf("workspace carve-out probe was created outside the workspace: %s", probe.Name())
 	}
 	if len(probeBoundary.ProtectedPaths) == 0 || probeBoundary.ProtectedPaths[len(probeBoundary.ProtectedPaths)-1] != probe.Name() {
@@ -197,27 +198,6 @@ func TestMachineProtectedPathNeedsBuiltInLSAndExplainsBackend(t *testing.T) {
 	state.Failure = "backend unavailable"
 	if err := validateSecurity(state); err == nil || !strings.Contains(err.Error(), "protected_paths require") {
 		t.Fatalf("machine backend error = %v", err)
-	}
-}
-
-func TestCanonicalSecurityPathResolvesMissingPathBelowSymlink(t *testing.T) {
-	root := t.TempDir()
-	real := filepath.Join(root, "real-cache")
-	if err := os.Mkdir(real, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(root, "cache-alias")
-	if err := os.Symlink(real, alias); err != nil {
-		t.Fatal(err)
-	}
-	got := canonicalSecurityPath(filepath.Join(alias, "skot", "tool-home"))
-	resolvedReal, err := filepath.EvalSymlinks(real)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(resolvedReal, "skot", "tool-home")
-	if got != want {
-		t.Fatalf("canonical path = %q; want %q", got, want)
 	}
 }
 

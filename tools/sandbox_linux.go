@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
+	"github.com/levmv/skot/internal/canonicalpath"
 	"golang.org/x/sys/unix"
 )
 
@@ -177,8 +178,8 @@ func landlockPathsExcept(roots, protected []string) (dirs, files []string, err e
 	seen := make(map[string]struct{})
 	var add func(string, string) error
 	add = func(path, boundary string) error {
-		path = canonicalSandboxPath(path)
-		if !pathContains(boundary, path) {
+		path = canonicalpath.Resolve(path)
+		if !canonicalpath.Contains(boundary, path) {
 			return nil
 		}
 		if protectedBy(protected, path) {
@@ -190,7 +191,7 @@ func landlockPathsExcept(roots, protected []string) (dirs, files []string, err e
 		seen[path] = struct{}{}
 		containsProtected := false
 		for _, denied := range protected {
-			if pathContains(path, denied) {
+			if canonicalpath.Contains(path, denied) {
 				containsProtected = true
 				break
 			}
@@ -227,7 +228,7 @@ func landlockPathsExcept(roots, protected []string) (dirs, files []string, err e
 		return nil
 	}
 	for _, root := range roots {
-		boundary := canonicalSandboxPath(root)
+		boundary := canonicalpath.Resolve(root)
 		if err := add(boundary, boundary); err != nil {
 			return nil, nil, err
 		}

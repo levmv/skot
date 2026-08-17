@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 func TestProtectedPathPolicyResolvesAndCompactsPaths(t *testing.T) {
@@ -27,9 +28,9 @@ func TestProtectedPathPolicyResolvesAndCompactsPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		canonicalSandboxPath(filepath.Join(home, "home-secret")),
-		canonicalSandboxPath(filepath.Join(root, "private")),
-		canonicalSandboxPath(external),
+		canonicalpath.Resolve(filepath.Join(home, "home-secret")),
+		canonicalpath.Resolve(filepath.Join(root, "private")),
+		canonicalpath.Resolve(external),
 	}
 	slices.Sort(want)
 	if got := policy.Paths(); !slices.Equal(got, want) {

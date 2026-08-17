@@ -173,6 +173,7 @@ func clampLimit(value, fallback, maximum int) int {
 	return min(value, maximum)
 }
 
+// isWithinRoot checks lexical containment only; it does not resolve symlinks.
 func isWithinRoot(root, path string) bool {
 	relative, err := filepath.Rel(root, path)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 func TestLoadProgramToolsTreatsMissingAsEmptyAndRejectsUnknownFields(t *testing.T) {
@@ -91,7 +92,7 @@ func TestProgramToolGetsObjectOnStdinKeepsStderrSeparateAndAppliesEnvironmentOve
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalWorkdir := filepath.Join(canonicalSandboxPath(root), "nested")
+	canonicalWorkdir := filepath.Join(canonicalpath.Resolve(root), "nested")
 	for _, want := range []string{`stdin={"query":"book"}`, "ambient=", "overlay=configured", "pwd=" + canonicalWorkdir, "stderr:\ndiagnostic", "status: failed", "exit_code: 4"} {
 		if !strings.Contains(output.Content, want) {
 			t.Fatalf("output = %q, want %q", output.Content, want)

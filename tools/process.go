@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 	"github.com/levmv/skot/internal/privatefs"
 )
 
@@ -241,13 +242,13 @@ func NewProcessManagerWithAccess(access *FilesystemAccess, stateHome, toolHomeRo
 	if policy == nil {
 		return nil, errors.New("filesystem access is uninitialized")
 	}
-	stateHome = canonicalSandboxPath(stateHome)
+	stateHome = canonicalpath.Resolve(stateHome)
 	jobHome := filepath.Join(stateHome, "jobs")
 	toolHomeRoot = strings.TrimSpace(toolHomeRoot)
 	toolHome := ""
 	if toolHomeRoot != "" {
-		toolHomeRoot = canonicalSandboxPath(toolHomeRoot)
-		toolHome = canonicalSandboxPath(WorkspaceToolHome(toolHomeRoot, policy.workspace))
+		toolHomeRoot = canonicalpath.Resolve(toolHomeRoot)
+		toolHome = canonicalpath.Resolve(WorkspaceToolHome(toolHomeRoot, policy.workspace))
 		if err := policy.processBoundary(toolHome).ValidateLayout(); err != nil {
 			return nil, err
 		}
@@ -285,10 +286,10 @@ func (manager *ProcessManager) resolveToolHome(policy *filesystemPolicy) (string
 			if err != nil {
 				return "", err
 			}
-			root = canonicalSandboxPath(root)
+			root = canonicalpath.Resolve(root)
 			manager.toolHomeRoot = root
 		}
-		manager.toolHome = canonicalSandboxPath(WorkspaceToolHome(root, policy.workspace))
+		manager.toolHome = canonicalpath.Resolve(WorkspaceToolHome(root, policy.workspace))
 	}
 	if err := policy.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
 		return "", err

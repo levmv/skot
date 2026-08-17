@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 	"golang.org/x/sys/unix"
 )
 
@@ -1501,7 +1502,7 @@ func TestBashWorkspaceScopeAcceptsAbsoluteWorkdirInsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.Content, canonicalSandboxPath(root)) {
+	if !strings.Contains(output.Content, canonicalpath.Resolve(root)) {
 		t.Fatalf("absolute in-workspace workdir output = %q", output.Content)
 	}
 }
@@ -1518,7 +1519,7 @@ func TestBashMachineScopeAcceptsExplicitExternalWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.Content, canonicalSandboxPath(outside)) {
+	if !strings.Contains(output.Content, canonicalpath.Resolve(outside)) {
 		t.Fatalf("external-workdir output = %q", output.Content)
 	}
 }

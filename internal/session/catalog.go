@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/privatefs"
 )
@@ -206,27 +207,7 @@ func canonicalWorkspace(workspace string) string {
 	if workspace == "" {
 		return ""
 	}
-	if absolute, err := filepath.Abs(workspace); err == nil {
-		workspace = absolute
-	}
-	workspace = filepath.Clean(workspace)
-	current := workspace
-	var missing []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			for index := len(missing) - 1; index >= 0; index-- {
-				resolved = filepath.Join(resolved, missing[index])
-			}
-			return filepath.Clean(resolved)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return workspace
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
-	}
+	return canonicalpath.Resolve(workspace)
 }
 
 func sessionTitle(value string) string {

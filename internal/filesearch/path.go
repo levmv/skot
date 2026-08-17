@@ -96,6 +96,8 @@ func (s *Searcher) resolveExistingPath(path string) (resolvedPath, error) {
 	}, nil
 }
 
+// withinRoot checks lexical containment only. Callers separately validate
+// resolved paths where symlinks may affect the boundary.
 func withinRoot(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {

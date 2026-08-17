@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 const (
@@ -351,7 +352,7 @@ func (manager *ProcessManager) resolveProgram(name string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("program %q is not on PATH: %w", name, err)
 		}
-		resolved = canonicalSandboxPath(resolved)
+		resolved = canonicalpath.Resolve(resolved)
 		if policy.protection.Protects(resolved) {
 			return "", fmt.Errorf("program %q is protected", name)
 		}

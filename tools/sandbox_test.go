@@ -119,24 +119,3 @@ func TestBoundaryLayoutRejectsUnsafeContainment(t *testing.T) {
 		})
 	}
 }
-
-func TestCanonicalSandboxPathResolvesExistingSymlinkPrefix(t *testing.T) {
-	root := t.TempDir()
-	real := filepath.Join(root, "real-cache")
-	if err := os.Mkdir(real, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(root, "cache-alias")
-	if err := os.Symlink(real, alias); err != nil {
-		t.Fatal(err)
-	}
-	got := canonicalSandboxPath(filepath.Join(alias, "skot", "tool-home"))
-	resolvedReal, err := filepath.EvalSymlinks(real)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(resolvedReal, "skot", "tool-home")
-	if got != want {
-		t.Fatalf("canonical path = %q; want %q", got, want)
-	}
-}

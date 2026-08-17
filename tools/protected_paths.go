@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 // ProtectedPathPolicy is the immutable shared filesystem deny-list for
@@ -59,7 +61,7 @@ func NewProtectedPathPolicy(root string, values []string) (*ProtectedPathPolicy,
 		case !filepath.IsAbs(value):
 			value = filepath.Join(root, value)
 		}
-		value = canonicalSandboxPath(value)
+		value = canonicalpath.Resolve(value)
 		if filepath.Dir(value) == value {
 			return nil, errors.New("the filesystem root cannot be a protected path")
 		}
@@ -80,7 +82,7 @@ func compactProtectedPaths(paths []string) []string {
 	for _, path := range paths {
 		covered := false
 		for _, parent := range compacted {
-			if pathContains(parent, path) {
+			if canonicalpath.Contains(parent, path) {
 				covered = true
 				break
 			}
@@ -112,9 +114,9 @@ func (policy *ProtectedPathPolicy) Protects(path string) bool {
 }
 
 func protectedBy(protected []string, path string) bool {
-	path = canonicalSandboxPath(path)
+	path = canonicalpath.Resolve(path)
 	for _, denied := range protected {
-		if pathContains(denied, path) {
+		if canonicalpath.Contains(denied, path) {
 			return true
 		}
 	}

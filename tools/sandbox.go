@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 const (
@@ -43,11 +45,11 @@ func (boundary Boundary) ValidateLayout() error {
 		return err
 	}
 	for _, path := range boundary.ProtectedPaths {
-		if pathContains(path, boundary.Workspace) {
+		if canonicalpath.Contains(path, boundary.Workspace) {
 			return fmt.Errorf("protected path %s contains the workspace", path)
 		}
 	}
-	if boundary.Scope == ScopeWorkspace && pathContains(boundary.ToolHome, boundary.Workspace) {
+	if boundary.Scope == ScopeWorkspace && canonicalpath.Contains(boundary.ToolHome, boundary.Workspace) {
 		return fmt.Errorf("tool home must not contain the workspace")
 	}
 	if boundary.Scope == ScopeWorkspace {
@@ -160,39 +162,8 @@ func sandboxBaseEnv(boundary Boundary) []string {
 	return minimalToolEnv(boundary.ToolHome)
 }
 
-func canonicalSandboxPath(path string) string {
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	path = filepath.Clean(path)
-	current := path
-	var missing []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			for index := len(missing) - 1; index >= 0; index-- {
-				resolved = filepath.Join(resolved, missing[index])
-			}
-			return filepath.Clean(resolved)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return path
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
-	}
-}
-
-func pathContains(root, path string) bool {
-	root = canonicalSandboxPath(root)
-	path = canonicalSandboxPath(path)
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
 func sandboxPathsOverlap(first, second string) bool {
-	return pathContains(first, second) || pathContains(second, first)
+	return canonicalpath.Contains(first, second) || canonicalpath.Contains(second, first)
 }
 
 func mergeToolEnv(base []string, extra map[string]string) []string {

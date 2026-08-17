@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
@@ -154,7 +155,7 @@ func TestApplicationGivesNestedHomeNoSpecialStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = application.Close() })
-	if slices.Contains(application.config.protectedPaths, canonicalSecurityPath(home)) {
+	if slices.Contains(application.config.protectedPaths, canonicalpath.Resolve(home)) {
 		t.Fatalf("Skot home became protected: %#v", application.config.protectedPaths)
 	}
 	if tools := application.ToolSetTools(toolpolicy.ToolSetDefault); slices.Contains(tools, "ls") {
@@ -626,8 +627,8 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 	}
 	t.Cleanup(func() { _ = application.Close() })
 	wantPaths := []string{
-		canonicalSecurityPath(filepath.Join(root, "settings-secret")),
-		canonicalSecurityPath(filepath.Join(root, "api-secret")),
+		canonicalpath.Resolve(filepath.Join(root, "settings-secret")),
+		canonicalpath.Resolve(filepath.Join(root, "api-secret")),
 	}
 	for _, want := range wantPaths {
 		if !slices.Contains(application.config.protectedPaths, want) {

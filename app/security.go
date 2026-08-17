@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/canonicalpath"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -184,7 +185,7 @@ func protectedPathsNotice(state securityState, root string, paths []string) stri
 	affected := state.EffectiveScope == workspacetools.ScopeMachine && len(paths) != 0
 	if state.EffectiveScope == workspacetools.ScopeWorkspace {
 		for _, path := range paths {
-			if securityPathContains(root, path) && !securityPathContains(path, root) {
+			if canonicalpath.Contains(root, path) && !canonicalpath.Contains(path, root) {
 				affected = true
 				break
 			}
@@ -229,36 +230,6 @@ func (state securityState) Summary() string {
 		text += " · no additional filesystem boundary"
 	}
 	return text
-}
-
-func canonicalSecurityPath(path string) string {
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	path = filepath.Clean(path)
-	current := path
-	var missing []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			for index := len(missing) - 1; index >= 0; index-- {
-				resolved = filepath.Join(resolved, missing[index])
-			}
-			return filepath.Clean(resolved)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return path
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
-	}
-}
-
-func securityPathContains(root, path string) bool {
-	root, path = canonicalSecurityPath(root), canonicalSecurityPath(path)
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func detectContainer(ctx context.Context) string {

@@ -10,6 +10,10 @@ import (
 )
 
 func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools []Tool, toolSet string, scope ScopeSnapshot) EffectiveConfigSnapshot {
+	return runtime.effectiveConfigSnapshotWithProgramToolsLocked(modelInfo, tools, toolSet, scope, runtime.programTools)
+}
+
+func (runtime *Runtime) effectiveConfigSnapshotWithProgramToolsLocked(modelInfo ModelInfo, tools []Tool, toolSet string, scope ScopeSnapshot, programTools []ProgramToolSnapshot) EffectiveConfigSnapshot {
 	toolSpecs := make([]ToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		toolSpecs = append(toolSpecs, cloneToolSpec(tool.Spec))
@@ -39,7 +43,7 @@ func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools
 			Endpoint:     runtime.sanitize(strings.TrimSpace(modelInfo.Endpoint)),
 			Build:        runtime.build,
 			Scope:        scope,
-			ProgramTools: activeProgramToolSnapshots(runtime.programTools, tools),
+			ProgramTools: activeProgramToolSnapshots(programTools, tools),
 		},
 	}
 }
@@ -160,10 +164,10 @@ func validateEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) error {
 	}
 	seenPrograms := make(map[string]struct{}, len(snapshot.Environment.ProgramTools))
 	for _, tool := range snapshot.Environment.ProgramTools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" || strings.TrimSpace(tool.Program) == "" || len(tool.Command) == 0 {
-			return errors.New("configured program tool requires name, program, and command")
+		if err := validateProgramToolSnapshot(tool); err != nil {
+			return err
 		}
+		name := strings.TrimSpace(tool.Name)
 		if _, exists := seenPrograms[name]; exists {
 			return fmt.Errorf("duplicate configured program tool %q", name)
 		}
@@ -171,22 +175,30 @@ func validateEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) error {
 		if _, exists := seen[name]; !exists {
 			return fmt.Errorf("configured program tool %q is absent from the model tool catalog", name)
 		}
-		if duration, err := time.ParseDuration(tool.Timeout); err != nil || duration <= 0 {
-			return fmt.Errorf("configured program tool %q has invalid timeout", name)
+	}
+	return nil
+}
+
+func validateProgramToolSnapshot(tool ProgramToolSnapshot) error {
+	name := strings.TrimSpace(tool.Name)
+	if name == "" || strings.TrimSpace(tool.Program) == "" || len(tool.Command) == 0 {
+		return errors.New("configured program tool requires name, program, and command")
+	}
+	if duration, err := time.ParseDuration(tool.Timeout); err != nil || duration <= 0 {
+		return fmt.Errorf("configured program tool %q has invalid timeout", name)
+	}
+	if tool.Yield != "" {
+		if duration, err := time.ParseDuration(tool.Yield); err != nil || duration <= 0 {
+			return fmt.Errorf("configured program tool %q has invalid yield", name)
 		}
-		if tool.Yield != "" {
-			if duration, err := time.ParseDuration(tool.Yield); err != nil || duration <= 0 {
-				return fmt.Errorf("configured program tool %q has invalid yield", name)
-			}
-		}
-		switch tool.Background {
-		case "never", "auto", "always":
-		default:
-			return fmt.Errorf("configured program tool %q has invalid background mode %q", name, tool.Background)
-		}
-		if tool.Detach && tool.Background == "never" && tool.Yield == "" {
-			return fmt.Errorf("configured program tool %q detaches work that cannot outlive its call", name)
-		}
+	}
+	switch tool.Background {
+	case "never", "auto", "always":
+	default:
+		return fmt.Errorf("configured program tool %q has invalid background mode %q", name, tool.Background)
+	}
+	if tool.Detach && tool.Background == "never" && tool.Yield == "" {
+		return fmt.Errorf("configured program tool %q detaches work that cannot outlive its call", name)
 	}
 	return nil
 }

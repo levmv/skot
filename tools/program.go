@@ -71,6 +71,15 @@ type ResolvedProgramTool struct {
 	CanBackground bool
 }
 
+// ProgramToolDescriptor exposes the model-visible part of a declaration
+// without resolving its executable. It lets callers validate exact tool sets
+// before binding only the declarations selected for a runtime.
+type ProgramToolDescriptor struct {
+	Tool agent.Tool
+	// CanBackground means any tool set containing Tool must also contain job.
+	CanBackground bool
+}
+
 // LoadProgramTools reads and validates a tools.json file. A missing file is an
 // empty catalog; an existing malformed file is a configuration error.
 func LoadProgramTools(path string) (ProgramToolConfig, error) {
@@ -260,6 +269,39 @@ func (tool ProgramTool) schema() json.RawMessage {
 	return result
 }
 
+// DescribeProgramTools builds catalog entries without consulting PATH or the
+// filesystem. The placeholder runners are a defensive backstop: callers must
+// replace selected entries with ResolveProgramTools results before publishing
+// them to a runtime.
+func DescribeProgramTools(declarations []ProgramTool) ([]ProgramToolDescriptor, error) {
+	described := make([]ProgramToolDescriptor, 0, len(declarations))
+	for _, declaration := range declarations {
+		if err := declaration.normalize(); err != nil {
+			return nil, fmt.Errorf("tool %s: %w", strings.TrimSpace(declaration.Name), err)
+		}
+		name := declaration.Name
+		described = append(described, ProgramToolDescriptor{
+			Tool: programAgentTool(declaration, func(context.Context, string) (agent.ToolOutput, error) {
+				return agent.ToolOutput{}, fmt.Errorf("program tool %q was not bound to an executable", name)
+			}),
+			CanBackground: declaration.Background != BackgroundNever || declaration.Yield > 0,
+		})
+	}
+	return described, nil
+}
+
+func programAgentTool(declaration ProgramTool, run func(context.Context, string) (agent.ToolOutput, error)) agent.Tool {
+	return agent.Tool{
+		Spec: agent.ToolSpec{
+			Name:         declaration.Name,
+			Description:  declaration.Description,
+			InputSchema:  declaration.schema(),
+			ParallelSafe: declaration.ParallelSafe,
+		},
+		Run: run,
+	}
+}
+
 // ResolveProgramTools resolves every executable now and produces ordinary
 // agent tools. Name collisions are deliberately left to the complete catalog
 // validation performed by app.Open.
@@ -294,15 +336,7 @@ func (manager *ProcessManager) ResolveProgramTools(declarations []ProgramTool) (
 		}
 		declaration := declaration
 		resolved = append(resolved, ResolvedProgramTool{
-			Tool: agent.Tool{
-				Spec: agent.ToolSpec{
-					Name:         declaration.Name,
-					Description:  declaration.Description,
-					InputSchema:  declaration.schema(),
-					ParallelSafe: declaration.ParallelSafe,
-				},
-				Run: manager.programRunner(declaration, program),
-			},
+			Tool:          programAgentTool(declaration, manager.programRunner(declaration, program)),
 			Snapshot:      snapshot,
 			CanBackground: declaration.Background != BackgroundNever || declaration.Yield > 0,
 		})

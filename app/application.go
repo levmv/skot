@@ -34,26 +34,27 @@ type Application struct {
 // replacement must not make callers retain a stale runtime, but it does not
 // change the stores, catalog, workspace, or runtime policy used to build one.
 type applicationConfig struct {
-	settings          *state.Store
-	interactive       *state.InteractiveStore
-	tools             []agent.Tool
-	programTools      []agent.ProgramToolSnapshot
-	applicationBuild  agent.BuildSnapshot
-	toolSets          toolpolicy.ToolSets
-	systemPrompt      string
-	root              string
-	home              string
-	protectedPaths    []string
-	protection        *workspacetools.ProtectedPathPolicy
-	baseURL           string
-	modelAPI          modelAPI
-	contextWindow     int
-	metadataLookup    modelContextLookup
-	retryBudget       time.Duration
-	streamIdleTimeout time.Duration
-	maxToolIterations int
-	awaitRequiredJobs bool
-	masker            *secretMasker
+	settings            *state.Store
+	interactive         *state.InteractiveStore
+	tools               []agent.Tool
+	programDeclarations []workspacetools.ProgramTool
+	programToolsFile    string
+	applicationBuild    agent.BuildSnapshot
+	toolSets            toolpolicy.ToolSets
+	systemPrompt        string
+	root                string
+	home                string
+	protectedPaths      []string
+	protection          *workspacetools.ProtectedPathPolicy
+	baseURL             string
+	modelAPI            modelAPI
+	contextWindow       int
+	metadataLookup      modelContextLookup
+	retryBudget         time.Duration
+	streamIdleTimeout   time.Duration
+	maxToolIterations   int
+	awaitRequiredJobs   bool
+	masker              *secretMasker
 }
 
 // applicationState is protected by Application.mu. It contains exactly the
@@ -96,7 +97,11 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 	current := application.state.session
 	children := application.state.children
 	application.mu.RUnlock()
-	retainedChildren := current != nil && current.runtime == runtime && children != nil && children.HasChildren(current.id)
+	currentIsRuntime := current != nil && current.runtime == runtime
+	retainedChildren := currentIsRuntime && children != nil && children.HasChildren(current.id)
+	if (len(result.DetachedJobs) != 0 || retainedChildren) && currentIsRuntime && current.memory {
+		return result, errors.Join(runErr, errors.New("in-memory one-shot created unexpected durable external work"))
+	}
 	if len(result.DetachedJobs) != 0 || retainedChildren {
 		application.mu.Lock()
 		if current := application.state.session; current != nil && current.runtime == runtime {
@@ -312,10 +317,11 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 	if err != nil {
 		return err
 	}
-	catalog := append([]agent.Tool(nil), application.config.tools...)
 	toolSets := application.config.toolSets
 	application.mu.RLock()
 	currentToolSet := application.state.toolSet
+	memorySession := application.state.session != nil && application.state.session.memory
+	processes := application.state.processes
 	application.mu.RUnlock()
 	toolSet, err := toolSets.Normalize(value)
 	if err != nil {
@@ -326,11 +332,17 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 			return preferences.SetToolSetSelection(toolSet)
 		})
 	}
-	selected, err := toolSetTools(toolSets, catalog, application.config.settings, toolSet)
+	if memorySession && !toolSetSupportsMemorySession(toolSets, toolSet) {
+		return errors.New("cannot enable process or external-work tools in an in-memory one-shot session")
+	}
+	selected, programSnapshots, err := bindToolSetTools(
+		application.config.tools, toolSets, application.config.settings, toolSet,
+		application.config.programDeclarations, application.config.programToolsFile, processes,
+	)
 	if err != nil {
 		return err
 	}
-	if err := runtime.SetTools(ctx, selected, toolSet); err != nil {
+	if err := runtime.SetToolsWithProgramTools(ctx, selected, toolSet, programSnapshots); err != nil {
 		return err
 	}
 	application.mu.Lock()
@@ -495,16 +507,19 @@ func (application *Application) reloadActiveTools(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tools := append([]agent.Tool(nil), application.config.tools...)
 	toolSets, settings := application.config.toolSets, application.config.settings
 	application.mu.RLock()
 	toolSet := application.state.toolSet
+	processes := application.state.processes
 	application.mu.RUnlock()
-	selected, err := toolSetTools(toolSets, tools, settings, toolSet)
+	selected, programSnapshots, err := bindToolSetTools(
+		application.config.tools, toolSets, settings, toolSet,
+		application.config.programDeclarations, application.config.programToolsFile, processes,
+	)
 	if err != nil {
 		return err
 	}
-	return runtime.SetTools(ctx, selected, toolSet)
+	return runtime.SetToolsWithProgramTools(ctx, selected, toolSet, programSnapshots)
 }
 
 func restoreStoredCredential(store *state.Store, provider, token string, existed bool) error {
@@ -607,7 +622,6 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	settings, masker := application.config.settings, application.config.masker
 	root, systemPrompt := application.config.root, application.config.systemPrompt
 	tools := append([]agent.Tool(nil), application.config.tools...)
-	programTools := append([]agent.ProgramToolSnapshot(nil), application.config.programTools...)
 	toolSets := application.config.toolSets
 	awaitRequiredJobs := application.config.awaitRequiredJobs
 	application.mu.RLock()
@@ -619,6 +633,13 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	application.mu.RUnlock()
 	if currentSession == nil || settings == nil || processes == nil {
 		return errors.New("application is closed")
+	}
+	tools, programTools, err := bindProgramToolsForSet(
+		tools, toolSets, toolSet, application.config.programDeclarations,
+		application.config.programToolsFile, processes,
+	)
+	if err != nil {
+		return err
 	}
 	projectInstructions, err := loadInstructions(root, application.config.protection)
 	if err != nil {
@@ -786,7 +807,7 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 	runtime := currentSession.runtime
 
 	security := resolveSecurityState(ctx, requested, protectedPaths)
-	if toolSetNeedsProcessBoundary(application.config.toolSets, application.config.programTools, application.CurrentToolSet()) {
+	if toolSetNeedsProcessBoundary(application.config.toolSets, application.config.programDeclarations, application.CurrentToolSet()) {
 		toolHome := ""
 		if security.EffectiveScope == workspacetools.ScopeWorkspace {
 			var err error

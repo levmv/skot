@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,15 @@ import (
 	"github.com/levmv/skot/internal/toolpolicy"
 	workspacetools "github.com/levmv/skot/tools"
 )
+
+func canonicalApplicationTestRoot(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := workspacetools.ResolveWorkspaceRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
 
 func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	home := t.TempDir()
@@ -270,7 +280,7 @@ func TestOpenLoadsWorkspacePreferencesOnlyForMatchingInteractiveWorkspace(t *tes
 	if _, err := state.Open(home); err != nil {
 		t.Fatal(err)
 	}
-	preferences, err := state.OpenInteractive(home, firstRoot)
+	preferences, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, firstRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,6 +420,7 @@ func TestOpenHeadlessDoesNotInheritStoredMachineScope(t *testing.T) {
 
 func TestOpenCanonicalWorkspaceAliasSharesPreferences(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
+	canonicalRoot := canonicalApplicationTestRoot(t, root)
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(root, alias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
@@ -417,7 +428,7 @@ func TestOpenCanonicalWorkspaceAliasSharesPreferences(t *testing.T) {
 	if _, err := state.Open(home); err != nil {
 		t.Fatal(err)
 	}
-	preferences, err := state.OpenInteractive(home, root)
+	preferences, err := state.OpenInteractive(home, canonicalRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +442,7 @@ func TestOpenCanonicalWorkspaceAliasSharesPreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer application.Close()
-	if application.Root() != root || application.CurrentModel() != "ollama/aliased" {
+	if application.Root() != canonicalRoot || application.CurrentModel() != "ollama/aliased" {
 		t.Fatalf("alias root/model = %q/%q", application.Root(), application.CurrentModel())
 	}
 }
@@ -441,7 +452,7 @@ func TestOpenInvalidWorkspaceToolSetFallsBackWithoutRewritingPreference(t *testi
 	if _, err := state.Open(home); err != nil {
 		t.Fatal(err)
 	}
-	preferences, err := state.OpenInteractive(home, root)
+	preferences, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,7 +774,7 @@ func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *test
 	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: t.TempDir(), ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
-		ToolSet: toolpolicy.ToolSetDefault, ToolSetExplicit: true,
+		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
 		Scope: workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
 	if err != nil {
@@ -776,6 +787,16 @@ func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *test
 	state, err := application.State(context.Background())
 	if err != nil || state.Configured == nil {
 		t.Fatalf("state = %#v, %v", state, err)
+	}
+	if len(state.Configured.Environment.ProgramTools) != 0 {
+		t.Fatalf("unselected program was resolved into snapshot: %#v", state.Configured.Environment.ProgramTools)
+	}
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetDefault); err != nil {
+		t.Fatal(err)
+	}
+	state, err = application.State(context.Background())
+	if err != nil || state.Configured == nil {
+		t.Fatalf("state after program switch = %#v, %v", state, err)
 	}
 	programs := state.Configured.Environment.ProgramTools
 	if len(programs) != 1 || programs[0].Name != "lookup" || programs[0].Program == "" || programs[0].Timeout != "10m0s" ||
@@ -799,6 +820,55 @@ func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *test
 	state, err = application.State(context.Background())
 	if err != nil || state.Configured == nil || len(state.Configured.Environment.ProgramTools) != 0 {
 		t.Fatalf("inactive program remained in snapshot: %#v, %v", state.Configured, err)
+	}
+}
+
+func TestOpenDoesNotBindUnselectedProgramExecutable(t *testing.T) {
+	home := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	toolsDocument := fmt.Sprintf(`{"tools":[{"name":"missing","description":"missing program","command":[%q]}]}`, missing)
+	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), ModelURI: "ollama/test", ModelExplicit: true,
+		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
+		Scope: workspacetools.ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatalf("unselected executable blocked process-free startup: %v", err)
+	}
+	if !application.state.session.memory {
+		t.Fatal("unselected program disabled in-memory one-shot")
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSwitchToolSetBindsProgramBeforePublishingIt(t *testing.T) {
+	home := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	toolsDocument := fmt.Sprintf(`{"tools":[{"name":"missing","description":"missing program","command":[%q]}]}`, missing)
+	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), ModelURI: "ollama/test", ModelExplicit: true,
+		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
+		ToolSets: map[string][]string{"program-only": {"missing"}},
+		Scope:    workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	err = application.SwitchToolSet(context.Background(), "program-only")
+	if err == nil || !strings.Contains(err.Error(), `tool missing`) || !strings.Contains(err.Error(), "does-not-exist") {
+		t.Fatalf("program binding error = %v", err)
+	}
+	if got := application.CurrentToolSet(); got != toolpolicy.ToolSetReadOnly {
+		t.Fatalf("failed switch published tool set %q", got)
 	}
 }
 
@@ -959,6 +1029,18 @@ func TestOpenHeadlessReadOnlyDoesNotProvisionProcessCapabilities(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatalf("read-only startup depends on process environment: %v", err)
+			}
+			if !application.state.session.memory {
+				t.Fatal("process-free one-shot did not use an in-memory journal")
+			}
+			if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("in-memory startup created home: %v", err)
+			}
+			if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetEdit); err != nil {
+				t.Fatalf("switch between memory-safe tool sets: %v", err)
+			}
+			if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetDefault); err == nil || !strings.Contains(err.Error(), "in-memory one-shot") {
+				t.Fatalf("unsafe memory-session switch error = %v", err)
 			}
 			if err := application.Close(); err != nil {
 				t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -519,6 +520,103 @@ func TestRunOrdinaryOneShotDoesNotCreateManagedSession(t *testing.T) {
 	}
 	if len(summaries) != 0 {
 		t.Fatalf("temporary one-shot sessions = %#v", summaries)
+	}
+}
+
+func TestRunProcessFreeOneShotDoesNotCreateSkotHome(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	t.Setenv("DEEPSEEK_API_KEY", "secret")
+	home := filepath.Join(t.TempDir(), "missing-home")
+	if err := run(context.Background(), []string{
+		"-model", "deepseek/model", "-base-url", server.URL,
+		"-home", home, "-root", t.TempDir(), "-tools", toolpolicy.ToolSetReadOnly, "task",
+	}, bytes.NewReader(nil), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("process-free one-shot created Skot home: %v", err)
+	}
+}
+
+const (
+	processFreeKillHelperEnv  = "SKOT_TEST_PROCESS_FREE_KILL_HELPER"
+	processFreeKillHomeEnv    = "SKOT_TEST_PROCESS_FREE_KILL_HOME"
+	processFreeKillRootEnv    = "SKOT_TEST_PROCESS_FREE_KILL_ROOT"
+	processFreeKillBaseURLEnv = "SKOT_TEST_PROCESS_FREE_KILL_BASE_URL"
+)
+
+func TestRunProcessFreeOneShotKillLeavesNoConversationData(t *testing.T) {
+	received := make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		select {
+		case received <- struct{}{}:
+		default:
+		}
+		select {
+		case <-request.Context().Done():
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	home := filepath.Join(t.TempDir(), "missing-home")
+	var output bytes.Buffer
+	command := exec.Command(os.Args[0], "-test.run=^TestRunProcessFreeOneShotKillHelper$")
+	command.Env = append(os.Environ(),
+		processFreeKillHelperEnv+"=1",
+		processFreeKillHomeEnv+"="+home,
+		processFreeKillRootEnv+"="+t.TempDir(),
+		processFreeKillBaseURLEnv+"="+server.URL,
+		"DEEPSEEK_API_KEY=secret",
+	)
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	killed := false
+	t.Cleanup(func() {
+		if !killed {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
+	select {
+	case <-received:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("helper did not reach model request: %s", output.String())
+	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("running process-free one-shot created Skot home: %v", err)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("killed helper exited successfully")
+	}
+	killed = true
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("killed process-free one-shot left conversation data: %v", err)
+	}
+}
+
+func TestRunProcessFreeOneShotKillHelper(t *testing.T) {
+	if os.Getenv(processFreeKillHelperEnv) != "1" {
+		return
+	}
+	err := run(context.Background(), []string{
+		"-model", "deepseek/model", "-base-url", os.Getenv(processFreeKillBaseURLEnv),
+		"-home", os.Getenv(processFreeKillHomeEnv), "-root", os.Getenv(processFreeKillRootEnv),
+		"-tools", toolpolicy.ToolSetReadOnly, "task",
+	}, bytes.NewReader(nil), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

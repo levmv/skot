@@ -2,7 +2,6 @@ package app
 
 import (
 	"github.com/levmv/skot/agent"
-	"github.com/levmv/skot/internal/session"
 )
 
 // liveSession owns one session-bound runtime and its persistence lifetime.
@@ -11,12 +10,22 @@ import (
 type liveSession struct {
 	id          string
 	runtime     *agent.Runtime
-	journal     *session.Store
+	journal     sessionJournal
 	managed     bool
 	provisional bool
+	memory      bool
 }
 
-func newLiveSession(id string, runtime *agent.Runtime, journal *session.Store, managed bool) *liveSession {
+type sessionJournal interface {
+	agent.Journal
+	HasUserTurn() bool
+	TailRepaired() bool
+	Close() error
+	ClosePruningEmpty() error
+	CloseDiscarding() error
+}
+
+func newLiveSession(id string, runtime *agent.Runtime, journal sessionJournal, managed bool) *liveSession {
 	return &liveSession{id: id, runtime: runtime, journal: journal, managed: managed}
 }
 

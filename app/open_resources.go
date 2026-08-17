@@ -31,13 +31,14 @@ func (resources *openResources) fail(cause error) (*Application, error) {
 }
 
 type openedSession struct {
-	journal     *session.Store
+	journal     sessionJournal
 	id          string
 	managed     bool
 	provisional bool
+	memory      bool
 }
 
-func openInitialSession(config Config, home, root string) (openedSession, error) {
+func openInitialSession(config Config, home, root string, memory bool) (openedSession, error) {
 	var opened openedSession
 	journalPath := strings.TrimSpace(config.JournalPath)
 	var err error
@@ -57,6 +58,10 @@ func openInitialSession(config Config, home, root string) (openedSession, error)
 	case config.Interactive || config.SaveSession:
 		opened.journal, opened.id, err = session.Create(home)
 		opened.managed = err == nil
+	case memory:
+		opened.journal, opened.id, err = session.CreateMemory()
+		opened.provisional = err == nil
+		opened.memory = err == nil
 	default:
 		opened.journal, opened.id, err = session.Create(home)
 		opened.managed = err == nil

@@ -121,6 +121,17 @@ The directory is created with mode `0700`; Skot-managed state files use mode
 `0600`. Session journals contain conversation and workspace data and should
 also be treated as private.
 
+Model-owned processes in `workspace` scope use a separate disposable home under
+the platform user cache, not under the Skot data directory. On Linux its root
+is `$XDG_CACHE_HOME/skot/tool-home` when `XDG_CACHE_HOME` is set and otherwise
+`$HOME/.cache/skot/tool-home`; each canonical workspace gets a hashed
+subdirectory. Consequently `-home`/`SK_HOME` moves private Skot state but does
+not isolate or relocate this shared cache. Set the platform cache environment
+as well when a CI job needs a fully separate process home. A workspace cache
+may be removed when no Skot invocation or surviving job/process for that
+workspace is still running; Skot does not currently garbage-collect it
+automatically.
+
 `config.json` is parsed strictly: unknown fields and multiple top-level values
 are rejected. A representative configuration is:
 
@@ -153,6 +164,14 @@ Use `/login` rather than editing `auth.json` directly.
 Running `sk` with no prompt creates a managed persistent session. A one-shot
 run is ephemeral unless `-save-session` or `-journal` is used, it creates a
 child agent, or it leaves detached work running.
+
+Fresh one-shot runs whose selected tool set contains only built-in
+non-process tools keep their event journal in memory, so normal exit and abrupt
+process termination leave no conversation data in `SK_HOME`. Tool sets with
+`bash`, `job`, `agent`, program tools, or application-provided tools use a
+provisional on-disk journal because they may create work whose state must
+survive the frontend. That journal is discarded after an ordinary one-shot
+unless the run makes the session resumable.
 
 ```sh
 sk -save-session "fix the failing tests"
@@ -262,7 +281,11 @@ Skot loads `tools.json` from its data directory, or another file selected by
 
 The executable receives one JSON argument object on stdin. Stdout becomes the
 model-facing result; stderr remains diagnostic output. A configured tool is
-visible only when the active tool set names it.
+visible only when the active tool set names it. Skot validates every declared
+tool name and schema at startup, but resolves an executable only when its tool
+set becomes active. Thus a missing executable for an inactive tool does not
+block startup; attempting to activate it fails without changing the current
+tool set.
 
 | Field | Meaning |
 | --- | --- |

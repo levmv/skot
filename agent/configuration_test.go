@@ -131,6 +131,35 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	}
 }
 
+func TestRuntimeReplacesToolsAndProgramMetadataAtomically(t *testing.T) {
+	program := Tool{
+		Spec: ToolSpec{Name: "lookup", Description: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
+	}
+	runtime := newTestRuntime(t, Config{
+		Model: &scriptedModel{}, Journal: &memoryJournal{}, Tools: []Tool{program},
+	})
+	resolved := ProgramToolSnapshot{
+		Name: "lookup", Program: "/bin/lookup", Command: []string{"lookup"},
+		Timeout: "1s", Background: "never",
+	}
+	if err := runtime.SetToolsWithProgramTools(context.Background(), []Tool{program}, "programs", []ProgramToolSnapshot{resolved}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.programTools) != 1 || runtime.programTools[0].Program != "/bin/lookup" || runtime.toolSet != "programs" {
+		t.Fatalf("runtime configuration = %#v, %q", runtime.programTools, runtime.toolSet)
+	}
+	invalid := resolved
+	invalid.Name = "inactive"
+	invalid.Program = ""
+	if err := runtime.SetToolsWithProgramTools(context.Background(), []Tool{program}, "broken", []ProgramToolSnapshot{invalid}); err == nil {
+		t.Fatal("invalid inactive program metadata was accepted")
+	}
+	if len(runtime.programTools) != 1 || runtime.programTools[0].Name != "lookup" || runtime.toolSet != "programs" {
+		t.Fatalf("failed update mutated runtime configuration = %#v, %q", runtime.programTools, runtime.toolSet)
+	}
+}
+
 func TestCloneEffectiveConfigSnapshotDoesNotAliasBuildStatus(t *testing.T) {
 	modified := false
 	snapshot := EffectiveConfigSnapshot{

@@ -145,7 +145,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	catalog = builtCatalog.tools
 	toolSets := builtCatalog.toolSets
-	programSnapshots := builtCatalog.programSnapshots
 	selectedToolSet, err := toolSets.Normalize(config.ToolSet)
 	if err != nil && workspaceToolSet {
 		notices = append(notices, fmt.Sprintf("invalid workspace tool_set %q for %s; ignored", config.ToolSet, root))
@@ -155,7 +154,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return resources.fail(agent.MarkInvalidRequest(err))
 	}
 	config.ToolSet = selectedToolSet
-	if config.Interactive || toolSetNeedsProcessBoundary(toolSets, programSnapshots, config.ToolSet) {
+	if config.Interactive || toolSetNeedsProcessBoundary(toolSets, builtCatalog.programDeclarations, config.ToolSet) {
 		toolHome := ""
 		if security.EffectiveScope == workspacetools.ScopeWorkspace {
 			toolHome, err = processes.ToolHome()
@@ -171,10 +170,19 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if notice := protectedPathsNotice(security, root, protection.Paths()); notice != "" {
 		notices = append(notices, notice)
 	}
+	catalog, programSnapshots, err := bindProgramToolsForSet(
+		catalog, toolSets, config.ToolSet, builtCatalog.programDeclarations,
+		builtCatalog.programToolsFile, processes,
+	)
+	if err != nil {
+		return resources.fail(agent.MarkInvalidRequest(err))
+	}
 
-	opened, err := openInitialSession(config, home, root)
+	memorySession := freshHeadlessMemorySession(config, toolSets)
+	opened, err := openInitialSession(config, home, root, memorySession)
 	resources.session = newLiveSession(opened.id, nil, opened.journal, opened.managed)
 	resources.session.provisional = opened.provisional
+	resources.session.memory = opened.memory
 	if err != nil {
 		return resources.fail(err)
 	}
@@ -273,26 +281,27 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	currentSession.runtime = runtime
 	return &Application{
 		config: applicationConfig{
-			settings:          settingsStore,
-			interactive:       interactiveStore,
-			tools:             append([]agent.Tool(nil), catalog...),
-			programTools:      append([]agent.ProgramToolSnapshot(nil), programSnapshots...),
-			applicationBuild:  build,
-			toolSets:          toolSets,
-			systemPrompt:      config.SystemPrompt,
-			root:              root,
-			home:              home,
-			protectedPaths:    protection.Paths(),
-			protection:        protection,
-			baseURL:           config.BaseURL,
-			modelAPI:          modelAPIOverride,
-			contextWindow:     config.ContextWindow,
-			metadataLookup:    openRouterContextWindow,
-			retryBudget:       config.RetryBudget,
-			streamIdleTimeout: config.StreamIdleTimeout,
-			maxToolIterations: config.MaxToolIterations,
-			masker:            masker,
-			awaitRequiredJobs: !config.Interactive,
+			settings:            settingsStore,
+			interactive:         interactiveStore,
+			tools:               append([]agent.Tool(nil), catalog...),
+			programDeclarations: append([]workspacetools.ProgramTool(nil), builtCatalog.programDeclarations...),
+			programToolsFile:    builtCatalog.programToolsFile,
+			applicationBuild:    build,
+			toolSets:            toolSets,
+			systemPrompt:        config.SystemPrompt,
+			root:                root,
+			home:                home,
+			protectedPaths:      protection.Paths(),
+			protection:          protection,
+			baseURL:             config.BaseURL,
+			modelAPI:            modelAPIOverride,
+			contextWindow:       config.ContextWindow,
+			metadataLookup:      openRouterContextWindow,
+			retryBudget:         config.RetryBudget,
+			streamIdleTimeout:   config.StreamIdleTimeout,
+			maxToolIterations:   config.MaxToolIterations,
+			masker:              masker,
+			awaitRequiredJobs:   !config.Interactive,
 		},
 		state: applicationState{
 			session:        currentSession,

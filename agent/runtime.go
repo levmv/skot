@@ -197,6 +197,9 @@ func normalizeProgramToolSnapshots(input []ProgramToolSnapshot, sanitize func(st
 		}
 		snapshot.Workdir = sanitize(strings.TrimSpace(snapshot.Workdir))
 		snapshot.EnvironmentNames = append([]string(nil), snapshot.EnvironmentNames...)
+		if err := validateProgramToolSnapshot(snapshot); err != nil {
+			return nil, err
+		}
 		result[index] = snapshot
 	}
 	return result, nil
@@ -350,6 +353,18 @@ func selectionMatchesModel(selection ModelSelectedRecord, modelInfo ModelInfo) b
 // Tool set names and exact membership deliberately live in the application
 // assembling the runtime.
 func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet string) error {
+	return runtime.setTools(ctx, input, toolSet, nil, false)
+}
+
+// SetToolsWithProgramTools atomically replaces the model-visible tools and
+// the resolved executable metadata recorded with them. Applications which
+// bind executable-backed tools lazily use this so a failed reconfiguration
+// cannot publish a tool without its matching journal snapshot (or vice versa).
+func (runtime *Runtime) SetToolsWithProgramTools(ctx context.Context, input []Tool, toolSet string, inputPrograms []ProgramToolSnapshot) error {
+	return runtime.setTools(ctx, input, toolSet, inputPrograms, true)
+}
+
+func (runtime *Runtime) setTools(ctx context.Context, input []Tool, toolSet string, inputPrograms []ProgramToolSnapshot, replacePrograms bool) error {
 	if !runtime.runMu.TryLock() {
 		return ErrRunActive
 	}
@@ -361,7 +376,18 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet stri
 	if err != nil {
 		return err
 	}
+	programTools := runtime.programTools
+	if replacePrograms {
+		programTools, err = normalizeProgramToolSnapshots(inputPrograms, runtime.sanitize)
+		if err != nil {
+			return err
+		}
+	}
 	toolSet = runtime.sanitize(strings.TrimSpace(toolSet))
+	snapshot := runtime.effectiveConfigSnapshotWithProgramToolsLocked(runtime.modelInfo, tools, toolSet, runtime.scope, programTools)
+	if err := validateEffectiveConfigSnapshot(snapshot); err != nil {
+		return err
+	}
 	records, err := runtime.journal.Records(ctx)
 	if err != nil {
 		return fmt.Errorf("read journal before tool reconfiguration: %w", err)
@@ -371,13 +397,15 @@ func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet stri
 		return err
 	}
 	runtime.publishSessionStatus(live.state)
-	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, tools, toolSet, runtime.scope)
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}
 	runtime.tools = tools
 	runtime.toolByName = toolByName
 	runtime.toolSet = toolSet
+	if replacePrograms {
+		runtime.programTools = programTools
+	}
 	runtime.publishSessionStatus(live.state)
 	return nil
 }

@@ -54,6 +54,7 @@ type ConfigurationAgent interface {
 	SwitchModel(context.Context, string, string) error
 	CurrentReasoningEffort() string
 	CurrentScope() string
+	EffectiveScope() string
 	ScopeSummary() string
 	ScopeNotice() string
 	SwitchScope(context.Context, string) error
@@ -91,6 +92,10 @@ type ProviderStatus = app.ProviderStatus
 type ModelChoice = app.ModelChoice
 
 type SessionSummary = app.SessionSummary
+
+func preferenceAppliedDespiteError(err error) bool {
+	return app.IsPreferenceNotPersisted(err)
+}
 
 type Config struct {
 	ModelURI        string

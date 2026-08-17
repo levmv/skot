@@ -1271,16 +1271,23 @@ func TestRunDeliversBackgroundCompletionThroughJournal(t *testing.T) {
 	}
 }
 
-func TestRunLoadsSavedSettingsUnlessExplicitlyOverridden(t *testing.T) {
-	home := t.TempDir()
-	settings, err := state.Open(home)
+func TestRunHeadlessIgnoresInteractivePreferencesAndHonorsExplicitInputs(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.SetToolSetSelection(toolpolicy.ToolSetEdit); err != nil {
+	if err := preferences.SetToolSetSelection(toolpolicy.ToolSetEdit); err != nil {
 		t.Fatal(err)
 	}
-	if err := settings.SetDefaultModelSelection("deepseek/saved-model", "high"); err != nil {
+	if err := preferences.SetModelSelection("deepseek/saved-model", "high"); err != nil {
+		t.Fatal(err)
+	}
+	interactiveBefore, err := os.ReadFile(filepath.Join(home, "interactive.json"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	var requests []chatRequestForTest
@@ -1298,7 +1305,7 @@ func TestRunLoadsSavedSettingsUnlessExplicitlyOverridden(t *testing.T) {
 	t.Setenv("SK_HOME", home)
 
 	runOnce := func(extra ...string) {
-		args := []string{"-base-url", server.URL, "-root", t.TempDir()}
+		args := []string{"-base-url", server.URL, "-root", root}
 		args = append(args, extra...)
 		args = append(args, "task")
 		if err := run(context.Background(), args, bytes.NewReader(nil), io.Discard, io.Discard); err != nil {
@@ -1307,19 +1314,20 @@ func TestRunLoadsSavedSettingsUnlessExplicitlyOverridden(t *testing.T) {
 	}
 	runOnce()
 	runOnce("-model", "deepseek/explicit-model", "-tools", toolpolicy.ToolSetDefault)
-	runOnce("-reasoning-effort", "default")
 	t.Setenv("SK_REASONING_EFFORT", "high")
 	runOnce("-model", "deepseek/env-effort-model")
-	if len(requests) != 4 || len(requests[0].Tools) != 7 || len(requests[1].Tools) != 8 {
+	if len(requests) != 3 || len(requests[0].Tools) == 0 || len(requests[0].Tools) != len(requests[1].Tools) {
 		t.Fatalf("request count/tool catalogs = %d/%d/%d", len(requests), len(requests[0].Tools), len(requests[1].Tools))
 	}
-	if requests[0].Model != "saved-model" || requests[1].Model != "explicit-model" ||
-		requests[2].Model != "saved-model" || requests[3].Model != "env-effort-model" {
-		t.Fatalf("models = %q/%q/%q/%q", requests[0].Model, requests[1].Model, requests[2].Model, requests[3].Model)
+	if requests[0].Model != "deepseek-v4-flash" || requests[1].Model != "explicit-model" || requests[2].Model != "env-effort-model" {
+		t.Fatalf("models = %q/%q/%q", requests[0].Model, requests[1].Model, requests[2].Model)
 	}
-	if requests[0].ReasoningEffort != "high" || requests[1].ReasoningEffort != "" ||
-		requests[2].ReasoningEffort != "" || requests[3].ReasoningEffort != "high" {
-		t.Fatalf("reasoning efforts = %q/%q/%q/%q", requests[0].ReasoningEffort, requests[1].ReasoningEffort, requests[2].ReasoningEffort, requests[3].ReasoningEffort)
+	if requests[0].ReasoningEffort != "" || requests[1].ReasoningEffort != "" || requests[2].ReasoningEffort != "high" {
+		t.Fatalf("reasoning efforts = %q/%q/%q", requests[0].ReasoningEffort, requests[1].ReasoningEffort, requests[2].ReasoningEffort)
+	}
+	interactiveAfter, err := os.ReadFile(filepath.Join(home, "interactive.json"))
+	if err != nil || !bytes.Equal(interactiveAfter, interactiveBefore) {
+		t.Fatalf("headless changed interactive state = %v", err)
 	}
 }
 

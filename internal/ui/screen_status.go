@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/toolpolicy"
 )
 
@@ -40,6 +41,10 @@ func (m screenModel) footerLine() string {
 	if toolSet == toolpolicy.ToolSetDefault {
 		toolSet = ""
 	}
+	effectiveScope := ""
+	if strings.TrimSpace(m.agent.EffectiveScope()) == string(app.ScopeMachine) {
+		effectiveScope = "scope: machine"
+	}
 
 	// The tool set sits away from the model, where a bare "default" next to a
 	// model name read as part of the selection. Root goes last because it is
@@ -49,6 +54,7 @@ func (m screenModel) footerLine() string {
 		compactContextStatus(m.sessionStatus.ContextReport),
 		compactUsage(m.sessionStatus.Usage),
 		toolSet,
+		effectiveScope,
 	)
 	root := sanitizeTerminalText(strings.TrimSpace(m.config.Root))
 	root = truncateFooterRoot(root, beforeRoot, "", m.contentWidth())

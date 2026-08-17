@@ -45,10 +45,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return nil, err
 	}
 	config.Home = home
-	toolHomeRoot, err := workspacetools.DefaultToolHomeRoot()
-	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
-	}
 	settingsStore, err := state.Open(home)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Skot data: %w", err)
@@ -57,30 +53,47 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
+	root, err := workspacetools.ResolveWorkspaceRoot(config.Root)
+	if err != nil {
+		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
+	}
+	toolHomeRoot, err := workspacetools.DefaultToolHomeRoot()
+	if err != nil {
+		return nil, agent.MarkInvalidRequest(err)
+	}
 	var notices []string
 	theme := state.ThemeAuto
+	var interactiveStore *state.InteractiveStore
+	var workspaceSettings state.WorkspaceSettings
+	workspaceToolSet := false
 	if config.Interactive {
-		selectedTheme, themeErr := state.NormalizeTheme(settings.Theme)
-		if themeErr == nil {
-			theme = selectedTheme
-		} else {
-			notices = append(notices, themeErr.Error()+"; reset to auto")
-			if saveErr := settingsStore.SetThemeSelection(state.ThemeAuto); saveErr != nil {
-				notices = append(notices, "save reset terminal theme: "+saveErr.Error())
-			}
+		legacyKeys, err := settingsStore.LegacyInteractiveKeys()
+		if err != nil {
+			return nil, fmt.Errorf("inspect legacy settings: %w", err)
 		}
-	}
-	if !config.ModelExplicit && strings.TrimSpace(settings.Model) != "" {
-		config.ModelURI = settings.Model
-		if !config.ReasoningEffortExplicit {
-			config.ReasoningEffort = settings.ReasoningEffort
+		if len(legacyKeys) != 0 {
+			notices = append(notices, "config.json contains ignored legacy interactive settings: "+strings.Join(legacyKeys, ", ")+"; remove them and choose the preferences again")
 		}
-	}
-	if !config.ToolSetExplicit && strings.TrimSpace(settings.ToolSet) != "" {
-		config.ToolSet = settings.ToolSet
-	}
-	if !config.ScopeExplicit && strings.TrimSpace(settings.Scope) != "" {
-		config.Scope = settings.Scope
+		interactiveStore, err = state.OpenInteractive(home, root)
+		if err != nil {
+			return nil, fmt.Errorf("initialize interactive state: %w", err)
+		}
+		interactiveSettings, err := interactiveStore.Settings()
+		if err != nil {
+			return nil, fmt.Errorf("load interactive state: %w", err)
+		}
+		notices = append(notices, interactiveSettings.Notices...)
+		if interactiveSettings.Theme != "" {
+			theme = interactiveSettings.Theme
+		}
+		workspaceSettings = interactiveSettings.Workspace
+		if !config.ToolSetExplicit && workspaceSettings.ToolSet != "" {
+			config.ToolSet = workspaceSettings.ToolSet
+			workspaceToolSet = true
+		}
+		if !config.ScopeExplicit && workspaceSettings.Scope != "" {
+			config.Scope = workspaceSettings.Scope
+		}
 	}
 	if strings.TrimSpace(config.ModelURI) == "" {
 		config.ModelURI = DefaultModelURI
@@ -91,10 +104,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	config.Scope = string(scope)
 
-	root, err := workspacetools.ResolveWorkspaceRoot(config.Root)
-	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
-	}
 	configuredProtectedPaths := append([]string(nil), settings.ProtectedPaths...)
 	configuredProtectedPaths = append(configuredProtectedPaths, config.ProtectedPaths...)
 	protection, err := workspacetools.NewProtectedPathPolicy(root, configuredProtectedPaths)
@@ -148,7 +157,15 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	catalog = builtCatalog.tools
 	toolSets := builtCatalog.toolSets
 	programSnapshots := builtCatalog.programSnapshots
-	config.ToolSet = builtCatalog.toolSet
+	selectedToolSet, err := toolSets.Normalize(config.ToolSet)
+	if err != nil && workspaceToolSet {
+		notices = append(notices, fmt.Sprintf("invalid workspace tool_set %q for %s; ignored", config.ToolSet, root))
+		selectedToolSet, err = toolSets.Normalize(ToolSetDefault)
+	}
+	if err != nil {
+		return resources.fail(agent.MarkInvalidRequest(err))
+	}
+	config.ToolSet = selectedToolSet
 
 	opened, err := openInitialSession(config, home, root)
 	resources.session = newLiveSession(opened.id, nil, opened.journal, opened.managed)
@@ -186,13 +203,18 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
 	}
 	notices = append(notices, processes.AttachSessionNotices(sessionID)...)
-	if config.Resume && !config.ModelExplicit {
+	sessionModelSelected := false
+	if !config.ModelExplicit {
 		if replayedState != nil && replayedState.Selection.Model != "" {
 			config.ModelURI = replayedState.Selection.Provider + "/" + replayedState.Selection.Model
+			sessionModelSelected = true
 			if !config.ReasoningEffortExplicit {
 				config.ReasoningEffort = replayedState.Selection.ReasoningEffort
 			}
 		}
+	}
+	if !sessionModelSelected {
+		notices = append(notices, applyWorkspaceModelPreference(&config, workspaceSettings, root, modelAPIOverride)...)
 	}
 	initialRoute, err := resolveModelRoute(config.ModelURI, config.ReasoningEffort, modelRouteOverrides{
 		BaseURL: config.BaseURL, API: modelAPIOverride, ContextWindow: config.ContextWindow,
@@ -247,6 +269,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	return &Application{
 		config: applicationConfig{
 			settings:          settingsStore,
+			interactive:       interactiveStore,
 			tools:             append([]agent.Tool(nil), catalog...),
 			programTools:      append([]agent.ProgramToolSnapshot(nil), programSnapshots...),
 			applicationBuild:  build,
@@ -278,6 +301,35 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			startupNotices: notices,
 		},
 	}, nil
+}
+
+func applyWorkspaceModelPreference(config *Config, workspace state.WorkspaceSettings, root string, api modelAPI) []string {
+	if config.ModelExplicit || strings.TrimSpace(workspace.Model) == "" {
+		return nil
+	}
+	effort := config.ReasoningEffort
+	if !config.ReasoningEffortExplicit && workspace.ReasoningEffort != nil {
+		effort = *workspace.ReasoningEffort
+	}
+	if config.ReasoningEffortExplicit {
+		config.ModelURI = workspace.Model
+		return nil
+	}
+	overrides := modelRouteOverrides{BaseURL: config.BaseURL, API: api, ContextWindow: config.ContextWindow}
+	if _, err := resolveModelRoute(workspace.Model, effort, overrides, modelRouteEnrichment{}); err == nil {
+		config.ModelURI = workspace.Model
+		config.ReasoningEffort = effort
+		return nil
+	} else if workspace.ReasoningEffort != nil {
+		if _, fallbackErr := resolveModelRoute(workspace.Model, "", overrides, modelRouteEnrichment{}); fallbackErr == nil {
+			config.ModelURI = workspace.Model
+			config.ReasoningEffort = ""
+			return []string{fmt.Sprintf("invalid workspace reasoning_effort %q for %s; ignored: %v", effort, root, err)}
+		}
+		return []string{fmt.Sprintf("invalid workspace model preference %q for %s; ignored: %v", workspace.Model, root, err)}
+	} else {
+		return []string{fmt.Sprintf("invalid workspace model preference %q for %s; ignored: %v", workspace.Model, root, err)}
+	}
 }
 
 func modelRequestPolicy(retryBudget, streamIdleTimeout time.Duration) agent.ModelRequestPolicy {

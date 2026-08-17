@@ -35,6 +35,7 @@ type Application struct {
 // change the stores, catalog, workspace, or runtime policy used to build one.
 type applicationConfig struct {
 	settings          *state.Store
+	interactive       *state.InteractiveStore
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
 	applicationBuild  agent.BuildSnapshot
@@ -112,10 +113,22 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	if err != nil {
 		return err
 	}
-	settings := application.config.settings
-	route, err := activateModelRoute(ctx, uri, effort, modelRouteOverrides{
+	overrides := modelRouteOverrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
-	}, savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
+	}
+	route, err := resolveModelRoute(uri, effort, overrides, modelRouteEnrichment{})
+	if err != nil {
+		return agent.MarkInvalidRequest(err)
+	}
+	currentModel := runtime.CurrentModel()
+	currentEffort := runtime.CurrentReasoningEffort()
+	if strings.EqualFold(route.URI, currentModel) && route.ReasoningEffort == currentEffort {
+		return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
+			return preferences.SetModelSelection(currentModel, currentEffort)
+		})
+	}
+	route, err = activateModelRoute(ctx, uri, effort, overrides,
+		savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
 	}
@@ -123,22 +136,8 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	if err != nil {
 		return err
 	}
-	previous, err := settings.Settings()
-	if err != nil {
-		return fmt.Errorf("load saved model selection: %w", err)
-	}
-	if err := settings.SetDefaultModelSelection(route.URI, route.ReasoningEffort); err != nil {
-		return fmt.Errorf("save model selection: %w", err)
-	}
 	if err := runtime.SwitchModel(ctx, model); err != nil {
-		rollbackErr := settings.SetDefaultModelSelection(previous.Model, previous.ReasoningEffort)
-		if rollbackErr != nil {
-			// Runtime rejected the switch and remains authoritative for this
-			// process; the joined error exposes that persistence could not be
-			// restored and may select the attempted model on the next launch.
-			rollbackErr = fmt.Errorf("restore previous model selection: %w", rollbackErr)
-		}
-		return errors.Join(err, rollbackErr)
+		return err
 	}
 	application.mu.RLock()
 	children := application.state.children
@@ -146,7 +145,9 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	if children != nil {
 		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort())
 	}
-	return nil
+	return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
+		return preferences.SetModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort())
+	})
 }
 
 func (application *Application) CurrentReasoningEffort() string {
@@ -169,23 +170,33 @@ func (application *Application) SwitchTheme(value string) error {
 		return err
 	}
 	application.mu.Lock()
-	defer application.mu.Unlock()
-	if application.state.session == nil || application.config.settings == nil {
+	if application.state.session == nil {
+		application.mu.Unlock()
 		return errors.New("application is closed")
 	}
-	if theme == application.state.theme {
+	if theme != application.state.theme {
+		application.state.theme = theme
+	}
+	application.mu.Unlock()
+	return application.persistInteractivePreference("theme", func(preferences *state.InteractiveStore) error {
+		return preferences.SetThemeSelection(theme)
+	})
+}
+
+func (application *Application) persistInteractivePreference(setting string, persist func(*state.InteractiveStore) error) error {
+	preferences := application.config.interactive
+	if preferences == nil {
 		return nil
 	}
-	if err := application.config.settings.SetThemeSelection(theme); err != nil {
-		return fmt.Errorf("save theme: %w", err)
+	if err := persist(preferences); err != nil {
+		return &PreferenceNotPersistedError{Setting: setting, Err: err}
 	}
-	application.state.theme = theme
 	return nil
 }
 
 func (application *Application) ModelChoices() []ModelChoice {
 	current := application.CurrentModel()
-	choices := modelChoices(application.config.settings, current, modelRouteOverrides{
+	choices := modelChoices(application.config.interactive, current, modelRouteOverrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
 	})
 	runtime := application.runtimeOrNil()
@@ -304,31 +315,24 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 	}
 	catalog := append([]agent.Tool(nil), application.config.tools...)
 	toolSets := application.config.toolSets
-	settings := application.config.settings
 	application.mu.RLock()
-	oldToolSet := application.state.toolSet
+	currentToolSet := application.state.toolSet
 	application.mu.RUnlock()
 	toolSet, err := toolSets.Normalize(value)
 	if err != nil {
 		return err
 	}
-	selected, err := toolSetTools(toolSets, catalog, settings, toolSet)
+	if toolSet == currentToolSet {
+		return application.persistInteractivePreference("tool set", func(preferences *state.InteractiveStore) error {
+			return preferences.SetToolSetSelection(toolSet)
+		})
+	}
+	selected, err := toolSetTools(toolSets, catalog, application.config.settings, toolSet)
 	if err != nil {
 		return err
 	}
 	if err := runtime.SetTools(ctx, selected, toolSet); err != nil {
 		return err
-	}
-	if err := settings.SetToolSetSelection(toolSet); err != nil {
-		previous, selectErr := toolSetTools(toolSets, catalog, settings, oldToolSet)
-		rollbackErr := selectErr
-		if selectErr == nil {
-			rollbackErr = runtime.SetTools(context.WithoutCancel(ctx), previous, oldToolSet)
-		}
-		if rollbackErr != nil {
-			rollbackErr = fmt.Errorf("restore previous tool set: %w", rollbackErr)
-		}
-		return errors.Join(fmt.Errorf("save tool set: %w", err), rollbackErr)
 	}
 	application.mu.Lock()
 	if application.state.session == nil || application.state.session.runtime != runtime {
@@ -337,7 +341,9 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 	}
 	application.state.toolSet = toolSet
 	application.mu.Unlock()
-	return nil
+	return application.persistInteractivePreference("tool set", func(preferences *state.InteractiveStore) error {
+		return preferences.SetToolSetSelection(toolSet)
+	})
 }
 
 func (application *Application) SessionStatus() agent.SessionStatus {
@@ -360,6 +366,12 @@ func (application *Application) CurrentScope() string {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
 	return string(application.state.requestedScope)
+}
+
+func (application *Application) EffectiveScope() string {
+	application.mu.RLock()
+	defer application.mu.RUnlock()
+	return string(application.state.security.EffectiveScope)
 }
 
 func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Model, error) {
@@ -760,17 +772,17 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 	application.mu.RLock()
 	if requested == application.state.requestedScope {
 		application.mu.RUnlock()
-		return nil
+		return application.persistInteractivePreference("filesystem scope", func(preferences *state.InteractiveStore) error {
+			return preferences.SetScopeSelection(string(requested))
+		})
 	}
 	processes := application.state.processes
 	currentSession := application.state.session
-	oldScope := application.state.requestedScope
 	application.mu.RUnlock()
-	settings := application.config.settings
 	root := application.config.root
 	toolHome := application.config.toolHome
 	protectedPaths := application.config.protectedPaths
-	if processes == nil || settings == nil || currentSession == nil || currentSession.runtime == nil {
+	if processes == nil || currentSession == nil || currentSession.runtime == nil {
 		return fmt.Errorf("application is closed")
 	}
 	runtime := currentSession.runtime
@@ -781,12 +793,9 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 	}
 
 	application.mu.Lock()
-	defer application.mu.Unlock()
 	if application.state.processes != processes || application.state.session != currentSession {
+		application.mu.Unlock()
 		return fmt.Errorf("runtime changed while switching scope")
-	}
-	if err := settings.SetDefaultScope(string(requested)); err != nil {
-		return fmt.Errorf("save filesystem scope: %w", err)
 	}
 	if err := processes.SetScopeAfter(security.EffectiveScope, func() error {
 		previous := application.state.security.snapshot()
@@ -800,10 +809,13 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 		}
 		return nil
 	}); err != nil {
-		settingsErr := settings.SetDefaultScope(string(oldScope))
-		return errors.Join(err, settingsErr)
+		application.mu.Unlock()
+		return err
 	}
 	application.state.requestedScope = requested
 	application.state.security = security
-	return nil
+	application.mu.Unlock()
+	return application.persistInteractivePreference("filesystem scope", func(preferences *state.InteractiveStore) error {
+		return preferences.SetScopeSelection(string(requested))
+	})
 }

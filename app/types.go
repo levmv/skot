@@ -1,6 +1,8 @@
 package app
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/levmv/skot/agent"
@@ -105,4 +107,24 @@ type SessionSummary struct {
 	ID        string
 	Title     string
 	UpdatedAt time.Time
+}
+
+// PreferenceNotPersistedError reports a live configuration value whose
+// interactive preference could not be saved. Frontends should refresh
+// from the live Application state and present the error as a partial-success
+// notice rather than pretending the runtime change failed.
+type PreferenceNotPersistedError struct {
+	Setting string
+	Err     error
+}
+
+func (failure *PreferenceNotPersistedError) Error() string {
+	return fmt.Sprintf("%s is active for this session but was not saved: %v", failure.Setting, failure.Err)
+}
+
+func (failure *PreferenceNotPersistedError) Unwrap() error { return failure.Err }
+
+func IsPreferenceNotPersisted(err error) bool {
+	var failure *PreferenceNotPersistedError
+	return errors.As(err, &failure)
 }

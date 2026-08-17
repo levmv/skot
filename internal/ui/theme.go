@@ -58,8 +58,9 @@ func (m *screenModel) switchTerminalTheme(value string) (tea.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := m.agent.SwitchTheme(theme); err != nil {
-		return nil, err
+	switchErr := m.agent.SwitchTheme(theme)
+	if switchErr != nil && !preferenceAppliedDespiteError(switchErr) {
+		return nil, switchErr
 	}
 	m.theme = theme
 	m.themeQuery++
@@ -68,11 +69,11 @@ func (m *screenModel) switchTerminalTheme(value string) (tea.Cmd, error) {
 		// missing response cannot leave the previously selected palette in place.
 		m.applyTerminalTheme(true)
 		m.themePending = true
-		return queryTerminalTheme(m.themeQuery), nil
+		return queryTerminalTheme(m.themeQuery), switchErr
 	}
 	m.themePending = false
 	m.applyTerminalTheme(theme == ThemeDark)
-	return nil, nil
+	return nil, switchErr
 }
 
 func (m *screenModel) applyTerminalTheme(dark bool) {

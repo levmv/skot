@@ -28,6 +28,10 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	preferences, err := state.OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,7 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := &Application{
-		config: applicationConfig{settings: settings, root: root, home: home},
+		config: applicationConfig{settings: settings, interactive: preferences, root: root, home: home},
 		state: applicationState{
 			session:        newLiveSession("", runtime, nil, false),
 			processes:      processes,
@@ -55,15 +59,73 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	if err := application.SwitchScope(context.Background(), workspacetools.ScopeMachine); err != nil {
 		t.Fatal(err)
 	}
-	if application.CurrentScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine · no additional filesystem boundary" {
-		t.Fatalf("scope = %q, summary = %q", application.CurrentScope(), application.ScopeSummary())
+	if application.CurrentScope() != workspacetools.ScopeMachine || application.EffectiveScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine · no additional filesystem boundary" {
+		t.Fatalf("scope = %q/%q, summary = %q", application.CurrentScope(), application.EffectiveScope(), application.ScopeSummary())
 	}
-	stored, err := settings.Settings()
-	if err != nil || stored.Scope != workspacetools.ScopeMachine {
-		t.Fatalf("stored scope = %q, %v", stored.Scope, err)
+	stored, err := preferences.Settings()
+	if err != nil || stored.Workspace.Scope != workspacetools.ScopeMachine {
+		t.Fatalf("stored scope = %q, %v", stored.Workspace.Scope, err)
 	}
 	if _, err := processes.RunShell(context.Background(), "true"); err != nil {
 		t.Fatalf("process manager unusable after switch: %v", err)
+	}
+}
+
+func TestApplicationKeepsSwitchedScopeWhenPreferenceIsNotPersisted(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	settings, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = processes.Close() })
+	journal, err := session.Open(filepath.Join(t.TempDir(), "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = journal.Close() })
+	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{
+		config: applicationConfig{settings: settings, interactive: preferences, root: root, home: home},
+		state: applicationState{
+			session: newLiveSession("", runtime, nil, false), processes: processes,
+			requestedScope: ScopeAuto,
+			security:       securityState{RequestedScope: ScopeAuto, EffectiveScope: ScopeMachine, Container: "docker"},
+		},
+	}
+	err = application.SwitchScope(context.Background(), ScopeMachine)
+	if err == nil || !IsPreferenceNotPersisted(err) {
+		t.Fatalf("scope persistence error = %v", err)
+	}
+	if application.CurrentScope() != ScopeMachine || application.EffectiveScope() != ScopeMachine {
+		t.Fatalf("live scope = %q/%q", application.CurrentScope(), application.EffectiveScope())
+	}
+	stored, readErr := preferences.Settings()
+	if readErr != nil || stored.Workspace.Scope != "" {
+		t.Fatalf("unexpected stored scope = %#v, %v", stored.Workspace, readErr)
+	}
+	if err := os.Remove(filepath.Join(home, "interactive.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchScope(context.Background(), ScopeMachine); err != nil {
+		t.Fatalf("retry current scope: %v", err)
+	}
+	stored, readErr = preferences.Settings()
+	if readErr != nil || stored.Workspace.Scope != ScopeMachine {
+		t.Fatalf("retried stored scope = %#v, %v", stored.Workspace, readErr)
 	}
 }
 
@@ -108,7 +170,7 @@ func TestApplicationSwitchesAndPersistsTheme(t *testing.T) {
 	if err := application.SwitchTheme(" DARK "); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := application.config.settings.Settings()
+	stored, err := application.config.interactive.Settings()
 	if err != nil || application.CurrentTheme() != state.ThemeDark || stored.Theme != state.ThemeDark {
 		t.Fatalf("theme = %q, stored = %q, err = %v", application.CurrentTheme(), stored.Theme, err)
 	}
@@ -124,7 +186,7 @@ func TestApplicationSwitchesAndPersistsTheme(t *testing.T) {
 	if err := application.SwitchTheme(state.ThemeLight); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("switch theme after close error = %v", err)
 	}
-	reopened, err := state.Open(home)
+	reopened, err := state.OpenInteractive(home, application.config.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,45 +196,50 @@ func TestApplicationSwitchesAndPersistsTheme(t *testing.T) {
 	}
 }
 
-func TestOpenLoadsPersistedTheme(t *testing.T) {
-	home, root := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"theme":"dark"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	application, err := Open(context.Background(), Config{
-		Home: home, Root: root, Interactive: true,
-		Scope: ScopeMachine, ScopeExplicit: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close() })
-	if got := application.CurrentTheme(); got != state.ThemeDark {
-		t.Fatalf("loaded theme = %q", got)
-	}
-}
-
-func TestOpenIgnoresThemeOutsideInteractiveUI(t *testing.T) {
-	home, root := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"theme":"sepia"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	application, err := Open(context.Background(), Config{
-		Home: home, Root: root, ModelURI: "ollama/qwen3:8b", ModelExplicit: true,
-		Scope: ScopeMachine, ScopeExplicit: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close() })
-	if got := application.CurrentTheme(); got != state.ThemeAuto {
-		t.Fatalf("non-interactive theme = %q", got)
-	}
-}
-
-func TestOpenResetsInvalidInteractiveThemeToAuto(t *testing.T) {
+func TestApplicationKeepsLiveThemeAndToolsWhenPreferenceIsNotPersisted(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"theme":"sepia"}`), 0o600); err != nil {
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: t.TempDir(), Interactive: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchTheme(state.ThemeDark); err == nil || !IsPreferenceNotPersisted(err) {
+		t.Fatalf("theme persistence error = %v", err)
+	}
+	if application.CurrentTheme() != state.ThemeDark {
+		t.Fatalf("live theme = %q", application.CurrentTheme())
+	}
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetReadOnly); err == nil || !IsPreferenceNotPersisted(err) {
+		t.Fatalf("tool persistence error = %v", err)
+	}
+	if application.CurrentToolSet() != toolpolicy.ToolSetReadOnly {
+		t.Fatalf("live tool set = %q", application.CurrentToolSet())
+	}
+	if err := os.Remove(filepath.Join(home, "interactive.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchTheme(state.ThemeDark); err != nil {
+		t.Fatalf("retry current theme: %v", err)
+	}
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetReadOnly); err != nil {
+		t.Fatalf("retry current tool set: %v", err)
+	}
+	stored, err := application.config.interactive.Settings()
+	if err != nil || stored.Theme != state.ThemeDark || stored.Workspace.ToolSet != toolpolicy.ToolSetReadOnly {
+		t.Fatalf("retried preferences = %#v, %v", stored, err)
+	}
+}
+
+func TestOpenIgnoresInvalidInteractiveThemeWithoutRewritingIt(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "interactive.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"ui":{"theme":"sepia"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	application, err := Open(context.Background(), Config{
@@ -186,12 +253,265 @@ func TestOpenResetsInvalidInteractiveThemeToAuto(t *testing.T) {
 	if got := application.CurrentTheme(); got != state.ThemeAuto {
 		t.Fatalf("theme = %q, want auto", got)
 	}
-	settings, err := application.config.settings.Settings()
-	if err != nil || settings.Theme != state.ThemeAuto {
-		t.Fatalf("stored theme = %q, err = %v", settings.Theme, err)
+	settings, err := application.config.interactive.Settings()
+	if err != nil || settings.Theme != "" {
+		t.Fatalf("stored theme view = %q, err = %v", settings.Theme, err)
 	}
-	if notices := strings.Join(application.StartupNotices(), "\n"); !strings.Contains(notices, "reset to auto") {
+	if notices := strings.Join(application.StartupNotices(), "\n"); !strings.Contains(notices, "ignored") {
 		t.Fatalf("startup notices = %q", notices)
+	}
+	if raw, err := os.ReadFile(path); err != nil || !strings.Contains(string(raw), `"theme":"sepia"`) {
+		t.Fatalf("invalid state was rewritten = %q, %v", raw, err)
+	}
+}
+
+func TestOpenLoadsWorkspacePreferencesOnlyForMatchingInteractiveWorkspace(t *testing.T) {
+	home, firstRoot, secondRoot := t.TempDir(), t.TempDir(), t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, firstRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetModelSelection("ollama/saved-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetToolSetSelection(toolpolicy.ToolSetReadOnly); err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetScopeSelection(string(ScopeMachine)); err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetThemeSelection(state.ThemeDark); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := Open(context.Background(), Config{Home: home, Root: firstRoot, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CurrentModel() != "ollama/saved-model" || first.CurrentReasoningEffort() != "" ||
+		first.CurrentToolSet() != toolpolicy.ToolSetReadOnly || first.CurrentScope() != ScopeMachine ||
+		first.CurrentTheme() != state.ThemeDark {
+		t.Fatalf("first workspace: model=%q effort=%q tools=%q scope=%q theme=%q",
+			first.CurrentModel(), first.CurrentReasoningEffort(), first.CurrentToolSet(), first.CurrentScope(), first.CurrentTheme())
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(context.Background(), Config{Home: home, Root: secondRoot, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if second.CurrentModel() != DefaultModelURI || second.CurrentToolSet() != toolpolicy.ToolSetDefault ||
+		second.CurrentScope() != ScopeAuto || second.CurrentTheme() != state.ThemeDark {
+		t.Fatalf("second workspace: model=%q tools=%q scope=%q theme=%q",
+			second.CurrentModel(), second.CurrentToolSet(), second.CurrentScope(), second.CurrentTheme())
+	}
+}
+
+func TestOpenLegacyInteractiveConfigIsIgnoredAndNoticedOnlyInteractively(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	legacy := `{"model":"ollama/legacy","reasoning_effort":"high","recent_models":["ollama/older"],"tool_set":"read-only","scope":"machine","theme":"dark"}`
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	interactive, err := Open(context.Background(), Config{Home: home, Root: root, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interactive.CurrentModel() != DefaultModelURI || interactive.CurrentToolSet() != toolpolicy.ToolSetDefault ||
+		interactive.CurrentScope() != ScopeAuto || interactive.CurrentTheme() != state.ThemeAuto {
+		t.Fatalf("legacy values leaked: model=%q tools=%q scope=%q theme=%q",
+			interactive.CurrentModel(), interactive.CurrentToolSet(), interactive.CurrentScope(), interactive.CurrentTheme())
+	}
+	notices := strings.Join(interactive.StartupNotices(), "\n")
+	for _, key := range []string{"model", "reasoning_effort", "recent_models", "tool_set", "scope", "theme"} {
+		if !strings.Contains(notices, key) {
+			t.Fatalf("legacy notice %q does not name %q", notices, key)
+		}
+	}
+	if err := interactive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != legacy {
+		t.Fatalf("legacy config changed = %q, %v", raw, err)
+	}
+	for _, name := range []string{"interactive.json", "interactive.lock"} {
+		if _, err := os.Stat(filepath.Join(home, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read-only legacy startup created %s: %v", name, err)
+		}
+	}
+
+	headless, err := Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "ollama/headless", ModelExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer headless.Close()
+	if notices := headless.StartupNotices(); len(notices) != 0 {
+		t.Fatalf("headless legacy notices = %#v", notices)
+	}
+	if headless.CurrentTheme() != state.ThemeAuto {
+		t.Fatalf("headless legacy theme = %q", headless.CurrentTheme())
+	}
+}
+
+func TestOpenHeadlessDoesNotInspectInteractiveStateOrLock(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "interactive.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "ollama/headless", ModelExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if application.CurrentModel() != "ollama/headless" {
+		t.Fatalf("headless model = %q", application.CurrentModel())
+	}
+}
+
+func TestOpenHeadlessDoesNotInheritStoredMachineScope(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetScopeSelection(string(ScopeMachine)); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "ollama/headless", ModelExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if application.CurrentScope() != ScopeAuto {
+		t.Fatalf("headless inherited requested scope %q", application.CurrentScope())
+	}
+}
+
+func TestOpenCanonicalWorkspaceAliasSharesPreferences(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetModelSelection("ollama/aliased", ""); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: alias, Interactive: true, Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if application.Root() != root || application.CurrentModel() != "ollama/aliased" {
+		t.Fatalf("alias root/model = %q/%q", application.Root(), application.CurrentModel())
+	}
+}
+
+func TestOpenInvalidWorkspaceToolSetFallsBackWithoutRewritingPreference(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetToolSetSelection("missing"); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, Interactive: true, Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if application.CurrentToolSet() != toolpolicy.ToolSetDefault || !strings.Contains(strings.Join(application.StartupNotices(), "\n"), "invalid workspace tool_set") {
+		t.Fatalf("tool set/notices = %q/%#v", application.CurrentToolSet(), application.StartupNotices())
+	}
+	stored, err := preferences.Settings()
+	if err != nil || stored.Workspace.ToolSet != "missing" {
+		t.Fatalf("invalid preference was rewritten = %#v, %v", stored.Workspace, err)
+	}
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetDefault); err != nil {
+		t.Fatalf("select current fallback: %v", err)
+	}
+	stored, err = preferences.Settings()
+	if err != nil || stored.Workspace.ToolSet != toolpolicy.ToolSetDefault {
+		t.Fatalf("invalid preference was not replaced = %#v, %v", stored.Workspace, err)
+	}
+}
+
+func TestOpenExistingJournalRestoresSessionModelButEmptyJournalUsesFreshDefaults(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	existingPath := filepath.Join(t.TempDir(), "existing.jsonl")
+	existing, err := session.Open(existingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApplicationRecord(t, existing, agent.RecordSessionStarted, agent.SessionStartedRecord{
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: "session_0123456789abcdef0123456789abcdef", Workspace: root,
+	})
+	appendApplicationRecord(t, existing, agent.RecordModelSelected, agent.ModelSelectedRecord{
+		Backend: "chat_completions", Provider: "ollama", Model: "saved", Epoch: "saved-epoch",
+	})
+	if err := existing.Close(); err != nil {
+		t.Fatal(err)
+	}
+	continued, err := Open(context.Background(), Config{
+		Home: home, Root: root, JournalPath: existingPath, ModelURI: "ollama/fresh",
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continued.CurrentModel() != "ollama/saved" {
+		t.Fatalf("continued journal model = %q", continued.CurrentModel())
+	}
+	if err := continued.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyPath := filepath.Join(t.TempDir(), "empty.jsonl")
+	fresh, err := Open(context.Background(), Config{
+		Home: home, Root: root, JournalPath: emptyPath, ModelURI: "ollama/fresh",
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if fresh.CurrentModel() != "ollama/fresh" {
+		t.Fatalf("empty journal model = %q", fresh.CurrentModel())
 	}
 }
 
@@ -665,32 +985,42 @@ func TestScopeSummaryReportsRunningProcessesWithEarlierScope(t *testing.T) {
 }
 
 func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
-	application, settings, _ := newModelSwitchApplication(t)
+	application, preferences, _ := newModelSwitchApplication(t)
 	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := settings.Settings()
-	if err != nil || stored.Model != "deepseek/new-model" || stored.ReasoningEffort != "high" || application.CurrentModel() != "deepseek/new-model" || application.CurrentReasoningEffort() != "high" {
+	stored, err := preferences.Settings()
+	if err != nil || stored.Workspace.Model != "deepseek/new-model" || stored.Workspace.ReasoningEffort == nil || *stored.Workspace.ReasoningEffort != "high" || application.CurrentModel() != "deepseek/new-model" || application.CurrentReasoningEffort() != "high" {
 		t.Fatalf("stored=%#v current=%q err=%v", stored, application.CurrentModel(), err)
 	}
 }
 
-func TestApplicationDoesNotSwitchModelWhenSavingSelectionFails(t *testing.T) {
-	application, _, home := newModelSwitchApplication(t)
-	if err := os.Remove(home); err != nil {
+func TestApplicationKeepsSwitchedModelWhenSavingSelectionFails(t *testing.T) {
+	application, preferences, home := newModelSwitchApplication(t)
+	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err == nil || !strings.Contains(err.Error(), "save model selection") {
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err == nil || !IsPreferenceNotPersisted(err) {
 		t.Fatalf("switch error = %v", err)
 	}
-	if got := application.CurrentModel(); got != "test/initial" {
-		t.Fatalf("model changed after settings failure: %q", got)
+	if got := application.CurrentModel(); got != "deepseek/new-model" {
+		t.Fatalf("model did not remain switched after persistence failure: %q", got)
+	}
+	if err := os.Remove(filepath.Join(home, "interactive.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err != nil {
+		t.Fatalf("retry current model: %v", err)
+	}
+	stored, err := preferences.Settings()
+	if err != nil || stored.Workspace.Model != "deepseek/new-model" || stored.Workspace.ReasoningEffort == nil || *stored.Workspace.ReasoningEffort != "high" {
+		t.Fatalf("retried model preference = %#v, %v", stored.Workspace, err)
 	}
 }
 
 func TestApplicationRestoresSavedModelWhenRuntimeRejectsSwitch(t *testing.T) {
-	application, settings, _ := newModelSwitchApplication(t)
-	if err := settings.SetDefaultModelSelection("deepseek/old-model", "high"); err != nil {
+	application, preferences, _ := newModelSwitchApplication(t)
+	if err := preferences.SetModelSelection("deepseek/old-model", "high"); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -698,11 +1028,11 @@ func TestApplicationRestoresSavedModelWhenRuntimeRejectsSwitch(t *testing.T) {
 	if err := application.SwitchModel(ctx, "deepseek/new-model", "high"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("switch error = %v", err)
 	}
-	stored, err := settings.Settings()
+	stored, err := preferences.Settings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Model != "deepseek/old-model" || stored.ReasoningEffort != "high" {
+	if stored.Workspace.Model != "deepseek/old-model" || stored.Workspace.ReasoningEffort == nil || *stored.Workspace.ReasoningEffort != "high" {
 		t.Fatalf("saved model after rejected switch = %#v", stored)
 	}
 	if got := application.CurrentModel(); got != "test/initial" {
@@ -710,10 +1040,14 @@ func TestApplicationRestoresSavedModelWhenRuntimeRejectsSwitch(t *testing.T) {
 	}
 }
 
-func newModelSwitchApplication(t *testing.T) (*Application, *state.Store, string) {
+func newModelSwitchApplication(t *testing.T) (*Application, *state.InteractiveStore, string) {
 	t.Helper()
 	home := t.TempDir()
 	settings, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,9 +1062,9 @@ func newModelSwitchApplication(t *testing.T) (*Application, *state.Store, string
 	}
 	t.Setenv("DEEPSEEK_API_KEY", "secret")
 	return &Application{
-		config: applicationConfig{settings: settings},
+		config: applicationConfig{settings: settings, interactive: preferences},
 		state:  applicationState{session: newLiveSession("", runtime, nil, false)},
-	}, settings, home
+	}, preferences, home
 }
 
 func TestOpenAppliesModelAPIOverrideBeforeReasoningEffortValidation(t *testing.T) {
@@ -749,7 +1083,12 @@ func TestOpenAppliesModelAPIOverrideBeforeReasoningEffortValidation(t *testing.T
 }
 
 func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
-	settings, err := state.Open(t.TempDir())
+	home, root := t.TempDir(), t.TempDir()
+	settings, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -780,7 +1119,7 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := &Application{
-		config: applicationConfig{settings: settings, tools: catalog, toolSets: toolSets},
+		config: applicationConfig{settings: settings, interactive: preferences, tools: catalog, toolSets: toolSets},
 		state: applicationState{
 			session: newLiveSession("", runtime, nil, false),
 			toolSet: toolpolicy.ToolSetDefault,
@@ -792,9 +1131,9 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 	if _, err := runtime.Run(context.Background(), "check tools", nil); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := settings.Settings()
-	if err != nil || stored.ToolSet != toolpolicy.ToolSetReadOnly || application.CurrentToolSet() != toolpolicy.ToolSetReadOnly {
-		t.Fatalf("stored=%q current=%q err=%v", stored.ToolSet, application.CurrentToolSet(), err)
+	stored, err := preferences.Settings()
+	if err != nil || stored.Workspace.ToolSet != toolpolicy.ToolSetReadOnly || application.CurrentToolSet() != toolpolicy.ToolSetReadOnly {
+		t.Fatalf("stored=%q current=%q err=%v", stored.Workspace.ToolSet, application.CurrentToolSet(), err)
 	}
 }
 

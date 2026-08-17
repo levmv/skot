@@ -31,7 +31,7 @@ func (m *screenModel) startScopeSwitch(scope string) tea.Cmd {
 		err := m.agent.SwitchScope(operationCtx, scope)
 		current := m.agent.CurrentScope()
 		notice := ""
-		if err == nil && current != previous {
+		if (err == nil || preferenceAppliedDespiteError(err)) && current != previous {
 			notice = m.agent.ScopeNotice()
 		}
 		return scopeDoneMsg{
@@ -53,7 +53,7 @@ func (m *screenModel) finishScopeSwitch(message scopeDoneMsg) {
 	if !message.concurrent {
 		m.operation.clear()
 	}
-	if message.err != nil {
+	if message.err != nil && !preferenceAppliedDespiteError(message.err) {
 		m.addBlock(screenBlockError, "scope: "+message.err.Error())
 		return
 	}
@@ -65,4 +65,7 @@ func (m *screenModel) finishScopeSwitch(message scopeDoneMsg) {
 		text += "\nnew tool calls use this scope; work already running is unchanged"
 	}
 	m.addBlock(screenBlockSystem, text)
+	if message.err != nil {
+		m.addBlock(screenBlockError, "scope: "+message.err.Error())
+	}
 }

@@ -14,15 +14,19 @@ import (
 	"github.com/levmv/skot/model/chatcompletions"
 )
 
-func TestKnownModelURIsPreferCurrentAndRecentBeforeCatalog(t *testing.T) {
-	store, err := state.Open(t.TempDir())
+func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T) {
+	home := t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenInteractive(home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultModel("openrouter/recent-model"); err != nil {
+	if err := store.SetModelSelection("openrouter/recent-model", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultModel("deepseek/saved-model"); err != nil {
+	if err := store.SetModelSelection("deepseek/saved-model", "high"); err != nil {
 		t.Fatal(err)
 	}
 	models := knownModelURIs(store, "openai/current-model")

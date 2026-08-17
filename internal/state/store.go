@@ -15,15 +15,53 @@ import (
 )
 
 type Settings struct {
-	Model           string              `json:"model,omitempty"`
-	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
-	RecentModels    []string            `json:"recent_models,omitempty"`
-	ToolSet         string              `json:"tool_set,omitempty"`
-	ToolSets        map[string][]string `json:"tool_sets,omitempty"`
-	AgentModels     []string            `json:"agent_models,omitempty"`
-	Scope           string              `json:"scope,omitempty"`
-	Theme           string              `json:"theme,omitempty"`
-	ProtectedPaths  []string            `json:"protected_paths,omitempty"`
+	ToolSets       map[string][]string `json:"tool_sets,omitempty"`
+	AgentModels    []string            `json:"agent_models,omitempty"`
+	ProtectedPaths []string            `json:"protected_paths,omitempty"`
+}
+
+// configDocument accepts the six pre-v1 interactive fields so upgrading does
+// not turn a strict config decode into a startup failure. Their raw values are
+// deliberately never exposed through Settings or written back by this store.
+type configDocument struct {
+	ToolSets       map[string][]string `json:"tool_sets,omitempty"`
+	AgentModels    []string            `json:"agent_models,omitempty"`
+	ProtectedPaths []string            `json:"protected_paths,omitempty"`
+
+	LegacyModel           json.RawMessage `json:"model,omitempty"`
+	LegacyReasoningEffort json.RawMessage `json:"reasoning_effort,omitempty"`
+	LegacyRecentModels    json.RawMessage `json:"recent_models,omitempty"`
+	LegacyToolSet         json.RawMessage `json:"tool_set,omitempty"`
+	LegacyScope           json.RawMessage `json:"scope,omitempty"`
+	LegacyTheme           json.RawMessage `json:"theme,omitempty"`
+}
+
+func (document configDocument) settings() Settings {
+	return Settings{
+		ToolSets: document.ToolSets, AgentModels: document.AgentModels,
+		ProtectedPaths: document.ProtectedPaths,
+	}
+}
+
+func (document configDocument) legacyInteractiveKeys() []string {
+	fields := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "model", raw: document.LegacyModel},
+		{name: "reasoning_effort", raw: document.LegacyReasoningEffort},
+		{name: "recent_models", raw: document.LegacyRecentModels},
+		{name: "tool_set", raw: document.LegacyToolSet},
+		{name: "scope", raw: document.LegacyScope},
+		{name: "theme", raw: document.LegacyTheme},
+	}
+	keys := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field.raw != nil {
+			keys = append(keys, field.name)
+		}
+	}
+	return keys
 }
 
 const (
@@ -57,8 +95,6 @@ type credentialData struct {
 type apiKeyPayload struct {
 	Token string `json:"token"`
 }
-
-const maxRecentModels = 20
 
 type Store struct {
 	mu       sync.Mutex
@@ -97,37 +133,24 @@ func Open(home string) (*Store, error) {
 func (store *Store) Settings() (Settings, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return store.load()
-}
-
-func (store *Store) SetDefaultModel(model string) error {
-	return store.SetDefaultModelSelection(model, "")
-}
-
-func (store *Store) SetDefaultModelSelection(model, reasoningEffort string) error {
-	model = strings.TrimSpace(model)
-	return store.update(func(settings *Settings) {
-		previous := settings.Model
-		settings.Model = model
-		settings.ReasoningEffort = strings.ToLower(strings.TrimSpace(reasoningEffort))
-		settings.RecentModels = recentModels(settings.RecentModels, previous, model)
-	})
-}
-
-func (store *Store) SetToolSetSelection(toolSet string) error {
-	return store.update(func(settings *Settings) { settings.ToolSet = strings.TrimSpace(toolSet) })
-}
-
-func (store *Store) SetDefaultScope(scope string) error {
-	return store.update(func(settings *Settings) { settings.Scope = strings.TrimSpace(scope) })
-}
-
-func (store *Store) SetThemeSelection(value string) error {
-	theme, err := NormalizeTheme(value)
+	document, err := store.loadConfig()
 	if err != nil {
-		return err
+		return Settings{}, err
 	}
-	return store.update(func(settings *Settings) { settings.Theme = theme })
+	return document.settings(), nil
+}
+
+// LegacyInteractiveKeys reports deprecated keys which were accepted only to
+// keep old pre-v1 config files readable. Callers decide whether their frontend
+// should surface a cleanup notice.
+func (store *Store) LegacyInteractiveKeys() ([]string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	document, err := store.loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return document.legacyInteractiveKeys(), nil
 }
 
 func (store *Store) APIKey(provider string) (string, bool, error) {
@@ -194,35 +217,24 @@ func (store *Store) DeleteAPIKey(provider string) error {
 
 func (store *Store) Dir() string { return store.dir }
 
-func (store *Store) update(change func(*Settings)) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	settings, err := store.load()
-	if err != nil {
-		return err
-	}
-	change(&settings)
-	return store.save(settings)
-}
-
-func (store *Store) load() (Settings, error) {
-	var settings Settings
+func (store *Store) loadConfig() (configDocument, error) {
+	var document configDocument
 	raw, err := os.ReadFile(store.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return settings, nil
+		return document, nil
 	}
 	if err != nil {
-		return Settings{}, fmt.Errorf("read config: %w", err)
+		return configDocument{}, fmt.Errorf("read config: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&settings); err != nil {
-		return Settings{}, fmt.Errorf("decode config: %w", err)
+	if err := decoder.Decode(&document); err != nil {
+		return configDocument{}, fmt.Errorf("decode config: %w", err)
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {
-		return Settings{}, errors.New("decode config: multiple JSON values")
+		return configDocument{}, errors.New("decode config: multiple JSON values")
 	}
-	return settings, nil
+	return document, nil
 }
 
 func (store *Store) loadCredentialsLocked() (credentialData, error) {
@@ -249,16 +261,16 @@ func (store *Store) loadCredentialsLocked() (credentialData, error) {
 	return credentials, nil
 }
 
-func (store *Store) save(settings Settings) error {
-	return store.saveJSON(store.path, "config", settings)
+func (store *Store) saveJSON(path, label string, value any) error {
+	return saveJSONAtomic(store.dir, path, label, value)
 }
 
-func (store *Store) saveJSON(path, label string, value any) error {
+func saveJSONAtomic(dir, path, label string, value any) error {
 	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", label, err)
 	}
-	file, err := os.CreateTemp(store.dir, "."+label+"-*.tmp")
+	file, err := os.CreateTemp(dir, "."+label+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary %s: %w", label, err)
 	}
@@ -283,7 +295,19 @@ func (store *Store) saveJSON(path, label string, value any) error {
 	if err := os.Rename(temporary, path); err != nil {
 		return fmt.Errorf("publish %s: %w", label, err)
 	}
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("sync %s directory: %w", label, err)
+	}
 	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func inspectStoreFile(path, label string) error {
@@ -301,36 +325,6 @@ func inspectStoreFile(path, label string) error {
 		return fmt.Errorf("restrict %s: %w", label, err)
 	}
 	return nil
-}
-
-func recentModels(models []string, previous, current string) []string {
-	recent := make([]string, 0, min(maxRecentModels, len(models)+1))
-	seen := make(map[string]struct{}, cap(recent)+1)
-	currentKey := normalizeModelURI(current)
-	if currentKey != "" {
-		seen[currentKey] = struct{}{}
-	}
-	add := func(model string) {
-		model = strings.TrimSpace(model)
-		key := normalizeModelURI(model)
-		if key == "" || len(recent) == maxRecentModels {
-			return
-		}
-		if _, exists := seen[key]; exists {
-			return
-		}
-		seen[key] = struct{}{}
-		recent = append(recent, model)
-	}
-	add(previous)
-	for _, model := range models {
-		add(model)
-	}
-	return recent
-}
-
-func normalizeModelURI(model string) string {
-	return strings.ToLower(strings.TrimSpace(model))
 }
 
 func normalizeProvider(provider string) string {

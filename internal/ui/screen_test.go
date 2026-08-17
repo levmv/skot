@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/toolpolicy"
 )
 
@@ -35,6 +37,7 @@ type fakeAgent struct {
 	knownModels      []string
 	modelChoices     []ModelChoice
 	scope            string
+	effectiveScope   string
 	scopeSummary     string
 	scopeNotice      string
 	scopeErr         error
@@ -132,11 +135,11 @@ func (fake *fakeAgent) ToolSetTools(toolSet string) []string {
 }
 
 func (fake *fakeAgent) SwitchToolSet(_ context.Context, toolSet string) error {
-	if fake.toolSetErr != nil {
+	if fake.toolSetErr != nil && !preferenceAppliedDespiteError(fake.toolSetErr) {
 		return fake.toolSetErr
 	}
 	fake.toolSet = toolSet
-	return nil
+	return fake.toolSetErr
 }
 
 func (fake *fakeAgent) CurrentModel() string { return fake.model }
@@ -167,12 +170,12 @@ func (fake *fakeAgent) ModelChoices() []ModelChoice {
 }
 
 func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort string) error {
-	if fake.modelErr != nil {
+	if fake.modelErr != nil && !preferenceAppliedDespiteError(fake.modelErr) {
 		return fake.modelErr
 	}
 	fake.model = model
 	fake.reasoningEffort = effort
-	return nil
+	return fake.modelErr
 }
 
 func (fake *fakeAgent) CurrentReasoningEffort() string { return fake.reasoningEffort }
@@ -186,12 +189,14 @@ func (fake *fakeAgent) ReasoningEfforts(uri string) []string {
 
 func (fake *fakeAgent) CurrentScope() string { return fake.scope }
 
+func (fake *fakeAgent) EffectiveScope() string { return fake.effectiveScope }
+
 func (fake *fakeAgent) ScopeSummary() string { return fake.scopeSummary }
 
 func (fake *fakeAgent) ScopeNotice() string { return fake.scopeNotice }
 
 func (fake *fakeAgent) SwitchScope(_ context.Context, policy string) error {
-	if fake.scopeErr != nil {
+	if fake.scopeErr != nil && !preferenceAppliedDespiteError(fake.scopeErr) {
 		return fake.scopeErr
 	}
 	fake.scope = policy
@@ -201,18 +206,19 @@ func (fake *fakeAgent) SwitchScope(_ context.Context, policy string) error {
 		effective = "workspace"
 		detail = " (auto)"
 	}
+	fake.effectiveScope = effective
 	fake.scopeSummary = "scope: " + effective + detail
-	return nil
+	return fake.scopeErr
 }
 
 func (fake *fakeAgent) CurrentTheme() string { return fake.theme }
 
 func (fake *fakeAgent) SwitchTheme(theme string) error {
-	if fake.themeErr != nil {
+	if fake.themeErr != nil && !preferenceAppliedDespiteError(fake.themeErr) {
 		return fake.themeErr
 	}
 	fake.theme = theme
-	return nil
+	return fake.themeErr
 }
 
 func (fake *fakeAgent) SessionStatus() agent.SessionStatus {
@@ -493,6 +499,82 @@ func TestModelCommandShowsAndSwitchesModel(t *testing.T) {
 	if transcript := strings.Join(model.transcript.lines, "\n"); strings.Contains(transcript, "unverified") {
 		t.Fatalf("model switch leaked internal compatibility status: %q", transcript)
 	}
+}
+
+func TestCurrentPickerSelectionReportsPreferencePersistenceFailure(t *testing.T) {
+	preferenceError := func(setting string) error {
+		return &app.PreferenceNotPersistedError{Setting: setting, Err: errors.New("disk full")}
+	}
+	assertReported := func(t *testing.T, model screenModel) {
+		t.Helper()
+		if model.picker.active() {
+			t.Fatalf("picker remained active: %#v", model.picker)
+		}
+		blocks := model.transcript.blocks
+		if len(blocks) < 2 || blocks[len(blocks)-1].kind != screenBlockError ||
+			!strings.Contains(blocks[len(blocks)-1].text, "is active for this session but was not saved") {
+			t.Fatalf("preference failure was not reported: %#v", blocks)
+		}
+	}
+
+	t.Run("model", func(t *testing.T) {
+		fake := &fakeAgent{
+			model: "deepseek/current", reasoningEffort: "high",
+			modelErr:  preferenceError("model"),
+			providers: []ProviderStatus{{Name: "deepseek", Source: "auth store"}},
+		}
+		model := testScreenModel(t, fake)
+		model.openModelPicker()
+		model, command := model.selectPickerItem()
+		if command != nil || fake.model != "deepseek/current" || fake.reasoningEffort != "high" {
+			t.Fatalf("command=%v model=%q effort=%q", command, fake.model, fake.reasoningEffort)
+		}
+		assertReported(t, model)
+	})
+
+	t.Run("tool set", func(t *testing.T) {
+		fake := &fakeAgent{toolSet: toolpolicy.ToolSetEdit, toolSetErr: preferenceError("tool set")}
+		model := testScreenModel(t, fake)
+		model.openToolSetPicker()
+		model, command := model.selectPickerItem()
+		if command != nil || fake.toolSet != toolpolicy.ToolSetEdit {
+			t.Fatalf("command=%v tool set=%q", command, fake.toolSet)
+		}
+		assertReported(t, model)
+	})
+
+	t.Run("scope", func(t *testing.T) {
+		fake := &fakeAgent{
+			scope: "auto", scopeSummary: "scope: workspace (auto)",
+			scopeErr: preferenceError("filesystem scope"),
+		}
+		model := testScreenModel(t, fake)
+		model.openScopePicker()
+		model, command := model.selectPickerItem()
+		if command == nil {
+			t.Fatal("current scope selection did not start preference retry")
+		}
+		message, ok := command().(scopeDoneMsg)
+		if !ok {
+			t.Fatalf("scope result has unexpected type")
+		}
+		model.finishScopeSwitch(message)
+		if fake.scope != "auto" {
+			t.Fatalf("scope = %q", fake.scope)
+		}
+		assertReported(t, model)
+	})
+
+	t.Run("theme", func(t *testing.T) {
+		fake := &fakeAgent{theme: ThemeDark, themeErr: preferenceError("theme")}
+		model := testScreenModel(t, fake)
+		model.openThemePicker()
+		model, command := model.selectPickerItem()
+		if command != nil || fake.theme != ThemeDark || !model.darkTheme {
+			t.Fatalf("command=%v theme=%q dark=%v", command, fake.theme, model.darkTheme)
+		}
+		assertReported(t, model)
+	})
 }
 
 func TestCommandSuggestionsCompleteAndSelectArguments(t *testing.T) {

@@ -80,6 +80,26 @@ func TestFooterNamesTheToolSetOnlyWhenItIsNotTheDefault(t *testing.T) {
 	}
 }
 
+func TestFooterShowsLiveEffectiveMachineScopeBeforeRoot(t *testing.T) {
+	t.Setenv("SK_COLOR", "never")
+	fake := &fakeAgent{
+		model: "openai/gpt-5.2", toolSet: toolpolicy.ToolSetDefault, theme: ThemeLight,
+		scope: "auto", effectiveScope: "machine",
+	}
+	model, err := newScreenModel(context.Background(), fake, Config{Root: "/work"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(160, 24)
+	if got := model.footerLine(); got != "openai/gpt-5.2 · scope: machine · /work" {
+		t.Fatalf("machine footer = %q", got)
+	}
+	fake.effectiveScope = "workspace"
+	if got := model.footerLine(); got != "openai/gpt-5.2 · /work" {
+		t.Fatalf("updated workspace footer = %q", got)
+	}
+}
+
 func TestFooterOmitsUnavailableContextAndUsage(t *testing.T) {
 	t.Setenv("SK_COLOR", "never")
 	fake := &fakeAgent{model: "openai/gpt", toolSet: toolpolicy.ToolSetReadOnly, theme: ThemeLight}

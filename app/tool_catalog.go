@@ -15,7 +15,6 @@ type builtToolCatalog struct {
 	tools            []agent.Tool
 	programSnapshots []agent.ProgramToolSnapshot
 	toolSets         toolpolicy.ToolSets
-	toolSet          string
 }
 
 func buildToolCatalog(config Config, settings state.Settings, credentials *state.Store, masker *secretMasker, base []agent.Tool, processes *workspacetools.ProcessManager, builtInOptions toolpolicy.BuiltInOptions) (builtToolCatalog, error) {
@@ -83,15 +82,10 @@ func buildToolCatalog(config Config, settings state.Settings, credentials *state
 	if err := toolSets.RequireTogether("job", backgroundCapable); err != nil {
 		return builtToolCatalog{}, err
 	}
-	toolSet, err := toolSets.Normalize(config.ToolSet)
-	if err != nil {
-		return builtToolCatalog{}, err
-	}
 	return builtToolCatalog{
 		tools:            catalog,
 		programSnapshots: programSnapshots,
 		toolSets:         toolSets,
-		toolSet:          toolSet,
 	}, nil
 }
 

@@ -424,7 +424,7 @@ func canonicalOpenRouterModelID(modelID string) string {
 	return modelID
 }
 
-func knownModelURIs(store *state.Store, current string) []string {
+func knownModelURIs(store *state.InteractiveStore, current string) []string {
 	models := make([]string, 0, len(modelCatalog)+4)
 	seen := make(map[string]struct{}, cap(models))
 	add := func(uri string) {
@@ -442,7 +442,7 @@ func knownModelURIs(store *state.Store, current string) []string {
 	add(current)
 	if store != nil {
 		if settings, err := store.Settings(); err == nil {
-			add(settings.Model)
+			add(settings.Workspace.Model)
 			for _, uri := range settings.RecentModels {
 				add(uri)
 			}
@@ -454,7 +454,7 @@ func knownModelURIs(store *state.Store, current string) []string {
 	return models
 }
 
-func modelChoices(store *state.Store, current string, overrides modelRouteOverrides) []ModelChoice {
+func modelChoices(store *state.InteractiveStore, current string, overrides modelRouteOverrides) []ModelChoice {
 	choices := make([]ModelChoice, 0, len(modelCatalog)+4)
 	for _, uri := range knownModelURIs(store, current) {
 		declaration, _ := catalogModelSpec(uri)

@@ -1,47 +1,26 @@
 package state
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
+func TestStoreLoadsAuthoredConfigAndKeepsLegacyInteractiveFieldsInert(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"tool_sets":{"review":["read","grep"]},"agent_models":["openai/gpt-5-mini"],"protected_paths":[".env","~/private"]}`), 0o600); err != nil {
+	raw := `{"tool_sets":{"review":["read","grep"]},"agent_models":["openai/gpt-5-mini"],"protected_paths":[".env","~/private"],"model":"old/model","reasoning_effort":"high","recent_models":["older/model"],"tool_set":"edit","scope":"machine","theme":"dark"}`
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(raw), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultModel("openrouter/example/model"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDefaultModelSelection("deepseek/next-model", " HIGH "); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetToolSetSelection("edit"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDefaultScope("machine"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetThemeSelection(" DARK "); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(home)
+	settings, err := store.Settings()
 	if err != nil {
 		t.Fatal(err)
-	}
-	settings, err := reopened.Settings()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settings.Model != "deepseek/next-model" || settings.ReasoningEffort != "high" || len(settings.RecentModels) != 1 || settings.RecentModels[0] != "openrouter/example/model" || settings.ToolSet != "edit" || settings.Scope != "machine" || settings.Theme != ThemeDark {
-		t.Fatalf("settings = %#v", settings)
 	}
 	if got := strings.Join(settings.ToolSets["review"], ","); got != "read,grep" {
 		t.Fatalf("tool sets = %#v", settings.ToolSets)
@@ -52,6 +31,17 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	if got := strings.Join(settings.AgentModels, ","); got != "openai/gpt-5-mini" {
 		t.Fatalf("agent models = %#v", settings.AgentModels)
 	}
+	legacy, err := store.LegacyInteractiveKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLegacy := []string{"model", "reasoning_effort", "recent_models", "tool_set", "scope", "theme"}
+	if !slices.Equal(legacy, wantLegacy) {
+		t.Fatalf("legacy fields = %#v", legacy)
+	}
+	if persisted, err := os.ReadFile(filepath.Join(home, "config.json")); err != nil || string(persisted) != raw {
+		t.Fatalf("config changed = %q, %v", persisted, err)
+	}
 	info, err := os.Stat(filepath.Join(home, "config.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -61,20 +51,12 @@ func TestStorePersistsSettingsAtomicallyAndPrivately(t *testing.T) {
 	}
 }
 
-func TestThemeSelectionDefaultsToAutoAndRejectsInvalidValues(t *testing.T) {
+func TestThemeNormalizationDefaultsToAutoAndRejectsInvalidValues(t *testing.T) {
 	if got, err := NormalizeTheme(""); err != nil || got != ThemeAuto {
 		t.Fatalf("default theme = %q, %v", got, err)
 	}
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetThemeSelection("sepia"); err == nil {
+	if _, err := NormalizeTheme("sepia"); err == nil {
 		t.Fatal("invalid theme accepted")
-	}
-	settings, err := store.Settings()
-	if err != nil || settings.Theme != "" {
-		t.Fatalf("settings after rejected theme = %#v, %v", settings, err)
 	}
 }
 
@@ -125,11 +107,11 @@ func TestStoreRejectsSymlinkedCredentials(t *testing.T) {
 
 func TestStoreKeepsNamedCredentialsSeparateFromSettings(t *testing.T) {
 	home := t.TempDir()
-	store, err := Open(home)
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"protected_paths":[".env"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetDefaultModel("deepseek/model"); err != nil {
+	store, err := Open(home)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetAPIKey(" DeepSeek ", " secret-token "); err != nil {
@@ -159,21 +141,5 @@ func TestStoreKeepsNamedCredentialsSeparateFromSettings(t *testing.T) {
 	}
 	if token, ok, err := store.APIKey("deepseek"); err != nil || ok || token != "" {
 		t.Fatalf("deleted API key = %q, %v, %v", token, ok, err)
-	}
-}
-
-func TestRecentModelsAreCaseInsensitiveUniqueAndBounded(t *testing.T) {
-	models := []string{"OPENAI/Old", "deepseek/one", "openrouter/two", "openai/old"}
-	for index := 0; index < 30; index++ {
-		models = append(models, fmt.Sprintf("provider/model-%02d", index))
-	}
-	recent := recentModels(models, "openai/previous", "OPENAI/OLD")
-	if len(recent) != maxRecentModels || recent[0] != "openai/previous" || recent[1] != "deepseek/one" {
-		t.Fatalf("recent models = %#v", recent)
-	}
-	for _, model := range recent {
-		if strings.EqualFold(model, "openai/old") {
-			t.Fatalf("current model leaked into recent list: %#v", recent)
-		}
 	}
 }

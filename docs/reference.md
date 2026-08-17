@@ -18,11 +18,9 @@ interactive session. A prompt supplied as arguments or through stdin runs once
 without the interactive screen. Bare `resume` selects the latest session for
 the current workspace; an ID or unambiguous prefix selects a particular one.
 
-`sk update` downloads the highest published `vX.Y.Z` GitHub release for the
-current platform, verifies its SHA-256 checksum, and atomically replaces the
-running executable. Drafts and prereleases are never selected, and an older
-release never replaces a newer running build. Existing processes continue with the old version until restarted.
-Development builds report an error instead of overwriting themselves.
+`sk update` installs a newer stable GitHub release for the current platform
+after verifying its SHA-256 checksum. Existing processes continue with the old
+version until restarted. Development builds cannot update themselves.
 
 Use `--` when prompt text could otherwise be parsed as a flag or begins with a
 reserved command name such as `resume` or `update`:
@@ -63,10 +61,17 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 `SK_COLOR=always|never` overrides automatic styled-output detection.
 `NO_COLOR` disables styling.
 
-For the model, reasoning effort, tool set, and filesystem scope, an explicit flag or
-environment variable wins over the persisted interactive selection. When a
-session is resumed without an explicit model, its recorded model and effort are
-restored.
+For a new interactive session, an explicit flag or environment variable wins
+over the current workspace preference, which wins over the product default.
+Interactive resume additionally restores the session-recorded model and effort
+between explicit input and the workspace preference.
+
+Headless runs never read interactive preferences. A fresh one-shot or
+`-save-session` run uses only explicit CLI/environment input and product
+defaults. Headless resume may restore the session-recorded model and effort,
+but not its tool set or filesystem scope. A new or empty `-journal` follows the
+fresh rule; an existing journal with a recorded selection follows the
+continuation rule.
 
 ## Models and credentials
 
@@ -105,25 +110,22 @@ thinking switch are not carried across an incompatible protocol override.
 Skot uses `~/.skot` by default. `SK_HOME` and `-home` select another data
 directory. It contains:
 
-- `config.json` — settings, custom tool sets, child-model allowlist, and
-  protected paths;
+- `config.json` — global configuration: custom tool sets, child-model
+  allowlist, and protected paths;
+- `interactive.json` — UI state and interactive preferences managed by Skot;
 - `auth.json` — credentials managed by `/login` and `/logout`;
 - `tools.json` — the default custom program tool catalog;
 - `sessions/` — managed session journals and child-agent state.
 
-The directory is created with private permissions. Session journals contain
-conversation and workspace data and should also be treated as private.
+The directory is created with mode `0700`; Skot-managed state files use mode
+`0600`. Session journals contain conversation and workspace data and should
+also be treated as private.
 
-`config.json` is strict JSON: unknown fields and multiple top-level values are
-rejected. A representative configuration is:
+`config.json` is parsed strictly: unknown fields and multiple top-level values
+are rejected. A representative configuration is:
 
 ```json
 {
-  "model": "deepseek/deepseek-v4-flash",
-  "reasoning_effort": "high",
-  "tool_set": "delegate",
-  "scope": "auto",
-  "theme": "auto",
   "tool_sets": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
@@ -134,15 +136,15 @@ rejected. A representative configuration is:
 
 | Field | Meaning |
 | --- | --- |
-| `model` | Persisted default model selected by the interactive UI. |
-| `reasoning_effort` | Persisted route-specific effort. |
-| `recent_models` | UI-managed recent-model list; normally not edited by hand. |
-| `tool_set` | Persisted tool set selection. |
 | `tool_sets` | Map of tool set names to exact ordered tool-name lists. A custom definition replaces a built-in set with the same name. |
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
-| `scope` | Persisted filesystem scope for built-in file tools and model-owned processes: `auto`, `workspace`, or `machine`. |
-| `theme` | Persisted interactive terminal theme: `auto`, `light`, or `dark`. An unrecognized saved value is reset to `auto` at interactive startup. |
 | `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
+
+Interactive theme and recent models are shared across workspaces. Model,
+reasoning effort, tool set, and requested filesystem scope are remembered per
+canonical workspace path; symlink aliases share preferences, while separate
+clones and worktrees do not. Skot manages these preferences in
+`interactive.json`; headless runs do not read them.
 
 Use `/login` rather than editing `auth.json` directly.
 
@@ -161,22 +163,7 @@ sk resume 0f3a "continue the fix"
 
 Session selection is scoped to the canonical workspace path. A short ID may be
 used when it identifies exactly one session. Bare `resume` chooses the most
-recent session for that workspace. Displayed session IDs and their prefixes use
-lowercase hexadecimal characters; a non-hex argument after `resume` is rejected.
-
-### Journal compatibility
-
-The journal schema version describes the required semantic projection used to
-rebuild session state, rather than the exact set of record kinds or JSON fields.
-Adding an optional payload field, or an observational record kind in the
-reserved `aux/` namespace, does not by itself change the schema version.
-
-An `aux/` record is a semantic leaf. Ignoring it may change only the replayed
-last sequence number: it must not affect conversation blocks, compaction or
-pruning boundaries, pending work, usage, configuration, or the validity of any
-required record. Unknown kinds outside `aux/` fail replay, and every journal
-must still begin with `session_started`. A change to required state or replay
-invariants requires a new schema version and an explicit migration.
+recent session for that workspace.
 
 ### Interactive commands
 
@@ -355,6 +342,9 @@ ordinary environment and filesystem permissions.
   container, “machine” means that container's filesystem boundary, not the host
   filesystem.
 
+The interactive footer shows `scope: machine` whenever the effective scope is
+`machine`.
+
 Content exposed to model-owned tools may be included in requests to the selected
 model provider. `read-only` prevents writes and command execution; it is not a
 confidentiality boundary for readable data.
@@ -387,7 +377,6 @@ if it should be hidden, just like any other sensitive directory.
 
 ```json
 {
-  "scope": "machine",
   "protected_paths": ["~/.skot", "~/.ssh", "~/.aws", ".env"]
 }
 ```

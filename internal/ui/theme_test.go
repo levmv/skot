@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/levmv/skot/app"
 )
 
 func TestDarkThemeUsesBrightAccent(t *testing.T) {
@@ -163,8 +164,8 @@ func TestThemeCommandRejectsInvalidTheme(t *testing.T) {
 	}
 }
 
-func TestThemeCommandKeepsCurrentThemeWhenSavingFails(t *testing.T) {
-	fake := &fakeAgent{theme: ThemeDark, themeErr: errors.New("disk full")}
+func TestThemeCommandKeepsCurrentThemeWhenSwitchFails(t *testing.T) {
+	fake := &fakeAgent{theme: ThemeDark, themeErr: errors.New("switch rejected")}
 	model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +175,26 @@ func TestThemeCommandKeepsCurrentThemeWhenSavingFails(t *testing.T) {
 	if command != nil || model.theme != ThemeDark || fake.theme != ThemeDark || !model.darkTheme || model.composer.value() != "/theme light" {
 		t.Fatalf("failed save: theme=%q stored=%q dark=%v input=%q command=%v", model.theme, fake.theme, model.darkTheme, model.composer.value(), command)
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "theme: disk full" {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "theme: switch rejected" {
 		t.Fatalf("theme error = %q", got)
+	}
+}
+
+func TestThemeCommandAppliesLiveThemeWhenPreferenceIsNotPersisted(t *testing.T) {
+	persistErr := &app.PreferenceNotPersistedError{Setting: "theme", Err: errors.New("disk full")}
+	fake := &fakeAgent{theme: ThemeDark, themeErr: persistErr}
+	model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.setValue("/theme light")
+	model, command := model.submitInput()
+	if command != nil || model.theme != ThemeLight || fake.theme != ThemeLight || model.darkTheme || model.composer.value() != "" {
+		t.Fatalf("partial save: theme=%q stored=%q dark=%v input=%q command=%v", model.theme, fake.theme, model.darkTheme, model.composer.value(), command)
+	}
+	blocks := model.transcript.blocks
+	if len(blocks) < 2 || blocks[len(blocks)-2].text != "theme: dark → light" ||
+		!strings.Contains(blocks[len(blocks)-1].text, "is active for this session but was not saved") {
+		t.Fatalf("partial-save blocks = %#v", blocks)
 	}
 }

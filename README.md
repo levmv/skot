@@ -79,11 +79,15 @@ SK_TOOLS=read-only sk -json "summarize this project" > result.json
 iteration limits bound unattended execution, and exit codes distinguish an
 invalid or incomplete run from a transient provider failure.
 
+Headless runs do not inherit model, tool-set, or filesystem-scope choices made
+in the interactive UI. For non-default behavior, pass flags or set environment
+variables; resumed sessions may restore their recorded model and reasoning
+effort.
+
 ## Tools
 
-A tool set is an exact list of capabilities available to the model. Built-in
-file operations are bounded, writes are atomic, and custom program tools expose
-narrow commands with JSON input instead of an unrestricted plugin API.
+A tool set is an exact list of capabilities available to the model. Custom
+program tools expose narrow commands with JSON input.
 
 Delegation is optional. When the `agent` tool is enabled, child agents share the
 current workspace and filesystem scope but receive only built-in read-only

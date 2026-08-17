@@ -304,8 +304,8 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 
 // formatSettingChange reports where a setting landed, naming where it came from
 // when that differs. The arrow is reserved for an actual transition: re-selecting
-// the current value is a no-op, and claiming a change that did not happen is
-// worse than saying nothing.
+// the current value is not a live transition, and claiming a change that did
+// not happen is worse than saying nothing.
 func formatSettingChange(name, before, after string) string {
 	if before == "" || before == after {
 		return name + ": " + after
@@ -332,13 +332,17 @@ func runToolsCommand(m *screenModel, input string, args []string) tea.Cmd {
 		return nil
 	}
 	before := m.agent.CurrentToolSet()
-	if err := m.agent.SwitchToolSet(m.ctx, args[0]); err != nil {
-		m.addBlock(screenBlockError, "tools: "+err.Error())
+	switchErr := m.agent.SwitchToolSet(m.ctx, args[0])
+	if switchErr != nil && !preferenceAppliedDespiteError(switchErr) {
+		m.addBlock(screenBlockError, "tools: "+switchErr.Error())
 		return nil
 	}
 	m.acceptCommand(input)
 	m.refreshSessionStatus()
 	m.addBlock(screenBlockSystem, toolSetChangeNotice(before, m.agent.CurrentToolSet()))
+	if switchErr != nil {
+		m.addBlock(screenBlockError, "tools: "+switchErr.Error())
+	}
 	return nil
 }
 
@@ -360,12 +364,15 @@ func runThemeCommand(m *screenModel, input string, args []string) tea.Cmd {
 	}
 	before := m.theme
 	command, err := m.switchTerminalTheme(args[0])
-	if err != nil {
+	if err != nil && !preferenceAppliedDespiteError(err) {
 		m.addBlock(screenBlockError, "theme: "+err.Error())
 		return nil
 	}
 	m.acceptCommand(input)
 	m.addBlock(screenBlockSystem, formatSettingChange("theme", before, m.theme))
+	if err != nil {
+		m.addBlock(screenBlockError, "theme: "+err.Error())
+	}
 	return command
 }
 
@@ -799,36 +806,31 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			return m, nil
 		}
 		effort := selectedModelEffort(item)
-		if item.current && effort == m.agent.CurrentReasoningEffort() && item.source != "none" {
-			return m, nil
-		}
 		m.selectModel(item.value, effort, picker)
 	case pickerToolSet:
-		if item.current {
-			return m, nil
-		}
 		before := m.agent.CurrentToolSet()
-		if err := m.agent.SwitchToolSet(m.ctx, item.value); err != nil {
-			m.addBlock(screenBlockError, "tools: "+err.Error())
+		switchErr := m.agent.SwitchToolSet(m.ctx, item.value)
+		if switchErr != nil && !preferenceAppliedDespiteError(switchErr) {
+			m.addBlock(screenBlockError, "tools: "+switchErr.Error())
 		} else {
 			m.refreshSessionStatus()
 			m.addBlock(screenBlockSystem, toolSetChangeNotice(before, m.agent.CurrentToolSet()))
+			if switchErr != nil {
+				m.addBlock(screenBlockError, "tools: "+switchErr.Error())
+			}
 		}
 	case pickerScope:
-		if item.current {
-			return m, nil
-		}
 		return m, m.startScopeSwitch(item.value)
 	case pickerTheme:
-		if item.current && item.value != ThemeAuto {
-			return m, nil
-		}
 		before := m.theme
 		command, err := m.switchTerminalTheme(item.value)
-		if err != nil {
+		if err != nil && !preferenceAppliedDespiteError(err) {
 			m.addBlock(screenBlockError, "theme: "+err.Error())
 		} else {
 			m.addBlock(screenBlockSystem, formatSettingChange("theme", before, m.theme))
+			if err != nil {
+				m.addBlock(screenBlockError, "theme: "+err.Error())
+			}
 		}
 		m.refreshTranscript()
 		return m, command
@@ -1009,6 +1011,7 @@ func (m *screenModel) selectModel(uri, effort string, returnPicker pickerState) 
 	for _, status := range m.providers {
 		if status.Name == provider {
 			if strings.EqualFold(uri, m.agent.CurrentModel()) && effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
+				m.switchModel(uri, effort)
 				return
 			}
 			m.startProviderLogin(provider, uri, effort, returnPicker)
@@ -1020,14 +1023,18 @@ func (m *screenModel) selectModel(uri, effort string, returnPicker pickerState) 
 
 func (m *screenModel) switchModel(uri, effort string) {
 	before := m.agent.CurrentModel()
-	if err := m.agent.SwitchModel(m.ctx, uri, effort); err != nil {
-		m.addBlock(screenBlockError, "model: "+err.Error())
+	switchErr := m.agent.SwitchModel(m.ctx, uri, effort)
+	if switchErr != nil && !preferenceAppliedDespiteError(switchErr) {
+		m.addBlock(screenBlockError, "model: "+switchErr.Error())
 		return
 	}
 	current := m.agent.CurrentModel()
 	m.refreshSessionStatus()
 	m.refreshModelChoices()
 	m.addBlock(screenBlockSystem, formatSettingChange("model", before, current))
+	if switchErr != nil {
+		m.addBlock(screenBlockError, "model: "+switchErr.Error())
+	}
 }
 
 func (m *screenModel) cycleModelEffort(delta int) {

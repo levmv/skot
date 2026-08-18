@@ -1,12 +1,16 @@
 # Skot
 
-Skot is a small, opinionated coding agent for direct work in one local
-workspace. It has a deliberately minimal toolset and supports both interactive
-sessions and one-shot runs.
+Skot is a small, opinionated coding agent for the terminal. It has
+deliberately few tools and supports both interactive sessions and one-shot
+runs.
 
-It is deliberately a harness, not an agent platform. Sessions and job state
-stay local, capabilities are explicit, and plans, roles, and larger workflows
-are left to prompts and the shell.
+It stays small on purpose: sessions and job state stay local, capabilities are
+explicit, and plans, roles, and larger workflows are left to prompts rather
+than built in.
+
+It ships as a single Go binary with no runtime to install alongside it, starts
+in a few milliseconds, and stays light on memory. The same binary serves an
+interactive terminal and a shell pipeline; neither is a second-class mode.
 
 ## Install
 

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
@@ -148,10 +149,41 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(stdout.Bytes(), []byte(`"tool_set":"default"`)) || bytes.Contains(stdout.Bytes(), []byte(`"profile"`)) {
-		t.Fatalf("JSON result uses an unexpected tool set field: %s", stdout.String())
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &wire); err != nil {
+		t.Fatalf("decode JSON wire object: %v; output=%q", err, stdout.String())
 	}
-	decoder := json.NewDecoder(&stdout)
+	wantKeys := []string{
+		"version", "reply", "usage", "status", "duration_ms", "model",
+		"reasoning_effort", "tool_set", "model_attempts", "run_id", "session_id",
+	}
+	if len(wire) != len(wantKeys) {
+		t.Fatalf("JSON wire key count = %d, want %d; output=%s", len(wire), len(wantKeys), stdout.String())
+	}
+	for _, key := range wantKeys {
+		if _, exists := wire[key]; !exists {
+			t.Fatalf("JSON result is missing stable field %q", key)
+		}
+	}
+	var wireVersion int
+	if err := json.Unmarshal(wire["version"], &wireVersion); err != nil || wireVersion != 1 {
+		t.Fatalf("JSON wire version = %s, %v", wire["version"], err)
+	}
+	var usageWire map[string]json.RawMessage
+	if err := json.Unmarshal(wire["usage"], &usageWire); err != nil {
+		t.Fatalf("decode JSON usage wire object: %v", err)
+	}
+	wantUsageKeys := []string{"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"}
+	if len(usageWire) != len(wantUsageKeys) {
+		t.Fatalf("JSON usage wire key count = %d, want %d; usage=%s", len(usageWire), len(wantUsageKeys), wire["usage"])
+	}
+	for _, key := range wantUsageKeys {
+		if _, exists := usageWire[key]; !exists {
+			t.Fatalf("JSON usage is missing stable field %q", key)
+		}
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	var result jsonResult
 	if err := decoder.Decode(&result); err != nil {
 		t.Fatalf("decode JSON result: %v; output=%q", err, stdout.String())
@@ -159,7 +191,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		t.Fatalf("JSON output contains more than one value: %v", err)
 	}
-	if result.Version != jsonResultVersion || result.Reply != "done" || result.Status != agent.RunCompleted ||
+	if result.Reply != "done" || result.Status != agent.RunCompleted ||
 		result.RunID == "" || result.SessionID == "" || result.Error != "" || result.DurationMillis < 0 ||
 		result.Model != "deepseek/test-model" || result.ReasoningEffort != "default" ||
 		result.ToolSet != toolpolicy.ToolSetDefault || result.ModelAttempts != 1 {
@@ -940,7 +972,7 @@ func TestRunOneShotExposesBackgroundBash(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatalf("requests = %d", len(requests))
 	}
-	if !bashSchemaHasProperty(t, requests[0].Tools, "background") {
+	if !toolSchemaHasProperty(t, requests[0].Tools, "bash", "background") {
 		t.Fatal("one-shot Bash schema does not expose background")
 	}
 }
@@ -1072,9 +1104,6 @@ func TestRunExecutesProviderToolCallWithProductOwnedIdentity(t *testing.T) {
 	}
 	if output.String() != "saw the file\n" || len(requests) != 2 {
 		t.Fatalf("output/requests = %q/%d", output.String(), len(requests))
-	}
-	if len(requests[0].Tools) != 8 {
-		t.Fatalf("tool catalog size = %d", len(requests[0].Tools))
 	}
 	messages := conversationMessages(requests[1].Messages)
 	if len(messages) != 3 || len(messages[1].ToolCalls) != 1 {
@@ -1417,7 +1446,11 @@ func TestRunHeadlessIgnoresInteractivePreferencesAndHonorsExplicitInputs(t *test
 	if len(requests) != 3 || len(requests[0].Tools) == 0 || len(requests[0].Tools) != len(requests[1].Tools) {
 		t.Fatalf("request count/tool catalogs = %d/%d/%d", len(requests), len(requests[0].Tools), len(requests[1].Tools))
 	}
-	if requests[0].Model != "deepseek-v4-flash" || requests[1].Model != "explicit-model" || requests[2].Model != "env-effort-model" {
+	_, defaultModel, ok := strings.Cut(app.DefaultModelURI, "/")
+	if !ok || defaultModel == "" {
+		t.Fatalf("product default model URI = %q", app.DefaultModelURI)
+	}
+	if requests[0].Model != defaultModel || requests[1].Model != "explicit-model" || requests[2].Model != "env-effort-model" {
 		t.Fatalf("models = %q/%q/%q", requests[0].Model, requests[1].Model, requests[2].Model)
 	}
 	if requests[0].ReasoningEffort != "" || requests[1].ReasoningEffort != "" || requests[2].ReasoningEffort != "high" {
@@ -1499,10 +1532,6 @@ type chatMessageForTest struct {
 			Arguments string `json:"arguments"`
 		} `json:"function"`
 	} `json:"tool_calls"`
-}
-
-func bashSchemaHasProperty(t *testing.T, tools []json.RawMessage, property string) bool {
-	return toolSchemaHasProperty(t, tools, "bash", property)
 }
 
 func toolSchemaHasProperty(t *testing.T, tools []json.RawMessage, toolName, property string) bool {

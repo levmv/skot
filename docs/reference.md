@@ -281,12 +281,10 @@ Skot loads `tools.json` from its data directory, or another file selected by
 ```
 
 The executable receives one JSON argument object on stdin. Stdout becomes the
-model-facing result; stderr remains diagnostic output. A configured tool is
-visible only when the active tool set names it. Skot validates every declared
-tool name and schema at startup, but resolves an executable only when its tool
-set becomes active. Thus a missing executable for an inactive tool does not
-block startup; attempting to activate it fails without changing the current
-tool set.
+model-facing result; non-empty stderr is captured separately and appended under
+a `stderr:` header. A configured tool is visible only when the active tool set
+names it. Skot validates the declaration at startup and resolves its executable
+when that tool set is activated.
 
 | Field | Meaning |
 | --- | --- |

@@ -60,8 +60,6 @@ func (m screenModel) renderDurationLine(duration time.Duration) string {
 	line := "─ Worked for " + formatTurnDuration(duration) + " "
 	if pad := width - visibleLen(line); pad > 0 {
 		line += strings.Repeat("─", pad)
-	} else {
-		line = truncateANSI(line, width)
 	}
 	return m.mutedStyle.Render(line)
 }

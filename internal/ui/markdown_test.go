@@ -10,8 +10,8 @@ import (
 func TestMarkdownTableFitsAndReflows(t *testing.T) {
 	renderer := newMarkdownRenderer(false, terminalPaletteFor(false))
 	markdown := "| Name | Description |\n| --- | --- |\n| alpha | a deliberately long description that must wrap |"
-	wide := renderer.renderLinesAtWidth(markdown, 80)
-	narrow := renderer.renderLinesAtWidth(markdown, 32)
+	wide := renderer.renderMarkdownLines(markdown, 80)
+	narrow := renderer.renderMarkdownLines(markdown, 32)
 	if len(narrow) <= len(wide) {
 		t.Fatalf("narrow table did not reflow: wide=%q narrow=%q", wide, narrow)
 	}
@@ -24,7 +24,7 @@ func TestMarkdownTableFitsAndReflows(t *testing.T) {
 
 func TestMarkdownStylesHeadingsBoldAndInlineCode(t *testing.T) {
 	renderer := newMarkdownRenderer(true, terminalPaletteFor(false))
-	lines := renderer.renderLinesAtWidth("## Title\nhello **world** and `README.md`", 80)
+	lines := renderer.renderMarkdownLines("## Title\nhello **world** and `README.md`", 80)
 	got := strings.Join(lines, "\n")
 	for _, want := range []string{
 		renderer.accentStyle.Bold(true).Render("Title"),
@@ -42,7 +42,7 @@ func TestMarkdownStylesHeadingsBoldAndInlineCode(t *testing.T) {
 
 func TestMarkdownRemovesFenceLanguage(t *testing.T) {
 	renderer := newMarkdownRenderer(false, terminalPaletteFor(false))
-	got := strings.Join(renderer.renderLinesAtWidth("```json\n{\"count\": 2}\n```", 80), "\n")
+	got := strings.Join(renderer.renderMarkdownLines("```json\n{\"count\": 2}\n```", 80), "\n")
 	if got != `{"count": 2}` {
 		t.Fatalf("code block = %q", got)
 	}

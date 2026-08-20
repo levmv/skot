@@ -294,6 +294,25 @@ func TestWorkspaceScopeAcceptsAbsoluteInsideAndRejectsExternalPaths(t *testing.T
 	}
 }
 
+func TestWorkspaceScopeRejectsSiblingPathWithSharedPrefix(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	siblingFile := filepath.Join(parent, "workspace-other", "sibling.txt")
+	mustWriteFile(t, filepath.Join(root, "inside.txt"), "inside\n")
+	mustWriteFile(t, siblingFile, "sibling\n")
+	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceToolsWithAccess(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTool(tools, "read", jsonArgs(t, map[string]any{"path": siblingFile})); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("sibling-prefix read error = %v", err)
+	}
+}
+
 func TestSharedFilesystemAccessSwitchesFileTools(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	external := filepath.Join(outside, "external.txt")

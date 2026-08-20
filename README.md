@@ -65,9 +65,8 @@ sk resume 0f3a "continue the fix" # ID or unambiguous prefix
 ```
 
 A Bash command still running after about ten seconds becomes a managed job the
-model can inspect, wait for, or stop. Managed jobs can outlive the interactive
-frontend and be adopted when the session is resumed. A clean exit stops
-ordinary jobs; custom tools explicitly declared detached may continue.
+model can inspect, wait for, or stop. Background jobs can outlive the Skot
+process and be adopted when the session is resumed.
 
 ## Scripts
 

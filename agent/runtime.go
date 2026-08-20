@@ -99,6 +99,9 @@ type Runtime struct {
 	programTools      []ProgramToolSnapshot
 }
 
+// New constructs an inert Runtime: it starts no background work and does not
+// take ownership of Journal or ExternalWork. An unused Runtime may be discarded
+// without cleanup.
 func New(config Config) (*Runtime, error) {
 	if config.Model == nil {
 		return nil, errors.New("model is required")

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 const (
@@ -28,7 +27,7 @@ type firecrawlFetchBackend struct {
 func newFirecrawlFetchBackend(token string) *firecrawlFetchBackend {
 	return &firecrawlFetchBackend{
 		token: strings.TrimSpace(token), endpoint: firecrawlScrapeEndpoint,
-		client: &http.Client{Timeout: 55 * time.Second},
+		client: &http.Client{Timeout: firecrawlFetchTimeout},
 	}
 }
 
@@ -61,7 +60,7 @@ func (backend *firecrawlFetchBackend) Fetch(ctx context.Context, request webFetc
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		drainWebError(response.Body)
+		discardWebErrorBody(response.Body)
 		return webFetchResult{}, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
 	var payload struct {
@@ -101,7 +100,7 @@ type exaFetchBackend struct {
 func newExaFetchBackend(token string) *exaFetchBackend {
 	return &exaFetchBackend{
 		token: strings.TrimSpace(token), endpoint: exaContentsEndpoint,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: exaFetchTimeout},
 	}
 }
 
@@ -119,7 +118,7 @@ func (backend *exaFetchBackend) Fetch(ctx context.Context, request webFetchReque
 		URLs: []string{request.URL},
 		Text: struct {
 			MaxCharacters int `json:"maxCharacters"`
-		}{MaxCharacters: webMaxTextBytes},
+		}{MaxCharacters: exaFetchMaxCharacters},
 		MaxAgeHours: 24, LivecrawlTimeout: 12_000,
 	})
 	if err != nil {
@@ -138,7 +137,7 @@ func (backend *exaFetchBackend) Fetch(ctx context.Context, request webFetchReque
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		drainWebError(response.Body)
+		discardWebErrorBody(response.Body)
 		return webFetchResult{}, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
 	var payload struct {
@@ -180,7 +179,7 @@ type tavilySearchProvider struct {
 }
 
 func newTavilySearchProvider(token string) *tavilySearchProvider {
-	return &tavilySearchProvider{token: strings.TrimSpace(token), endpoint: tavilySearchEndpoint, client: &http.Client{Timeout: webProviderTimeout}}
+	return &tavilySearchProvider{token: strings.TrimSpace(token), endpoint: tavilySearchEndpoint, client: &http.Client{Timeout: webSearchAttemptTimeout}}
 }
 
 func (*tavilySearchProvider) Name() string { return "tavily" }
@@ -207,7 +206,7 @@ func (provider *tavilySearchProvider) Search(ctx context.Context, request webSea
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		drainWebError(response.Body)
+		discardWebErrorBody(response.Body)
 		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
 	var payload struct {
@@ -234,7 +233,7 @@ type exaSearchProvider struct {
 }
 
 func newExaSearchProvider(token string) *exaSearchProvider {
-	return &exaSearchProvider{token: strings.TrimSpace(token), endpoint: exaSearchEndpoint, client: &http.Client{Timeout: webProviderTimeout}}
+	return &exaSearchProvider{token: strings.TrimSpace(token), endpoint: exaSearchEndpoint, client: &http.Client{Timeout: webSearchAttemptTimeout}}
 }
 
 func (*exaSearchProvider) Name() string { return "exa" }
@@ -260,7 +259,7 @@ func (provider *exaSearchProvider) Search(ctx context.Context, request webSearch
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		drainWebError(response.Body)
+		discardWebErrorBody(response.Body)
 		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
 	}
 	var payload struct {
@@ -291,6 +290,7 @@ func decodeWebJSON(reader io.Reader, target any) error {
 	return json.Unmarshal(raw, target)
 }
 
-func drainWebError(reader io.Reader) {
+// discardWebErrorBody reads and discards a bounded third-party error body.
+func discardWebErrorBody(reader io.Reader) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(reader, 64*1024))
 }

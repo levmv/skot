@@ -42,7 +42,8 @@ const (
 
 // ProgramTool declares one executable-backed model tool. The JSON tags are a
 // user-facing file format; arguments are passed to Command on stdin as one JSON
-// object, stdout is semantic output, and stderr remains diagnostic output.
+// object. Stdout is model-facing output; non-empty stderr is captured separately
+// and appended to that output under a `stderr:` header.
 type ProgramTool struct {
 	Name         string            `json:"name"`
 	Description  string            `json:"description"`
@@ -463,7 +464,7 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 			},
 		})
 		if err != nil {
-			return agent.ToolOutput{}, fmt.Errorf("%w: %s: %v", agent.ErrToolFatal, declaration.Name, err)
+			return agent.ToolOutput{}, fmt.Errorf("%w: %s: %w", agent.ErrToolFatal, declaration.Name, err)
 		}
 		if background {
 			return manager.result(job, jobResultOptions{managed: true})

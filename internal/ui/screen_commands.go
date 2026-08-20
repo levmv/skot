@@ -171,7 +171,7 @@ func (m screenModel) renderCommandSuggestions() []string {
 			}
 			label += m.mutedStyle.Render(" " + sanitizeTerminalText(description))
 		}
-		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+truncateANSI(label, m.contentWidth()))
+		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+label)
 	}
 	return lines
 }
@@ -434,7 +434,6 @@ func (m *screenModel) openModelPicker() {
 			description:  description,
 			activeDetail: modelChoiceDescription(choice),
 			dimmed:       loginRequired,
-			source:       status.Source,
 			efforts:      efforts, effortIndex: effortIndex,
 		}
 		switch {
@@ -636,6 +635,8 @@ func (picker pickerState) descriptionColumn() int {
 }
 
 func pickerNavigationFor(kind pickerKind) pickerNavigation {
+	// Fixed, non-destructive lists use number shortcuts; models use search and
+	// logout keeps only arrows.
 	switch kind {
 	case pickerModel:
 		return navigationSearch
@@ -1149,7 +1150,7 @@ func (m screenModel) renderPicker() []string {
 		} else {
 			filter += m.accentStyle.Render(sanitizeTerminalText(m.picker.query))
 		}
-		lines = append(lines, strings.Repeat(" ", transcriptGutter)+truncateANSI(filter, m.contentWidth()))
+		lines = append(lines, strings.Repeat(" ", transcriptGutter)+filter)
 	}
 	if len(visible) == 0 {
 		return append(lines, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render("no matches"))
@@ -1203,7 +1204,7 @@ func (m screenModel) renderPicker() []string {
 		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+shortcut+truncateANSI(label, availableWidth))
 	}
 	if note != "" {
-		lines = append(lines, "", strings.Repeat(" ", transcriptGutter)+truncateANSI(m.warningStyle.Render(note), m.contentWidth()))
+		lines = append(lines, "", strings.Repeat(" ", transcriptGutter)+m.warningStyle.Render(note))
 	}
 	return lines
 }

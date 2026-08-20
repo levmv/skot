@@ -180,6 +180,9 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 
 	memorySession := freshHeadlessMemorySession(config, toolSets)
 	opened, err := openInitialSession(config, home, root, memorySession)
+	if err != nil {
+		return resources.fail(err)
+	}
 	managedID := ""
 	if opened.managed {
 		managedID = opened.id
@@ -187,9 +190,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	resources.session = newLiveSession(managedID, nil, opened.journal, opened.managed)
 	resources.session.provisional = opened.provisional
 	resources.session.memory = opened.memory
-	if err != nil {
-		return resources.fail(err)
-	}
 	currentSession := resources.session
 	journal := opened.journal
 	sessionID := opened.id

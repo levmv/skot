@@ -81,7 +81,7 @@ type classifiedError struct {
 func (err classifiedError) Error() string { return err.cause.Error() }
 func (err classifiedError) Unwrap() error { return err.cause }
 func (err classifiedError) Is(target error) bool {
-	return target == err.class || errors.Is(err.cause, target)
+	return target == err.class
 }
 
 // MarkInvalidRequest preserves err's text and cause while classifying the

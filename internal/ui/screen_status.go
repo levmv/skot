@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
-	"github.com/levmv/skot/internal/toolpolicy"
 )
 
 const footerSeparator = " · "
@@ -38,7 +37,7 @@ func (m screenModel) footerLine() string {
 	// The footer names the tool set only when it departs from the default, the
 	// same way it stays silent about a default reasoning effort. Both are there
 	// to surface a deliberate choice, and the default is not one.
-	if toolSet == toolpolicy.ToolSetDefault {
+	if toolSet == app.ToolSetDefault {
 		toolSet = ""
 	}
 	effectiveScope := ""

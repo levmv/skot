@@ -253,11 +253,11 @@ type interactiveSession interface {
 	ShortSessionID() string
 }
 
-func writeInteractiveResumeHint(output io.Writer, session interactiveSession) {
-	if !session.HasUserTurn() {
+func writeInteractiveResumeHint(output io.Writer, resumable interactiveSession) {
+	if !resumable.HasUserTurn() {
 		return
 	}
-	writeResumeHint(output, session.ShortSessionID())
+	writeResumeHint(output, resumable.ShortSessionID())
 }
 
 // writeResumeHint prints nothing for sessions Skot cannot address, such as an

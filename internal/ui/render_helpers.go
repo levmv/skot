@@ -1,12 +1,9 @@
 package ui
 
-import (
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
-)
+import "github.com/charmbracelet/x/ansi"
 
 func visibleLen(text string) int {
-	return lipgloss.Width(text)
+	return ansi.StringWidth(text)
 }
 
 func truncateANSI(text string, width int) string {

@@ -38,6 +38,8 @@ type openedSession struct {
 	memory      bool
 }
 
+// openInitialSession returns no journal or ownership flags on error, so callers
+// may discard the accompanying openedSession without registering cleanup.
 func openInitialSession(config Config, home, root string, memory bool) (openedSession, error) {
 	var opened openedSession
 	journalPath := strings.TrimSpace(config.JournalPath)

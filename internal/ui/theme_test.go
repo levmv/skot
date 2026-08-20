@@ -52,10 +52,10 @@ func TestThemeAppliesToMarkdownPalette(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := "## Title\n`inline`\n```\ncode block\n```"
-	dark := strings.Join(model.markdown.renderLinesAtWidth(text, 80), "\n")
+	dark := strings.Join(model.markdown.renderMarkdownLines(text, 80), "\n")
 
 	model.applyTerminalTheme(false)
-	light := strings.Join(model.markdown.renderLinesAtWidth(text, 80), "\n")
+	light := strings.Join(model.markdown.renderMarkdownLines(text, 80), "\n")
 	if dark == light {
 		t.Fatalf("markdown palette did not change with theme: %q", dark)
 	}

@@ -26,7 +26,7 @@ func newMarkdownRenderer(useStyle bool, palette terminalPalette) markdownRendere
 	return renderer
 }
 
-func (renderer markdownRenderer) renderLinesAtWidth(text string, width int) []string {
+func (renderer markdownRenderer) renderMarkdownLines(text string, tableWidth int) []string {
 	text = sanitizeTerminalText(text)
 	if text == "" {
 		return nil
@@ -37,7 +37,7 @@ func (renderer markdownRenderer) renderLinesAtWidth(text string, width int) []st
 	}
 	input := strings.Split(trimmed, "\n")
 	var fence markdownFence
-	return renderer.renderLines(input, &fence, max(1, width))
+	return renderer.renderLines(input, &fence, max(1, tableWidth))
 }
 
 type markdownFence struct {

@@ -26,10 +26,15 @@ import (
 
 const (
 	childMetadataVersion = 1
+	childDetailKind      = "agent"
+
 	maxActiveChildren    = 4
 	maxChildrenPerParent = 16
 	maxRunsPerChild      = 16
-	childDetailKind      = "agent"
+
+	// maxChildResultBytes bounds replies copied into the parent tool result. The
+	// complete child trace remains available in its own journal.
+	maxChildResultBytes = 32 << 10
 )
 
 var childAgentSchema = json.RawMessage(`{
@@ -566,10 +571,10 @@ func (supervisor *childSupervisor) launchLocked(child *childAgent, prompt string
 		child.mu.Lock()
 		run.RunID = result.RunID
 		run.Status = result.Status
-		run.Answer = truncateUTF8(result.Answer, productlimits.MaxChildAgentResultBytes)
+		run.Answer = truncateUTF8(result.Answer, maxChildResultBytes)
 		run.ToolLimitReached = result.ToolLimitReached
 		if runErr != nil {
-			run.Error = truncateUTF8(runErr.Error(), productlimits.MaxChildAgentResultBytes)
+			run.Error = truncateUTF8(runErr.Error(), maxChildResultBytes)
 		}
 		run.FinishedAt = time.Now().UTC()
 		if state, err := runtime.State(context.WithoutCancel(runCtx)); err == nil {
@@ -900,7 +905,7 @@ func restoreChildRuns(records []agent.Record, blocks []agent.ConversationBlock) 
 	for _, block := range blocks {
 		run := &childRun{
 			RunID: block.RunID, Status: block.Status,
-			Error:            truncateUTF8(block.Error, productlimits.MaxChildAgentResultBytes),
+			Error:            truncateUTF8(block.Error, maxChildResultBytes),
 			ToolLimitReached: block.ToolLimitReached,
 		}
 		// Start at the preceding block boundary so compaction performed before
@@ -917,7 +922,7 @@ func restoreChildRuns(records []agent.Record, blocks []agent.ConversationBlock) 
 				var payload agent.ModelResponseRecord
 				if json.Unmarshal(record.Data, &payload) == nil && payload.RunID == block.RunID {
 					run.Usage = run.Usage.Add(payload.Usage)
-					run.Answer = truncateUTF8(assistantReply(payload.Items), productlimits.MaxChildAgentResultBytes)
+					run.Answer = truncateUTF8(assistantReply(payload.Items), maxChildResultBytes)
 				}
 			case agent.RecordContextCompacted:
 				var payload agent.ContextCompactedRecord
@@ -1092,7 +1097,7 @@ func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
 	}
 	var output strings.Builder
 	var details []agent.Detail
-	remaining := productlimits.MaxChildAgentResultBytes
+	remaining := maxChildResultBytes
 	for index, snapshot := range snapshots {
 		if index != 0 {
 			output.WriteString("\n\n")

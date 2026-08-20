@@ -50,6 +50,9 @@ type ToolCall struct {
 	ProviderReferences []ProviderReference `json:"provider_references,omitempty"`
 }
 
+// ProviderReference carries adapter-owned replay identity in journaled tool
+// calls. Kind identifies the adapter payload; Backend and Epoch bind it to a
+// provider selection. Empty Backend and Epoch identify a legacy reference.
 type ProviderReference struct {
 	Kind    string          `json:"kind"`
 	Backend string          `json:"backend"`
@@ -157,13 +160,17 @@ type ModelResponse struct {
 const StopReasonOutputLimit = "output_limit"
 
 type ModelUsage struct {
-	InputTokens       int `json:"input_tokens,omitempty"`
+	InputTokens int `json:"input_tokens,omitempty"`
+	// CachedInputTokens is the cached subset of InputTokens, not additional
+	// input.
 	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
 	OutputTokens      int `json:"output_tokens,omitempty"`
 	// ReasoningTokens is the reported reasoning subset of OutputTokens, not an
 	// additional token count.
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
-	TotalTokens     int `json:"total_tokens,omitempty"`
+	// TotalTokens counts InputTokens plus OutputTokens. Adapters must preserve
+	// that invariant when mapping provider usage.
+	TotalTokens int `json:"total_tokens,omitempty"`
 }
 
 func (usage ModelUsage) Add(other ModelUsage) ModelUsage {

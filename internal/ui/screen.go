@@ -118,6 +118,8 @@ const (
 	pickerSession
 )
 
+// pickerItem is the shared row shape for every picker kind. Zero-valued
+// optional fields opt out of kind-specific behavior.
 type pickerItem struct {
 	value       string
 	label       string
@@ -129,7 +131,6 @@ type pickerItem struct {
 	dimmed        bool
 	custom        bool
 	dividerBefore bool
-	source        string
 	modelURI      string
 	efforts       []string
 	effortIndex   int
@@ -283,8 +284,8 @@ func RunScreen(ctx context.Context, runtime Agent, config Config, in, out *os.Fi
 }
 
 func watchTerminalSize(ctx context.Context, program *tea.Program, out *os.File, width, height int) {
-	// WithoutRenderer leaves terminal ownership to Skot, including SIGWINCH
-	// handling. Polling also coalesces resize bursts into authoritative redraws.
+	// WithoutRenderer skips Bubble Tea's terminal initialization, so this poller
+	// is the only source of size updates after Skot's initial GetSize call.
 	ticker := time.NewTicker(resizeInterval)
 	defer ticker.Stop()
 	for {
@@ -512,7 +513,7 @@ func (m screenModel) inlineFrame() inlineFrame {
 		dynamic = append(dynamic, m.markedEditorLines()...)
 		dynamic = append(dynamic, m.renderCommandSuggestions()...)
 	}
-	dynamic = append(dynamic, "", strings.Repeat(" ", transcriptGutter)+truncateANSI(m.footerLine(), m.contentWidth()))
+	dynamic = append(dynamic, "", strings.Repeat(" ", transcriptGutter)+m.footerLine())
 
 	var cursor *tea.Cursor
 	if editorDynamicStart >= 0 {
@@ -575,7 +576,7 @@ func (m screenModel) queuedLine() string {
 	if len(queued) > 1 {
 		text = fmt.Sprintf("queued %d · latest: %s", len(queued), compactSingleLine(queued[len(queued)-1], 120))
 	}
-	return m.marked(" ", truncateANSI(m.mutedStyle.Render(text), m.contentWidth()))
+	return m.marked(" ", m.mutedStyle.Render(text))
 }
 
 func (m screenModel) contentWidth() int { return max(1, max(20, m.width)-transcriptGutter-1) }

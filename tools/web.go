@@ -16,21 +16,29 @@ import (
 )
 
 const (
-	webMaxTextBytes     = 96 * 1024
-	webMaxResponseBytes = 2 * 1024 * 1024
-	webDefaultResults   = 5
-	webMaxResults       = 20
-	webProviderTimeout  = 20 * time.Second
-	webFetchDetailKind  = "web_fetch_result"
-	webSearchDetailKind = "web_search_result"
+	webMaxTextBytes = 96 * 1024
+
+	// exaFetchMaxCharacters bounds the provider response before transfer;
+	// webMaxTextBytes independently bounds the returned UTF-8 text locally.
+	exaFetchMaxCharacters   = 96 * 1024
+	webMaxResponseBytes     = 2 * 1024 * 1024
+	webDefaultResults       = 5
+	webMaxResults           = 20
+	webSearchAttemptTimeout = 20 * time.Second
+	firecrawlFetchTimeout   = 55 * time.Second
+	exaFetchTimeout         = 30 * time.Second
+	webFetchDetailKind      = "web_fetch_result"
+	webSearchDetailKind     = "web_search_result"
 )
+
+var webSearchProviderOrder = [...]string{"tavily", "exa"}
 
 // WebCredentialLookup returns the current token for one web provider. Tools
 // call it at execution time, so a successful login does not leave stale
 // credentials captured in long-lived closures.
 type WebCredentialLookup func(provider string) (string, error)
 
-type webService struct {
+type webTools struct {
 	credential WebCredentialLookup
 }
 
@@ -38,7 +46,7 @@ type webService struct {
 // web_search while WebSearchAvailable is false; its runner checks again so a
 // stale catalog can never bypass the credential boundary.
 func NewWebTools(credential WebCredentialLookup) []agent.Tool {
-	service := &webService{credential: credential}
+	web := &webTools{credential: credential}
 	return []agent.Tool{
 		{
 			Spec: agent.ToolSpec{
@@ -47,7 +55,7 @@ func NewWebTools(credential WebCredentialLookup) []agent.Tool {
 				InputSchema:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","description":"Absolute public http(s) URL."}},"required":["url"],"additionalProperties":false}`),
 				ParallelSafe: true,
 			},
-			Run: service.fetch,
+			Run: web.fetch,
 		},
 		{
 			Spec: agent.ToolSpec{
@@ -56,13 +64,13 @@ func NewWebTools(credential WebCredentialLookup) []agent.Tool {
 				InputSchema:  json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Search query."},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum results; defaults to 5."}},"required":["query"],"additionalProperties":false}`),
 				ParallelSafe: false,
 			},
-			Run: service.search,
+			Run: web.search,
 		},
 	}
 }
 
 func WebSearchAvailable(credential WebCredentialLookup) (bool, error) {
-	for _, provider := range []string{"tavily", "exa"} {
+	for _, provider := range webSearchProviderOrder {
 		token, err := lookupWebCredential(credential, provider)
 		if err != nil {
 			return false, err
@@ -90,12 +98,14 @@ type webFetchResult struct {
 	Truncated bool
 }
 
+// webFetchBackend includes built-in credentialless implementations;
+// webSearchProvider represents a configured third-party service.
 type webFetchBackend interface {
 	Name() string
 	Fetch(context.Context, webFetchRequest) (webFetchResult, error)
 }
 
-func (service *webService) fetch(ctx context.Context, raw string) (agent.ToolOutput, error) {
+func (web *webTools) fetch(ctx context.Context, raw string) (agent.ToolOutput, error) {
 	var args webFetchArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return agent.ToolOutput{}, err
@@ -105,7 +115,7 @@ func (service *webService) fetch(ctx context.Context, raw string) (agent.ToolOut
 		return agent.ToolOutput{}, err
 	}
 	request := webFetchRequest{URL: requestURL.String()}
-	backends, err := service.fetchBackends()
+	backends, err := web.newFetchBackends()
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -134,17 +144,17 @@ func (service *webService) fetch(ctx context.Context, raw string) (agent.ToolOut
 	return agent.ToolOutput{Content: content.String(), Details: []agent.Detail{detail}}, nil
 }
 
-func (service *webService) fetchBackends() ([]webFetchBackend, error) {
+func (web *webTools) newFetchBackends() ([]webFetchBackend, error) {
 	var backends []webFetchBackend
-	for _, provider := range []string{"firecrawl", "exa"} {
-		token, err := lookupWebCredential(service.credential, provider)
+	for _, name := range []string{"firecrawl", "exa"} {
+		token, err := lookupWebCredential(web.credential, name)
 		if err != nil {
-			return nil, fmt.Errorf("load %s credential: %w", provider, err)
+			return nil, fmt.Errorf("load %s credential: %w", name, err)
 		}
 		if token == "" {
 			continue
 		}
-		switch provider {
+		switch name {
 		case "firecrawl":
 			backends = append(backends, newFirecrawlFetchBackend(token))
 		case "exa":
@@ -209,12 +219,12 @@ type webSearchProvider interface {
 	Search(context.Context, webSearchRequest) ([]webSearchResult, error)
 }
 
-func (service *webService) search(ctx context.Context, raw string) (agent.ToolOutput, error) {
+func (web *webTools) search(ctx context.Context, raw string) (agent.ToolOutput, error) {
 	var args webSearchArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	providers, err := service.searchProviders()
+	providers, err := web.searchProviders()
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
@@ -233,10 +243,10 @@ func (service *webService) search(ctx context.Context, raw string) (agent.ToolOu
 	return agent.ToolOutput{Content: content, Details: []agent.Detail{detail}}, nil
 }
 
-func (service *webService) searchProviders() ([]webSearchProvider, error) {
-	providers := make([]webSearchProvider, 0, 2)
-	for _, name := range []string{"tavily", "exa"} {
-		token, err := lookupWebCredential(service.credential, name)
+func (web *webTools) searchProviders() ([]webSearchProvider, error) {
+	providers := make([]webSearchProvider, 0, len(webSearchProviderOrder))
+	for _, name := range webSearchProviderOrder {
+		token, err := lookupWebCredential(web.credential, name)
 		if err != nil {
 			return nil, fmt.Errorf("load %s credential: %w", name, err)
 		}
@@ -267,7 +277,7 @@ func searchWeb(ctx context.Context, request webSearchRequest, providers []webSea
 	}
 	failures := make([]string, 0, len(providers))
 	for _, provider := range providers {
-		attemptCtx, cancel := context.WithTimeout(ctx, webProviderTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, webSearchAttemptTimeout)
 		results, err := provider.Search(attemptCtx, request)
 		cancel()
 		if ctx.Err() != nil {

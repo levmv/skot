@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
 	"github.com/levmv/skot/agent"
 	workspacetools "github.com/levmv/skot/tools"
 )
@@ -436,7 +435,7 @@ func (m screenModel) renderSystemLine(line string) string {
 func (m screenModel) renderAssistantBlock(text string) []string {
 	lines := []string{m.marked(" ", "")}
 	marked := false
-	for _, rendered := range m.markdown.renderLinesAtWidth(text, m.contentWidth()) {
+	for _, rendered := range m.markdown.renderMarkdownLines(text, m.contentWidth()) {
 		for _, line := range wrapDisplayLine(rendered, m.contentWidth()) {
 			marker := " "
 			if !marked && strings.TrimSpace(line) != "" {
@@ -467,11 +466,7 @@ func (m screenModel) wrappedMarkedWithContinuation(marker, continuation, text st
 	var lines []string
 	marked := false
 	for _, sourceLine := range strings.Split(text, "\n") {
-		wrapped := lipgloss.Wrap(sourceLine, width, "")
-		if wrapped == "" {
-			wrapped = " "
-		}
-		for _, line := range strings.Split(wrapped, "\n") {
+		for _, line := range wrapDisplayLine(sourceLine, width) {
 			lineMarker := continuation
 			if !marked {
 				lineMarker = marker

@@ -7,9 +7,9 @@ import (
 	"github.com/levmv/skot/agent"
 )
 
-// Exit codes preserve the unattended contract established by the Cy fork.
-// They describe the caller action: inspect, fix and rerun, retry unchanged, or
-// treat the invocation as interrupted.
+// Exit codes are an unattended contract. They describe the caller action:
+// inspect, fix and rerun, retry unchanged, or treat the invocation as
+// interrupted.
 const (
 	exitOK          = 0
 	exitFailure     = 1

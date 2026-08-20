@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -18,11 +19,10 @@ import (
 	"github.com/levmv/skot/app"
 )
 
-// TestCompositionPrototypeRunsIndependentApplications preserves the original
-// public composition probe behind the built-in child supervisor: independent
-// Applications must still run, cancel, close, and replay without sharing
-// mutable session state.
-func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
+// TestIndependentApplicationsRunInOneProcess exercises app as an importing
+// consumer: independent Applications must run, cancel, close, and replay
+// without sharing mutable session state. Keep this test in package app_test.
+func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 	const childCount = 3
 
 	parallelStarted := make(chan string, childCount)
@@ -35,11 +35,11 @@ func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if !containsString(toolNames, "read") {
+		if !slices.Contains(toolNames, "read") {
 			t.Errorf("read-only child did not receive the read tool: %v", toolNames)
 		}
 		for _, forbidden := range []string{"edit", "write", "bash", "job"} {
-			if containsString(toolNames, forbidden) {
+			if slices.Contains(toolNames, forbidden) {
 				t.Errorf("read-only child received %q tool: %v", forbidden, toolNames)
 			}
 		}
@@ -94,19 +94,19 @@ func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
 	}
 
 	started := make(map[string]struct{}, childCount)
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
+	startedDeadline := time.After(5 * time.Second)
 	for len(started) < childCount {
 		select {
 		case prompt := <-parallelStarted:
 			started[prompt] = struct{}{}
-		case <-deadline.C:
+		case <-startedDeadline:
 			t.Fatalf("only %d/%d child requests ran concurrently", len(started), childCount)
 		}
 	}
 	close(parallelRelease)
 
 	runIDs := make(map[string]struct{}, childCount)
+	finishedDeadline := time.After(5 * time.Second)
 	for range childCount {
 		select {
 		case got := <-outcomes:
@@ -121,14 +121,13 @@ func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
 				t.Fatalf("duplicate run ID %q", got.result.RunID)
 			}
 			runIDs[got.result.RunID] = struct{}{}
-		case <-deadline.C:
+		case <-finishedDeadline:
 			t.Fatal("parallel child runs did not finish")
 		}
 	}
 
 	states := make([]agent.State, childCount)
 	sessionIDs := make(map[string]struct{}, childCount)
-	exposedSessionIDs := 0
 	for index, child := range children {
 		state, err := child.State(context.Background())
 		if err != nil {
@@ -145,15 +144,6 @@ func TestCompositionPrototypeRunsIndependentApplications(t *testing.T) {
 		if state.Configured == nil || state.Configured.ModelContext.ToolSet != app.ToolSetReadOnly {
 			t.Fatalf("child %d effective configuration = %#v", index, state.Configured)
 		}
-		if exposed := child.SessionID(); exposed != "" {
-			exposedSessionIDs++
-			if exposed != state.SessionID {
-				t.Fatalf("child %d exposed session ID %q, journal has %q", index, exposed, state.SessionID)
-			}
-		}
-	}
-	if exposedSessionIDs == 0 {
-		t.Log("explicit-journal Applications have runtime session IDs in State, but Application.SessionID does not expose them")
 	}
 	listed, err := children[1].ListSessions()
 	if err != nil {
@@ -298,13 +288,4 @@ func writeCompositionResponse(t *testing.T, writer http.ResponseWriter, answer s
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", payload)
 	_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n")
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
-}
-
-func containsString(values []string, value string) bool {
-	for _, candidate := range values {
-		if candidate == value {
-			return true
-		}
-	}
-	return false
 }

@@ -27,8 +27,4 @@ const (
 	// provider completion ceiling. Child histories remain governed by the same
 	// request and journal limits as ordinary sessions.
 	MaxChildAgentPromptBytes = 1 << 20
-
-	// MaxChildAgentResultBytes bounds child replies copied into a parent tool
-	// result. The complete child trace remains available in its own journal.
-	MaxChildAgentResultBytes = 32 << 10
 )

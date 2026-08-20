@@ -10,7 +10,10 @@ import (
 	"github.com/levmv/skot/app"
 )
 
-const footerSeparator = " · "
+const (
+	footerSeparator             = " · "
+	footerContextWarningPercent = 40
+)
 
 func (m *screenModel) refreshSessionStatus() {
 	m.sessionStatus = m.agent.SessionStatus()
@@ -48,17 +51,30 @@ func (m screenModel) footerLine() string {
 	// The tool set sits away from the model, where a bare "default" next to a
 	// model name read as part of the selection. Root goes last because it is
 	// the one part that gets truncated, which keeps the rest at a stable width.
+	contextStatus := compactContextStatus(m.sessionStatus.ContextReport)
 	beforeRoot := compactFooterParts(
 		model,
-		compactContextStatus(m.sessionStatus.ContextReport),
-		compactUsage(m.sessionStatus.Usage),
+		contextStatus,
 		toolSet,
 		effectiveScope,
 	)
 	root := sanitizeTerminalText(strings.TrimSpace(m.config.Root))
 	root = truncateFooterRoot(root, beforeRoot, "", m.contentWidth())
 
-	return m.mutedStyle.Render(compactFooterParts(beforeRoot, root))
+	parts := []string{model, contextStatus, toolSet, effectiveScope, root}
+	rendered := make([]string, 0, len(parts))
+	for index, part := range parts {
+		part = sanitizeTerminalText(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		style := m.mutedStyle
+		if index == 1 && contextUsagePercent(m.sessionStatus.ContextReport) >= footerContextWarningPercent {
+			style = m.warningStyle
+		}
+		rendered = append(rendered, style.Render(part))
+	}
+	return strings.Join(rendered, m.mutedStyle.Render(footerSeparator))
 }
 
 func compactFooterParts(parts ...string) string {
@@ -115,13 +131,7 @@ func compactContextStatus(report agent.ContextReport) string {
 	if report.Window <= 0 {
 		return ""
 	}
-	// InputLimit is the automatic-compaction boundary, so 100% means the next
-	// request has exhausted its usable budget rather than the provider window.
-	limit := report.InputLimit
-	if limit <= 0 {
-		limit = report.Window
-	}
-	percent := int(float64(max(0, report.TotalInputTokens))*100/float64(limit) + 0.5)
+	percent := contextUsagePercent(report)
 	if percent == 0 && report.TotalInputTokens > 0 {
 		// Rounding to zero beside a visible token count reads as a
 		// contradiction, so a used-but-tiny context says so directly.
@@ -130,19 +140,17 @@ func compactContextStatus(report agent.ContextReport) string {
 	return fmt.Sprintf("ctx ~%d%%", percent)
 }
 
-func compactUsage(usage agent.ModelUsage) string {
-	if usage.InputTokens == 0 && usage.CachedInputTokens == 0 && usage.OutputTokens == 0 {
-		return ""
+func contextUsagePercent(report agent.ContextReport) int {
+	if report.Window <= 0 {
+		return 0
 	}
-	sent := "↑" + formatTokenCount(usage.InputTokens)
-	if usage.CachedInputTokens > 0 {
-		// Cached input is part of the input on every backend, not additional to
-		// it. The parentheses carry that on their own, so the figure inside
-		// needs no arrow. No space either: spaces separate the arrows from each
-		// other, so one here would leave the parenthetical floating between them.
-		sent += "(" + formatTokenCount(usage.CachedInputTokens) + ")"
+	// InputLimit is the automatic-compaction boundary, so 100% means the next
+	// request has exhausted its usable budget rather than the provider window.
+	limit := report.InputLimit
+	if limit <= 0 {
+		limit = report.Window
 	}
-	return sent + " ↓" + formatTokenCount(usage.OutputTokens)
+	return int(float64(max(0, report.TotalInputTokens))*100/float64(limit) + 0.5)
 }
 
 func formatTokenCount(tokens int) string {

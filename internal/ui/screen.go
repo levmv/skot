@@ -18,12 +18,12 @@ import (
 )
 
 const (
-	transcriptGutter  = 2
-	userMarker        = "›"
-	userBarMarker     = "┃"
-	resizeInterval    = 75 * time.Millisecond
-	transcriptFrame   = 33 * time.Millisecond
-	themeQueryTimeout = 150 * time.Millisecond
+	transcriptGutter   = 2
+	userMarker         = "›"
+	userBarMarker      = "┃"
+	resizeInterval     = 75 * time.Millisecond
+	transcriptMaxDelay = 200 * time.Millisecond
+	themeQueryTimeout  = 150 * time.Millisecond
 )
 
 type ConversationAgent interface {
@@ -44,7 +44,14 @@ type ShellAgent interface {
 	RunPrivateShell(context.Context, string) (agent.ToolResult, error)
 }
 
-type ConfigurationAgent interface {
+// Agent is the complete screen-to-application boundary. ConversationAgent and
+// ShellAgent remain separate because asynchronous helpers use those narrower
+// roles directly.
+type Agent interface {
+	ConversationAgent
+	ShellAgent
+
+	// Configuration.
 	CurrentToolSet() string
 	ToolSets() []string
 	ToolSetTools(string) []string
@@ -60,31 +67,18 @@ type ConfigurationAgent interface {
 	SwitchScope(context.Context, string) error
 	CurrentTheme() string
 	SwitchTheme(string) error
-}
 
-type CredentialAgent interface {
+	// Credentials.
 	ProviderStatuses() ([]ProviderStatus, error)
 	Login(context.Context, string, string) error
 	Logout(context.Context, string) error
-}
 
-type SessionAgent interface {
+	// Sessions.
 	SessionID() string
 	StartupNotices() []string
 	ListSessions() ([]SessionSummary, error)
 	ClearSession(context.Context) (string, error)
 	ResumeSession(context.Context, string) (string, error)
-}
-
-// Agent is the UI composition boundary. The smaller embedded roles keep
-// command, conversation, credential, and session dependencies independently
-// usable by helpers and alternate frontends.
-type Agent interface {
-	ConversationAgent
-	ShellAgent
-	ConfigurationAgent
-	CredentialAgent
-	SessionAgent
 }
 
 type ProviderStatus = app.ProviderStatus
@@ -376,6 +370,11 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if next.themePending {
 		return next, cmd
 	}
+	if event, ok := msg.(agentEventMsg); ok &&
+		event.event.Kind == agent.EventTextDelta &&
+		!strings.Contains(event.event.Text, "\n") {
+		return next, cmd
+	}
 	if err := next.renderer.RenderFrame(next.inlineFrame(), next.width, next.height); err != nil {
 		next.renderErr = fmt.Errorf("render terminal: %w", err)
 		next.quitting = true
@@ -423,6 +422,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 	case agentEventMsg:
 		m.applyAgentEvent(msg.event)
 		if msg.event.Kind == agent.EventTextDelta {
+			if strings.Contains(msg.event.Text, "\n") {
+				m.refreshTranscript()
+			}
 			return m, tea.Batch(waitAgentMsg(m.operation.events), m.scheduleTranscriptRender())
 		}
 		m.operation.renderPending = false

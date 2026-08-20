@@ -702,12 +702,21 @@ func TestDurableMaintenanceEventsReachTranscript(t *testing.T) {
 	}
 }
 
-func TestTextDeltasFlushAtFrameBoundary(t *testing.T) {
-	fake := &fakeAgent{}
-	model := testScreenModel(t, fake)
+func TestTextDeltasFlushAtNewlineOrMaxDelay(t *testing.T) {
+	var output bytes.Buffer
+	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeLight}, Config{}, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 24)
 	model.appendBlock(screenBlock{kind: screenBlockAssistant, text: "before", attemptID: "attempt"})
 	model.refreshTranscript()
+	if err := model.renderer.RenderFrame(model.inlineFrame(), model.width, model.height); err != nil {
+		t.Fatal(err)
+	}
+	model.transcript.presented()
 	before := strings.Join(model.transcript.lines, "\n")
+	output.Reset()
 
 	updated, _ := model.Update(agentEventMsg{event: agent.Event{
 		Kind: agent.EventTextDelta, AttemptID: "attempt", Text: " after",
@@ -719,11 +728,33 @@ func TestTextDeltasFlushAtFrameBoundary(t *testing.T) {
 	if transcript := strings.Join(got.transcript.lines, "\n"); transcript != before {
 		t.Fatalf("delta rendered before frame boundary: %q", transcript)
 	}
+	updated, _ = got.Update(agentEventMsg{event: agent.Event{
+		Kind: agent.EventTextDelta, AttemptID: "attempt", Text: " again",
+	}})
+	got = updated.(screenModel)
+	if output.Len() != 0 {
+		t.Fatalf("text deltas wrote to the terminal before frame boundary: %q", output.String())
+	}
 
 	updated, _ = got.Update(transcriptRenderMsg{})
 	got = updated.(screenModel)
-	if got.operation.renderPending || !strings.Contains(strings.Join(got.transcript.lines, "\n"), "before after") {
+	if got.operation.renderPending || !strings.Contains(strings.Join(got.transcript.lines, "\n"), "before after again") {
 		t.Fatalf("frame did not flush delta: pending=%v transcript=%q", got.operation.renderPending, got.transcript.lines)
+	}
+	if output.Len() == 0 {
+		t.Fatal("frame boundary did not write accumulated text to the terminal")
+	}
+
+	output.Reset()
+	updated, _ = got.Update(agentEventMsg{event: agent.Event{
+		Kind: agent.EventTextDelta, AttemptID: "attempt", Text: "\nnext line",
+	}})
+	got = updated.(screenModel)
+	if !strings.Contains(strings.Join(got.transcript.lines, "\n"), "next line") {
+		t.Fatalf("newline did not flush delta: %q", got.transcript.lines)
+	}
+	if output.Len() == 0 {
+		t.Fatal("newline did not write accumulated text to the terminal")
 	}
 }
 

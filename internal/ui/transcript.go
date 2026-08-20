@@ -489,18 +489,7 @@ func (m screenModel) renderToolSummaryLines(marker, text, detail string) []strin
 	if detail != "" {
 		body += "  " + m.mutedStyle.Render(detail)
 	}
-	wrapped := wrapDisplayLine(body, max(1, m.contentWidth()-indent))
-	lines := make([]string, 0, len(wrapped))
-	for index, line := range wrapped {
-		lineMarker := " "
-		prefix := strings.Repeat(" ", indent)
-		if index == 0 {
-			lineMarker = marker
-			prefix = m.accentStyle.Render(label) + " "
-		}
-		lines = append(lines, m.marked(lineMarker, prefix+line))
-	}
-	return lines
+	return m.hangingLines(marker, m.accentStyle.Render(label)+" ", strings.Repeat(" ", indent), body)
 }
 
 func toolCommandPrefix(text string) (label, body string, indent int, ok bool) {

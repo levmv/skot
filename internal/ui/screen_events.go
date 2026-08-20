@@ -44,7 +44,7 @@ func (m *screenModel) scheduleTranscriptRender() tea.Cmd {
 	m.operation.renderPending = true
 	ctx := m.ctx
 	return func() tea.Msg {
-		timer := time.NewTimer(transcriptFrame)
+		timer := time.NewTimer(transcriptMaxDelay)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():

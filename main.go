@@ -176,7 +176,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if interactive {
 		// Registered after Close so it runs before it: Close drops the session,
 		// and the hint would then see no user turn.
-		defer writeInteractiveResumeHint(stderr, application)
+		defer func() {
+			if application.HasUserTurn() {
+				writeResumeHint(stderr, application.ShortSessionID())
+			}
+		}()
 	}
 	for _, notice := range application.StartupNotices() {
 		fmt.Fprintln(stderr, "sk: "+notice)
@@ -190,6 +194,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			ScopeSummary:    application.ScopeSummary(),
 		}, inFile, outFile)
 	}
+	return runOneShot(ctx, application, config, prompt, stdout, stderr)
+}
+
+func runOneShot(ctx context.Context, application *app.Application, config cliConfig, prompt string, stdout, stderr io.Writer) error {
 	measureUsage := config.verbose || config.jsonOutput
 	var usageBefore agent.ModelUsage
 	if measureUsage {
@@ -201,7 +209,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	var observer *runEventObserver
 	var emit agent.EmitFunc
-	if config.verbose || config.jsonOutput {
+	if measureUsage {
 		observer = &runEventObserver{verbose: verboseEmitter(config.verbose, stderr)}
 		emit = observer.emit
 	}
@@ -246,18 +254,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		writeResumeHint(stderr, application.ShortSessionID())
 	}
 	return runErr
-}
-
-type interactiveSession interface {
-	HasUserTurn() bool
-	ShortSessionID() string
-}
-
-func writeInteractiveResumeHint(output io.Writer, resumable interactiveSession) {
-	if !resumable.HasUserTurn() {
-		return
-	}
-	writeResumeHint(output, resumable.ShortSessionID())
 }
 
 // writeResumeHint prints nothing for sessions Skot cannot address, such as an

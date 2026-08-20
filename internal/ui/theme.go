@@ -19,8 +19,8 @@ type terminalPalette struct {
 	accent  color.Color
 	error   color.Color
 	success color.Color
-	// warning sits between muted and error: it flags a cost the user is about
-	// to accept on purpose, not a failure.
+	// warning sits between muted and error: it calls attention to a state or a
+	// cost without presenting it as a failure.
 	warning color.Color
 	// userBar marks user messages and should sit below muted text: it is a
 	// scanning aid, not something to read, so it fades toward the background

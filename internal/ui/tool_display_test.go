@@ -7,7 +7,7 @@ import (
 	"github.com/levmv/skot/agent"
 )
 
-func TestDescribeToolCallUsesWorkspaceArguments(t *testing.T) {
+func TestDescribeToolCallUsesToolArguments(t *testing.T) {
 	tests := []struct {
 		name string
 		tool string
@@ -20,10 +20,13 @@ func TestDescribeToolCallUsesWorkspaceArguments(t *testing.T) {
 		{name: "glob", tool: "glob", args: `{"pattern":"**/*_test.go","path":"skot"}`, want: "glob  **/*_test.go · skot"},
 		{name: "edit", tool: "edit", args: `{"path":"skot/main.go","old_text":"before","new_text":"after"}`, want: "edit  skot/main.go"},
 		{name: "write", tool: "write", args: `{"path":"skot/new.go","content":"package main"}`, want: "write  skot/new.go"},
+		{name: "shell", tool: "bash", args: `{"command":"go test ./...","workdir":"skot","background":true}`, want: "$ go test ./... · in skot · background"},
 		{name: "job list", tool: "job", args: `{"action":"list"}`, want: "job  list"},
 		{name: "job wait", tool: "job", args: `{"action":"wait","job_id":"job-123","timeout":30}`, want: "job  wait job-123 · timeout 30s"},
 		{name: "agent start", tool: "agent", args: `{"action":"start","prompt":"inspect parser behavior","model":"openai/gpt-5-mini"}`, want: `agent  start · openai/gpt-5-mini · "inspect parser behavior"`},
 		{name: "agent check", tool: "agent", args: `{"action":"check","ids":["agent_1234","agent_5678"],"wait":"any"}`, want: "agent  check agent_1234, agent_5678 · wait any"},
+		{name: "web search", tool: "web_search", args: `{"query":"current Go release"}`, want: `web  "current Go release"`},
+		{name: "web fetch", tool: "web_fetch", args: `{"url":"https://example.com/docs?q=skot"}`, want: "fetch  https://example.com/docs?…"},
 	}
 
 	for _, test := range tests {

@@ -57,18 +57,11 @@ func (m screenModel) renderModelProcessPreview(output string, indent int) []stri
 
 func (m screenModel) renderProcessOutputLine(outputLine string, indent int, wrap bool) []string {
 	width := max(1, m.contentWidth()-indent)
-	var content []string
-	if wrap {
-		content = wrapDisplayLine(outputLine, width)
-	} else {
-		content = []string{ansi.Truncate(outputLine, width, "…")}
-	}
 	prefix := strings.Repeat(" ", indent)
-	lines := make([]string, 0, len(content))
-	for _, line := range content {
-		lines = append(lines, m.marked(" ", prefix+m.mutedStyle.Render(line)))
+	if wrap {
+		return m.hangingLines(" ", prefix, prefix, m.mutedStyle.Render(outputLine))
 	}
-	return lines
+	return []string{m.marked(" ", prefix+m.mutedStyle.Render(ansi.Truncate(outputLine, width, "…")))}
 }
 
 func processOutputPreviewLines(output string, limit int) []string {

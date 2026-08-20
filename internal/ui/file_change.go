@@ -69,19 +69,10 @@ func (m screenModel) renderFileDiffLine(line agent.FileDiffLine, numberWidth int
 	if line.NoNewline {
 		content += "  [no newline]"
 	}
-	wrapped := wrapDisplayLine(content, max(1, m.contentWidth()-visibleLen(gutter)))
-	lines := make([]string, 0, len(wrapped))
-	for index, part := range wrapped {
-		prefix := indent
-		if index == 0 {
-			prefix = gutter
-		}
-		if line.Kind != "add" {
-			part = m.mutedStyle.Render(part)
-		}
-		lines = append(lines, m.marked(" ", prefix+part))
+	if line.Kind != "add" {
+		content = m.mutedStyle.Render(content)
 	}
-	return lines
+	return m.hangingLines(" ", gutter, indent, content)
 }
 
 func diffNumberWidth(change fileChangeMeta) int {

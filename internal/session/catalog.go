@@ -28,27 +28,7 @@ type Summary struct {
 	UpdatedAt time.Time
 }
 
-func ResolveHome(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve user home: %w", err)
-		}
-		value = filepath.Join(home, ".skot")
-	}
-	abs, err := filepath.Abs(value)
-	if err != nil {
-		return "", fmt.Errorf("resolve Skot home: %w", err)
-	}
-	return filepath.Clean(abs), nil
-}
-
 func Create(home string) (*Store, string, error) {
-	home, err := ResolveHome(home)
-	if err != nil {
-		return nil, "", err
-	}
 	sessionsDir := filepath.Join(home, "sessions")
 	if err := privatefs.EnsureDirectory(sessionsDir, "sessions directory"); err != nil {
 		return nil, "", err
@@ -76,10 +56,6 @@ func Create(home string) (*Store, string, error) {
 }
 
 func OpenManaged(home, id string) (*Store, error) {
-	home, err := ResolveHome(home)
-	if err != nil {
-		return nil, err
-	}
 	if !validSessionID(id) {
 		return nil, fmt.Errorf("invalid session ID %q", id)
 	}
@@ -98,10 +74,6 @@ func OpenManaged(home, id string) (*Store, error) {
 }
 
 func List(home, workspace string) ([]Summary, error) {
-	home, err := ResolveHome(home)
-	if err != nil {
-		return nil, err
-	}
 	workspace = canonicalWorkspace(workspace)
 	entries, err := os.ReadDir(filepath.Join(home, "sessions"))
 	if errors.Is(err, os.ErrNotExist) {

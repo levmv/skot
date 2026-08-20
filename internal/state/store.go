@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/levmv/skot/internal/privatefs"
-	"github.com/levmv/skot/internal/session"
 )
 
 type Settings struct {
@@ -105,14 +104,10 @@ type Store struct {
 }
 
 func Open(home string) (*Store, error) {
-	dir, err := session.ResolveHome(home)
-	if err != nil {
+	if err := inspectHome(home); err != nil {
 		return nil, err
 	}
-	if err := inspectHome(dir); err != nil {
-		return nil, err
-	}
-	store := &Store{dir: dir, path: filepath.Join(dir, "config.json"), authPath: filepath.Join(dir, "auth.json")}
+	store := &Store{dir: home, path: filepath.Join(home, "config.json"), authPath: filepath.Join(home, "auth.json")}
 	if err := privatefs.InspectRegularFile(store.path, "config file"); err != nil {
 		return nil, err
 	}

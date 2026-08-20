@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/levmv/skot/internal/privatefs"
-	"github.com/levmv/skot/internal/session"
 )
 
 const (
@@ -78,20 +77,16 @@ type InteractiveStore struct {
 // OpenInteractive validates the interactive document without creating its lock
 // file. Callers must only invoke it for interactive launches.
 func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
-	dir, err := session.ResolveHome(home)
-	if err != nil {
-		return nil, err
-	}
 	workspace = filepath.Clean(strings.TrimSpace(workspace))
 	if workspace == "." || !filepath.IsAbs(workspace) {
 		return nil, errors.New("interactive workspace must be an absolute path")
 	}
-	if err := inspectHome(dir); err != nil {
+	if err := inspectHome(home); err != nil {
 		return nil, err
 	}
 	store := &InteractiveStore{
-		dir: dir, path: filepath.Join(dir, "interactive.json"),
-		lockPath: filepath.Join(dir, "interactive.lock"), workspace: workspace,
+		dir: home, path: filepath.Join(home, "interactive.json"),
+		lockPath: filepath.Join(home, "interactive.lock"), workspace: workspace,
 		lockTimeout: defaultLockTimeout,
 	}
 	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {

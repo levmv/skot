@@ -40,7 +40,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(err)
 	}
-	home, err := session.ResolveHome(config.Home)
+	home, err := ResolveHome(config.Home)
 	if err != nil {
 		return nil, err
 	}
@@ -372,8 +372,6 @@ func effectiveStreamIdleTimeout(value time.Duration) time.Duration {
 	}
 	return DefaultStreamIdleTimeout
 }
-
-func ResolveHome(value string) (string, error) { return session.ResolveHome(value) }
 
 func (application *Application) Root() string {
 	return application.config.root

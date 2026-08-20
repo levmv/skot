@@ -22,7 +22,7 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 			},
 		}}
 		runtime := newTestRuntime(t, Config{
-			Model: model, Journal: journal,
+			Backend: model, Journal: journal,
 			Tools: []Tool{{
 				Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 				Run: func(_ context.Context, raw string) (ToolOutput, error) {
@@ -67,7 +67,7 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 			}}}, nil
 		}}}
 		runtime := newTestRuntime(t, Config{
-			Model: model, Journal: journal,
+			Backend: model, Journal: journal,
 			Tools: []Tool{{
 				Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 				Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },

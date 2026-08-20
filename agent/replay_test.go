@@ -96,6 +96,30 @@ func TestReplayRequiresExplicitModelProvider(t *testing.T) {
 	}
 }
 
+func TestReplayDoesNotCarryConfigurationAcrossModelSelections(t *testing.T) {
+	records := []Record{
+		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
+		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "first", Provider: "first", Model: "model", Epoch: "epoch-first"}),
+		recordForTest(t, 3, RecordSessionConfigured, EffectiveConfigSnapshot{
+			ModelContext: ModelContextSnapshot{
+				CompactionInstructions: compactionSystemInstructions,
+				ToolLimitInstructions:  toolLimitInstructions,
+			},
+			RuntimePolicy: RuntimePolicySnapshot{
+				ContextWindow: 64_000, MaxModelAttempts: 1, MaxToolIterations: DefaultMaxToolIterations,
+			},
+		}),
+		recordForTest(t, 4, RecordModelSelected, ModelSelectedRecord{Backend: "second", Provider: "second", Model: "model", Epoch: "epoch-second"}),
+	}
+	state, err := Replay(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Selection.Provider != "second" || state.Configured != nil {
+		t.Fatalf("state after unconfigured selection = %#v", state)
+	}
+}
+
 func TestReplayRemovesPendingToolCallsByIdentity(t *testing.T) {
 	toolCall := func(id string) Item {
 		return Item{

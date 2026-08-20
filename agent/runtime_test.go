@@ -28,7 +28,7 @@ func TestRuntimeDirectResponse(t *testing.T) {
 			}, nil
 		},
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Instructions: "be useful"})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Instructions: "be useful"})
 	var events []Event
 
 	result, err := runtime.Run(context.Background(), "say hello", func(event Event) {
@@ -68,13 +68,53 @@ func TestRuntimeDirectResponse(t *testing.T) {
 	}
 	assertAuthoritativeEvents(t, events, journal.snapshot())
 
-	resumed := newTestRuntime(t, Config{Model: model, Journal: journal, Instructions: "be useful"})
+	resumed := newTestRuntime(t, Config{Backend: model, Journal: journal, Instructions: "be useful"})
 	resumedState, err := resumed.State(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resumed.SessionStatus().Usage != resumedState.Usage {
 		t.Fatalf("status was not bootstrapped by State: %#v", resumed.SessionStatus())
+	}
+}
+
+func TestRuntimeWithoutAvailableModelCanBeInspectedAndReconfigured(t *testing.T) {
+	journal := &memoryJournal{}
+	unavailable := ModelInfo{
+		BackendID: "anthropic.removed", Provider: "removed", Model: "old-model",
+		ProviderStateContract: "anthropic.messages.v1", ContextWindow: 64_000,
+	}
+	runtime := newTestRuntime(t, Config{Model: unavailable, Journal: journal})
+	if runtime.CurrentModel() != "removed/old-model" || runtime.CurrentModelInfo() != unavailable {
+		t.Fatalf("unavailable model info = %#v", runtime.CurrentModelInfo())
+	}
+	if _, err := runtime.State(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), "continue", nil); !errors.Is(err, ErrModelUnavailable) || !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("run unavailable model error = %v", err)
+	}
+	if _, err := runtime.Compact(context.Background(), 1); !errors.Is(err, ErrModelUnavailable) {
+		t.Fatalf("compact unavailable model error = %v", err)
+	}
+	if records := journal.snapshot(); len(records) != 0 {
+		t.Fatalf("unavailable operations changed journal: %#v", records)
+	}
+
+	model := &scriptedModel{info: ModelInfo{BackendID: "test", Provider: "test", Model: "replacement"}, steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "continued"}}, StopReason: "stop"}, nil
+		},
+	}}
+	if err := runtime.SwitchModel(context.Background(), model.testModelInfo(), model); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.Run(context.Background(), "continue", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "continued" || runtime.CurrentModel() != "test/replacement" {
+		t.Fatalf("replacement result/model = %#v/%q", result, runtime.CurrentModel())
 	}
 }
 
@@ -113,7 +153,7 @@ func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: &memoryJournal{}, Tools: []Tool{tool},
+		Backend: model, Journal: &memoryJournal{}, Tools: []Tool{tool},
 	})
 	done := make(chan error, 1)
 	go func() {
@@ -181,7 +221,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, MaxToolIterations: 2,
+		Backend: model, Journal: journal, MaxToolIterations: 2,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
@@ -240,7 +280,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 	journal := &memoryJournal{}
 	seedModel := &scriptedModel{steps: []modelStep{directModelResponse("old answer")}}
-	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal})
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal})
 	oldInput := strings.Repeat("old context ", 2_400)
 	if _, err := seedRuntime.Run(context.Background(), oldInput, nil); err != nil {
 		t.Fatal(err)
@@ -248,7 +288,7 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 
 	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
 		steps: []modelStep{
 			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
@@ -272,7 +312,7 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, MaxToolIterations: 1,
+		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
@@ -298,7 +338,7 @@ func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
 	journal := &memoryJournal{}
 	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
 		steps: []modelStep{
 			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
@@ -315,7 +355,7 @@ func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, MaxToolIterations: 1,
+		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
 			Spec: ToolSpec{
 				Name: "inspect", Description: strings.Repeat("detailed tool documentation ", 1_200),
@@ -355,7 +395,7 @@ func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, MaxToolIterations: 1,
+		Backend: model, Journal: journal, MaxToolIterations: 1,
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -379,7 +419,8 @@ func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
 func TestRuntimeToolIterationLimits(t *testing.T) {
 	newRuntime := func(limit int) (*Runtime, error) {
 		return New(Config{
-			Model: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			Model: ModelInfo{BackendID: "test", Provider: "test", Model: "test"},
+			Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
 			}),
 			Journal: &memoryJournal{}, MaxToolIterations: limit,
@@ -424,7 +465,7 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "write", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
@@ -476,7 +517,7 @@ func TestRuntimeOwnedStopReasonsHaveExpectedCompletionClassification(t *testing.
 func TestRuntimePersistsEmptyRefusalAsIncomplete(t *testing.T) {
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{
-		Model: &scriptedModel{steps: []modelStep{
+		Backend: &scriptedModel{steps: []modelStep{
 			func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				return ModelResponse{StopReason: "refusal"}, nil
 			},
@@ -506,7 +547,7 @@ func TestRuntimeDoesNotOwnApplicationInstructions(t *testing.T) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: &memoryJournal{}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}})
 	if _, err := runtime.Run(context.Background(), "task", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +559,7 @@ func TestRuntimeDoesNotRetryInvalidModelRequest(t *testing.T) {
 		attempts++
 		return ModelResponse{}, MarkInvalidRequest(errors.New("request will remain invalid"))
 	})
-	runtime := newTestRuntime(t, Config{Model: model, Journal: &memoryJournal{}, RequestPolicy: ModelRequestPolicy{MaxAttempts: 3}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, RequestPolicy: ModelRequestPolicy{MaxAttempts: 3}})
 	_, err := runtime.Run(context.Background(), "task", nil)
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("error = %v", err)
@@ -540,7 +581,7 @@ func TestRuntimeRetriesWithinFreshLogicalRequestBudget(t *testing.T) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: &memoryJournal{},
+		Backend: model, Journal: &memoryJournal{},
 		RequestPolicy: ModelRequestPolicy{
 			MaxAttempts: -1, RetryBudget: time.Second, BaseDelay: time.Millisecond,
 			MaxDelay: 2 * time.Millisecond, StreamIdleTimeout: 7 * time.Millisecond,
@@ -576,7 +617,7 @@ func TestRuntimeJournalsBoundedFailedAttemptDiagnostics(t *testing.T) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond},
 		Sanitize: func(text string) string {
 			return strings.ReplaceAll(text, secret, "[redacted]")
@@ -633,7 +674,7 @@ func TestRuntimeStartsNewRetryBudgetAfterSuccessfulToolCallResponse(t *testing.T
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: &memoryJournal{},
+		Backend: model, Journal: &memoryJournal{},
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "read"}, nil },
@@ -659,7 +700,7 @@ func TestRuntimeRequestBudgetBoundsOneHungAttempt(t *testing.T) {
 		return ModelResponse{}, ctx.Err()
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: &memoryJournal{},
+		Backend: model, Journal: &memoryJournal{},
 		RequestPolicy: ModelRequestPolicy{
 			MaxAttempts: -1, RetryBudget: 20 * time.Millisecond, BaseDelay: time.Millisecond,
 		},
@@ -681,7 +722,7 @@ func TestRuntimeDoesNotRetryNonRetryableProviderFailure(t *testing.T) {
 		return ModelResponse{}, &ProviderError{Cause: MarkProviderFailure(errors.New("payment required")), StatusCode: 402}
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: &memoryJournal{},
+		Backend: model, Journal: &memoryJournal{},
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: -1, RetryBudget: time.Second, BaseDelay: time.Millisecond},
 	})
 	_, err := runtime.Run(context.Background(), "task", nil)
@@ -703,7 +744,7 @@ func TestRuntimeHonorsProviderRetryAfter(t *testing.T) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: &memoryJournal{},
+		Backend: model, Journal: &memoryJournal{},
 		RequestPolicy: ModelRequestPolicy{
 			MaxAttempts: -1, RetryBudget: time.Second,
 			BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond,
@@ -745,7 +786,7 @@ func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, Instructions: "instructions " + secret,
+		Backend: model, Journal: journal, Instructions: "instructions " + secret,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -798,7 +839,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, "~", "[REDACTED]") },
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -853,7 +894,7 @@ func TestRuntimePersistsConfiguredSessionIdentityAndWorkspace(t *testing.T) {
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model:     model,
+		Backend:   model,
 		Journal:   journal,
 		SessionID: "session_fixed",
 		Workspace: "/workspace",
@@ -916,7 +957,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 			}}}, nil
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 
 	result, err := runtime.Run(context.Background(), "use echo", nil)
 	if err != nil {
@@ -962,7 +1003,7 @@ func TestRuntimeDiscardsFailedPartialAttempt(t *testing.T) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "accepted"}}}, nil
 		},
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	var events []Event
 
 	result, err := runtime.Run(context.Background(), "retry", func(event Event) { events = append(events, event) })
@@ -993,7 +1034,7 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 	journal := &memoryJournal{}
 	var firstRequest ModelRequest
 	firstModel := &scriptedModel{
-		info: ModelInfo{Backend: "backend.a", Provider: "provider-a", Model: "alpha"},
+		info: ModelInfo{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			firstRequest = request
 			return ModelResponse{Items: []Item{
@@ -1002,13 +1043,13 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 			}}, nil
 		}},
 	}
-	if _, err := newTestRuntime(t, Config{Model: firstModel, Journal: journal}).Run(context.Background(), "first", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: firstModel, Journal: journal}).Run(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
 	}
 
 	var secondRequest ModelRequest
 	secondModel := &scriptedModel{
-		info: ModelInfo{Backend: "backend.b", Provider: "provider-b", Model: "beta"},
+		info: ModelInfo{BackendID: "backend.b", Provider: "provider-b", Model: "beta"},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			secondRequest = request
 			for _, item := range request.Items {
@@ -1019,7 +1060,7 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second answer"}}}, nil
 		}},
 	}
-	if _, err := newTestRuntime(t, Config{Model: secondModel, Journal: journal}).Run(context.Background(), "second", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: secondModel, Journal: journal}).Run(context.Background(), "second", nil); err != nil {
 		t.Fatal(err)
 	}
 	if firstRequest.SessionID == "" || firstRequest.SessionID != secondRequest.SessionID {
@@ -1043,25 +1084,25 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 func TestRuntimeSwitchModelJournalsSelectionBeforeNextRun(t *testing.T) {
 	journal := &memoryJournal{}
 	firstModel := &scriptedModel{
-		info: ModelInfo{Backend: "backend.a", Provider: "provider-a", Model: "alpha"},
+		info: ModelInfo{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
 		steps: []modelStep{func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}}, nil
 		}},
 	}
-	runtime := newTestRuntime(t, Config{Model: firstModel, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: firstModel, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
 	}
 
 	var secondRequest ModelRequest
 	secondModel := &scriptedModel{
-		info: ModelInfo{Backend: "backend.b", Provider: "provider-b", Model: "beta", ReasoningEffort: "high"},
+		info: ModelInfo{BackendID: "backend.b", Provider: "provider-b", Model: "beta", ReasoningEffort: "high"},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			secondRequest = request
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second"}}}, nil
 		}},
 	}
-	if err := runtime.SwitchModel(context.Background(), secondModel); err != nil {
+	if err := runtime.SwitchModel(context.Background(), secondModel.testModelInfo(), secondModel); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.CurrentModel() != "provider-b/beta" || runtime.CurrentReasoningEffort() != "high" {
@@ -1090,14 +1131,14 @@ func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
 	journal := &memoryJournal{}
 	first := &scriptedModel{
 		info: ModelInfo{
-			Backend: "chat_completions.test", Provider: "test", Model: "same",
+			BackendID: "chat_completions.test", Provider: "test", Model: "same",
 			ProviderStateContract: "chat_completions.reasoning_replay.current_turn.v1",
 		},
 		steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}}, nil
 		}},
 	}
-	runtime := newTestRuntime(t, Config{Model: first, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: first, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1107,10 +1148,10 @@ func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
 	}
 
 	second := &scriptedModel{info: ModelInfo{
-		Backend: "chat_completions.test", Provider: "test", Model: "same",
+		BackendID: "chat_completions.test", Provider: "test", Model: "same",
 		ProviderStateContract: "chat_completions.reasoning_replay.tool_turns.v1",
 	}}
-	if err := runtime.SwitchModel(context.Background(), second); err != nil {
+	if err := runtime.SwitchModel(context.Background(), second.testModelInfo(), second); err != nil {
 		t.Fatal(err)
 	}
 	after, err := Replay(journal.snapshot())
@@ -1127,7 +1168,8 @@ func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
 
 func TestRuntimeRequiresModelProvider(t *testing.T) {
 	_, err := New(Config{
-		Model:   &scriptedModel{info: ModelInfo{Backend: "chat_completions.deepseek", Model: "model"}},
+		Model:   ModelInfo{BackendID: "chat_completions.deepseek", Model: "model"},
+		Backend: &scriptedModel{},
 		Journal: &memoryJournal{},
 	})
 	if err == nil || !strings.Contains(err.Error(), "provider") {
@@ -1152,7 +1194,7 @@ func TestRuntimeCanReplaceToolsBetweenRuns(t *testing.T) {
 	}}
 	read := testRuntimeTool("read")
 	edit := testRuntimeTool("edit")
-	runtime := newTestRuntime(t, Config{Model: model, Journal: &memoryJournal{}, Tools: []Tool{read, edit}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{read, edit}})
 	if _, err := runtime.Run(context.Background(), "first", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1205,7 +1247,7 @@ func TestRuntimeCancellationIsDurable(t *testing.T) {
 		<-ctx.Done()
 		return ModelResponse{}, ctx.Err()
 	})
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	var result RunResult
@@ -1258,7 +1300,7 @@ func TestRuntimeCancellationDuringDeliveryIsDurable(t *testing.T) {
 			modelCalled := false
 			config := Config{
 				Journal: journal,
-				Model: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 					modelCalled = true
 					return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "unexpected"}}, StopReason: "stop"}, nil
 				}),
@@ -1309,7 +1351,7 @@ func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T)
 			return ToolOutput{}, ctx.Err()
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	var runErr error
@@ -1413,9 +1455,9 @@ type scriptedModel struct {
 	next  int
 }
 
-func (model *scriptedModel) Info() ModelInfo {
-	if model.info.Backend == "" {
-		return ModelInfo{Backend: "test", Provider: "test", Model: "test"}
+func (model *scriptedModel) testModelInfo() ModelInfo {
+	if model.info.BackendID == "" {
+		return ModelInfo{BackendID: "test", Provider: "test", Model: "test"}
 	}
 	return model.info
 }
@@ -1431,7 +1473,9 @@ func (model *scriptedModel) Complete(ctx context.Context, request ModelRequest, 
 
 type modelFunc func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
 
-func (modelFunc) Info() ModelInfo { return ModelInfo{Backend: "test", Provider: "test", Model: "test"} }
+func (modelFunc) testModelInfo() ModelInfo {
+	return ModelInfo{BackendID: "test", Provider: "test", Model: "test"}
+}
 
 func (function modelFunc) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 	return function(ctx, request, emit)
@@ -1485,7 +1529,7 @@ func TestRuntimeJournalFailureLeavesRecoverableUnfinishedRun(t *testing.T) {
 	}
 	runtime := newTestRuntime(t, Config{
 		Journal: journal,
-		Model: &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+		Backend: &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "not committed"}}}, nil
 		}}},
 	})
@@ -1542,6 +1586,12 @@ func (journal *memoryJournal) snapshot() []Record {
 
 func newTestRuntime(t *testing.T, config Config) *Runtime {
 	t.Helper()
+	if config.Model.BackendID == "" {
+		config.Model = ModelInfo{BackendID: "test", Provider: "test", Model: "test"}
+		if described, ok := config.Backend.(interface{ testModelInfo() ModelInfo }); ok {
+			config.Model = described.testModelInfo()
+		}
+	}
 	runtime, err := New(config)
 	if err != nil {
 		t.Fatal(err)

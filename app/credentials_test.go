@@ -122,43 +122,43 @@ func TestOllamaModelNeverRequiresStoredCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := buildModelBackend(testResolvedRoute(t, "ollama/qwen3:8b", "", "", 0), store, modelBackendOptions{requireCredential: true})
+	route := testResolvedRoute(t, "ollama/qwen3:8b", "", "", 0)
+	_, err = buildModelBackend(route, store, modelBackendOptions{requireCredential: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := backend.Info()
+	info, err := modelInfoForRoute(route)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if info.Provider != "ollama" || info.Model != "qwen3:8b" || info.Endpoint != "http://localhost:11434/v1" || !info.ContextWindowEstimated {
 		t.Fatalf("Ollama model info = %#v", info)
 	}
 }
 
-func TestBuildModelBackendUsesAutomaticContextUnlessOverridden(t *testing.T) {
-	store, err := state.Open(t.TempDir())
+func TestModelInfoUsesAutomaticContextUnlessOverridden(t *testing.T) {
+	automatic, err := modelInfoForRoute(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	automatic, err := buildModelBackend(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "", 0), store, modelBackendOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := automatic.Info().ContextWindow; got != 1_000_000 {
+	if got := automatic.ContextWindow; got != 1_000_000 {
 		t.Fatalf("automatic context window = %d", got)
 	}
-	if automatic.Info().ProviderStateContract == "" {
-		t.Fatalf("automatic model info = %#v", automatic.Info())
+	if automatic.ProviderStateContract == "" {
+		t.Fatalf("automatic model info = %#v", automatic)
 	}
-	overridden, err := buildModelBackend(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 64_000), store, modelBackendOptions{})
+	overridden, err := modelInfoForRoute(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 64_000))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := overridden.Info().ContextWindow; got != 64_000 {
+	if got := overridden.ContextWindow; got != 64_000 {
 		t.Fatalf("overridden context window = %d", got)
 	}
-	custom, err := buildModelBackend(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 0), store, modelBackendOptions{})
+	custom, err := modelInfoForRoute(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := custom.Info().ContextWindow; got != unknownModelContextWindow {
+	if got := custom.ContextWindow; got != unknownModelContextWindow {
 		t.Fatalf("custom endpoint fallback window = %d", got)
 	}
 }

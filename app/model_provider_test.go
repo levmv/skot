@@ -3,6 +3,9 @@ package app
 import (
 	"strings"
 	"testing"
+
+	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/modelhttp"
 )
 
 func TestParseModelURIPreservesSlashInModel(t *testing.T) {
@@ -115,11 +118,23 @@ func TestModelCatalogInvariants(t *testing.T) {
 			t.Errorf("explicit override for unsupported catalog URI %q has compatibility %q", spec.URI, route.Compatibility)
 		}
 		if implementedModelAPI(route.API) {
-			backend, err := buildModelBackend(route, nil, modelBackendOptions{})
+			_, err := buildModelBackend(route, nil, modelBackendOptions{})
 			if err != nil {
 				t.Errorf("build catalog URI %q: %v", spec.URI, err)
-			} else if backend.Info().ProviderStateContract != route.ProviderStateContract {
-				t.Errorf("catalog URI %q state contract = %q, route has %q", spec.URI, backend.Info().ProviderStateContract, route.ProviderStateContract)
+			}
+			info, err := modelInfoForRoute(route)
+			if err != nil {
+				t.Errorf("describe catalog URI %q: %v", spec.URI, err)
+				continue
+			}
+			if info.BackendID != string(route.API)+"."+route.Provider || info.Provider != route.Provider ||
+				info.Model != route.Model || info.ReasoningEffort != route.ReasoningEffort ||
+				info.ProviderStateContract != route.ProviderStateContract || info.ContextWindow != route.ContextWindow ||
+				info.ContextWindowEstimated != route.ContextWindowEstimated ||
+				info.MaxRequestBytes != productlimits.MaxModelRequestBytes ||
+				info.MaxCompletionBytes != productlimits.MaxModelCompletionBytes ||
+				info.Endpoint != modelhttp.PublicEndpoint(route.BaseURL) {
+				t.Errorf("catalog URI %q model info = %#v, route = %#v", spec.URI, info, route)
 			}
 		}
 	}
@@ -224,11 +239,15 @@ func TestBuildModelBackendSelectsAnthropicAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := buildModelBackend(route, nil, modelBackendOptions{})
+	_, err = buildModelBackend(route, nil, modelBackendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info := backend.Info(); info.Backend != "anthropic_messages.ollama" || info.ProviderStateContract != "anthropic_messages.thinking_replay.v1" {
+	info, err := modelInfoForRoute(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BackendID != "anthropic_messages.ollama" || info.ProviderStateContract != "anthropic_messages.thinking_replay.v1" {
 		t.Fatalf("Anthropic backend info = %#v", info)
 	}
 }
@@ -240,11 +259,15 @@ func TestBuildModelBackendSelectsResponsesAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend, err := buildModelBackend(route, nil, modelBackendOptions{})
+	_, err = buildModelBackend(route, nil, modelBackendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info := backend.Info(); info.Backend != "responses.ollama" || info.ProviderStateContract != "responses.manual_history.v1" {
+	info, err := modelInfoForRoute(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BackendID != "responses.ollama" || info.ProviderStateContract != "responses.manual_history.v1" {
 		t.Fatalf("Responses backend info = %#v", info)
 	}
 }

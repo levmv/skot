@@ -16,7 +16,7 @@ const (
 )
 
 // ContextReport is a tokenizer-independent estimate of the next model input.
-// Window zero means that the configured backend did not declare one.
+// Window zero means that no context window is known for the selected model.
 type ContextReport struct {
 	Window               int
 	InputLimit           int
@@ -140,7 +140,7 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 		}
 	}
 	projected := runtime.projectModelItems(items, ProviderContext{
-		Backend: runtime.modelInfo.Backend,
+		Backend: runtime.modelInfo.BackendID,
 		Epoch:   state.Selection.Epoch,
 	})
 	// Projection may remove reasoning only, so pending users remain the suffix.

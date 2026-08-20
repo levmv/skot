@@ -412,8 +412,8 @@ func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 			if gotThinking != test.wantThinking {
 				t.Fatalf("thinking = %q", gotThinking)
 			}
-			if backend.Info().ReasoningEffort != test.effort {
-				t.Fatalf("model info = %#v", backend.Info())
+			if backend.reasoningEffort != test.effort {
+				t.Fatalf("reasoning effort = %q", backend.reasoningEffort)
 			}
 		})
 	}
@@ -446,22 +446,8 @@ func TestBuildRequestCanUseCanonicalAPIModelWithoutChangingSelection(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Model != "openrouter/free" || backend.Info().Model != "free" {
-		t.Fatalf("wire/selection model = %q/%q", request.Model, backend.Info().Model)
-	}
-}
-
-func TestModelInfoReportsSecretFreeEffectiveEndpoint(t *testing.T) {
-	backend, err := New(Config{
-		Provider: "test", Model: "model", ContextWindow: 64_000, ContextWindowEstimated: true,
-		BaseURL: "https://user:password@example.test/v1?token=secret#fragment", Authorizer: BearerToken("unused"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info := backend.Info()
-	if info.Endpoint != "https://example.test/v1" || info.ContextWindow != 64_000 || !info.ContextWindowEstimated {
-		t.Fatalf("model info = %#v", info)
+	if request.Model != "openrouter/free" || backend.model != "free" {
+		t.Fatalf("wire/selection model = %q/%q", request.Model, backend.model)
 	}
 }
 

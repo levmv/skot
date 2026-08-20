@@ -35,7 +35,10 @@ func TestWorkspaceToolsExposeStandaloneCatalog(t *testing.T) {
 	if got, want := strings.Join(names, ","), "read,ls,grep,glob,edit,write"; got != want {
 		t.Fatalf("tools = %q, want %q", got, want)
 	}
-	if _, err := agent.New(agent.Config{Model: inertModel{}, Journal: inertJournal{}, Tools: tools}); err != nil {
+	if _, err := agent.New(agent.Config{
+		Model:   agent.ModelInfo{BackendID: "test", Provider: "test", Model: "test"},
+		Backend: inertModel{}, Journal: inertJournal{}, Tools: tools,
+	}); err != nil {
 		t.Fatalf("agent rejected tool catalog: %v", err)
 	}
 }
@@ -533,10 +536,6 @@ func jsonArgs(t *testing.T, value any) string {
 }
 
 type inertModel struct{}
-
-func (inertModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "test"}
-}
 
 func (inertModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	return agent.ModelResponse{}, errors.New("unused")

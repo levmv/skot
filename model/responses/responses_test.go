@@ -455,21 +455,17 @@ func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
 	}
 }
 
-func TestModelInfoReportsResponsesIdentity(t *testing.T) {
+func TestBuildRequestUsesCanonicalAPIModel(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "openai", Model: "gpt-test", APIModel: "wire-model", ContextWindow: 128_000, ContextWindowEstimated: true,
+		Provider: "openai", Model: "gpt-test", APIModel: "wire-model",
 		BaseURL: "https://user:password@example.test/v1/?token=secret#fragment", Authorizer: BearerToken("unused"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := backend.Info()
-	if info.Backend != "responses.openai" || info.Provider != "openai" || info.Model != "gpt-test" || info.ProviderStateContract != "responses.manual_history.v1" || info.Endpoint != "https://example.test/v1/" || !info.ContextWindowEstimated {
-		t.Fatalf("model info = %#v", info)
-	}
 	request, err := backend.buildRequest(agent.ModelRequest{})
-	if err != nil || request.Model != "wire-model" {
-		t.Fatalf("wire model/error = %q/%v", request.Model, err)
+	if err != nil || request.Model != "wire-model" || backend.backendID() != BackendID("openai") {
+		t.Fatalf("wire model/backend/error = %q/%q/%v", request.Model, backend.backendID(), err)
 	}
 }
 

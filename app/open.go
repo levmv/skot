@@ -27,6 +27,9 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if config.MaxToolIterations < -1 {
 		return nil, agent.MarkInvalidRequest(errors.New("max tool iterations must be positive or -1 for unlimited"))
 	}
+	if config.ContextWindow < 0 {
+		return nil, agent.MarkInvalidRequest(errors.New("model context window cannot be negative"))
+	}
 	config.RetryBudget = effectiveRetryBudget(config.RetryBudget)
 	config.StreamIdleTimeout = effectiveStreamIdleTimeout(config.StreamIdleTimeout)
 	config.MaxToolIterations = effectiveMaxToolIterations(config.MaxToolIterations)
@@ -222,13 +225,12 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if !sessionModelSelected {
 		notices = append(notices, applyWorkspaceModelPreference(&config, workspaceSettings, root, modelAPIOverride)...)
 	}
-	initialRoute, err := resolveModelRoute(config.ModelURI, config.ReasoningEffort, modelRouteOverrides{
-		BaseURL: config.BaseURL, API: modelAPIOverride, ContextWindow: config.ContextWindow,
-	}, modelRouteEnrichment{})
-	if err != nil {
-		return cleanup(agent.MarkInvalidRequest(err))
+	var knownModel *agent.ModelInfo
+	if resumedState != nil {
+		if modelInfo, ok := restoredModelInfo(*resumedState, config.ModelURI); ok {
+			knownModel = &modelInfo
+		}
 	}
-	config.ReasoningEffort = initialRoute.ReasoningEffort
 	builder := runtimeBuilder{
 		baseURL:           config.BaseURL,
 		modelAPI:          modelAPIOverride,
@@ -248,16 +250,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		awaitRequiredJobs: !config.Interactive,
 		sanitize:          masker.Redact,
 	}
-	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort); err != nil {
-		return cleanup(agent.MarkInvalidRequest(err))
-	}
-	if err := children.Preload(ctx, runtimeSessionID); err != nil {
-		return cleanup(fmt.Errorf("load child agents: %w", err))
-	}
-	builder.externalWork = applicationExternalWork{
-		processes: processExternalWork{processes: processes, await: !config.Interactive}, agents: children,
-	}
-	runtime, _, err := builder.buildWithRoute(ctx, runtimeBuildParams{
+	buildParams := runtimeBuildParams{
 		journal:         journal,
 		sessionID:       runtimeSessionID,
 		modelURI:        config.ModelURI,
@@ -267,7 +260,23 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			requireCredential: !config.Interactive,
 		},
 		resumedState: resumedState,
-	})
+		knownModel:   knownModel,
+	}
+	modelInfo, backend, err := builder.resolveRestored(ctx, buildParams)
+	if err != nil {
+		return cleanup(err)
+	}
+	config.ReasoningEffort = modelInfo.ReasoningEffort
+	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort); err != nil {
+		return cleanup(agent.MarkInvalidRequest(err))
+	}
+	if err := children.Preload(ctx, runtimeSessionID); err != nil {
+		return cleanup(fmt.Errorf("load child agents: %w", err))
+	}
+	builder.externalWork = applicationExternalWork{
+		processes: processExternalWork{processes: processes, await: !config.Interactive}, agents: children,
+	}
+	runtime, err := builder.newRuntime(buildParams, modelInfo, backend)
 	if err != nil {
 		return cleanup(err)
 	}

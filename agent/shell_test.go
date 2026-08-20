@@ -12,7 +12,7 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 	journal := &memoryJournal{}
 	called := ""
 	runtime := newTestRuntime(t, Config{
-		Model:   &scriptedModel{},
+		Backend: &scriptedModel{},
 		Journal: journal,
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
 			called = command
@@ -50,7 +50,7 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 func TestPrivateShellDoesNotTouchJournal(t *testing.T) {
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{
-		Model:   &scriptedModel{},
+		Backend: &scriptedModel{},
 		Journal: journal,
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
 			return ToolOutput{Content: command}, nil
@@ -70,7 +70,7 @@ func TestShellRedactsKnownSecretFromResultAndDurableJournal(t *testing.T) {
 	const secret = "shell-secret-token"
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{
-		Model: &scriptedModel{}, Journal: journal,
+		Backend: &scriptedModel{}, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		UserShell: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{Content: "value=" + secret}, nil
@@ -91,7 +91,7 @@ func TestShellRedactsKnownSecretFromResultAndDurableJournal(t *testing.T) {
 
 func TestShellRejectedWhileRunLockIsHeld(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
-		Model:     &scriptedModel{},
+		Backend:   &scriptedModel{},
 		Journal:   &memoryJournal{},
 		UserShell: func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	})

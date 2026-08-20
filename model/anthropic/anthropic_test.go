@@ -571,19 +571,16 @@ func TestCompleteRejectsMalformedStreamState(t *testing.T) {
 	}
 }
 
-func TestModelInfoReportsAnthropicIdentity(t *testing.T) {
+func TestBackendUsesStableReplayIdentity(t *testing.T) {
 	backend, err := New(Config{
 		Provider: "test", Model: "display-model", APIModel: "wire-model",
-		ContextWindow: 1_000_000, ContextWindowEstimated: true,
 		BaseURL: "https://user:password@example.test/v1/?token=secret#fragment", Authorizer: APIKey("unused"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := backend.Info()
-	if info.Backend != "anthropic_messages.test" || info.Provider != "test" || info.Model != "display-model" ||
-		info.ProviderStateContract != ProviderStateContract || info.Endpoint != "https://example.test/v1/" || !info.ContextWindowEstimated {
-		t.Fatalf("model info = %#v", info)
+	if backend.backendID() != BackendID("test") || backend.backendID() != "anthropic_messages.test" {
+		t.Fatalf("backend ID = %q", backend.backendID())
 	}
 }
 

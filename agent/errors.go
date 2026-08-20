@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -20,12 +21,23 @@ var (
 	// ErrModelStreamIdle reports that an open model stream produced no payload
 	// within its configured idle interval.
 	ErrModelStreamIdle = errors.New("model stream idle timeout")
+	// ErrModelUnavailable reports that a runtime knows its selected model but has
+	// no executable backend for it.
+	ErrModelUnavailable = errors.New("model unavailable")
 	// ErrToolFatal marks an execution failure the model cannot repair by
 	// changing tool arguments, such as a configured executable disappearing
 	// after startup validation. Its tool result is journaled before the run
 	// stops.
 	ErrToolFatal = errors.New("fatal tool execution failure")
 )
+
+type modelUnavailableError struct{ model string }
+
+func (err modelUnavailableError) Error() string {
+	return fmt.Sprintf("model %q is unavailable", err.model)
+}
+
+func (err modelUnavailableError) Is(target error) bool { return target == ErrModelUnavailable }
 
 // ProviderError preserves provider response metadata needed by retry policy.
 // Retryable describes immediate retry eligibility, independently from the

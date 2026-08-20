@@ -199,7 +199,11 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if endpoint := backend.Info().Endpoint; endpoint != "https://opencode.ai/zen/go/v1" {
+			info, err := modelInfoForRoute(route)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if endpoint := info.Endpoint; endpoint != "https://opencode.ai/zen/go/v1" {
 				t.Fatalf("backend endpoint = %q", endpoint)
 			}
 			response, err := backend.Complete(context.Background(), test.request, nil)

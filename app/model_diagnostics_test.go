@@ -11,10 +11,6 @@ import (
 
 type routeDiagnosticTestModel struct{ err error }
 
-func (model routeDiagnosticTestModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "candidate"}
-}
-
 func (model routeDiagnosticTestModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	return agent.ModelResponse{}, model.err
 }
@@ -55,7 +51,7 @@ func TestUnverifiedRouteAddsProtocolContextOnlyAfterAProviderFailure(t *testing.
 func TestSupportedRouteDoesNotWrapItsBackend(t *testing.T) {
 	inner := routeDiagnosticTestModel{err: agent.MarkProviderFailure(errors.New("service down"))}
 	model := addRouteDiagnostics(inner, resolvedModelRoute{Compatibility: modelCompatibilitySupported})
-	if _, wrapped := model.(routeDiagnosticModel); wrapped {
+	if _, wrapped := model.(routeDiagnosticBackend); wrapped {
 		t.Fatal("supported route was wrapped with an unverified-route diagnostic")
 	}
 }

@@ -15,7 +15,7 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 		}
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "new answer"}}}, nil
 	}}}
-	if _, err := newTestRuntime(t, Config{Model: thirdModel, Journal: journal}).Run(context.Background(), "new question", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: thirdModel, Journal: journal}).Run(context.Background(), "new question", nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -88,7 +88,7 @@ func TestRuntimeCompactSummarizesWithoutToolsAndCommitsTailBoundary(t *testing.T
 			}, nil
 		},
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestRuntimeCompactRejectsIncompleteSummaryWithoutJournalRecord(t *testing.T
 			}, nil
 		},
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
 	}}
-	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal})
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal})
 	oldQuestion := strings.Repeat("old context ", 4_000)
 	if _, err := seedRuntime.Run(context.Background(), oldQuestion, nil); err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 				if request.Instructions != compactionSystemInstructions || len(request.Tools) != 0 || len(request.Items) != 1 {
@@ -189,7 +189,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 			},
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	var events []Event
 	result, err := runtime.Run(context.Background(), "new question", func(event Event) {
 		assertEventCommittedAtEmission(t, journal, event)
@@ -243,7 +243,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 		directModelResponse("answer two"),
 		directModelResponse("answer three"),
 	}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	for _, input := range []string{"question one", "question two", "question three"} {
 		if _, err := runtime.Run(context.Background(), input, nil); err != nil {
 			t.Fatal(err)
@@ -262,7 +262,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	}
 
 	fourthModel := &scriptedModel{steps: []modelStep{directModelResponse("answer four")}}
-	if _, err := newTestRuntime(t, Config{Model: fourthModel, Journal: journal}).Run(context.Background(), "question four", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: fourthModel, Journal: journal}).Run(context.Background(), "question four", nil); err != nil {
 		t.Fatal(err)
 	}
 	state, err = Replay(journal.snapshot())
@@ -321,7 +321,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 			return ToolOutput{Content: "echo result: " + arguments}, nil
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	if _, err := runtime.Run(context.Background(), "use echo", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("one"), directModelResponse("two"), directModelResponse("three")}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "one", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
 		directModelResponse("summary"),
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 2, BaseDelay: time.Millisecond},
 	})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
@@ -438,7 +438,7 @@ func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
 func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
@@ -80,23 +81,6 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 	if err != nil {
 		return agent.RunResult{}, err
 	}
-	uri := runtime.CurrentModel()
-	provider, _, err := parseModelURI(uri)
-	if err != nil {
-		return agent.RunResult{}, err
-	}
-	spec, _ := modelProviderSpec(provider)
-	baseURL := strings.TrimSpace(application.config.baseURL)
-	settings := application.config.settings
-	if baseURL == "" && !spec.credentialless {
-		token, _, err := credentialForProvider(settings, provider)
-		if err != nil {
-			return agent.RunResult{}, err
-		}
-		if token == "" {
-			return agent.RunResult{}, agent.MarkInvalidRequest(missingProviderCredentialError(provider, uri))
-		}
-	}
 	result, runErr := runtime.Run(ctx, input, emit)
 	application.mu.RLock()
 	current := application.state.session
@@ -141,11 +125,15 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
 	}
-	model, err := buildModelBackend(route, application.config.settings, modelBackendOptions{requireCredential: true})
+	modelInfo, err := modelInfoForRoute(route)
+	if err != nil {
+		return agent.MarkInvalidRequest(err)
+	}
+	backend, err := buildModelBackend(route, application.config.settings, modelBackendOptions{requireCredential: true})
 	if err != nil {
 		return err
 	}
-	if err := runtime.SwitchModel(ctx, model); err != nil {
+	if err := runtime.SwitchModel(ctx, modelInfo, backend); err != nil {
 		return err
 	}
 	application.mu.RLock()
@@ -215,6 +203,9 @@ func (application *Application) ModelChoices() []ModelChoice {
 	info := runtime.CurrentModelInfo()
 	for index := range choices {
 		if strings.EqualFold(choices[index].URI, current) {
+			if protocol, _, ok := strings.Cut(info.BackendID, "."); ok && knownModelAPI(modelAPI(protocol)) {
+				choices[index].Protocol = protocol
+			}
 			choices[index].ContextWindow = info.ContextWindow
 			choices[index].ContextWindowEstimated = info.ContextWindowEstimated
 			break
@@ -390,7 +381,28 @@ func (application *Application) EffectiveScope() string {
 	return string(application.state.security.EffectiveScope)
 }
 
-func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Model, error) {
+func modelInfoForRoute(route resolvedModelRoute) (agent.ModelInfo, error) {
+	var backendID string
+	switch route.API {
+	case modelAPIChatCompletions:
+		backendID = chatcompletions.BackendID(route.Provider)
+	case modelAPIResponses:
+		backendID = responsemodel.BackendID(route.Provider)
+	case modelAPIAnthropicMessages:
+		backendID = anthropic.BackendID(route.Provider)
+	default:
+		return agent.ModelInfo{}, fmt.Errorf("unsupported model API %q", route.API)
+	}
+	return agent.ModelInfo{
+		BackendID: backendID, Provider: route.Provider, Model: route.Model,
+		ReasoningEffort: route.ReasoningEffort, ProviderStateContract: route.ProviderStateContract,
+		ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
+		MaxRequestBytes: productlimits.MaxModelRequestBytes, MaxCompletionBytes: productlimits.MaxModelCompletionBytes,
+		Endpoint: modelhttp.PublicEndpoint(route.BaseURL),
+	}, nil
+}
+
+func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Backend, error) {
 	if !implementedModelAPI(route.API) {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
 	}
@@ -411,21 +423,19 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 		// send a non-empty placeholder.
 		authorizer = modelhttp.BearerToken(route.Provider)
 	}
-	var backend agent.Model
+	var backend agent.Backend
 	var err error
 	switch route.API {
 	case modelAPIChatCompletions:
 		backend, err = chatcompletions.New(chatcompletions.Config{
 			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
 			ReasoningEffort: route.ReasoningEffort, Traits: route.ChatTraits,
-			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
 		})
 	case modelAPIResponses:
 		backend, err = responsemodel.New(responsemodel.Config{
 			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
 			ReasoningEffort: route.ReasoningEffort, Traits: route.ResponsesTraits,
-			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
 		})
 	case modelAPIAnthropicMessages:
@@ -438,7 +448,6 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 		backend, err = anthropic.New(anthropic.Config{
 			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
 			MaxTokens: route.MaxOutputTokens, PromptCache: route.PromptCache,
-			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: apiKeyAuthorizer, Header: route.Header,
 		})
 	default:
@@ -638,6 +647,17 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		return errors.New("current session runtime is unavailable")
 	}
 	currentRuntimeID := currentRuntime.CurrentSessionID()
+	var knownModel *agent.ModelInfo
+	if resumedState != nil {
+		if modelInfo, ok := restoredModelInfo(*resumedState, modelURI); ok {
+			knownModel = &modelInfo
+		}
+	} else {
+		modelInfo := currentRuntime.CurrentModelInfo()
+		if modelInfoMatchesURI(modelInfo, modelURI) {
+			knownModel = &modelInfo
+		}
+	}
 	tools, programTools, err := bindProgramToolsForSet(
 		tools, toolSets, toolSet, application.config.programDeclarations,
 		application.config.programToolsFile, processes,
@@ -672,9 +692,9 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 			processes: processExternalWork{processes: processes, await: awaitRequiredJobs}, agents: children,
 		},
 	}
-	runtime, _, err := builder.buildWithRoute(ctx, runtimeBuildParams{
+	runtime, err := builder.buildRestored(ctx, runtimeBuildParams{
 		journal: journal, sessionID: id, modelURI: modelURI, reasoningEffort: reasoningEffort, instructions: instructions,
-		resumedState: resumedState,
+		resumedState: resumedState, knownModel: knownModel,
 	})
 	if err != nil {
 		return err

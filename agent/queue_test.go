@@ -32,7 +32,7 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "contents"}, nil },
 	}
 	journal := &memoryJournal{}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	var eventsMu sync.Mutex
 	var events []Event
 	done := make(chan error, 1)
@@ -98,7 +98,7 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
 	}}
-	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal})
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal})
 	oldInput := strings.Repeat("old context ", 1_800)
 	recentInput := strings.Repeat("recent context ", 900)
 	if _, err := seedRuntime.Run(context.Background(), oldInput, nil); err != nil {
@@ -113,7 +113,7 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 	queuedInput := strings.Repeat("queued context ", 1_200)
 	normalizedQueuedInput := strings.TrimSpace(queuedInput)
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				close(firstStarted)
@@ -140,7 +140,7 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
@@ -179,7 +179,7 @@ func TestQueuedInputAfterFinalBoundaryRemainsClaimable(t *testing.T) {
 		<-release
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
-	runtime := newTestRuntime(t, Config{Model: model, Journal: &memoryJournal{}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}})
 	done := make(chan error, 1)
 	go func() {
 		_, err := runtime.Run(context.Background(), "start", nil)
@@ -221,7 +221,7 @@ func TestCancellationKeepsUndeliveredQueuedInput(t *testing.T) {
 		return ModelResponse{}, ctx.Err()
 	})
 	journal := &memoryJournal{}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

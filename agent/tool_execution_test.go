@@ -56,7 +56,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 			return ToolOutput{Content: name}, nil
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	done := make(chan runTestOutcome, 1)
 	go func() {
 		result, err := runtime.Run(context.Background(), "inspect", nil)
@@ -115,7 +115,7 @@ func TestFatalToolFailureIsJournaledBeforeRunFails(t *testing.T) {
 			return ToolOutput{}, fmt.Errorf("%w: executable disappeared", ErrToolFatal)
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	result, err := runtime.Run(context.Background(), "run it", nil)
 	if !errors.Is(err, ErrToolFatal) || result.Status != RunFailed {
 		t.Fatalf("result = %#v, error = %v", result, err)
@@ -172,7 +172,7 @@ func TestFatalParallelToolFailureSettlesSiblingCalls(t *testing.T) {
 			return ToolOutput{}, ctx.Err()
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{configured, slow}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{configured, slow}})
 	result, err := runtime.Run(context.Background(), "run both", nil)
 	if !errors.Is(err, ErrToolFatal) || result.Status != RunFailed {
 		t.Fatalf("result = %#v, error = %v", result, err)
@@ -222,7 +222,7 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 			return ToolOutput{Content: "written"}, nil
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: &memoryJournal{}, Tools: []Tool{read, write}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{read, write}})
 	done := make(chan runTestOutcome, 1)
 	go func() {
 		result, err := runtime.Run(context.Background(), "change", nil)
@@ -279,7 +279,7 @@ func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
 			return ToolOutput{Content: "read"}, nil
 		},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: &memoryJournal{}, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{tool}})
 	done := make(chan runTestOutcome, 1)
 	go func() {
 		result, err := runtime.Run(context.Background(), "many reads", nil)
@@ -322,7 +322,7 @@ func TestRuntimeCancelsAllActiveParallelSafeCalls(t *testing.T) {
 		},
 	}
 	journal := &memoryJournal{}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan runTestOutcome, 1)
 	go func() {

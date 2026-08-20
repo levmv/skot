@@ -29,6 +29,28 @@ func TestMissingStartupCredentialOpensLoginPicker(t *testing.T) {
 	}
 }
 
+func TestUnavailableCurrentModelShowsErrorInsteadOfLoginPicker(t *testing.T) {
+	fake := &fakeAgent{
+		model: "opencode-go/removed-model",
+		modelChoices: []ModelChoice{
+			{URI: "opencode-go/removed-model", Unavailable: true},
+			{URI: "deepseek/model"},
+		},
+		providers: []ProviderStatus{
+			{Name: "opencode-go", Source: "none", Description: "OpenCode Go subscription"},
+			{Name: "deepseek", Source: "auth store", Description: "model provider"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	if model.picker.active() {
+		t.Fatalf("unavailable model opened startup picker: %#v", model.picker)
+	}
+	last := model.transcript.blocks[len(model.transcript.blocks)-1]
+	if last.kind != screenBlockError || last.text != `model "opencode-go/removed-model" is unavailable; choose another with /model` {
+		t.Fatalf("unavailable model error = %#v", last)
+	}
+}
+
 func TestLoginSecretNeverEntersTranscriptOrHistory(t *testing.T) {
 	fake := &fakeAgent{
 		model:     "deepseek/model",

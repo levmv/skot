@@ -17,7 +17,7 @@ func (runtime *Runtime) State(ctx context.Context) (State, error) {
 		return State{}, err
 	}
 	// Preserve State's non-blocking snapshot behavior during an active run. The
-	// status projection calls the model adapter, so publish it only when runMu
+	// status projection calls the model backend, so publish it only when runMu
 	// proves that no model request is executing; the sequence guard rejects this
 	// replay if an operation completed between Records and TryLock.
 	if runtime.runMu.TryLock() {

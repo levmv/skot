@@ -147,12 +147,12 @@ type ModelRequest struct {
 	Items         []Item
 	Tools         []ToolSpec
 	// StreamIdleTimeout bounds silence between provider stream payloads. Zero
-	// leaves this concern to the model implementation or caller context.
+	// leaves this concern to the backend implementation or caller context.
 	StreamIdleTimeout time.Duration
 }
 
 type ModelInfo struct {
-	Backend         string `json:"backend"`
+	BackendID       string `json:"backend"`
 	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
@@ -206,8 +206,10 @@ type ModelStreamEvent struct {
 	Text string
 }
 
-type Model interface {
-	Info() ModelInfo
+// Backend executes model requests and owns protocol-specific replay policy.
+// The selected model and its effective, secret-free configuration are supplied
+// separately to Runtime as ModelInfo.
+type Backend interface {
 	Complete(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
 	// ProjectModelItems applies adapter replay policy after runtime ownership
 	// filtering. It may filter reasoning items in place, but must preserve order

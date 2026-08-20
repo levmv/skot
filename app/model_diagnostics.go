@@ -8,20 +8,20 @@ import (
 	"github.com/levmv/skot/agent"
 )
 
-type routeDiagnosticModel struct {
-	agent.Model
+type routeDiagnosticBackend struct {
+	agent.Backend
 	uri string
 	api modelAPI
 }
 
-func (model routeDiagnosticModel) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	response, err := model.Model.Complete(ctx, request, emit)
+func (backend routeDiagnosticBackend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+	response, err := backend.Backend.Complete(ctx, request, emit)
 	if err == nil || !errors.Is(err, agent.ErrProviderFailure) || providerFailureHasIndependentExplanation(err) {
 		return response, err
 	}
 	return response, fmt.Errorf(
 		"%w; route %q is unverified, so the request may not match its %s protocol",
-		err, model.uri, model.api,
+		err, backend.uri, backend.api,
 	)
 }
 
@@ -39,9 +39,9 @@ func providerFailureHasIndependentExplanation(err error) bool {
 	}
 }
 
-func addRouteDiagnostics(model agent.Model, route resolvedModelRoute) agent.Model {
-	if model == nil || route.Compatibility != modelCompatibilityUnverified {
-		return model
+func addRouteDiagnostics(backend agent.Backend, route resolvedModelRoute) agent.Backend {
+	if backend == nil || route.Compatibility != modelCompatibilityUnverified {
+		return backend
 	}
-	return routeDiagnosticModel{Model: model, uri: route.URI, api: route.API}
+	return routeDiagnosticBackend{Backend: backend, uri: route.URI, api: route.API}
 }

@@ -15,7 +15,8 @@ import (
 func TestRuntimeRunsWithJournalAndModelAdapters(t *testing.T) {
 	journal := &memoryJournal{}
 	runtime, err := agent.New(agent.Config{
-		Model:        echoModel{},
+		Model:        agent.ModelInfo{BackendID: "example", Provider: "example", Model: "echo", ContextWindow: 128_000},
+		Backend:      echoModel{},
 		Journal:      journal,
 		Instructions: "Answer briefly.",
 		SessionID:    "session-public-test",
@@ -47,10 +48,6 @@ func TestRuntimeRunsWithJournalAndModelAdapters(t *testing.T) {
 }
 
 type echoModel struct{}
-
-func (echoModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "example", Provider: "example", Model: "echo", ContextWindow: 128_000}
-}
 
 func (echoModel) Complete(_ context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	answer := "echo: " + request.Items[len(request.Items)-1].Text

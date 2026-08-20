@@ -38,7 +38,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, Tools: []Tool{tool},
+		Backend: model, Journal: journal, Tools: []Tool{tool},
 		ExternalWork: externalWorkFuncs{pending: func(sessionID string) []BoundaryEvent {
 			sourceSession = sessionID
 			if !completionAvailable || delivered {
@@ -136,7 +136,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		}
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "still remembered"}}, StopReason: "stop"}, nil
 	}}}
-	if _, err := newTestRuntime(t, Config{Model: replayModel, Journal: journal}).Run(context.Background(), "continue", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: replayModel, Journal: journal}).Run(context.Background(), "continue", nil); err != nil {
 		t.Fatal(err)
 	}
 	if countRecordKind(journal.snapshot(), RecordBoundaryEvent) != 1 {
@@ -181,7 +181,7 @@ func TestRuntimeWaitsForRequiredJobsBeforeAcceptingFinalResponse(t *testing.T) {
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		ExternalWork: externalWorkFuncs{await: func(context.Context, string) (bool, error) {
 			waits++
 			if waits == 1 {
@@ -226,7 +226,7 @@ func TestRuntimeUsesJournalAsAuthorityWhenDurableCompletionIsOfferedAgain(t *tes
 	firstModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}, StopReason: "stop"}, nil
 	}}}
-	if _, err := newTestRuntime(t, Config{Model: firstModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "one", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: firstModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "one", nil); err != nil {
 		t.Fatal(err)
 	}
 	if count := countRecordKind(journal.snapshot(), RecordBoundaryEvent); count != 1 {
@@ -236,7 +236,7 @@ func TestRuntimeUsesJournalAsAuthorityWhenDurableCompletionIsOfferedAgain(t *tes
 	secondModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second"}}, StopReason: "stop"}, nil
 	}}}
-	if _, err := newTestRuntime(t, Config{Model: secondModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "two", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: secondModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "two", nil); err != nil {
 		t.Fatal(err)
 	}
 	if count := countRecordKind(journal.snapshot(), RecordBoundaryEvent); count != 1 {
@@ -273,7 +273,7 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}, StopReason: "stop"}, nil
 		},
 	}}
-	if _, err := newTestRuntime(t, Config{Model: firstModel, Journal: journal, Tools: []Tool{tool}, ExternalWork: work}).Run(context.Background(), "one", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: firstModel, Journal: journal, Tools: []Tool{tool}, ExternalWork: work}).Run(context.Background(), "one", nil); err != nil {
 		t.Fatal(err)
 	}
 	if toolCommits == 0 {
@@ -284,7 +284,7 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 	secondModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second"}}, StopReason: "stop"}, nil
 	}}}
-	if _, err := newTestRuntime(t, Config{Model: secondModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "two", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: secondModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "two", nil); err != nil {
 		t.Fatal(err)
 	}
 	if toolCommits <= beforeRestart {
@@ -304,7 +304,7 @@ func TestRunFinishedRecordsDetachedJobs(t *testing.T) {
 		return []string{"job-detached"}
 	}}
 	var events []Event
-	result, err := newTestRuntime(t, Config{Model: model, Journal: journal, ExternalWork: work}).Run(context.Background(), "work", func(event Event) {
+	result, err := newTestRuntime(t, Config{Backend: model, Journal: journal, ExternalWork: work}).Run(context.Background(), "work", func(event Event) {
 		events = append(events, event)
 	})
 	if err != nil {

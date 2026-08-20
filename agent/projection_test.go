@@ -21,8 +21,8 @@ type reasoningModel struct {
 	requests []ModelRequest
 }
 
-func (model *reasoningModel) Info() ModelInfo {
-	return ModelInfo{Backend: "test", Provider: "test", Model: "test", ProviderStateContract: "test.reasoning.v1"}
+func (model *reasoningModel) testModelInfo() ModelInfo {
+	return ModelInfo{BackendID: "test", Provider: "test", Model: "test", ProviderStateContract: "test.reasoning.v1"}
 }
 
 func (model *reasoningModel) Complete(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
@@ -69,7 +69,7 @@ func TestContextEstimateMatchesTheProjectedRequest(t *testing.T) {
 		t.Run(replayName(replay), func(t *testing.T) {
 			journal := &memoryJournal{}
 			model := &reasoningModel{replay: replay}
-			runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+			runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 			if _, err := runtime.Run(context.Background(), "question", nil); err != nil {
 				t.Fatal(err)
 			}
@@ -111,7 +111,7 @@ func TestContextEstimateProjectsPendingInputAsTheNextUserMessage(t *testing.T) {
 		t.Run(replayName(replay), func(t *testing.T) {
 			journal := &memoryJournal{}
 			model := &reasoningModel{replay: replay}
-			runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+			runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 			if _, err := runtime.Run(context.Background(), "question", nil); err != nil {
 				t.Fatal(err)
 			}

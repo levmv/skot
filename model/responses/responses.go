@@ -30,14 +30,10 @@ type Config struct {
 	APIModel        string
 	ReasoningEffort string
 	Traits          RouteTraits
-	ContextWindow   int
-	// ContextWindowEstimated distinguishes discovered/defaulted values from a
-	// reviewed or explicit limit in durable runtime diagnostics.
-	ContextWindowEstimated bool
-	BaseURL                string
-	HTTPClient             *http.Client
-	Authorizer             Authorizer
-	Header                 http.Header
+	BaseURL         string
+	HTTPClient      *http.Client
+	Authorizer      Authorizer
+	Header          http.Header
 }
 
 type Backend struct {
@@ -46,9 +42,6 @@ type Backend struct {
 	apiModel           string
 	reasoningEffort    string
 	traits             RouteTraits
-	contextWindow      int
-	contextEstimated   bool
-	baseURL            string
 	endpoint           string
 	client             *http.Client
 	authorizer         Authorizer
@@ -75,9 +68,6 @@ func New(config Config) (*Backend, error) {
 	if baseURL == "" {
 		return nil, agent.MarkInvalidRequest(errors.New("base URL is required"))
 	}
-	if config.ContextWindow < 0 {
-		return nil, agent.MarkInvalidRequest(errors.New("context window cannot be negative"))
-	}
 	if err := config.Traits.validate(); err != nil {
 		return nil, agent.MarkInvalidRequest(err)
 	}
@@ -91,8 +81,7 @@ func New(config Config) (*Backend, error) {
 	return &Backend{
 		provider: provider, model: model, apiModel: apiModel,
 		reasoningEffort: reasoningEffort, traits: config.Traits,
-		contextWindow: config.ContextWindow, contextEstimated: config.ContextWindowEstimated,
-		baseURL: baseURL, endpoint: baseURL + "/responses", client: client,
+		endpoint: baseURL + "/responses", client: client,
 		authorizer: config.Authorizer, header: config.Header.Clone(),
 		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
@@ -104,17 +93,11 @@ func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 	return items
 }
 
-func (backend *Backend) Info() agent.ModelInfo {
-	return agent.ModelInfo{
-		Backend: backend.backendID(), Provider: backend.provider, Model: backend.model,
-		ReasoningEffort: backend.reasoningEffort, ProviderStateContract: backend.traits.ProviderStateContract(),
-		ContextWindow: backend.contextWindow, ContextWindowEstimated: backend.contextEstimated,
-		MaxRequestBytes: backend.maxRequestBytes, MaxCompletionBytes: backend.maxCompletionBytes,
-		Endpoint: modelhttp.PublicEndpoint(backend.baseURL),
-	}
-}
+func (backend *Backend) backendID() string { return BackendID(backend.provider) }
 
-func (backend *Backend) backendID() string { return "responses." + backend.provider }
+// BackendID returns the stable replay identity used by Responses for a
+// provider. Route resolution and the adapter must use this same function.
+func BackendID(provider string) string { return "responses." + strings.TrimSpace(provider) }
 
 func (backend *Backend) callReferenceKind() string {
 	return "responses." + backend.provider + ".function_call"

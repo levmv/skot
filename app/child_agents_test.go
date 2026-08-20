@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -334,6 +335,71 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 	}
 }
 
+func TestResumePreservesUnavailableChildWithoutChangingItsModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		decoded, err := decodeChildTestRequest(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeChildTestAnswer(writer, "answer: "+decoded.Prompt)
+	}))
+	t.Cleanup(server.Close)
+
+	home, root := t.TempDir(), t.TempDir()
+	application, err := Open(context.Background(), childTestConfig(home, root, server.URL+"/v1", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Run(context.Background(), "parent work", nil); err != nil {
+		t.Fatal(err)
+	}
+	parentID := application.SessionID()
+	tool := childTestTool(t, application)
+	started := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: "child work"})
+	childID := strings.Fields(started.Content)[1]
+	runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{childID}, Wait: "all"})
+
+	child := application.state.children.children[parentID][childID]
+	appendApplicationRecord(t, child.journal, agent.RecordModelSelected, agent.ModelSelectedRecord{
+		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
+	})
+	child.mu.Lock()
+	metadata := child.metadata
+	child.mu.Unlock()
+	metadata.Model = "opencode-go/minimax-m2.5"
+	metadata.ReasoningEffort = ""
+	if err := writeChildMetadata(child.dir, metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := Open(context.Background(), childTestResumeConfig(home, root, server.URL+"/v1", parentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close() }()
+	tool = childTestTool(t, resumed)
+	replayed := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{childID}})
+	if !strings.Contains(replayed.Content, "answer: child work") {
+		t.Fatalf("restored child history = %q", replayed.Content)
+	}
+	raw, err := json.Marshal(childToolArgs{Action: "send", ID: childID, Prompt: "continue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tool.Run(agent.WithToolSessionID(context.Background(), parentID), string(raw))
+	if !errors.Is(err, agent.ErrModelUnavailable) || !strings.Contains(err.Error(), `model "opencode-go/minimax-m2.5" is unavailable`) {
+		t.Fatalf("send unavailable child error = %v", err)
+	}
+	restored := resumed.state.children.children[parentID][childID]
+	if restored == nil || restored.snapshot().Model != "opencode-go/minimax-m2.5" {
+		t.Fatalf("restored child model = %#v", restored)
+	}
+}
+
 func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 	journal, err := session.Open(filepath.Join(t.TempDir(), "events.jsonl"))
 	if err != nil {
@@ -341,8 +407,8 @@ func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = journal.Close() })
 	model := &childReplayModel{}
-	runtime, err := agent.New(agent.Config{
-		Model: model, Journal: journal, SessionID: "session_0123456789abcdef0123456789abcdef",
+	runtime, err := newApplicationTestRuntime(agent.Config{
+		Backend: model, Journal: journal, SessionID: "session_0123456789abcdef0123456789abcdef",
 		Tools: []agent.Tool{{
 			Spec: agent.ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (agent.ToolOutput, error) { return agent.ToolOutput{Content: "ok"}, nil },
@@ -531,10 +597,6 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 }
 
 type childReplayModel struct{ calls int }
-
-func (model *childReplayModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "child-replay"}
-}
 
 func (model *childReplayModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	if len(request.Tools) == 0 {

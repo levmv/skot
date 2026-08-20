@@ -861,11 +861,17 @@ func (m *screenModel) refreshProviderStatuses() error {
 }
 
 func (m *screenModel) openStartupLoginPicker() {
+	currentModel := m.agent.CurrentModel()
+	for _, choice := range m.modelChoices {
+		if strings.EqualFold(choice.URI, currentModel) && choice.Unavailable {
+			m.addBlock(screenBlockError, fmt.Sprintf("model %q is unavailable; choose another with /model", currentModel))
+			return
+		}
+	}
 	if err := m.refreshProviderStatuses(); err != nil {
 		m.addBlock(screenBlockError, "credentials: "+err.Error())
 		return
 	}
-	currentModel := m.agent.CurrentModel()
 	provider := modelProvider(currentModel)
 	currentMissing := false
 	for _, status := range m.providers {

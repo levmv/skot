@@ -100,7 +100,7 @@ func TestRuntimeJournalsAndReplaysProviderDataAcrossToolTurn(t *testing.T) {
 	state := json.RawMessage(`{"id":"rs_1","encrypted_content":"ciphertext"}`)
 	model := &scriptedModel{
 		info: ModelInfo{
-			Backend: "responses.test", Provider: "test", Model: "model",
+			BackendID: "responses.test", Provider: "test", Model: "model",
 			ProviderStateContract: "responses.manual_history.v1",
 		},
 		steps: []modelStep{
@@ -127,7 +127,7 @@ func TestRuntimeJournalsAndReplaysProviderDataAcrossToolTurn(t *testing.T) {
 		},
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal,
+		Backend: model, Journal: journal,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },

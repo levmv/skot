@@ -18,7 +18,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	var requests []ModelRequest
 	model := configurationModel{
 		info: ModelInfo{
-			Backend: "test", Provider: "provider", Model: "alpha", ContextWindow: 64_000,
+			BackendID: "test", Provider: "provider", Model: "alpha", ContextWindow: 64_000,
 			ContextWindowEstimated: true, Endpoint: "https://secret@example.test/v1?token=secret",
 			MaxRequestBytes: 1_000_000, MaxCompletionBytes: 100_000,
 		},
@@ -29,7 +29,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	}
 	modified := false
 	runtime := newTestRuntime(t, Config{
-		Model: model, Journal: journal, Tools: []Tool{read}, Instructions: "follow secret",
+		Backend: model, Journal: journal, Tools: []Tool{read}, Instructions: "follow secret",
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 3}, MaxToolIterations: 7,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, "secret", "[redacted]") },
 		Metadata: ConfigurationMetadata{
@@ -105,10 +105,10 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	}
 
 	next := configurationModel{
-		info:     ModelInfo{Backend: "test", Provider: "provider", Model: "beta", ContextWindow: 128_000, Endpoint: "https://next.example/v1"},
+		info:     ModelInfo{BackendID: "test", Provider: "provider", Model: "beta", ContextWindow: 128_000, Endpoint: "https://next.example/v1"},
 		complete: model.complete,
 	}
-	if err := runtime.SwitchModel(context.Background(), next); err != nil {
+	if err := runtime.SwitchModel(context.Background(), next.testModelInfo(), next); err != nil {
 		t.Fatal(err)
 	}
 	if got := countRecordKind(journal.snapshot(), RecordSessionConfigured); got != 4 {
@@ -145,7 +145,7 @@ func TestRuntimeReplacesToolsAndProgramMetadataAtomically(t *testing.T) {
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: &scriptedModel{}, Journal: &memoryJournal{}, Tools: []Tool{program},
+		Backend: &scriptedModel{}, Journal: &memoryJournal{}, Tools: []Tool{program},
 	})
 	resolved := ProgramToolSnapshot{
 		Name: "lookup", Program: "/bin/lookup", Command: []string{"lookup"},
@@ -190,7 +190,7 @@ type configurationModel struct {
 	complete func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
 }
 
-func (model configurationModel) Info() ModelInfo { return model.info }
+func (model configurationModel) testModelInfo() ModelInfo { return model.info }
 
 func (model configurationModel) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
 	return model.complete(ctx, request, emit)

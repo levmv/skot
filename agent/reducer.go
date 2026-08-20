@@ -148,6 +148,11 @@ func (reducer *stateReducer) applyModelSelected(record Record) error {
 		return fmt.Errorf("model selection reused epoch %q at sequence %d", payload.Epoch, record.Sequence)
 	}
 	state.Selection = payload
+	// Effective configuration describes the selection which preceded it in the
+	// journal. A process may stop after recording a new selection but before its
+	// configuration, so retaining the old snapshot here would attribute the
+	// previous model's limits and endpoint to the new one.
+	state.Configured = nil
 	return nil
 }
 

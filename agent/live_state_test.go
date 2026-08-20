@@ -12,7 +12,7 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 	var runtime *Runtime
 	requestNumber := 0
 	model := configurationModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "projection", ContextWindow: 128_000},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "projection", ContextWindow: 128_000},
 		complete: func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			replayed, err := Replay(journal.snapshot())
 			if err != nil {
@@ -42,7 +42,7 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 	}
 	boundaryCommitted := false
 	runtime = newTestRuntime(t, Config{
-		Model: model, Journal: journal, Tools: []Tool{tool}, Instructions: "be exact",
+		Backend: model, Journal: journal, Tools: []Tool{tool}, Instructions: "be exact",
 		Metadata: ConfigurationMetadata{ToolSet: "default"},
 		ExternalWork: externalWorkFuncs{
 			pending: func(string) []BoundaryEvent {

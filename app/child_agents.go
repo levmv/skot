@@ -884,10 +884,22 @@ func (supervisor *childSupervisor) openChildLocked(ctx context.Context, dir, par
 		return fail(fmt.Errorf("reconcile journal: %w", err))
 	}
 	runs := restoreChildRuns(records, sessionState.Blocks)
-	runtime, err := builder.build(ctx, runtimeBuildParams{
-		journal: journal, sessionID: metadata.SessionID, modelURI: metadata.Model,
-		reasoningEffort: metadata.ReasoningEffort, instructions: instructions, resumedState: &sessionState,
-	})
+	modelURI := strings.TrimSpace(metadata.Model)
+	reasoningEffort := strings.TrimSpace(metadata.ReasoningEffort)
+	if sessionState.Selection.Model != "" {
+		modelURI = strings.TrimSpace(sessionState.Selection.Provider) + "/" + strings.TrimSpace(sessionState.Selection.Model)
+		reasoningEffort = strings.TrimSpace(sessionState.Selection.ReasoningEffort)
+	}
+	metadata.Model = modelURI
+	metadata.ReasoningEffort = reasoningEffort
+	params := runtimeBuildParams{
+		journal: journal, sessionID: metadata.SessionID, modelURI: modelURI,
+		reasoningEffort: reasoningEffort, instructions: instructions, resumedState: &sessionState,
+	}
+	if modelInfo, ok := restoredModelInfo(sessionState, modelURI); ok {
+		params.knownModel = &modelInfo
+	}
+	runtime, err := builder.buildRestored(ctx, params)
 	if err != nil {
 		return fail(err)
 	}

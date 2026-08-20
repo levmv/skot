@@ -53,7 +53,7 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
+	runtime, err := newApplicationTestRuntime(agent.Config{Backend: applicationTestModel{}, Journal: journal})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestApplicationKeepsSwitchedScopeWhenPreferenceIsNotPersisted(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
+	runtime, err := newApplicationTestRuntime(agent.Config{Backend: applicationTestModel{}, Journal: journal})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1249,7 +1249,7 @@ func newModelSwitchApplication(t *testing.T) (*Application, *state.InteractiveSt
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
+	runtime, err := newApplicationTestRuntime(agent.Config{Backend: applicationTestModel{}, Journal: journal})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1303,8 +1303,8 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := agent.New(agent.Config{
-		Model:   toolSetCaptureModel{t: t, want: "read,ls,grep,glob"},
+	runtime, err := newApplicationTestRuntime(agent.Config{
+		Backend: toolSetCaptureModel{t: t, want: "read,ls,grep,glob"},
 		Journal: &applicationMemoryJournal{},
 		Tools:   selectedTools,
 	})
@@ -1327,63 +1327,6 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 	stored, err := preferences.Settings()
 	if err != nil || stored.Workspace.ToolSet != toolpolicy.ToolSetReadOnly || application.CurrentToolSet() != toolpolicy.ToolSetReadOnly {
 		t.Fatalf("stored=%q current=%q err=%v", stored.Workspace.ToolSet, application.CurrentToolSet(), err)
-	}
-}
-
-func TestApplicationRejectsRunWithoutCredentialBeforeJournalMutation(t *testing.T) {
-	home := t.TempDir()
-	settings, err := state.Open(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journal, err := session.Open(filepath.Join(t.TempDir(), "session.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
-	if err != nil {
-		t.Fatal(err)
-	}
-	application := &Application{
-		config: applicationConfig{settings: settings},
-		state:  applicationState{session: newLiveSession("", runtime, nil, false)},
-	}
-	if _, err := application.Run(context.Background(), "do work", nil); err == nil || !strings.Contains(err.Error(), "/login test") || !errors.Is(err, agent.ErrInvalidRequest) {
-		t.Fatalf("missing credential error = %v", err)
-	}
-	records, err := journal.Records(context.Background())
-	if err != nil || len(records) != 0 {
-		t.Fatalf("journal records = %#v, %v", records, err)
-	}
-}
-
-func TestApplicationCustomBaseURLDoesNotRequireCredential(t *testing.T) {
-	home := t.TempDir()
-	settings, err := state.Open(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journal, err := session.Open(filepath.Join(t.TempDir(), "session.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{Model: applicationReplyModel{}, Journal: journal})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DEEPSEEK_API_KEY", "")
-	application := &Application{
-		config: applicationConfig{settings: settings, baseURL: "https://gateway.example/v1"},
-		state:  applicationState{session: newLiveSession("", runtime, nil, false)},
-	}
-	result, err := application.Run(context.Background(), "do work", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != agent.RunCompleted || result.Answer != "done" {
-		t.Fatalf("run result = %#v", result)
 	}
 }
 
@@ -1510,6 +1453,176 @@ func TestApplicationListsAndResumesSessionWithRecordedModel(t *testing.T) {
 	}
 }
 
+func TestApplicationResumeOpensHistoryWhenSavedModelIsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/chat/completions" {
+			t.Errorf("request path = %q", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"continued\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	application, _ := newSessionApplication(t)
+	application.config.baseURL = server.URL
+	sourceID := createUnavailableModelSession(t, application.config.home, application.config.root)
+
+	if _, err := application.ResumeSession(context.Background(), session.ShortID(sourceID)); err != nil {
+		t.Fatal(err)
+	}
+	if application.CurrentModel() != "opencode-go/minimax-m2.5" {
+		t.Fatalf("restored model = %q", application.CurrentModel())
+	}
+	choices := application.ModelChoices()
+	currentChoice := slices.IndexFunc(choices, func(choice ModelChoice) bool {
+		return strings.EqualFold(choice.URI, application.CurrentModel())
+	})
+	if currentChoice < 0 || choices[currentChoice].Protocol != "anthropic_messages" {
+		t.Fatalf("restored model choice = %#v", choices)
+	}
+	opened, err := application.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opened.Items) != 1 || opened.Items[0].Text != "saved question" || opened.Selection.Model != "minimax-m2.5" {
+		t.Fatalf("opened history = %#v", opened)
+	}
+
+	if _, err := application.Run(context.Background(), "continue it", nil); !errors.Is(err, agent.ErrModelUnavailable) {
+		t.Fatalf("run unavailable model error = %v", err)
+	}
+	unchanged, err := application.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unchanged.Items) != 1 || unchanged.Selection.Model != "minimax-m2.5" {
+		t.Fatalf("failed continuation changed history = %#v", unchanged)
+	}
+	if err := application.SwitchModel(context.Background(), "deepseek/initial-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := application.Run(context.Background(), "continue it", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "continued" {
+		t.Fatalf("continued result = %#v", result)
+	}
+	continued, err := application.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continued.Selection.Provider != "deepseek" || continued.Selection.Model != "initial-model" {
+		t.Fatalf("continued selection = %#v", continued.Selection)
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExplicitResumeKeepsUnavailableSavedModelAndLetsClearStartOver(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	root = canonicalApplicationTestRoot(t, root)
+	sourceID := createUnavailableModelSession(t, home, root)
+
+	application, err := Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "opencode-go/minimax-m2.5", ModelExplicit: true,
+		ReasoningEffort: "high", ReasoningEffortExplicit: true,
+		Resume: true, ResumePrefix: session.ShortID(sourceID),
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+	if _, err := application.Run(context.Background(), "continue", nil); !errors.Is(err, agent.ErrModelUnavailable) ||
+		!strings.Contains(err.Error(), `model "opencode-go/minimax-m2.5" is unavailable`) {
+		t.Fatalf("headless run error = %v", err)
+	}
+	if application.CurrentReasoningEffort() != "" {
+		t.Fatalf("unavailable model used unsaved reasoning effort %q", application.CurrentReasoningEffort())
+	}
+	if _, err := application.ClearSession(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := application.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if application.CurrentModel() != "opencode-go/minimax-m2.5" || len(state.Items) != 0 || application.HasUserTurn() {
+		t.Fatalf("cleared unavailable session = model %q, state %#v, user turn %t", application.CurrentModel(), state, application.HasUserTurn())
+	}
+	if _, err := application.Run(context.Background(), "new task", nil); !errors.Is(err, agent.ErrModelUnavailable) || application.HasUserTurn() {
+		t.Fatalf("cleared unavailable run = %v, user turn %t", err, application.HasUserTurn())
+	}
+}
+
+func TestResumeDoesNotTreatDifferentUnknownModelAsSavedSelection(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	root = canonicalApplicationTestRoot(t, root)
+	sourceID := createUnavailableModelSession(t, home, root)
+
+	_, err := Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "opencode-go/not-the-saved-model", ModelExplicit: true,
+		Resume: true, ResumePrefix: session.ShortID(sourceID),
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), "not available in Skot's current model list") {
+		t.Fatalf("different unknown model error = %v", err)
+	}
+}
+
+func TestResumeDoesNotTreatInvalidEffortAsAnUnavailableModel(t *testing.T) {
+	home, root := t.TempDir(), canonicalApplicationTestRoot(t, t.TempDir())
+	source, sourceID, err := session.Create(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: root,
+	})
+	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+		Backend: "chat_completions.deepseek", Provider: "deepseek", Model: "deepseek-v4-flash", Epoch: "epoch-saved",
+	})
+	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "saved-run"})
+	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "saved-run", Text: "saved question"})
+	appendApplicationRecord(t, source, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "saved-run", Status: agent.RunCompleted})
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Open(context.Background(), Config{
+		Home: home, Root: root, ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
+		ReasoningEffort: "invalid", ReasoningEffortExplicit: true,
+		Resume: true, ResumePrefix: session.ShortID(sourceID), Interactive: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("invalid effort error = %v", err)
+	}
+}
+
+func createUnavailableModelSession(t *testing.T, home, root string) string {
+	t.Helper()
+	source, sourceID, err := session.Create(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: root,
+	})
+	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
+	})
+	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "saved-run"})
+	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "saved-run", Text: "saved question"})
+	appendApplicationRecord(t, source, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "saved-run", Status: agent.RunCompleted})
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return sourceID
+}
+
 func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/chat/completions" {
@@ -1624,11 +1737,12 @@ func TestOpenDoesNotTurnInternalRouteReviewStateIntoAStartupWarning(t *testing.T
 }
 
 func TestApplicationModelChoicesKeepCurrentEffectiveContext(t *testing.T) {
-	runtime, err := agent.New(agent.Config{
-		Model: applicationModelInfoModel{info: agent.ModelInfo{
-			Backend: "chat_completions.openrouter", Provider: "openrouter", Model: "~x-ai/grok-latest",
+	runtime, err := newApplicationTestRuntime(agent.Config{
+		Model: agent.ModelInfo{
+			BackendID: "chat_completions.openrouter", Provider: "openrouter", Model: "~x-ai/grok-latest",
 			ContextWindow: 333_000,
-		}},
+		},
+		Backend: applicationTestModel{},
 		Journal: &applicationMemoryJournal{},
 	})
 	if err != nil {
@@ -1656,7 +1770,7 @@ func TestApplicationDoesNotWarnWhenSelectingAnUnreviewedRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = journal.Close() })
-	runtime, err := agent.New(agent.Config{Model: applicationTestModel{}, Journal: journal})
+	runtime, err := newApplicationTestRuntime(agent.Config{Backend: applicationTestModel{}, Journal: journal})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1737,9 +1851,10 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 	appendApplicationRecord(t, journal, agent.RecordModelSelected, agent.ModelSelectedRecord{
 		Backend: "chat_completions", Provider: "deepseek", Model: "initial-model", Epoch: "epoch-initial",
 	})
-	model := applicationDeepseekModel{model: "initial-model"}
-	runtime, err := agent.New(agent.Config{
-		Model: model, Journal: journal, SessionID: id, Workspace: root,
+	model := applicationDeepseekModel{}
+	runtime, err := newApplicationTestRuntime(agent.Config{
+		Model:   agent.ModelInfo{BackendID: "chat_completions", Provider: "deepseek", Model: "initial-model"},
+		Backend: model, Journal: journal, SessionID: id, Workspace: root,
 		Tools: selectedTools, UserShell: processes.RunShell,
 	})
 	if err != nil {
@@ -1771,21 +1886,16 @@ func appendApplicationRecord(t *testing.T, journal *session.Store, kind agent.Re
 
 type applicationTestModel struct{}
 
-type applicationModelInfoModel struct{ info agent.ModelInfo }
-
-func (model applicationModelInfoModel) Info() agent.ModelInfo { return model.info }
-
-func (applicationModelInfoModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	return agent.ModelResponse{}, errors.New("unused")
+func newApplicationTestRuntime(config agent.Config) (*agent.Runtime, error) {
+	if config.Model.BackendID == "" {
+		config.Model = agent.ModelInfo{BackendID: "test", Provider: "test", Model: "initial"}
+	}
+	return agent.New(config)
 }
 
 type toolSetCaptureModel struct {
 	t    *testing.T
 	want string
-}
-
-func (model toolSetCaptureModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "tool-set-capture"}
 }
 
 func (model toolSetCaptureModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
@@ -1834,40 +1944,18 @@ func (journal *applicationMemoryJournal) Records(context.Context) ([]agent.Recor
 	return append([]agent.Record(nil), journal.records...), nil
 }
 
-func (applicationTestModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "test", Model: "initial"}
-}
-
 func (applicationTestModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	return agent.ModelResponse{}, errors.New("unused")
 }
 
-type applicationReplyModel struct{}
-
-func (applicationReplyModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "test", Provider: "deepseek", Model: "local"}
-}
-
-func (applicationReplyModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	return agent.ModelResponse{Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "done"}}}, nil
-}
-
-type applicationDeepseekModel struct{ model string }
-
-func (model applicationDeepseekModel) Info() agent.ModelInfo {
-	return agent.ModelInfo{Backend: "chat_completions", Provider: "deepseek", Model: model.model}
-}
+type applicationDeepseekModel struct{}
 
 func (applicationDeepseekModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
 	return agent.ModelResponse{}, errors.New("unused")
 }
 
-func (applicationModelInfoModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
-
 func (model toolSetCaptureModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
 
 func (applicationTestModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
-
-func (applicationReplyModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
 
 func (applicationDeepseekModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }

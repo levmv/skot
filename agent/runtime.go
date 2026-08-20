@@ -38,7 +38,12 @@ const (
 )
 
 type Config struct {
-	Model         Model
+	// Model always identifies the selected model and its effective, secret-free
+	// configuration. Backend may be nil when a persisted selection remains
+	// inspectable but cannot be executed by the current application.
+	Model   ModelInfo
+	Backend Backend
+
 	Journal       Journal
 	Tools         []Tool
 	Instructions  string
@@ -52,7 +57,7 @@ type Config struct {
 	ExternalWork      ExternalWork
 	Sanitize          func(string) string
 	// Metadata supplies resolved product facts which agent.Runtime cannot
-	// infer from model and tool interfaces. It is recorded but not interpreted.
+	// infer from backend and tool interfaces. It is recorded but not interpreted.
 	Metadata ConfigurationMetadata
 }
 
@@ -82,7 +87,7 @@ type Runtime struct {
 	// work in an active turn can observe the new boundary.
 	configMu          sync.RWMutex
 	pendingInputs     []string
-	model             Model
+	backend           Backend
 	modelInfo         ModelInfo
 	journal           Journal
 	tools             []Tool
@@ -106,10 +111,7 @@ type Runtime struct {
 // take ownership of Journal or ExternalWork. An unused Runtime may be discarded
 // without cleanup.
 func New(config Config) (*Runtime, error) {
-	if config.Model == nil {
-		return nil, errors.New("model is required")
-	}
-	modelInfo, err := normalizeModelInfo(config.Model.Info())
+	modelInfo, err := normalizeModelInfo(config.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +165,7 @@ func New(config Config) (*Runtime, error) {
 	}
 
 	runtime := &Runtime{
-		model:             config.Model,
+		backend:           config.Backend,
 		modelInfo:         modelInfo,
 		journal:           config.Journal,
 		tools:             tools,
@@ -272,11 +274,11 @@ func (runtime *Runtime) CurrentModelInfo() ModelInfo {
 	return runtime.modelInfo
 }
 
-func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
-	if model == nil {
-		return errors.New("model is required")
+func (runtime *Runtime) SwitchModel(ctx context.Context, modelInfo ModelInfo, backend Backend) error {
+	if backend == nil {
+		return errors.New("model backend is required")
 	}
-	modelInfo, err := normalizeModelInfo(model.Info())
+	modelInfo, err := normalizeModelInfo(modelInfo)
 	if err != nil {
 		return err
 	}
@@ -307,7 +309,7 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 			return err
 		}
 		selection := ModelSelectedRecord{
-			Backend:               modelInfo.Backend,
+			Backend:               modelInfo.BackendID,
 			Provider:              modelInfo.Provider,
 			Model:                 modelInfo.Model,
 			ReasoningEffort:       modelInfo.ReasoningEffort,
@@ -323,21 +325,21 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, model Model) error {
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
 	}
-	runtime.model = model
+	runtime.backend = backend
 	runtime.modelInfo = modelInfo
 	runtime.publishSessionStatus(live.state)
 	return nil
 }
 
 func normalizeModelInfo(modelInfo ModelInfo) (ModelInfo, error) {
-	modelInfo.Backend = strings.TrimSpace(modelInfo.Backend)
+	modelInfo.BackendID = strings.TrimSpace(modelInfo.BackendID)
 	modelInfo.Provider = strings.TrimSpace(modelInfo.Provider)
 	modelInfo.Model = strings.TrimSpace(modelInfo.Model)
 	modelInfo.ReasoningEffort = strings.ToLower(strings.TrimSpace(modelInfo.ReasoningEffort))
 	modelInfo.ProviderStateContract = ProviderStateContract(strings.TrimSpace(string(modelInfo.ProviderStateContract)))
 	modelInfo.Endpoint = strings.TrimSpace(modelInfo.Endpoint)
-	if modelInfo.Backend == "" || modelInfo.Provider == "" || modelInfo.Model == "" {
-		return ModelInfo{}, errors.New("model backend, provider, and model name are required")
+	if modelInfo.BackendID == "" || modelInfo.Provider == "" || modelInfo.Model == "" {
+		return ModelInfo{}, errors.New("model backend ID, provider, and model name are required")
 	}
 	if modelInfo.ContextWindow < 0 {
 		return ModelInfo{}, errors.New("model context window cannot be negative")
@@ -356,7 +358,7 @@ func modelURI(modelInfo ModelInfo) string {
 }
 
 func selectionMatchesModel(selection ModelSelectedRecord, modelInfo ModelInfo) bool {
-	return selection.Backend == modelInfo.Backend &&
+	return selection.Backend == modelInfo.BackendID &&
 		selection.Provider == modelInfo.Provider &&
 		selection.Model == modelInfo.Model &&
 		selection.ReasoningEffort == modelInfo.ReasoningEffort &&
@@ -447,6 +449,9 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 
 	input, err := normalizeInput(input)
 	if err != nil {
+		return RunResult{}, err
+	}
+	if err := runtime.requireBackend(); err != nil {
 		return RunResult{}, err
 	}
 	input = runtime.sanitize(input)
@@ -802,7 +807,7 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 			}
 			emitEvent(emit, Event{Kind: EventModelAttemptStarted, RunID: runID, AttemptID: attemptID})
 		}
-		response, err := runtime.model.Complete(requestCtx, request, func(event ModelStreamEvent) {
+		response, err := runtime.backend.Complete(requestCtx, request, func(event ModelStreamEvent) {
 			switch event.Kind {
 			case EventTextDelta, EventReasoningSummaryDelta:
 				emitEvent(emit, Event{Kind: event.Kind, RunID: runID, AttemptID: attemptID, Text: runtime.sanitize(event.Text)})
@@ -861,7 +866,7 @@ func (runtime *Runtime) recordModelAttemptFailure(
 		purpose = ModelRequestCompaction
 	}
 	errorText, errorTruncated := boundedModelAttemptText(cause.Error(), maxModelAttemptErrorBytes)
-	backend, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Backend), maxModelAttemptFieldBytes)
+	backend, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.BackendID), maxModelAttemptFieldBytes)
 	provider, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Provider), maxModelAttemptFieldBytes)
 	model, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Model), maxModelAttemptFieldBytes)
 	payload := ModelAttemptFailedRecord{
@@ -980,7 +985,23 @@ func (runtime *Runtime) modelRequest(state State) (ModelRequest, error) {
 // projectModelItems applies runtime ownership filtering before the adapter's
 // replay policy. Requests and context estimates share this projection.
 func (runtime *Runtime) projectModelItems(items []Item, providerContext ProviderContext) []Item {
-	return runtime.model.ProjectModelItems(projectOwnedModelItems(items, providerContext))
+	items = projectOwnedModelItems(items, providerContext)
+	if runtime.backend == nil {
+		// Without the adapter's replay policy we retain extra reasoning items.
+		// That can only overestimate context use, and this Runtime cannot send a
+		// request until an executable backend is attached.
+		return items
+	}
+	return runtime.backend.ProjectModelItems(items)
+}
+
+func (runtime *Runtime) requireBackend() error {
+	runtime.configMu.RLock()
+	defer runtime.configMu.RUnlock()
+	if runtime.backend != nil {
+		return nil
+	}
+	return MarkInvalidRequest(modelUnavailableError{model: modelURI(runtime.modelInfo)})
 }
 
 // projectOwnedModelItems consumes an already-owned item snapshot. Callers must
@@ -1051,7 +1072,7 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 		return err
 	}
 	selection := ModelSelectedRecord{
-		Backend:               runtime.modelInfo.Backend,
+		Backend:               runtime.modelInfo.BackendID,
 		Provider:              runtime.modelInfo.Provider,
 		Model:                 runtime.modelInfo.Model,
 		ReasoningEffort:       runtime.modelInfo.ReasoningEffort,

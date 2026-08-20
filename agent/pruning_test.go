@@ -24,7 +24,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 		directModelResponse("old tool work complete"),
 		directModelResponse("recent answer"),
 	}}
-	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal, Tools: []Tool{tool}})
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal, Tools: []Tool{tool}})
 	if _, err := seedRuntime.Run(context.Background(), "inspect a large result", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 32 * 1024},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 32 * 1024},
 		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			var result string
 			for _, item := range request.Items {
@@ -48,7 +48,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
 		}},
 	}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
 	var events []Event
 	if _, err := runtime.Run(context.Background(), "new question", func(event Event) {
 		assertEventCommittedAtEmission(t, journal, event)
@@ -103,7 +103,7 @@ func TestInsufficientToolPruningFallsThroughToCompaction(t *testing.T) {
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
 	}}
-	seedRuntime := newTestRuntime(t, Config{Model: seedModel, Journal: journal, Tools: []Tool{tool}})
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal, Tools: []Tool{tool}})
 	if _, err := seedRuntime.Run(context.Background(), strings.Repeat("large user context ", 4*1024), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestInsufficientToolPruningFallsThroughToCompaction(t *testing.T) {
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{Backend: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				if request.Instructions != compactionSystemInstructions {
@@ -123,7 +123,7 @@ func TestInsufficientToolPruningFallsThroughToCompaction(t *testing.T) {
 			directModelResponse("final answer"),
 		},
 	}
-	if _, err := newTestRuntime(t, Config{Model: model, Journal: journal, Tools: []Tool{tool}}).Run(context.Background(), "new question", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}}).Run(context.Background(), "new question", nil); err != nil {
 		t.Fatal(err)
 	}
 	state, err := Replay(journal.snapshot())
@@ -154,7 +154,7 @@ func TestPruneToolResultKeepsUTF8HeadAndTail(t *testing.T) {
 func TestReplayRejectsToolPruningInsideConversationBlock(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestReplayRejectsToolPruningInsideConversationBlock(t *testing.T) {
 func TestToolPruningCannotAdvanceIntoActiveRun(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
-	runtime := newTestRuntime(t, Config{Model: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
 	}

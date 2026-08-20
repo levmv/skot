@@ -37,6 +37,9 @@ func (runtime *Runtime) Compact(ctx context.Context, keepVerbatimBlocks int) (Co
 		return ContextCompactedRecord{}, ErrRunActive
 	}
 	defer runtime.runMu.Unlock()
+	if err := runtime.requireBackend(); err != nil {
+		return ContextCompactedRecord{}, err
+	}
 	records, err := runtime.journal.Records(ctx)
 	if err != nil {
 		return ContextCompactedRecord{}, fmt.Errorf("read journal for compaction: %w", err)

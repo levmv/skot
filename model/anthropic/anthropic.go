@@ -42,9 +42,7 @@ type Config struct {
 	APIModel string
 	// MaxTokens is required by the Messages protocol. Zero selects a
 	// conservative compatibility default for explicitly configured routes.
-	MaxTokens              int
-	ContextWindow          int
-	ContextWindowEstimated bool
+	MaxTokens int
 	// PromptCache marks endpoints that honor cache_control breakpoints. It stays
 	// off for compatible endpoints that place their own breakpoints, because the
 	// protocol allows only a few per request.
@@ -60,10 +58,7 @@ type Backend struct {
 	model              string
 	apiModel           string
 	maxTokens          int
-	contextWindow      int
-	contextEstimated   bool
 	promptCache        bool
-	baseURL            string
 	endpoint           string
 	client             *http.Client
 	authorizer         Authorizer
@@ -89,9 +84,6 @@ func New(config Config) (*Backend, error) {
 	if baseURL == "" {
 		return nil, agent.MarkInvalidRequest(errors.New("base URL is required"))
 	}
-	if config.ContextWindow < 0 {
-		return nil, agent.MarkInvalidRequest(errors.New("context window cannot be negative"))
-	}
 	if config.MaxTokens < 0 {
 		return nil, agent.MarkInvalidRequest(errors.New("max tokens cannot be negative"))
 	}
@@ -108,9 +100,8 @@ func New(config Config) (*Backend, error) {
 	}
 	return &Backend{
 		provider: provider, model: model, apiModel: apiModel, maxTokens: maxTokens,
-		contextWindow: config.ContextWindow, contextEstimated: config.ContextWindowEstimated,
 		promptCache: config.PromptCache,
-		baseURL:     baseURL, endpoint: baseURL + "/messages", client: client,
+		endpoint:    baseURL + "/messages", client: client,
 		authorizer: config.Authorizer, header: config.Header.Clone(),
 		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
@@ -122,19 +113,13 @@ func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 	return items
 }
 
-func (backend *Backend) Info() agent.ModelInfo {
-	return agent.ModelInfo{
-		Backend: backend.backendID(), Provider: backend.provider, Model: backend.model,
-		ProviderStateContract: ProviderStateContract,
-		ContextWindow:         backend.contextWindow, ContextWindowEstimated: backend.contextEstimated,
-		MaxRequestBytes: backend.maxRequestBytes, MaxCompletionBytes: backend.maxCompletionBytes,
-		Endpoint: modelhttp.PublicEndpoint(backend.baseURL),
-	}
+func (backend *Backend) backendID() string {
+	return BackendID(backend.provider)
 }
 
-func (backend *Backend) backendID() string {
-	return "anthropic_messages." + backend.provider
-}
+// BackendID returns the stable replay identity used by Anthropic Messages for
+// a provider. Route resolution and the adapter must use this same function.
+func BackendID(provider string) string { return "anthropic_messages." + strings.TrimSpace(provider) }
 
 func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
 	wireRequest, err := backend.buildRequest(request)

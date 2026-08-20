@@ -650,7 +650,7 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 		return runtime.finishToolLimited(ctx, live, emit, runID, committed.answer, RunIncomplete, RunIncompleteError{StopReason: committed.response.StopReason})
 	}
 	if committed.answer == "" {
-		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunFailed, fmt.Errorf("%w: final model response contained no answer", ErrToolLoopLimit))
+		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunFailed, errors.New("tool loop limit reached: final model response contained no answer"))
 	}
 	return runtime.finishToolLimited(ctx, live, emit, runID, committed.answer, RunCompleted, nil)
 }
@@ -1147,8 +1147,8 @@ func (runtime *Runtime) finishToolLimited(ctx context.Context, reducer *stateRed
 
 func (runtime *Runtime) finishRun(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error, toolLimitReached bool) (RunResult, error) {
 	payload := RunFinishedRecord{RunID: runID, Status: status, ToolLimitReached: toolLimitReached}
-	if detached, ok := runtime.externalWork.(DetachedExternalWork); ok {
-		payload.DetachedJobs = canonicalDetachedJobIDs(detached.DetachedJobs(reducer.state.SessionID), runtime.sanitize)
+	if runtime.externalWork != nil {
+		payload.DetachedJobs = canonicalDetachedJobIDs(runtime.externalWork.DetachedJobs(reducer.state.SessionID), runtime.sanitize)
 	}
 	if cause != nil {
 		cause = sanitizeError(cause, runtime.sanitize)

@@ -120,19 +120,15 @@ type BoundaryEvent struct {
 // boundaries. Implementations may keep richer state outside the journal, but
 // must acknowledge events and tool results only through the commit callbacks.
 // Await reports whether a new model request is required before the preceding
-// response may be accepted as final.
+// response may be accepted as final. DetachedJobs reports work which makes the
+// session durable beyond the current application process; implementations with
+// no such work return nil.
 type ExternalWork interface {
 	Status(id string) ([]Detail, bool)
 	PendingEvents(sessionID string) []BoundaryEvent
 	EventCommitted(jobID string)
 	ToolResultCommitted(ToolResult)
 	Await(context.Context, string) (bool, error)
-}
-
-// DetachedExternalWork is an optional extension for work allowed to survive
-// the application process. Keeping it separate means an ExternalWork source
-// that has no such lifecycle does not need to implement a meaningless method.
-type DetachedExternalWork interface {
 	DetachedJobs(sessionID string) []string
 }
 
@@ -561,16 +557,12 @@ type ToolResultsPrunedRecord struct {
 	TailBytes       int    `json:"tail_bytes"`
 }
 
-var (
-	ErrEmptyInput    = errors.New("input is empty")
-	ErrRunActive     = errors.New("a run is already active")
-	ErrToolLoopLimit = errors.New("tool loop limit reached")
-)
+var ErrRunActive = errors.New("a run is already active")
 
 func normalizeInput(input string) (string, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return "", ErrEmptyInput
+		return "", errors.New("input is empty")
 	}
 	return input, nil
 }

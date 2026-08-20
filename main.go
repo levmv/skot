@@ -320,7 +320,7 @@ func readPrompt(args []string, stdin io.Reader) (string, error) {
 	if len(args) != 0 {
 		prompt := strings.TrimSpace(strings.Join(args, " "))
 		if prompt == "" {
-			return "", agent.ErrEmptyInput
+			return "", errors.New("prompt is empty")
 		}
 		return prompt, nil
 	}
@@ -342,7 +342,7 @@ func readPrompt(args []string, stdin io.Reader) (string, error) {
 	}
 	prompt := strings.TrimSpace(string(data))
 	if prompt == "" {
-		return "", agent.ErrEmptyInput
+		return "", errors.New("stdin is empty")
 	}
 	return prompt, nil
 }

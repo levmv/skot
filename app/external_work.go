@@ -86,8 +86,8 @@ func (work processExternalWork) EventCommitted(jobID string) {
 
 func (work processExternalWork) ToolResultCommitted(result agent.ToolResult) {
 	for _, detail := range result.Details {
-		process, ok := workspacetools.ProcessResultFromDetail(detail)
-		if ok && process.JobID != "" && process.Status != workspacetools.ProcessRunning {
+		process, ok := agent.ProcessResultFromDetail(detail)
+		if ok && process.JobID != "" && process.Status != agent.ProcessRunning {
 			work.processes.MarkCompletionDelivered(process.JobID)
 		}
 	}

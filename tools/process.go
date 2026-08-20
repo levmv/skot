@@ -39,15 +39,14 @@ const (
 )
 
 const (
-	ProcessResultDetailKind = "process_result"
-	ProcessRunning          = "running"
-	ProcessCompleted        = "completed"
-	ProcessFailed           = "failed"
-	ProcessKilled           = "killed"
-	ProcessTimedOut         = "timed_out"
-	ProcessNotStarted       = "not_started"
-	ProcessAbandoned        = "abandoned"
-	ProcessUnknown          = "unknown"
+	ProcessRunning    = agent.ProcessRunning
+	ProcessCompleted  = agent.ProcessCompleted
+	ProcessFailed     = agent.ProcessFailed
+	ProcessKilled     = agent.ProcessKilled
+	ProcessTimedOut   = agent.ProcessTimedOut
+	ProcessNotStarted = agent.ProcessNotStarted
+	ProcessAbandoned  = agent.ProcessAbandoned
+	ProcessUnknown    = agent.ProcessUnknown
 )
 
 type processOrigin uint8
@@ -56,21 +55,6 @@ const (
 	processOriginModel processOrigin = iota
 	processOriginUser
 )
-
-type ProcessResult struct {
-	JobID            string `json:"job_id,omitempty"`
-	Status           string `json:"status"`
-	Scope            Scope  `json:"scope,omitempty"`
-	ExitCode         *int   `json:"exit_code,omitempty"`
-	DurationMillis   int64  `json:"duration_ms"`
-	OutputBytes      int64  `json:"output_bytes"`
-	DiscardedBytes   int64  `json:"discarded_bytes,omitempty"`
-	OutputError      string `json:"output_error,omitempty"`
-	FailureTail      string `json:"failure_tail,omitempty"`
-	ManagedProcesses int    `json:"managed_processes,omitempty"`
-	UserInitiated    bool   `json:"user_initiated,omitempty"`
-	Detached         bool   `json:"detached,omitempty"`
-}
 
 type CompletionEvent struct {
 	JobID      string
@@ -718,10 +702,10 @@ func (manager *ProcessManager) monitor(job *processJob, timeout time.Duration) {
 	job.doneOnce.Do(func() { close(job.done) })
 }
 
-func (manager *ProcessManager) Status(jobID string) (ProcessResult, bool) {
+func (manager *ProcessManager) Status(jobID string) (agent.ProcessResult, bool) {
 	job := manager.get(jobID)
 	if job == nil {
-		return ProcessResult{}, false
+		return agent.ProcessResult{}, false
 	}
 	if job.snapshot().supervised {
 		_ = manager.refreshSupervisedJob(job)
@@ -734,7 +718,7 @@ func (manager *ProcessManager) StatusDetails(jobID string) ([]agent.Detail, bool
 	if !ok {
 		return nil, false
 	}
-	detail, err := processResultDetail(result)
+	detail, err := agent.NewDetail(agent.ProcessResultDetailKind, result)
 	if err != nil {
 		return nil, false
 	}
@@ -1101,7 +1085,7 @@ func (manager *ProcessManager) closeJobs(jobs []*processJob, reason string, forg
 
 func (manager *ProcessManager) result(job *processJob, options jobResultOptions) (agent.ToolOutput, error) {
 	meta := manager.processResult(job, options.managed)
-	detail, err := processResultDetail(meta)
+	detail, err := agent.NewDetail(agent.ProcessResultDetailKind, meta)
 	if err != nil {
 		return agent.ToolOutput{}, fmt.Errorf("encode process result: %w", err)
 	}
@@ -1177,11 +1161,11 @@ func (manager *ProcessManager) formatJob(job *processJob, output []byte, include
 	return text.String()
 }
 
-func (manager *ProcessManager) processResult(job *processJob, managed bool) ProcessResult {
+func (manager *ProcessManager) processResult(job *processJob, managed bool) agent.ProcessResult {
 	state := job.snapshot()
-	result := ProcessResult{
+	result := agent.ProcessResult{
 		Status:           state.status,
-		Scope:            state.scope,
+		Scope:            string(state.scope),
 		ExitCode:         state.exitCode,
 		DurationMillis:   jobDuration(state.startedAt, state.finishedAt).Milliseconds(),
 		UserInitiated:    state.userInitiated,
@@ -1207,25 +1191,6 @@ func (manager *ProcessManager) processResult(job *processJob, managed bool) Proc
 		result.FailureTail = strings.TrimSpace(string(tail))
 	}
 	return result
-}
-
-func processResultDetail(result ProcessResult) (agent.Detail, error) {
-	data, err := json.Marshal(result)
-	if err != nil {
-		return agent.Detail{}, err
-	}
-	return agent.Detail{Kind: ProcessResultDetailKind, Data: data}, nil
-}
-
-func ProcessResultFromDetail(detail agent.Detail) (ProcessResult, bool) {
-	if detail.Kind != ProcessResultDetailKind || len(detail.Data) == 0 {
-		return ProcessResult{}, false
-	}
-	var result ProcessResult
-	if err := json.Unmarshal(detail.Data, &result); err != nil || result.Status == "" {
-		return ProcessResult{}, false
-	}
-	return result, true
 }
 
 func (buffer *jobBuffer) Write(data []byte) (int, error) {

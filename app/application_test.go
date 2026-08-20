@@ -518,14 +518,14 @@ func TestOpenExistingJournalRestoresModelAndJobsButEmptyJournalUsesFreshDefaults
 	if len(started.Details) != 1 {
 		t.Fatalf("background process details = %#v", started.Details)
 	}
-	process, ok := workspacetools.ProcessResultFromDetail(started.Details[0])
+	process, ok := agent.ProcessResultFromDetail(started.Details[0])
 	if !ok || process.JobID == "" {
 		t.Fatalf("background process = %#v, %t", process, ok)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		status, found := continued.state.processes.Status(process.JobID)
-		if found && status.Status != workspacetools.ProcessRunning {
+		if found && status.Status != agent.ProcessRunning {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -1436,7 +1436,7 @@ func TestApplicationClearSessionStopsOldSessionJobs(t *testing.T) {
 	if len(started.Details) != 1 {
 		t.Fatalf("process details = %#v", started.Details)
 	}
-	process, ok := workspacetools.ProcessResultFromDetail(started.Details[0])
+	process, ok := agent.ProcessResultFromDetail(started.Details[0])
 	if !ok || process.JobID == "" {
 		t.Fatalf("process result = %#v, %t", process, ok)
 	}

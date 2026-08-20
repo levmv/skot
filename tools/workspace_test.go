@@ -63,6 +63,7 @@ func TestReadAndLSReturnBoundedStructuredText(t *testing.T) {
 	}
 	read := mustRunTool(t, tools, "read", `{"path":"docs/note.txt","offset":2,"limit":1}`)
 	if !strings.Contains(read, "     2\ttwo") || !strings.Contains(read, "offset=3") ||
+		!strings.Contains(read, "truncated: true") ||
 		!regexp.MustCompile(`(?m)^sha256: [0-9a-f]{64}$`).MatchString(read) {
 		t.Fatalf("read result = %q", read)
 	}
@@ -190,7 +191,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, ok := FileChangeMetaFromDetail(edit.Details[0])
+	change, ok := agent.FileChangeFromDetail(edit.Details[0])
 	if !ok || change.Path != canonicalExternal {
 		t.Fatalf("external edit detail = %#v, ok=%v", change, ok)
 	}
@@ -199,7 +200,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, ok = FileChangeMetaFromDetail(write.Details[0])
+	change, ok = agent.FileChangeFromDetail(write.Details[0])
 	if !ok || change.Path != filepath.ToSlash(canonicalpath.Resolve(created)) {
 		t.Fatalf("external write detail = %#v, ok=%v", change, ok)
 	}
@@ -208,7 +209,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, ok = FileChangeMetaFromDetail(write.Details[0])
+	change, ok = agent.FileChangeFromDetail(write.Details[0])
 	if !ok || change.Path != filepath.ToSlash(canonicalpath.Resolve(throughAlias)) {
 		t.Fatalf("external alias write detail = %#v, ok=%v", change, ok)
 	}
@@ -271,7 +272,7 @@ func TestWorkspaceScopeAcceptsAbsoluteInsideAndRejectsExternalPaths(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	change, ok := FileChangeMetaFromDetail(write.Details[0])
+	change, ok := agent.FileChangeFromDetail(write.Details[0])
 	if !ok || change.Path != "created.txt" {
 		t.Fatalf("absolute in-workspace write detail = %#v, ok=%v", change, ok)
 	}
@@ -451,13 +452,13 @@ func TestEditAndWriteUseHashesAndAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^updated\nsha256: [0-9a-f]{64}$`).MatchString(editOutput.Content) {
+	if !regexp.MustCompile(`^operation: edited\nsha256: [0-9a-f]{64}\n$`).MatchString(editOutput.Content) {
 		t.Fatalf("edit result = %q", editOutput.Content)
 	}
 	if len(editOutput.Details) != 1 {
 		t.Fatalf("edit details = %#v", editOutput.Details)
 	}
-	editChange, ok := FileChangeMetaFromDetail(editOutput.Details[0])
+	editChange, ok := agent.FileChangeFromDetail(editOutput.Details[0])
 	if !ok || editChange.Path != "note.txt" || editChange.Operation != "edited" || editChange.Additions != 1 || editChange.Deletions != 1 {
 		t.Fatalf("edit change = %#v, ok=%v", editChange, ok)
 	}
@@ -468,13 +469,13 @@ func TestEditAndWriteUseHashesAndAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(writeOutput.Content, "created\nsha256: ") {
+	if !regexp.MustCompile(`^operation: created\nsha256: [0-9a-f]{64}\n$`).MatchString(writeOutput.Content) {
 		t.Fatalf("write result = %q", writeOutput.Content)
 	}
 	if len(writeOutput.Details) != 1 {
 		t.Fatalf("write details = %#v", writeOutput.Details)
 	}
-	writeChange, ok := FileChangeMetaFromDetail(writeOutput.Details[0])
+	writeChange, ok := agent.FileChangeFromDetail(writeOutput.Details[0])
 	if !ok || writeChange.Path != "new/nested.txt" || writeChange.Operation != "created" || writeChange.Additions != 1 || writeChange.Deletions != 0 {
 		t.Fatalf("write change = %#v, ok=%v", writeChange, ok)
 	}

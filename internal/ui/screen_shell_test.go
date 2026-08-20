@@ -2,23 +2,21 @@ package ui
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
-	workspacetools "github.com/levmv/skot/tools"
 )
 
-func processDetailForTest(t *testing.T, result workspacetools.ProcessResult) agent.Detail {
+func processDetailForTest(t *testing.T, result agent.ProcessResult) agent.Detail {
 	t.Helper()
-	data, err := json.Marshal(result)
+	detail, err := agent.NewDetail(agent.ProcessResultDetailKind, result)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return agent.Detail{Kind: workspacetools.ProcessResultDetailKind, Data: data}
+	return detail
 }
 
 func TestShellEscapeParsing(t *testing.T) {
@@ -66,8 +64,8 @@ func TestPrivateShellUsesPrivateRuntimeMethod(t *testing.T) {
 func TestShellResultRendersStatusAndOutput(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.startShell("printf hello", false)
-	result := workspacetools.ProcessResult{
-		Status: workspacetools.ProcessCompleted, DurationMillis: 1250, OutputBytes: 5, UserInitiated: true,
+	result := agent.ProcessResult{
+		Status: agent.ProcessCompleted, DurationMillis: 1250, OutputBytes: 5, UserInitiated: true,
 	}
 	zero := 0
 	result.ExitCode = &zero
@@ -95,8 +93,8 @@ func TestShellResultRendersStatusAndOutput(t *testing.T) {
 }
 
 func TestProcessStatusReportsManagedGroupSize(t *testing.T) {
-	result := workspacetools.ProcessResult{
-		Status: workspacetools.ProcessKilled, DurationMillis: 250, ManagedProcesses: 3,
+	result := agent.ProcessResult{
+		Status: agent.ProcessKilled, DurationMillis: 250, ManagedProcesses: 3,
 	}
 	status := processStatusText(result)
 	if !strings.Contains(status, "killed") || !strings.Contains(status, "3 managed processes") {
@@ -109,8 +107,8 @@ func TestModelBashResultUsesProcessPresentation(t *testing.T) {
 	call := agent.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"go test ./..."}`}
 	model.addToolCallAt(call, time.Now())
 	zero := 0
-	result := workspacetools.ProcessResult{
-		Status: workspacetools.ProcessCompleted, ExitCode: &zero, DurationMillis: 20, OutputBytes: 2,
+	result := agent.ProcessResult{
+		Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 20, OutputBytes: 2,
 	}
 	model.finishTool(agent.ToolResult{
 		CallID:  "call",
@@ -139,8 +137,8 @@ func TestModelProcessOutputUsesBoundedHeadAndTailPreview(t *testing.T) {
 	model.finishTool(agent.ToolResult{
 		CallID:  "call",
 		Content: "status: completed\nexit_code: 0\n\n" + strings.Join(outputLines, "\n") + "\n",
-		Details: []agent.Detail{processDetailForTest(t, workspacetools.ProcessResult{
-			Status: workspacetools.ProcessCompleted, ExitCode: &zero, OutputBytes: 71,
+		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+			Status: agent.ProcessCompleted, ExitCode: &zero, OutputBytes: 71,
 		})},
 	})
 	rendered := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
@@ -180,8 +178,8 @@ func TestUserShellKeepsCompleteOutput(t *testing.T) {
 	outputLines := []string{"line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8"}
 	model.finishShell(agent.ToolResult{
 		Content: "status: completed\nexit_code: 0\n\n" + strings.Join(outputLines, "\n") + "\n",
-		Details: []agent.Detail{processDetailForTest(t, workspacetools.ProcessResult{
-			Status: workspacetools.ProcessCompleted, ExitCode: &zero, OutputBytes: 55, UserInitiated: true,
+		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+			Status: agent.ProcessCompleted, ExitCode: &zero, OutputBytes: 55, UserInitiated: true,
 		})},
 	}, nil, model.operation.startedAt.Add(time.Millisecond))
 	rendered := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
@@ -203,8 +201,8 @@ func TestFailedModelProcessFallsBackToFailureTail(t *testing.T) {
 	model.finishTool(agent.ToolResult{
 		CallID:  "call",
 		Content: "status: failed\nexit_code: 1\n",
-		Details: []agent.Detail{processDetailForTest(t, workspacetools.ProcessResult{
-			Status: workspacetools.ProcessFailed, ExitCode: &exit, FailureTail: "useful failure\nlast line",
+		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+			Status: agent.ProcessFailed, ExitCode: &exit, FailureTail: "useful failure\nlast line",
 		})},
 	})
 	rendered := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
@@ -214,10 +212,10 @@ func TestFailedModelProcessFallsBackToFailureTail(t *testing.T) {
 }
 
 func TestManagedBashStatusRefreshesFromRuntime(t *testing.T) {
-	running := workspacetools.ProcessResult{JobID: "job-1", Status: workspacetools.ProcessRunning, DurationMillis: 1000}
+	running := agent.ProcessResult{JobID: "job-1", Status: agent.ProcessRunning, DurationMillis: 1000}
 	zero := 0
-	completed := workspacetools.ProcessResult{
-		JobID: "job-1", Status: workspacetools.ProcessCompleted, ExitCode: &zero, DurationMillis: 2500, OutputBytes: 3,
+	completed := agent.ProcessResult{
+		JobID: "job-1", Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 2500, OutputBytes: 3,
 	}
 	fake := &fakeAgent{status: []agent.Detail{processDetailForTest(t, completed)}, statusFound: true}
 	model := testScreenModel(t, fake)
@@ -226,16 +224,16 @@ func TestManagedBashStatusRefreshesFromRuntime(t *testing.T) {
 	})
 	model.refreshProcessResults()
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]
-	if block.tool == nil || block.tool.process == nil || block.tool.process.Status != workspacetools.ProcessCompleted || block.tool.failed {
+	if block.tool == nil || block.tool.process == nil || block.tool.process.Status != agent.ProcessCompleted || block.tool.failed {
 		t.Fatalf("refreshed process block = %#v", block)
 	}
 }
 
 func TestManagedBashCompletionAppendsAfterBlockEnteredScrollback(t *testing.T) {
-	running := workspacetools.ProcessResult{JobID: "job-1", Status: workspacetools.ProcessRunning, DurationMillis: 1000}
+	running := agent.ProcessResult{JobID: "job-1", Status: agent.ProcessRunning, DurationMillis: 1000}
 	zero := 0
-	completed := workspacetools.ProcessResult{
-		JobID: "job-1", Status: workspacetools.ProcessCompleted, ExitCode: &zero, DurationMillis: 3000,
+	completed := agent.ProcessResult{
+		JobID: "job-1", Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 3000,
 	}
 	fake := &fakeAgent{status: []agent.Detail{processDetailForTest(t, completed)}, statusFound: true}
 	model := testScreenModel(t, fake)
@@ -255,15 +253,15 @@ func TestManagedBashCompletionAppendsAfterBlockEnteredScrollback(t *testing.T) {
 		t.Fatalf("offscreen process blocks = %#v", model.transcript.blocks)
 	}
 	completion := model.transcript.blocks[len(model.transcript.blocks)-1]
-	if completion.tool == nil || completion.tool.process == nil || completion.tool.process.Status != workspacetools.ProcessCompleted {
+	if completion.tool == nil || completion.tool.process == nil || completion.tool.process.Status != agent.ProcessCompleted {
 		t.Fatalf("appended completion = %#v", completion)
 	}
 }
 
 func TestRecordedShellHistoryCollapsesSyntheticItems(t *testing.T) {
 	zero := 0
-	result := workspacetools.ProcessResult{
-		Status: workspacetools.ProcessCompleted, ExitCode: &zero, DurationMillis: 10, OutputBytes: 2, UserInitiated: true,
+	result := agent.ProcessResult{
+		Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 10, OutputBytes: 2, UserInitiated: true,
 	}
 	fake := &fakeAgent{state: agent.State{Items: []agent.Item{
 		{Kind: agent.ItemUserText, Text: "!printf hi"},

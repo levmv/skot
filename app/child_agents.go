@@ -973,7 +973,11 @@ func (supervisor *childSupervisor) Status(id string) ([]agent.Detail, bool) {
 	defer supervisor.mu.Unlock()
 	for _, group := range supervisor.children {
 		if child, exists := group[id]; exists {
-			return snapshotDetails(child.snapshot()), true
+			detail, err := snapshotDetail(child.snapshot())
+			if err != nil {
+				return nil, false
+			}
+			return []agent.Detail{detail}, true
 		}
 	}
 	return nil, false
@@ -1083,7 +1087,11 @@ func childToolOutput(prefix string, snapshot childSnapshot) (agent.ToolOutput, e
 	if snapshot.RunID != "" {
 		content += " (" + snapshot.RunID + ")"
 	}
-	return agent.ToolOutput{Content: content, Details: snapshotDetails(snapshot)}, nil
+	detail, err := snapshotDetail(snapshot)
+	if err != nil {
+		return agent.ToolOutput{}, err
+	}
+	return agent.ToolOutput{Content: content, Details: []agent.Detail{detail}}, nil
 }
 
 func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
@@ -1119,7 +1127,11 @@ func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
 			remaining -= len(result) + 1
 		}
 		snapshot.ResultDelivered = true
-		details = append(details, snapshotDetails(snapshot)...)
+		detail, err := snapshotDetail(snapshot)
+		if err != nil {
+			return agent.ToolOutput{}, err
+		}
+		details = append(details, detail)
 	}
 	return agent.ToolOutput{Content: output.String(), Details: details}, nil
 }
@@ -1137,12 +1149,8 @@ func childResultText(status agent.RunStatus, answer, runError string) string {
 	return answer
 }
 
-func snapshotDetails(snapshot childSnapshot) []agent.Detail {
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return nil
-	}
-	return []agent.Detail{{Kind: childDetailKind, Data: data}}
+func snapshotDetail(snapshot childSnapshot) (agent.Detail, error) {
+	return agent.NewDetail(childDetailKind, snapshot)
 }
 
 func truncateUTF8(value string, maxBytes int) string {

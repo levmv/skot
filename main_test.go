@@ -1300,8 +1300,8 @@ func TestRunExecutesModelBashAndPersistsProcessDetail(t *testing.T) {
 		if item.Kind != agent.ItemToolResult || item.ToolResult == nil || len(item.ToolResult.Details) == 0 {
 			continue
 		}
-		process, ok := workspacetools.ProcessResultFromDetail(item.ToolResult.Details[0])
-		if !ok || process.Status != workspacetools.ProcessCompleted || process.UserInitiated {
+		process, ok := agent.ProcessResultFromDetail(item.ToolResult.Details[0])
+		if !ok || process.Status != agent.ProcessCompleted || process.UserInitiated {
 			t.Fatalf("process detail = %#v, ok=%v", process, ok)
 		}
 		return

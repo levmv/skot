@@ -18,6 +18,9 @@ import (
 	"github.com/levmv/skot/internal/filesearch"
 )
 
+// File-tool text is model-facing: metadata uses key/value header lines,
+// incomplete content says "truncated: true", and a blank line separates any
+// body from its headers.
 const (
 	defaultReadLines    = 200
 	maxReadLines        = 2000
@@ -55,6 +58,7 @@ func (workspace *workspace) read(ctx context.Context, raw string) (agent.ToolOut
 	var output strings.Builder
 	fmt.Fprintf(&output, "sha256: %s\n", digest)
 	if more {
+		output.WriteString("truncated: true\n")
 		fmt.Fprintf(&output, "continue: read(path=%q, offset=%d, limit=%d)\n", display, next, limit)
 	}
 	output.WriteByte('\n')
@@ -173,7 +177,7 @@ func (workspace *workspace) grep(ctx context.Context, raw string) (agent.ToolOut
 		if oversizedLines == 0 {
 			return agent.ToolOutput{Content: "no matches\n"}, nil
 		}
-		return agent.ToolOutput{Content: fmt.Sprintf("no matches\nskipped_oversized_lines: %d\n", oversizedLines)}, nil
+		return agent.ToolOutput{Content: fmt.Sprintf("skipped_oversized_lines: %d\n\nno matches\n", oversizedLines)}, nil
 	}
 	var output strings.Builder
 	fmt.Fprintf(&output, "matches: %d\n", len(lines))
@@ -369,12 +373,12 @@ func (workspace *workspace) edit(ctx context.Context, raw string) (agent.ToolOut
 	}
 	newHash := sha256.Sum256(updated)
 	change := buildFileChangeMeta(display, "edited", old, updated)
-	detail, err := fileChangeDetail(change)
+	detail, err := agent.NewDetail(agent.FileChangeDetailKind, change)
 	if err != nil {
-		return agent.ToolOutput{}, fmt.Errorf("encode file change: %w", err)
+		return agent.ToolOutput{}, err
 	}
 	return agent.ToolOutput{
-		Content: fmt.Sprintf("updated\nsha256: %x", newHash),
+		Content: fmt.Sprintf("operation: %s\nsha256: %x\n", change.Operation, newHash),
 		Details: []agent.Detail{detail},
 	}, nil
 }
@@ -424,12 +428,12 @@ func (workspace *workspace) write(ctx context.Context, raw string) (agent.ToolOu
 		operation = "replaced"
 	}
 	change := buildFileChangeMeta(target.display, operation, target.old, updated)
-	detail, err := fileChangeDetail(change)
+	detail, err := agent.NewDetail(agent.FileChangeDetailKind, change)
 	if err != nil {
-		return agent.ToolOutput{}, fmt.Errorf("encode file change: %w", err)
+		return agent.ToolOutput{}, err
 	}
 	return agent.ToolOutput{
-		Content: fmt.Sprintf("%s\nsha256: %x", operation, newHash),
+		Content: fmt.Sprintf("operation: %s\nsha256: %x\n", operation, newHash),
 		Details: []agent.Detail{detail},
 	}, nil
 }

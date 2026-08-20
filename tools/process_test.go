@@ -1754,12 +1754,12 @@ func runProcessResultContext[T any](t *testing.T, ctx context.Context, run func(
 	return result
 }
 
-func processResultForTest(t *testing.T, output agent.ToolOutput) ProcessResult {
+func processResultForTest(t *testing.T, output agent.ToolOutput) agent.ProcessResult {
 	t.Helper()
 	if len(output.Details) != 1 {
 		t.Fatalf("process details = %#v", output.Details)
 	}
-	result, ok := ProcessResultFromDetail(output.Details[0])
+	result, ok := agent.ProcessResultFromDetail(output.Details[0])
 	if !ok {
 		t.Fatalf("invalid process detail = %#v", output.Details[0])
 	}

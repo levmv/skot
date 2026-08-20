@@ -8,7 +8,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
-	workspacetools "github.com/levmv/skot/tools"
 )
 
 func (m *screenModel) startShell(command string, private bool) tea.Cmd {
@@ -55,9 +54,9 @@ func (transcript *transcriptState) finishShell(result agent.ToolResult, runErr e
 		tool.failed = runErr != nil && !errors.Is(runErr, context.Canceled)
 		tool.output = processOutputFromContent(result.Content)
 		for _, detail := range result.Details {
-			if process, ok := workspacetools.ProcessResultFromDetail(detail); ok {
+			if process, ok := agent.ProcessResultFromDetail(detail); ok {
 				tool.process = &process
-				tool.failed = process.Status != workspacetools.ProcessCompleted
+				tool.failed = process.Status != agent.ProcessCompleted
 			}
 		}
 		if tool.process == nil && strings.TrimSpace(result.Content) != "" {

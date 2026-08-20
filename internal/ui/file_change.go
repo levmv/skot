@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	workspacetools "github.com/levmv/skot/tools"
+	"github.com/levmv/skot/agent"
 )
 
-type fileChangeMeta = workspacetools.FileChangeMeta
+type fileChangeMeta = agent.FileChange
 
 func (m screenModel) renderToolDisplay(text string) string {
 	name, arguments := splitToolDisplay(text)
@@ -54,7 +54,7 @@ func (m screenModel) renderFileChangeLines(summary string, change fileChangeMeta
 	return lines
 }
 
-func (m screenModel) renderFileDiffLine(line workspacetools.FileDiffLine, numberWidth int) []string {
+func (m screenModel) renderFileDiffLine(line agent.FileDiffLine, numberWidth int) []string {
 	number := diffDisplayLineNumber(line)
 	sign := " "
 	if line.Kind == "add" {
@@ -94,7 +94,7 @@ func diffNumberWidth(change fileChangeMeta) int {
 	return width
 }
 
-func diffDisplayLineNumber(line workspacetools.FileDiffLine) int {
+func diffDisplayLineNumber(line agent.FileDiffLine) int {
 	if line.Kind == "delete" {
 		return line.OldLine
 	}

@@ -26,15 +26,15 @@ func TestCommittedProcessToolResultSuppressesDuplicateCompletion(t *testing.T) {
 	if len(started.Details) != 1 {
 		t.Fatalf("started details = %#v", started.Details)
 	}
-	running, ok := workspacetools.ProcessResultFromDetail(started.Details[0])
-	if !ok || running.JobID == "" || running.Status != workspacetools.ProcessRunning {
+	running, ok := agent.ProcessResultFromDetail(started.Details[0])
+	if !ok || running.JobID == "" || running.Status != agent.ProcessRunning {
 		t.Fatalf("started process = %#v, %v", running, ok)
 	}
 	work.ToolResultCommitted(agent.ToolResult{Details: started.Details})
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		status, ok := manager.Status(running.JobID)
-		if ok && status.Status != workspacetools.ProcessRunning {
+		if ok && status.Status != agent.ProcessRunning {
 			break
 		}
 		if time.Now().After(deadline) {

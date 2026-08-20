@@ -28,6 +28,34 @@ func TestNormalizeDetailsRejectsInvalidAndOversizedData(t *testing.T) {
 	}
 }
 
+func TestStructuredDetailVocabularyRoundTrips(t *testing.T) {
+	changeDetail, err := NewDetail(FileChangeDetailKind, FileChange{
+		Type: FileChangeDetailKind, Path: "note.txt", Operation: "edited", Additions: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, ok := FileChangeFromDetail(changeDetail)
+	if !ok || change.Path != "note.txt" || change.Operation != "edited" || change.Additions != 1 {
+		t.Fatalf("file change = %#v, ok=%v", change, ok)
+	}
+
+	processDetail, err := NewDetail(ProcessResultDetailKind, ProcessResult{
+		JobID: "job-1", Status: ProcessCompleted, OutputBytes: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, ok := ProcessResultFromDetail(processDetail)
+	if !ok || process.JobID != "job-1" || process.Status != ProcessCompleted || process.OutputBytes != 12 {
+		t.Fatalf("process result = %#v, ok=%v", process, ok)
+	}
+
+	if _, err := NewDetail("unsupported", make(chan struct{})); err == nil {
+		t.Fatal("unsupported detail payload was accepted")
+	}
+}
+
 func TestReplayRejectsInvalidJournaledDetail(t *testing.T) {
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),

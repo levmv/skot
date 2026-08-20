@@ -1,32 +1,33 @@
 package ui
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/levmv/skot/agent"
-	workspacetools "github.com/levmv/skot/tools"
 )
 
 func TestFileChangeDetailRendersFocusedDiff(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.addToolCall(agent.ToolCall{ID: "call-1", Name: "edit", RawArguments: `{"path":"note.txt"}`})
-	change := workspacetools.BuildFileChangeMeta(
-		"note.txt",
-		"edited",
-		[]byte("alpha\nbeta\n"),
-		[]byte("alpha\ngamma\n"),
-	)
-	data, err := json.Marshal(change)
+	change := agent.FileChange{
+		Type: agent.FileChangeDetailKind, Path: "note.txt", Operation: "edited",
+		Additions: 1, Deletions: 1, TotalHunks: 1,
+		Hunks: []agent.FileDiffHunk{{
+			OldStart: 1, OldLines: 2, NewStart: 1, NewLines: 2,
+			Lines: []agent.FileDiffLine{
+				{Kind: "context", OldLine: 1, NewLine: 1, Text: "alpha"},
+				{Kind: "delete", OldLine: 2, Text: "beta"},
+				{Kind: "add", NewLine: 2, Text: "gamma"},
+			},
+		}},
+	}
+	detail, err := agent.NewDetail(agent.FileChangeDetailKind, change)
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.finishTool(agent.ToolResult{CallID: "call-1", Details: []agent.Detail{{
-		Kind: workspacetools.FileChangeMetaType,
-		Data: data,
-	}}})
+	model.finishTool(agent.ToolResult{CallID: "call-1", Details: []agent.Detail{detail}})
 
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]
 	if block.tool == nil || block.tool.fileChange == nil || block.text != "edited  note.txt" {
@@ -47,15 +48,15 @@ func TestFileChangeDetailRendersFocusedDiff(t *testing.T) {
 
 func TestFileChangeSeparatesHunksWithoutMachineHeader(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	change := workspacetools.FileChangeMeta{
+	change := agent.FileChange{
 		Additions: 2,
 		Deletions: 2,
-		Hunks: []workspacetools.FileDiffHunk{
-			{Lines: []workspacetools.FileDiffLine{
+		Hunks: []agent.FileDiffHunk{
+			{Lines: []agent.FileDiffLine{
 				{Kind: "delete", OldLine: 2, Text: "old near start"},
 				{Kind: "add", NewLine: 2, Text: "new near start"},
 			}},
-			{Lines: []workspacetools.FileDiffLine{
+			{Lines: []agent.FileDiffLine{
 				{Kind: "delete", OldLine: 12, Text: "old near end"},
 				{Kind: "add", NewLine: 12, Text: "new near end"},
 			}},
@@ -80,7 +81,7 @@ func TestFileChangeSeparatesHunksWithoutMachineHeader(t *testing.T) {
 func TestFileChangeWrapUsesHangingContentIndent(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.resize(24, 24)
-	lines := model.renderFileDiffLine(workspacetools.FileDiffLine{
+	lines := model.renderFileDiffLine(agent.FileDiffLine{
 		Kind: "add", NewLine: 123, Text: "abcdefghijklmnopqrstuv",
 	}, 3)
 
@@ -102,7 +103,7 @@ func TestFileChangeStylesOnlyDiffSignsAndDeletedContent(t *testing.T) {
 	model.useStyle = true
 	model.applyTerminalTheme(true)
 
-	deleted := strings.Join(model.renderFileDiffLine(workspacetools.FileDiffLine{
+	deleted := strings.Join(model.renderFileDiffLine(agent.FileDiffLine{
 		Kind: "delete", OldLine: 7, Text: "old text",
 	}, 1), "\n")
 	if !strings.Contains(deleted, model.mutedStyle.Render("7")) ||
@@ -111,7 +112,7 @@ func TestFileChangeStylesOnlyDiffSignsAndDeletedContent(t *testing.T) {
 		t.Fatalf("deleted line styles = %q", deleted)
 	}
 
-	added := strings.Join(model.renderFileDiffLine(workspacetools.FileDiffLine{
+	added := strings.Join(model.renderFileDiffLine(agent.FileDiffLine{
 		Kind: "add", NewLine: 7, Text: "new text",
 	}, 1), "\n")
 	if !strings.Contains(added, model.mutedStyle.Render("7")) ||

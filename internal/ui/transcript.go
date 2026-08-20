@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
-	workspacetools "github.com/levmv/skot/tools"
 )
 
 type screenBlockKind uint8
@@ -241,7 +240,7 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 		tool.failed = tool.failed || failed
 		recognizedDetail := false
 		for _, detail := range result.Details {
-			if change, ok := workspacetools.FileChangeMetaFromDetail(detail); ok {
+			if change, ok := agent.FileChangeFromDetail(detail); ok {
 				recognizedDetail = true
 				tool.fileChange = &change
 				block.text = sanitizeTerminalText(strings.TrimSpace(change.Operation + "  " + change.Path))
@@ -249,12 +248,12 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 					changedPaths = appendUniquePath(changedPaths, path)
 				}
 			}
-			if process, ok := workspacetools.ProcessResultFromDetail(detail); ok {
+			if process, ok := agent.ProcessResultFromDetail(detail); ok {
 				recognizedDetail = true
 				tool.process = &process
 				tool.output = processOutputFromContent(result.Content)
 				tool.elapsed = time.Duration(process.DurationMillis) * time.Millisecond
-				tool.failed = process.Status != workspacetools.ProcessCompleted && process.Status != workspacetools.ProcessRunning
+				tool.failed = process.Status != agent.ProcessCompleted && process.Status != agent.ProcessRunning
 			}
 		}
 		if failed && !recognizedDetail && strings.TrimSpace(result.Content) != "" {

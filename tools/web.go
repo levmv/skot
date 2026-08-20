@@ -133,7 +133,7 @@ func (web *webTools) fetch(ctx context.Context, raw string) (agent.ToolOutput, e
 		content.WriteString("truncated: true\n")
 	}
 	fmt.Fprintf(&content, "\n%s", result.Text)
-	detail, err := webDetail(webFetchDetailKind, struct {
+	detail, err := agent.NewDetail(webFetchDetailKind, struct {
 		Backend   string `json:"backend"`
 		URL       string `json:"url"`
 		Truncated bool   `json:"truncated,omitempty"`
@@ -233,7 +233,7 @@ func (web *webTools) search(ctx context.Context, raw string) (agent.ToolOutput, 
 		return agent.ToolOutput{}, err
 	}
 	content := formatWebSearch(args.Query, provider, results)
-	detail, err := webDetail(webSearchDetailKind, struct {
+	detail, err := agent.NewDetail(webSearchDetailKind, struct {
 		Provider string `json:"provider"`
 		Results  int    `json:"results"`
 	}{provider, len(results)})
@@ -352,14 +352,6 @@ func lookupWebCredential(lookup WebCredentialLookup, provider string) (string, e
 	}
 	token, err := lookup(provider)
 	return strings.TrimSpace(token), err
-}
-
-func webDetail(kind string, value any) (agent.Detail, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return agent.Detail{}, fmt.Errorf("encode %s detail: %w", kind, err)
-	}
-	return agent.Detail{Kind: kind, Data: data}, nil
 }
 
 var webWhitespace = regexp.MustCompile(`\s+`)

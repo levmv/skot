@@ -7,10 +7,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/levmv/skot/agent"
-	workspacetools "github.com/levmv/skot/tools"
 )
 
-type processResultMeta = workspacetools.ProcessResult
+type processResultMeta = agent.ProcessResult
 
 const (
 	maxModelProcessPreviewLines = 6
@@ -24,7 +23,7 @@ func (m screenModel) renderProcessResultLines(block screenBlock) []string {
 	output := tool.output
 	userOwned := tool.shell != nil || result.UserInitiated
 	_, _, outputIndent, _ := toolCommandPrefix(block.text)
-	if output == "" && !userOwned && result.Status != workspacetools.ProcessCompleted && result.Status != workspacetools.ProcessRunning {
+	if output == "" && !userOwned && result.Status != agent.ProcessCompleted && result.Status != agent.ProcessRunning {
 		output = result.FailureTail
 	}
 	if userOwned {
@@ -104,7 +103,7 @@ func omittedOutputLabel(lines int) string {
 
 func processStatusText(result processResultMeta) string {
 	parts := []string{formatDuration(time.Duration(result.DurationMillis) * time.Millisecond)}
-	if result.Status == workspacetools.ProcessRunning {
+	if result.Status == agent.ProcessRunning {
 		parts = append(parts, "running")
 		if result.JobID != "" {
 			parts = append(parts, result.JobID)
@@ -112,19 +111,19 @@ func processStatusText(result processResultMeta) string {
 		return strings.Join(parts, " · ")
 	}
 	switch result.Status {
-	case workspacetools.ProcessTimedOut:
+	case agent.ProcessTimedOut:
 		parts = append(parts, "timed out")
-	case workspacetools.ProcessKilled:
+	case agent.ProcessKilled:
 		parts = append(parts, "killed")
-	case workspacetools.ProcessFailed:
+	case agent.ProcessFailed:
 		if result.ExitCode == nil {
 			parts = append(parts, "failed")
 		}
-	case workspacetools.ProcessNotStarted:
+	case agent.ProcessNotStarted:
 		parts = append(parts, "not started")
-	case workspacetools.ProcessAbandoned:
+	case agent.ProcessAbandoned:
 		parts = append(parts, "abandoned")
-	case workspacetools.ProcessUnknown:
+	case agent.ProcessUnknown:
 		parts = append(parts, "status unavailable")
 	}
 	if result.ManagedProcesses > 1 {
@@ -156,7 +155,7 @@ func (transcript *transcriptState) refreshProcessResults(status func(string) ([]
 	blockCount := len(transcript.blocks)
 	for index := range blockCount {
 		block := &transcript.blocks[index]
-		if block.tool == nil || block.tool.process == nil || block.tool.superseded || block.tool.process.Status != workspacetools.ProcessRunning || block.tool.process.JobID == "" {
+		if block.tool == nil || block.tool.process == nil || block.tool.superseded || block.tool.process.Status != agent.ProcessRunning || block.tool.process.JobID == "" {
 			continue
 		}
 		tool := block.tool
@@ -164,7 +163,7 @@ func (transcript *transcriptState) refreshProcessResults(status func(string) ([]
 		if !ok {
 			if !transcript.blockAboveViewport(index, viewportTop, viewportKnown) {
 				unknown := *tool.process
-				unknown.Status = workspacetools.ProcessUnknown
+				unknown.Status = agent.ProcessUnknown
 				unknown.FailureTail = "job state is unavailable in this Skot process"
 				transcript.markBlockDirty(index)
 				tool.process = &unknown
@@ -176,7 +175,7 @@ func (transcript *transcriptState) refreshProcessResults(status func(string) ([]
 			continue
 		}
 		for _, detail := range details {
-			result, ok := workspacetools.ProcessResultFromDetail(detail)
+			result, ok := agent.ProcessResultFromDetail(detail)
 			if !ok {
 				continue
 			}
@@ -185,12 +184,12 @@ func (transcript *transcriptState) refreshProcessResults(status func(string) ([]
 					transcript.markBlockDirty(index)
 					tool.process = &result
 					tool.elapsed = time.Duration(result.DurationMillis) * time.Millisecond
-					tool.failed = result.Status != workspacetools.ProcessCompleted && result.Status != workspacetools.ProcessRunning
+					tool.failed = result.Status != agent.ProcessCompleted && result.Status != agent.ProcessRunning
 					changed = true
 				}
 				continue
 			}
-			if result.Status == workspacetools.ProcessRunning {
+			if result.Status == agent.ProcessRunning {
 				continue
 			}
 			tool.superseded = true
@@ -203,7 +202,7 @@ func (transcript *transcriptState) refreshProcessResults(status func(string) ([]
 			copyTool.process = &result
 			copyTool.superseded = false
 			copyTool.elapsed = time.Duration(result.DurationMillis) * time.Millisecond
-			copyTool.failed = result.Status != workspacetools.ProcessCompleted
+			copyTool.failed = result.Status != agent.ProcessCompleted
 			transcript.appendBlock(copy)
 			changed = true
 		}
@@ -217,7 +216,7 @@ func (m screenModel) hasRunningProcesses() bool {
 
 func (transcript transcriptState) hasRunningProcesses() bool {
 	for _, block := range transcript.blocks {
-		if block.tool != nil && block.tool.process != nil && !block.tool.superseded && block.tool.process.Status == workspacetools.ProcessRunning && block.tool.process.JobID != "" {
+		if block.tool != nil && block.tool.process != nil && !block.tool.superseded && block.tool.process.Status == agent.ProcessRunning && block.tool.process.JobID != "" {
 			return true
 		}
 	}
@@ -233,7 +232,7 @@ func (transcript transcriptState) blockAboveViewport(index, viewportTop int, vie
 
 func (transcript transcriptState) processCompletionRepresented(jobID string) bool {
 	for _, block := range transcript.blocks {
-		if block.tool != nil && block.tool.process != nil && block.tool.process.JobID == jobID && block.tool.process.Status != workspacetools.ProcessRunning {
+		if block.tool != nil && block.tool.process != nil && block.tool.process.JobID == jobID && block.tool.process.Status != agent.ProcessRunning {
 			return true
 		}
 	}

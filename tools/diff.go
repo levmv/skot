@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"strings"
 	"unicode/utf8"
 
@@ -9,42 +8,15 @@ import (
 )
 
 const (
-	fileChangeMetaType      = "file_change"
 	diffContextLines        = 2
 	maxDiffDisplayLines     = 80
 	maxDiffDisplayLineRunes = 320
 	maxMyersDiffDistance    = 512
 )
 
-const FileChangeMetaType = fileChangeMetaType
-
-type FileChangeMeta struct {
-	Type       string         `json:"type"`
-	Path       string         `json:"path"`
-	Operation  string         `json:"operation"`
-	Additions  int            `json:"additions"`
-	Deletions  int            `json:"deletions"`
-	Hunks      []FileDiffHunk `json:"hunks,omitempty"`
-	TotalHunks int            `json:"total_hunks"`
-	Truncated  bool           `json:"truncated,omitempty"`
-}
-
-type FileDiffHunk struct {
-	OldStart int            `json:"old_start"`
-	OldLines int            `json:"old_lines"`
-	NewStart int            `json:"new_start"`
-	NewLines int            `json:"new_lines"`
-	Lines    []FileDiffLine `json:"lines"`
-}
-
-type FileDiffLine struct {
-	Kind      string `json:"kind"`
-	OldLine   int    `json:"old_line,omitempty"`
-	NewLine   int    `json:"new_line,omitempty"`
-	Text      string `json:"text"`
-	NoNewline bool   `json:"no_newline,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
+type fileChange = agent.FileChange
+type fileDiffHunk = agent.FileDiffHunk
+type fileDiffLine = agent.FileDiffLine
 
 type diffSourceLine struct {
 	text       string
@@ -63,7 +35,7 @@ type numberedDiffOp struct {
 	newLine int
 }
 
-func buildFileChangeMeta(path, operation string, old, updated []byte) FileChangeMeta {
+func buildFileChangeMeta(path, operation string, old, updated []byte) fileChange {
 	oldLines := splitDiffSourceLines(string(old))
 	newLines := splitDiffSourceLines(string(updated))
 	raw, exact := myersLineDiff(oldLines, newLines)
@@ -71,8 +43,8 @@ func buildFileChangeMeta(path, operation string, old, updated []byte) FileChange
 		raw = fallbackLineDiff(oldLines, newLines)
 	}
 	ops := numberDiffOps(raw)
-	meta := FileChangeMeta{
-		Type:      fileChangeMetaType,
+	meta := fileChange{
+		Type:      agent.FileChangeDetailKind,
 		Path:      path,
 		Operation: operation,
 	}
@@ -88,29 +60,6 @@ func buildFileChangeMeta(path, operation string, old, updated []byte) FileChange
 	meta.TotalHunks = len(hunks)
 	meta.Hunks, meta.Truncated = limitDiffHunks(hunks, maxDiffDisplayLines)
 	return meta
-}
-
-func BuildFileChangeMeta(path, operation string, old, updated []byte) FileChangeMeta {
-	return buildFileChangeMeta(path, operation, old, updated)
-}
-
-func fileChangeDetail(meta FileChangeMeta) (agent.Detail, error) {
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return agent.Detail{}, err
-	}
-	return agent.Detail{Kind: fileChangeMetaType, Data: data}, nil
-}
-
-func FileChangeMetaFromDetail(detail agent.Detail) (FileChangeMeta, bool) {
-	if detail.Kind != fileChangeMetaType || len(detail.Data) == 0 {
-		return FileChangeMeta{}, false
-	}
-	var decoded FileChangeMeta
-	if err := json.Unmarshal(detail.Data, &decoded); err != nil || decoded.Type != fileChangeMetaType {
-		return FileChangeMeta{}, false
-	}
-	return decoded, true
 }
 
 func splitDiffSourceLines(text string) []diffSourceLine {
@@ -252,7 +201,7 @@ func numberDiffOps(raw []rawDiffOp) []numberedDiffOp {
 	return ops
 }
 
-func buildDiffHunks(ops []numberedDiffOp) []FileDiffHunk {
+func buildDiffHunks(ops []numberedDiffOp) []fileDiffHunk {
 	var changes []int
 	for index, op := range ops {
 		if op.kind != ' ' {
@@ -262,7 +211,7 @@ func buildDiffHunks(ops []numberedDiffOp) []FileDiffHunk {
 	if len(changes) == 0 {
 		return nil
 	}
-	var hunks []FileDiffHunk
+	var hunks []fileDiffHunk
 	for changeIndex := 0; changeIndex < len(changes); {
 		first := changes[changeIndex]
 		last := first
@@ -282,7 +231,7 @@ func buildDiffHunks(ops []numberedDiffOp) []FileDiffHunk {
 	return hunks
 }
 
-func makeDiffHunk(ops []numberedDiffOp, start, end int) FileDiffHunk {
+func makeDiffHunk(ops []numberedDiffOp, start, end int) fileDiffHunk {
 	oldCursor, newCursor := 1, 1
 	for _, op := range ops[:start] {
 		if op.kind != '+' {
@@ -292,7 +241,7 @@ func makeDiffHunk(ops []numberedDiffOp, start, end int) FileDiffHunk {
 			newCursor++
 		}
 	}
-	hunk := FileDiffHunk{OldStart: oldCursor, NewStart: newCursor}
+	hunk := fileDiffHunk{OldStart: oldCursor, NewStart: newCursor}
 	for _, op := range ops[start:end] {
 		if op.kind != '+' {
 			hunk.OldLines++
@@ -307,7 +256,7 @@ func makeDiffHunk(ops []numberedDiffOp, start, end int) FileDiffHunk {
 		} else if op.kind == '-' {
 			kind = "delete"
 		}
-		hunk.Lines = append(hunk.Lines, FileDiffLine{
+		hunk.Lines = append(hunk.Lines, fileDiffLine{
 			Kind:      kind,
 			OldLine:   op.oldLine,
 			NewLine:   op.newLine,
@@ -334,12 +283,12 @@ func truncateDiffLine(text string, limit int) (string, bool) {
 	return string(runes[:max(1, limit-1)]) + "…", true
 }
 
-func limitDiffHunks(hunks []FileDiffHunk, limit int) ([]FileDiffHunk, bool) {
+func limitDiffHunks(hunks []fileDiffHunk, limit int) ([]fileDiffHunk, bool) {
 	if limit <= 0 {
 		return nil, len(hunks) > 0
 	}
 	remaining := limit
-	limited := make([]FileDiffHunk, 0, len(hunks))
+	limited := make([]fileDiffHunk, 0, len(hunks))
 	truncated := false
 	for _, hunk := range hunks {
 		if remaining == 0 {
@@ -348,7 +297,7 @@ func limitDiffHunks(hunks []FileDiffHunk, limit int) ([]FileDiffHunk, bool) {
 		}
 		copy := hunk
 		if len(copy.Lines) > remaining {
-			copy.Lines = append([]FileDiffLine(nil), copy.Lines[:remaining]...)
+			copy.Lines = append([]fileDiffLine(nil), copy.Lines[:remaining]...)
 			truncated = true
 		}
 		for _, line := range copy.Lines {

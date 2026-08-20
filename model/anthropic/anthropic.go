@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
@@ -29,24 +28,12 @@ const (
 // be replayed verbatim during a tool turn.
 const ProviderStateContract agent.ProviderStateContract = "anthropic_messages.thinking_replay.v1"
 
-// Authorizer applies provider-owned authorization to a request. Implementations
-// may refresh credentials and must be safe for concurrent use.
-type Authorizer interface {
-	Authorize(context.Context, *http.Request) error
-}
-
-type AuthorizerFunc func(context.Context, *http.Request) error
-
-func (fn AuthorizerFunc) Authorize(ctx context.Context, request *http.Request) error {
-	return fn(ctx, request)
-}
+type Authorizer = modelhttp.Authorizer
+type AuthorizerFunc = modelhttp.AuthorizerFunc
 
 // APIKey returns the native Anthropic Messages authorizer.
 func APIKey(token string) Authorizer {
-	return AuthorizerFunc(func(_ context.Context, request *http.Request) error {
-		request.Header.Set("x-api-key", token)
-		return nil
-	})
+	return modelhttp.HeaderToken("x-api-key", token)
 }
 
 type Config struct {
@@ -141,14 +128,8 @@ func (backend *Backend) Info() agent.ModelInfo {
 		ProviderStateContract: ProviderStateContract,
 		ContextWindow:         backend.contextWindow, ContextWindowEstimated: backend.contextEstimated,
 		MaxRequestBytes: backend.maxRequestBytes, MaxCompletionBytes: backend.maxCompletionBytes,
-		Endpoint: PublicEndpoint(backend.baseURL),
+		Endpoint: modelhttp.PublicEndpoint(backend.baseURL),
 	}
-}
-
-// PublicEndpoint returns the canonical secret-free endpoint reported in model
-// diagnostics.
-func PublicEndpoint(value string) string {
-	return modelhttp.PublicEndpoint(value)
 }
 
 func (backend *Backend) backendID() string {
@@ -160,7 +141,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
 	}
-	body, err := json.Marshal(wireRequest)
+	body, err := modelhttp.MarshalRequestJSON(wireRequest)
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode Anthropic Messages request: %w", err))
 	}
@@ -190,7 +171,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return agent.ModelResponse{}, decodeHTTPError(backend.provider, backend.model, response)
+		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Anthropic Messages API", response)
 	}
 
 	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
@@ -388,11 +369,8 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 			if strings.TrimSpace(block.id) == "" || strings.TrimSpace(block.name) == "" {
 				return nil, fmt.Errorf("%s returned an incomplete tool_use block", backend.provider)
 			}
-			arguments := block.arguments.String()
-			if arguments == "" {
-				arguments = "{}"
-			}
-			if err := validateObjectJSON(arguments); err != nil {
+			arguments, err := agent.NormalizeToolArguments(block.arguments.String())
+			if err != nil {
 				return nil, fmt.Errorf("%s returned invalid arguments for tool %q: %w", backend.provider, block.name, err)
 			}
 			providerID, _ := json.Marshal(block.id)
@@ -413,32 +391,4 @@ func emitModelEvent(emit func(agent.ModelStreamEvent), kind agent.EventKind, val
 
 func (backend *Backend) callIDReferenceKind() string {
 	return backend.backendID() + ".tool_use_id"
-}
-
-func decodeHTTPError(provider, model string, response *http.Response) error {
-	body, err := io.ReadAll(io.LimitReader(response.Body, productlimits.MaxModelCompletionBytes+1))
-	if err != nil {
-		return fmt.Errorf("%s Anthropic Messages API returned HTTP %s (read body: %w)", provider, response.Status, err)
-	}
-	if len(body) > productlimits.MaxModelCompletionBytes {
-		body = body[:productlimits.MaxModelCompletionBytes]
-	}
-	var envelope struct {
-		Error *apiError `json:"error"`
-	}
-	message, errorType := "", ""
-	if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
-		message = strings.TrimSpace(envelope.Error.Message)
-		errorType = strings.TrimSpace(envelope.Error.Type)
-	}
-	if message == "" {
-		message = strings.TrimSpace(string(body))
-	}
-	if message == "" {
-		message = http.StatusText(response.StatusCode)
-	}
-	return modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
-		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
-		Message: message, Type: errorType, RetryAfter: modelhttp.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
-	})
 }

@@ -385,22 +385,8 @@ func (manager *ProcessManager) resolveProgram(name string) (string, error) {
 }
 
 func validateProgramArguments(raw string) ([]byte, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		raw = "{}"
-	}
-	var object map[string]json.RawMessage
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	if err := decoder.Decode(&object); err != nil {
-		return nil, fmt.Errorf("invalid tool arguments: %w", err)
-	}
-	if object == nil {
-		return nil, errors.New("invalid tool arguments: expected one JSON object")
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, errors.New("invalid tool arguments: multiple JSON values")
-	}
-	return []byte(raw), nil
+	normalized, err := agent.NormalizeToolArguments(raw)
+	return []byte(normalized), err
 }
 
 func takeProgramBackground(raw []byte) ([]byte, bool, error) {
@@ -417,8 +403,13 @@ func takeProgramBackground(raw []byte) ([]byte, bool, error) {
 		return nil, false, errors.New("invalid tool arguments: background must be true or false")
 	}
 	delete(fields, programBackgroundArg)
-	trimmed, err := json.Marshal(fields)
-	return trimmed, background, err
+	var trimmed bytes.Buffer
+	encoder := json.NewEncoder(&trimmed)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(fields); err != nil {
+		return nil, false, err
+	}
+	return bytes.TrimSuffix(trimmed.Bytes(), []byte{'\n'}), background, nil
 }
 
 func (manager *ProcessManager) programRunner(declaration ProgramTool, program string) func(context.Context, string) (agent.ToolOutput, error) {

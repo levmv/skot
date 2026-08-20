@@ -836,6 +836,10 @@ func TestNormalizeToolsReturnsCanonicalOwnedCatalog(t *testing.T) {
 	if normalized[0].Spec.Name != "read" || string(normalized[0].Spec.InputSchema) != `{"type":"object"}` {
 		t.Fatalf("normalized catalog aliases input: %#v", normalized)
 	}
+	input[0].Spec.InputSchema = json.RawMessage(`{"type":"string"}`)
+	if _, err := NormalizeTools(input); err == nil || !strings.Contains(err.Error(), "type object") {
+		t.Fatalf("scalar tool schema error = %v", err)
+	}
 }
 
 func TestRuntimePersistsConfiguredSessionIdentityAndWorkspace(t *testing.T) {

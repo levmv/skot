@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelhttp"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
@@ -402,13 +403,13 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 			return nil, agent.MarkInvalidRequest(missingProviderCredentialError(route.Provider, route.URI))
 		}
 	}
-	var authorizer chatcompletions.Authorizer = storedBearerAuthorizer{
+	var authorizer modelhttp.Authorizer = storedBearerAuthorizer{
 		store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
 	}
 	if route.Credentialless {
 		// Ollama ignores the token, while OpenAI-compatible clients conventionally
 		// send a non-empty placeholder.
-		authorizer = chatcompletions.BearerToken(route.Provider)
+		authorizer = modelhttp.BearerToken(route.Provider)
 	}
 	var backend agent.Model
 	var err error
@@ -428,7 +429,7 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
 		})
 	case modelAPIAnthropicMessages:
-		var apiKeyAuthorizer anthropic.Authorizer = storedAPIKeyAuthorizer{
+		var apiKeyAuthorizer modelhttp.Authorizer = storedAPIKeyAuthorizer{
 			store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
 		}
 		if route.Credentialless {

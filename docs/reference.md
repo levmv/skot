@@ -280,18 +280,18 @@ Skot loads `tools.json` from its data directory, or another file selected by
 }
 ```
 
-The executable receives one JSON argument object on stdin. Stdout becomes the
-model-facing result; non-empty stderr is captured separately and appended under
-a `stderr:` header. A configured tool is visible only when the active tool set
-names it. Skot validates the declaration at startup and resolves its executable
-when that tool set is activated.
+The executable receives one JSON object on stdin. Stdout becomes the model-facing
+result; non-empty stderr is captured separately and appended under a `stderr:`
+header. A configured tool is visible only when the active tool set names it.
+Skot validates the declaration at startup and resolves its executable when that
+tool set is activated.
 
 | Field | Meaning |
 | --- | --- |
 | `name` | Required tool name: starts with a letter and contains only letters, digits, and underscores. |
 | `description` | Required model-facing description. |
 | `command` | Required executable and fixed arguments. |
-| `parameters` | JSON Schema object for stdin arguments. Defaults to `{"type":"object"}`. |
+| `parameters` | Optional JSON Schema for the object sent to stdin. By default, any object is accepted. |
 | `timeout` | Hard timeout in seconds. Default: `600`; maximum: `3600`. |
 | `workdir` | Working directory relative to the workspace root. |
 | `env` | Environment overlay. `HOME`, `TMPDIR`, and `SK_INTERNAL_*` are reserved. |

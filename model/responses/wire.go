@@ -220,7 +220,7 @@ func (apiError *apiError) message() string {
 func (backend *Backend) buildRequest(request agent.ModelRequest) (responseRequest, error) {
 	input := make([]json.RawMessage, 0, len(request.Items)+1)
 	if request.Summary != "" {
-		message, err := marshalInputItem(inputMessage{Role: "developer", Content: "Conversation summary:\n" + request.Summary})
+		message, err := marshalInputItem(inputMessage{Role: "developer", Content: agent.ConversationSummaryPrefix + request.Summary})
 		if err != nil {
 			return responseRequest{}, err
 		}
@@ -268,6 +268,10 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 			if item.ResponseID == "" || item.ToolCall == nil || item.ToolCall.ID == "" || strings.TrimSpace(item.ToolCall.Name) == "" {
 				return responseRequest{}, fmt.Errorf("assistant item %d has an invalid tool call", index)
 			}
+			arguments, err := agent.NormalizeToolArguments(item.ToolCall.RawArguments)
+			if err != nil {
+				return responseRequest{}, fmt.Errorf("assistant item %d has invalid tool arguments: %w", index, err)
+			}
 			identity, err := backend.functionCallIdentity(*item.ToolCall, request.ProviderEpoch)
 			if err != nil {
 				return responseRequest{}, fmt.Errorf("tool call item %d: %w", index, err)
@@ -278,7 +282,7 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 			callIDs[item.ToolCall.ID] = identity.CallID
 			raw, err := marshalInputItem(functionCallItem{
 				Type: "function_call", ID: identity.ID, CallID: identity.CallID,
-				Name: item.ToolCall.Name, Arguments: item.ToolCall.RawArguments, Status: identity.Status,
+				Name: item.ToolCall.Name, Arguments: arguments, Status: identity.Status,
 			})
 			if err != nil {
 				return responseRequest{}, err
@@ -304,18 +308,15 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 		}
 	}
 
-	tools := make([]responseTool, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			return responseRequest{}, errors.New("tool name is required")
-		}
-		if !json.Valid(tool.InputSchema) {
-			return responseRequest{}, fmt.Errorf("tool %q input schema is invalid", name)
-		}
+	toolSpecs, err := agent.NormalizeToolSpecs(request.Tools)
+	if err != nil {
+		return responseRequest{}, err
+	}
+	tools := make([]responseTool, 0, len(toolSpecs))
+	for _, tool := range toolSpecs {
 		tools = append(tools, responseTool{
-			Type: "function", Name: name, Description: tool.Description,
-			Parameters: append(json.RawMessage(nil), tool.InputSchema...), Strict: false,
+			Type: "function", Name: tool.Name, Description: tool.Description,
+			Parameters: tool.InputSchema, Strict: false,
 		})
 	}
 	wireRequest := responseRequest{
@@ -371,13 +372,8 @@ func (backend *Backend) reasoningInput(item agent.Item, epoch string) (json.RawM
 
 func (backend *Backend) functionCallIdentity(call agent.ToolCall, epoch string) (functionCallIdentity, error) {
 	for _, reference := range call.ProviderReferences {
-		if reference.Kind != backend.callReferenceKind() {
+		if !reference.MatchesReplayContext(backend.callReferenceKind(), backend.backendID(), epoch) {
 			continue
-		}
-		if reference.Backend != "" || reference.Epoch != "" || epoch != "" {
-			if reference.Backend != backend.backendID() || reference.Epoch != epoch {
-				continue
-			}
 		}
 		var identity functionCallIdentity
 		if err := json.Unmarshal(reference.Data, &identity); err != nil {
@@ -457,8 +453,12 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 			if err != nil {
 				return agent.ModelResponse{}, fmt.Errorf("encode %s function call identity: %w", backend.provider, err)
 			}
+			arguments, err := agent.NormalizeToolArguments(output.Arguments)
+			if err != nil {
+				return agent.ModelResponse{}, fmt.Errorf("%s response function call item %d has invalid arguments: %w", backend.provider, index, err)
+			}
 			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{
-				Name: output.Name, RawArguments: output.Arguments,
+				Name: output.Name, RawArguments: arguments,
 				ProviderReferences: []agent.ProviderReference{{Kind: backend.callReferenceKind(), Data: identity}},
 			}})
 			hasToolCall = true

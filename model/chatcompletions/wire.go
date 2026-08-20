@@ -214,33 +214,31 @@ type apiError struct {
 }
 
 func (e *apiError) message() string {
-	if e == nil || e.Message == "" {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
 		return "unknown error"
 	}
-	return e.Message
+	return strings.TrimSpace(e.Message)
 }
 
 func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, error) {
-	// Complete can be called directly, so reapply the idempotent policy to a copy.
+	// Direct callers may supply unprojected, caller-owned items. Project a copy.
 	request.Items = backend.ProjectModelItems(append([]agent.Item(nil), request.Items...))
 	messages, err := backend.buildMessages(request)
 	if err != nil {
 		return chatRequest{}, err
 	}
-	tools := make([]chatTool, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		if tool.Name == "" {
-			return chatRequest{}, errors.New("tool name is required")
-		}
-		if !json.Valid(tool.InputSchema) {
-			return chatRequest{}, fmt.Errorf("tool %q input schema is invalid", tool.Name)
-		}
+	toolSpecs, err := agent.NormalizeToolSpecs(request.Tools)
+	if err != nil {
+		return chatRequest{}, err
+	}
+	tools := make([]chatTool, 0, len(toolSpecs))
+	for _, tool := range toolSpecs {
 		tools = append(tools, chatTool{
 			Type: "function",
 			Function: chatToolDefinition{
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  append(json.RawMessage(nil), tool.InputSchema...),
+				Parameters:  tool.InputSchema,
 			},
 		})
 	}
@@ -278,7 +276,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 		messages = append(messages, chatMessage{Role: "system", Content: request.Instructions})
 	}
 	if request.Summary != "" {
-		messages = append(messages, chatMessage{Role: "system", Content: "Conversation summary:\n" + request.Summary})
+		messages = append(messages, chatMessage{Role: "system", Content: agent.ConversationSummaryPrefix + request.Summary})
 	}
 	callIDs := make(map[string]string)
 	for index := 0; index < len(request.Items); {
@@ -311,6 +309,10 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 					if part.ToolCall == nil || part.ToolCall.ID == "" || part.ToolCall.Name == "" {
 						return nil, fmt.Errorf("assistant item %d has an invalid tool call", index)
 					}
+					arguments, err := agent.NormalizeToolArguments(part.ToolCall.RawArguments)
+					if err != nil {
+						return nil, fmt.Errorf("assistant item %d has invalid tool arguments: %w", index, err)
+					}
 					providerID := backend.providerCallID(*part.ToolCall, request.ProviderEpoch)
 					callIDs[part.ToolCall.ID] = providerID
 					message.ToolCalls = append(message.ToolCalls, wireToolCall{
@@ -318,7 +320,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 						Type: "function",
 						Function: wireFunctionCall{
 							Name:      part.ToolCall.Name,
-							Arguments: part.ToolCall.RawArguments,
+							Arguments: arguments,
 						},
 					})
 				default:
@@ -423,13 +425,8 @@ func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 
 func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string {
 	for _, reference := range call.ProviderReferences {
-		if reference.Kind != backend.callIDReferenceKind() {
+		if !reference.MatchesReplayContext(backend.callIDReferenceKind(), backend.backendID(), epoch) {
 			continue
-		}
-		if reference.Backend != "" || reference.Epoch != "" || epoch != "" {
-			if reference.Backend != backend.backendID() || reference.Epoch != epoch {
-				continue
-			}
 		}
 		var value string
 		if json.Unmarshal(reference.Data, &value) == nil && value != "" {

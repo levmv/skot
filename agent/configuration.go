@@ -150,19 +150,13 @@ func validateEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) error {
 	if snapshot.Environment.Scope.ProtectedPathCount < 0 {
 		return errors.New("configured protected path count cannot be negative")
 	}
-	seen := make(map[string]struct{}, len(snapshot.ModelContext.Tools))
-	for _, tool := range snapshot.ModelContext.Tools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			return errors.New("configured tool name is required")
-		}
-		if _, exists := seen[name]; exists {
-			return fmt.Errorf("duplicate configured tool %q", name)
-		}
-		seen[name] = struct{}{}
-		if !json.Valid(tool.InputSchema) {
-			return fmt.Errorf("configured tool %q input schema is not valid JSON", name)
-		}
+	tools, err := NormalizeToolSpecs(snapshot.ModelContext.Tools)
+	if err != nil {
+		return fmt.Errorf("configured model tools: %w", err)
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		seen[tool.Name] = struct{}{}
 	}
 	seenPrograms := make(map[string]struct{}, len(snapshot.Environment.ProgramTools))
 	for _, tool := range snapshot.Environment.ProgramTools {

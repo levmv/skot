@@ -19,8 +19,8 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 	model := &scriptedModel{steps: []modelStep{
 		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `"first"`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `"second"`}},
+				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"first"}`}},
+				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"second"}`}},
 			}}, nil
 		},
 		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
@@ -38,9 +38,15 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"string"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(_ context.Context, raw string) (ToolOutput, error) {
-			name := strings.Trim(raw, `"`)
+			var args struct {
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal([]byte(raw), &args); err != nil {
+				return ToolOutput{}, err
+			}
+			name := args.Value
 			started <- name
 			<-release[name]
 			finished <- name
@@ -186,9 +192,9 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
 		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `"before"`}},
+				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"before"}`}},
 				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "write", RawArguments: `{}`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `"after"`}},
+				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"after"}`}},
 			}}, nil
 		},
 		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
@@ -196,9 +202,15 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 		},
 	}}
 	read := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"string"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(_ context.Context, raw string) (ToolOutput, error) {
-			started <- "read:" + strings.Trim(raw, `"`)
+			var args struct {
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal([]byte(raw), &args); err != nil {
+				return ToolOutput{}, err
+			}
+			started <- "read:" + args.Value
 			return ToolOutput{Content: raw}, nil
 		},
 	}
@@ -245,7 +257,7 @@ func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
 	var peak atomic.Int32
 	calls := make([]Item, callCount)
 	for index := range calls {
-		calls[index] = Item{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: fmt.Sprintf("%d", index)}}
+		calls[index] = Item{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: fmt.Sprintf(`{"index":%d}`, index)}}
 	}
 	model := &scriptedModel{steps: []modelStep{
 		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
@@ -256,7 +268,7 @@ func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"integer"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			current := active.Add(1)
 			for previous := peak.Load(); current > previous && !peak.CompareAndSwap(previous, current); previous = peak.Load() {
@@ -296,12 +308,12 @@ func TestRuntimeCancelsAllActiveParallelSafeCalls(t *testing.T) {
 	stopped := make(chan struct{}, 2)
 	model := &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 		return ModelResponse{Items: []Item{
-			{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `"first"`}},
-			{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `"second"`}},
+			{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"first"}`}},
+			{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"second"}`}},
 		}}, nil
 	}}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"string"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
 			started <- struct{}{}
 			<-ctx.Done()

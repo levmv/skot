@@ -127,7 +127,7 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 		}
 	}
 	if state.Compaction != nil {
-		report.SummaryTokens = estimateTextTokens("Conversation summary:\n"+state.Compaction.Summary) + perMessageTokens
+		report.SummaryTokens = estimateTextTokens(ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
 	}
 	// Project pending input with its history: current-turn routes drop the
 	// previous turn's reasoning once the next user message is appended.

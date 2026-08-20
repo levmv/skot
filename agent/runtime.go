@@ -214,25 +214,23 @@ func normalizeProgramToolSnapshots(input []ProgramToolSnapshot, sanitize func(st
 }
 
 func normalizeTools(input []Tool) ([]Tool, map[string]Tool, error) {
-	toolByName := make(map[string]Tool, len(input))
 	tools := make([]Tool, len(input))
 	copy(tools, input)
+	specs := make([]ToolSpec, len(tools))
+	for index := range tools {
+		specs[index] = tools[index].Spec
+	}
+	normalizedSpecs, err := NormalizeToolSpecs(specs)
+	if err != nil {
+		return nil, nil, err
+	}
+	toolByName := make(map[string]Tool, len(tools))
 	for index, tool := range tools {
-		name := strings.TrimSpace(tool.Spec.Name)
-		if name == "" {
-			return nil, nil, errors.New("tool name is required")
-		}
+		name := normalizedSpecs[index].Name
 		if tool.Run == nil {
 			return nil, nil, fmt.Errorf("tool %q has no runner", name)
 		}
-		if !json.Valid(tool.Spec.InputSchema) {
-			return nil, nil, fmt.Errorf("tool %q input schema is not valid JSON", name)
-		}
-		tool.Spec.InputSchema = append(json.RawMessage(nil), tool.Spec.InputSchema...)
-		if _, exists := toolByName[name]; exists {
-			return nil, nil, fmt.Errorf("duplicate tool %q", name)
-		}
-		tool.Spec.Name = name
+		tool.Spec = normalizedSpecs[index]
 		tools[index] = tool
 		toolByName[name] = tool
 	}
@@ -1283,6 +1281,10 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 			if len(item.ProviderData) != 0 || item.ToolCall == nil || strings.TrimSpace(item.ToolCall.Name) == "" {
 				return ModelResponse{}, errors.New("tool call name is required")
 			}
+			arguments, err := NormalizeToolArguments(item.ToolCall.RawArguments)
+			if err != nil {
+				return ModelResponse{}, fmt.Errorf("tool call %q: %w", strings.TrimSpace(item.ToolCall.Name), err)
+			}
 			for _, reference := range item.ToolCall.ProviderReferences {
 				if strings.TrimSpace(reference.Kind) == "" || !json.Valid(reference.Data) {
 					return ModelResponse{}, errors.New("tool call provider reference is invalid")
@@ -1299,6 +1301,7 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 			}
 			item.ToolCall.ID = id
 			item.ToolCall.Name = strings.TrimSpace(item.ToolCall.Name)
+			item.ToolCall.RawArguments = arguments
 		default:
 			return ModelResponse{}, fmt.Errorf("model returned unsupported item kind %q", item.Kind)
 		}
@@ -1310,30 +1313,38 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 	return accepted, nil
 }
 
-func validateAcceptedItem(item Item) error {
+func normalizeAcceptedItem(item Item) (Item, error) {
 	switch item.Kind {
 	case ItemAssistantText:
 		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
-			return fmt.Errorf("%s item has unrelated payload", item.Kind)
+			return Item{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
 		}
 		if item.ProviderContext != nil {
-			return errors.New("assistant text item has provider context")
+			return Item{}, errors.New("assistant text item has provider context")
 		}
 	case ItemReasoning:
 		if item.ResponseID == "" || item.ProviderContext == nil || item.ProviderContext.Backend == "" || item.ProviderContext.Epoch == "" || item.ToolCall != nil || item.ToolResult != nil {
-			return errors.New("reasoning item requires provider context")
+			return Item{}, errors.New("reasoning item requires provider context")
 		}
 		if err := validateProviderData(item.ProviderData); err != nil {
-			return fmt.Errorf("reasoning item has invalid provider data: %w", err)
+			return Item{}, fmt.Errorf("reasoning item has invalid provider data: %w", err)
 		}
 	case ItemToolCall:
 		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall == nil || item.ToolCall.ID == "" || strings.TrimSpace(item.ToolCall.Name) == "" {
-			return errors.New("accepted tool call requires ID and name")
+			return Item{}, errors.New("accepted tool call requires ID and name")
 		}
+		arguments, err := NormalizeToolArguments(item.ToolCall.RawArguments)
+		if err != nil {
+			return Item{}, fmt.Errorf("accepted tool call has invalid arguments: %w", err)
+		}
+		call := cloneToolCall(*item.ToolCall)
+		call.Name = strings.TrimSpace(call.Name)
+		call.RawArguments = arguments
+		item.ToolCall = &call
 	default:
-		return fmt.Errorf("unsupported accepted item kind %q", item.Kind)
+		return Item{}, fmt.Errorf("unsupported accepted item kind %q", item.Kind)
 	}
-	return nil
+	return item, nil
 }
 
 func responseToolCalls(items []Item) []ToolCall {

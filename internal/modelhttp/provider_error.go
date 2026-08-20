@@ -3,16 +3,18 @@ package modelhttp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/levmv/skot/agent"
+	productlimits "github.com/levmv/skot/internal/limits"
 )
 
 // ProviderErrorDetails is the protocol-neutral part of an HTTP provider
-// failure. Adapters remain responsible for decoding their wire envelope.
+// failure.
 type ProviderErrorDetails struct {
 	Provider   string
 	Model      string
@@ -22,6 +24,44 @@ type ProviderErrorDetails struct {
 	Code       string
 	Type       string
 	RetryAfter time.Duration
+}
+
+// DecodeProviderError reads the common error envelope used by Skot's HTTP model
+// adapters. A structured message wins; an unrecognized bounded body is the
+// fallback, while an empty recognized envelope falls back to HTTP status text.
+func DecodeProviderError(provider, model, label string, response *http.Response) error {
+	body, err := io.ReadAll(io.LimitReader(response.Body, productlimits.MaxModelCompletionBytes+1))
+	if err != nil {
+		return fmt.Errorf("%s %s returned HTTP %s (read body: %w)", provider, label, response.Status, err)
+	}
+	if len(body) > productlimits.MaxModelCompletionBytes {
+		body = body[:productlimits.MaxModelCompletionBytes]
+	}
+	var envelope struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type,omitempty"`
+			Code    any    `json:"code,omitempty"`
+		} `json:"error"`
+	}
+	message, code, errorType := "", "", ""
+	structured := json.Unmarshal(body, &envelope) == nil && envelope.Error != nil
+	if structured {
+		message = strings.TrimSpace(envelope.Error.Message)
+		code = ErrorCode(envelope.Error.Code)
+		errorType = strings.TrimSpace(envelope.Error.Type)
+	}
+	if message == "" && !structured {
+		message = strings.TrimSpace(string(body))
+	}
+	if message == "" {
+		message = http.StatusText(response.StatusCode)
+	}
+	return NewProviderError(ProviderErrorDetails{
+		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
+		Message: message, Code: code, Type: errorType,
+		RetryAfter: ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+	})
 }
 
 // UnsupportedCompletionReasonError reports a non-retryable protocol mismatch.

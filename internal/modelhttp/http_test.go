@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+func TestMarshalRequestJSONAvoidsHTMLEscapingAndTrailingNewline(t *testing.T) {
+	body, err := MarshalRequestJSON(struct {
+		Text string `json:"text"`
+	}{Text: "<p>музей & архив</p>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), `{"text":"<p>музей & архив</p>"}`; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	now := time.Date(2026, time.August, 18, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

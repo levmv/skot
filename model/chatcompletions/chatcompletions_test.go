@@ -116,9 +116,9 @@ func TestStreamDeltaDecodesEitherReasoningField(t *testing.T) {
 func TestCompleteAccumulatesToolCallDeltas(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"provider_call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"pa\"}}]},\"finish_reason\":null}]}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"provider_call_1\",\"type\":\"function\",\"function\":{\"name\":\"render\",\"arguments\":\"{\\\"mark\"}}]},\"finish_reason\":null}]}\n\n")
 		// Some compatible providers omit index on later deltas.
-		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"th\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"up\\\":\\\"<p>&</p>\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -134,7 +134,7 @@ func TestCompleteAccumulatesToolCallDeltas(t *testing.T) {
 		t.Fatalf("items = %#v", response.Items)
 	}
 	call := response.Items[0].ToolCall
-	if call.Name != "read_file" || call.RawArguments != `{"path":"README.md"}` {
+	if call.Name != "render" || call.RawArguments != `{"markup":"<p>&</p>"}` {
 		t.Fatalf("call = %#v", call)
 	}
 	if len(call.ProviderReferences) != 1 || call.ProviderReferences[0].Kind != "chat_completions.test.call_id" {
@@ -462,9 +462,6 @@ func TestModelInfoReportsSecretFreeEffectiveEndpoint(t *testing.T) {
 	info := backend.Info()
 	if info.Endpoint != "https://example.test/v1" || info.ContextWindow != 64_000 || !info.ContextWindowEstimated {
 		t.Fatalf("model info = %#v", info)
-	}
-	if endpoint := PublicEndpoint("  https://other:secret@example.test/v1/?token=secret#fragment  "); endpoint != "https://example.test/v1/" {
-		t.Fatalf("public endpoint = %q", endpoint)
 	}
 }
 

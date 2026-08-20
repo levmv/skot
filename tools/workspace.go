@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,19 +150,7 @@ func (workspace *workspace) tool(name, description, schema string, parallelSafe 
 }
 
 func decodeArgs(raw string, target any) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		raw = "{}"
-	}
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("invalid tool arguments: %w", err)
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("invalid tool arguments: multiple JSON values")
-	}
-	return nil
+	return agent.DecodeToolArguments(raw, target)
 }
 
 func clampLimit(value, fallback, maximum int) int {

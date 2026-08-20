@@ -221,7 +221,8 @@ func (reducer *stateReducer) applyModelResponse(record Record) error {
 		return fmt.Errorf("model response has no user block at sequence %d", record.Sequence)
 	}
 	for _, item := range payload.Items {
-		if err := validateAcceptedItem(item); err != nil {
+		item, err = normalizeAcceptedItem(item)
+		if err != nil {
 			return fmt.Errorf("invalid model response at sequence %d: %w", record.Sequence, err)
 		}
 		if err := validateProviderOwnership(item, state.Selection); err != nil {

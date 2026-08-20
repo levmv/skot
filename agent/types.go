@@ -44,8 +44,9 @@ type ProviderData struct {
 }
 
 type ToolCall struct {
-	ID                 string              `json:"id"`
-	Name               string              `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// RawArguments is a normalized JSON object; empty provider input is {}.
 	RawArguments       string              `json:"raw_arguments"`
 	ProviderReferences []ProviderReference `json:"provider_references,omitempty"`
 }
@@ -58,6 +59,19 @@ type ProviderReference struct {
 	Backend string          `json:"backend"`
 	Epoch   string          `json:"epoch"`
 	Data    json.RawMessage `json:"data"`
+}
+
+// MatchesReplayContext reports whether a reference of kind belongs to the
+// selected backend epoch. A legacy unattributed reference matches only when
+// the selected epoch is also empty.
+func (reference ProviderReference) MatchesReplayContext(kind, backend, epoch string) bool {
+	if reference.Kind != kind {
+		return false
+	}
+	if reference.Backend == "" && reference.Epoch == "" && epoch == "" {
+		return true
+	}
+	return reference.Backend == backend && reference.Epoch == epoch
 }
 
 type ToolResult struct {
@@ -74,8 +88,9 @@ type Detail struct {
 }
 
 type ToolSpec struct {
-	Name         string          `json:"name"`
-	Description  string          `json:"description"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// InputSchema must be a JSON Schema with top-level type object.
 	InputSchema  json.RawMessage `json:"input_schema"`
 	ParallelSafe bool            `json:"parallel_safe,omitempty"`
 }
@@ -120,6 +135,9 @@ type ExternalWork interface {
 type DetachedExternalWork interface {
 	DetachedJobs(sessionID string) []string
 }
+
+// ConversationSummaryPrefix introduces compacted history to a model.
+const ConversationSummaryPrefix = "Conversation summary:\n"
 
 type ModelRequest struct {
 	SessionID     string

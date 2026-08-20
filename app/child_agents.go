@@ -326,13 +326,8 @@ func (supervisor *childSupervisor) runTool(ctx context.Context, raw string) (age
 }
 
 func decodeChildToolArgs(raw string, target *childToolArgs) error {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode agent arguments: %w", err)
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("decode agent arguments: multiple JSON values")
+	if err := agent.DecodeToolArguments(raw, target); err != nil {
+		return err
 	}
 	target.Action = strings.ToLower(strings.TrimSpace(target.Action))
 	target.ID = strings.TrimSpace(target.ID)

@@ -2,6 +2,7 @@ package modelhttp
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,6 +10,31 @@ import (
 
 	"github.com/levmv/skot/agent"
 )
+
+func TestDecodeProviderErrorFallbacks(t *testing.T) {
+	tests := []struct {
+		name, body, want, notWant string
+	}{
+		{name: "empty structured message", body: `{"error":{"message":"","type":"request_error"}}`, want: "): Bad Request", notWant: `{"error":`},
+		{name: "plain body", body: "upstream proxy failed", want: "upstream proxy failed"},
+		{name: "status text", want: "): " + http.StatusText(http.StatusBadRequest)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := &http.Response{
+				Status: "400 Bad Request", StatusCode: http.StatusBadRequest,
+				Header: http.Header{}, Body: io.NopCloser(strings.NewReader(test.body)),
+			}
+			err := DecodeProviderError("provider", "model", "API", response)
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %q, want %q", err, test.want)
+			}
+			if test.notWant != "" && strings.Contains(err.Error(), test.notWant) {
+				t.Fatalf("error = %q, do not want %q", err, test.notWant)
+			}
+		})
+	}
+}
 
 func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.T) {
 	tests := []struct {

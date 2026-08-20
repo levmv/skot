@@ -11,28 +11,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
 )
 
-type Authorizer interface {
-	Authorize(context.Context, *http.Request) error
-}
-
-type AuthorizerFunc func(context.Context, *http.Request) error
-
-func (function AuthorizerFunc) Authorize(ctx context.Context, request *http.Request) error {
-	return function(ctx, request)
-}
+type Authorizer = modelhttp.Authorizer
+type AuthorizerFunc = modelhttp.AuthorizerFunc
 
 func BearerToken(token string) Authorizer {
-	return AuthorizerFunc(func(_ context.Context, request *http.Request) error {
-		request.Header.Set("Authorization", "Bearer "+token)
-		return nil
-	})
+	return modelhttp.BearerToken(token)
 }
 
 type Config struct {
@@ -136,7 +125,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
 	}
-	body, err := json.Marshal(wireRequest)
+	body, err := modelhttp.MarshalRequestJSON(wireRequest)
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode Responses request: %w", err))
 	}
@@ -165,7 +154,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return agent.ModelResponse{}, decodeHTTPError(backend.provider, backend.model, response)
+		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Responses API", response)
 	}
 
 	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
@@ -242,34 +231,4 @@ func emitModelEvent(emit func(agent.ModelStreamEvent), kind agent.EventKind, tex
 	if emit != nil && text != "" {
 		emit(agent.ModelStreamEvent{Kind: kind, Text: text})
 	}
-}
-
-func decodeHTTPError(provider, model string, response *http.Response) error {
-	body, err := io.ReadAll(io.LimitReader(response.Body, productlimits.MaxModelCompletionBytes+1))
-	if err != nil {
-		return fmt.Errorf("%s Responses API returned HTTP %s (read body: %w)", provider, response.Status, err)
-	}
-	if len(body) > productlimits.MaxModelCompletionBytes {
-		body = body[:productlimits.MaxModelCompletionBytes]
-	}
-	var envelope struct {
-		Error *apiError `json:"error"`
-	}
-	message, code, errorType := "", "", ""
-	if json.Unmarshal(body, &envelope) == nil && envelope.Error != nil {
-		message = envelope.Error.message()
-		code = modelhttp.ErrorCode(envelope.Error.Code)
-		errorType = strings.TrimSpace(envelope.Error.Type)
-	}
-	if message == "" {
-		message = strings.TrimSpace(string(body))
-	}
-	if message == "" {
-		message = http.StatusText(response.StatusCode)
-	}
-	return modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
-		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
-		Message: message, Code: code, Type: errorType,
-		RetryAfter: modelhttp.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
-	})
 }

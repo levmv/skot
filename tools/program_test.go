@@ -137,7 +137,7 @@ func TestProgramBackgroundAutoStripsItsSyntheticArgumentAndUsesJobTool(t *testin
 		t.Fatal(err)
 	}
 	ctx := agent.WithToolSessionID(context.Background(), "session-program")
-	output, err := resolved[0].Tool.Run(ctx, `{"query":"kept","background":true}`)
+	output, err := resolved[0].Tool.Run(ctx, `{"query":"<p>&</p>","background":true}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestProgramBackgroundAutoStripsItsSyntheticArgumentAndUsesJobTool(t *testin
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		content, _ := manager.jobOutput(job, 1024)
-		if strings.Contains(string(content), `{"query":"kept"}`) {
+		if strings.Contains(string(content), `{"query":"<p>&</p>"}`) {
 			if strings.Contains(string(content), "background") {
 				t.Fatalf("synthetic argument reached program: %q", content)
 			}

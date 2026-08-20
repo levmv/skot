@@ -571,20 +571,6 @@ func TestCompleteRejectsMalformedStreamState(t *testing.T) {
 	}
 }
 
-func TestBuildRequestRejectsNonObjectToolJSON(t *testing.T) {
-	backend := newTestBackend(t, "http://example.invalid/v1")
-	for _, request := range []agent.ModelRequest{
-		{Tools: []agent.ToolSpec{{Name: "bad", InputSchema: json.RawMessage(`true`)}}},
-		{Items: []agent.Item{{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
-			ID: "call_1", Name: "bad", RawArguments: `[]`,
-		}}}},
-	} {
-		if _, err := backend.buildRequest(request); err == nil || !strings.Contains(err.Error(), "JSON object") {
-			t.Fatalf("error = %v", err)
-		}
-	}
-}
-
 func TestModelInfoReportsAnthropicIdentity(t *testing.T) {
 	backend, err := New(Config{
 		Provider: "test", Model: "display-model", APIModel: "wire-model",

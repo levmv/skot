@@ -146,18 +146,15 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesReques
 	if err != nil {
 		return messagesRequest{}, err
 	}
-	tools := make([]toolDefinition, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			return messagesRequest{}, errors.New("tool name is required")
-		}
-		if err := validateObjectJSON(string(tool.InputSchema)); err != nil {
-			return messagesRequest{}, fmt.Errorf("tool %q input schema is invalid: %w", name, err)
-		}
+	toolSpecs, err := agent.NormalizeToolSpecs(request.Tools)
+	if err != nil {
+		return messagesRequest{}, err
+	}
+	tools := make([]toolDefinition, 0, len(toolSpecs))
+	for _, tool := range toolSpecs {
 		tools = append(tools, toolDefinition{
-			Name: name, Description: tool.Description,
-			InputSchema: append(json.RawMessage(nil), tool.InputSchema...),
+			Name: tool.Name, Description: tool.Description,
+			InputSchema: tool.InputSchema,
 		})
 	}
 	system := request.Instructions
@@ -165,7 +162,7 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesReques
 		if system != "" {
 			system += "\n\n"
 		}
-		system += "Conversation summary:\n" + request.Summary
+		system += agent.ConversationSummaryPrefix + request.Summary
 	}
 	if backend.promptCache {
 		markPromptCacheBreakpoint(messages)
@@ -225,11 +222,8 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 					if part.ToolCall == nil || part.ToolCall.ID == "" || strings.TrimSpace(part.ToolCall.Name) == "" {
 						return nil, fmt.Errorf("assistant item %d has an invalid tool call", index)
 					}
-					arguments := strings.TrimSpace(part.ToolCall.RawArguments)
-					if arguments == "" {
-						arguments = "{}"
-					}
-					if err := validateObjectJSON(arguments); err != nil {
+					arguments, err := agent.NormalizeToolArguments(part.ToolCall.RawArguments)
+					if err != nil {
 						return nil, fmt.Errorf("assistant item %d has invalid tool arguments: %w", index, err)
 					}
 					providerID := backend.providerCallID(*part.ToolCall, request.ProviderEpoch)
@@ -280,13 +274,8 @@ func appendBlocks(messages []message, role string, blocks []contentBlock) []mess
 
 func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string {
 	for _, reference := range call.ProviderReferences {
-		if reference.Kind != backend.callIDReferenceKind() {
+		if !reference.MatchesReplayContext(backend.callIDReferenceKind(), backend.backendID(), epoch) {
 			continue
-		}
-		if reference.Backend != "" || reference.Epoch != "" || epoch != "" {
-			if reference.Backend != backend.backendID() || reference.Epoch != epoch {
-				continue
-			}
 		}
 		var value string
 		if json.Unmarshal(reference.Data, &value) == nil && value != "" {
@@ -333,18 +322,4 @@ func validRedactedThinkingData(data json.RawMessage) bool {
 
 func stringPointer(value string) *string {
 	return &value
-}
-
-func validateObjectJSON(value string) error {
-	if trimmed := strings.TrimSpace(value); trimmed == "" || trimmed[0] != '{' {
-		return errors.New("expected a JSON object")
-	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(value), &object); err != nil {
-		return err
-	}
-	if object == nil {
-		return errors.New("expected a JSON object")
-	}
-	return nil
 }

@@ -253,9 +253,9 @@ func compactSingleLine(value string, limit int) string {
 }
 
 func compactCommand(value string, limit int) string {
-	value = strings.ToValidUTF8(value, "�")
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")
+	value = sanitizeTerminalText(value)
 	value = strings.TrimSpace(value)
 	value = strings.ReplaceAll(value, "\n", " ↵ ")
 	value = strings.ReplaceAll(value, "\t", "⇥")

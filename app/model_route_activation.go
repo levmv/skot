@@ -51,7 +51,7 @@ func activateModelRoute(ctx context.Context, uri, effort string, overrides model
 		return route, nil
 	}
 	if lookup == nil {
-		lookup = openRouterContextWindow
+		return route, nil
 	}
 	window, lookupErr := lookup(ctx, route.APIModel)
 	if lookupErr == nil && window > 0 {

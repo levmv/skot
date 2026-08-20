@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +27,7 @@ const (
 	// same ratio without having to write multiple MiB per fault injection.
 	maxDurableTailCompactionThreshold = 8 * 1024 * 1024
 	durableTailCompactionMultiple     = 32
+	maxJobWorkerLogLimit              = defaultCommandLogLimit
 )
 
 // RunJobWorkerIfRequested handles Skot's private re-exec mode. Applications
@@ -196,7 +196,7 @@ func validateWorkerSpec(spec jobWorkerSpec) error {
 	if !filepath.IsAbs(spec.JobDir) {
 		return errors.New("invalid worker job directory")
 	}
-	if spec.LogLimit <= 0 {
+	if spec.LogLimit <= 0 || spec.LogLimit > maxJobWorkerLogLimit {
 		return errors.New("invalid worker limits")
 	}
 	if spec.Program == "" || len(spec.Args) == 0 || spec.Args[0] == "" || spec.Dir == "" {
@@ -249,15 +249,7 @@ func durableTailCompactionThreshold(limit int64) int64 {
 	if limit <= 0 {
 		return 0
 	}
-	minimum := int64(math.MaxInt64)
-	if limit <= math.MaxInt64/2 {
-		minimum = 2 * limit
-	}
-	threshold := int64(maxDurableTailCompactionThreshold)
-	if limit <= math.MaxInt64/durableTailCompactionMultiple {
-		threshold = min(threshold, durableTailCompactionMultiple*limit)
-	}
-	return max(minimum, threshold)
+	return max(2*limit, min(int64(maxDurableTailCompactionThreshold), durableTailCompactionMultiple*limit))
 }
 
 func (writer *durableTailWriter) Write(data []byte) (int, error) {

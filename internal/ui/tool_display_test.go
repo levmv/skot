@@ -71,10 +71,14 @@ func TestToolDisplayIsSanitizedBeforeTerminal(t *testing.T) {
 	}
 }
 
-func TestCompactSingleLineSanitizesTerminalControls(t *testing.T) {
+func TestCompactToolTextSanitizesTerminalControls(t *testing.T) {
 	input := "safe\x1b[31mred\x1b[0m \x1b]52;c;Y2xpcGJvYXJk\aafter\nnext"
 	if got, want := compactSingleLine(input, 80), "safered after next"; got != want {
 		t.Fatalf("compact single line = %q, want %q", got, want)
+	}
+	command := "safe\x1b[31mred\x1b[0m \x1b]52;c;Y2xpcGJvYXJk\aafter\r\nnext\rlast\targ"
+	if got, want := compactCommand(command, 80), "safered after ↵ next ↵ last⇥arg"; got != want {
+		t.Fatalf("compact command = %q, want %q", got, want)
 	}
 }
 

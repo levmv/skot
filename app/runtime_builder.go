@@ -70,10 +70,6 @@ func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtime
 	if err != nil {
 		return nil, resolvedModelRoute{}, fmt.Errorf("select tools for tool set: %w", err)
 	}
-	externalWork := builder.externalWork
-	if externalWork == nil {
-		externalWork = processExternalWork{processes: builder.processes, await: builder.awaitRequiredJobs}
-	}
 	runtime, err := agent.New(agent.Config{
 		Model:             model,
 		Journal:           params.journal,
@@ -84,7 +80,7 @@ func (builder runtimeBuilder) buildWithRoute(ctx context.Context, params runtime
 		RequestPolicy:     builder.requestPolicy,
 		MaxToolIterations: builder.maxToolIterations,
 		UserShell:         builder.processes.RunShell,
-		ExternalWork:      externalWork,
+		ExternalWork:      builder.externalWork,
 		Sanitize:          builder.sanitize,
 		Metadata: agent.ConfigurationMetadata{
 			ToolSet: builder.toolSet, Scope: builder.scope, AwaitRequiredJobs: builder.awaitRequiredJobs,

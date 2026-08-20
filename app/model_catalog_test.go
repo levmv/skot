@@ -118,6 +118,24 @@ func TestActivateOpenRouterRouteEnrichesAndPureResolutionPreservesProtocol(t *te
 	}
 }
 
+func TestActivateOpenRouterRouteWithoutLookupStaysOffline(t *testing.T) {
+	original := openRouterMetadataClient
+	requested := false
+	openRouterMetadataClient = &http.Client{Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requested = true
+		return nil, errors.New("unexpected metadata request")
+	})}
+	t.Cleanup(func() { openRouterMetadataClient = original })
+
+	route, err := activateModelRoute(context.Background(), "openrouter/example/future", "", modelRouteOverrides{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested || route.ContextWindow != unknownModelContextWindow || !route.ContextWindowEstimated {
+		t.Fatalf("offline route/requested = %#v/%t", route, requested)
+	}
+}
+
 func TestActivateOpenRouterRouteFallsBackToMatchingSavedContext(t *testing.T) {
 	offline := func(context.Context, string) (int, error) { return 0, errors.New("offline") }
 	saved := &savedModelContext{

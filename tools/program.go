@@ -56,6 +56,10 @@ type ProgramTool struct {
 	Yield        int               `json:"yield,omitempty"`
 	Detach       bool              `json:"detach,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
+
+	// inputSchema is populated by normalize and includes any synthetic arguments
+	// which are model-visible but absent from the user's declaration.
+	inputSchema json.RawMessage
 }
 
 // ProgramToolConfig is the top-level tools.json document.
@@ -141,11 +145,15 @@ func (tool *ProgramTool) normalize() error {
 			return fmt.Errorf("command argument %d contains a NUL byte", index+2)
 		}
 	}
-	parameters, err := normalizeProgramSchema(tool.Parameters)
+	if tool.Background == "" {
+		tool.Background = BackgroundNever
+	}
+	parameters, inputSchema, err := normalizeProgramSchemas(tool.Parameters, tool.Background == BackgroundAuto)
 	if err != nil {
 		return err
 	}
 	tool.Parameters = parameters
+	tool.inputSchema = inputSchema
 	if tool.Timeout < 0 {
 		return errors.New("timeout cannot be negative")
 	}
@@ -156,21 +164,8 @@ func (tool *ProgramTool) normalize() error {
 	if filepath.IsAbs(tool.Workdir) {
 		return fmt.Errorf("workdir %q must be relative to the workspace root", tool.Workdir)
 	}
-	if tool.Background == "" {
-		tool.Background = BackgroundNever
-	}
 	switch tool.Background {
-	case BackgroundNever, BackgroundAlways:
-	case BackgroundAuto:
-		var schema struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-		}
-		if err := json.Unmarshal(tool.Parameters, &schema); err != nil {
-			return fmt.Errorf("decode parameters: %w", err)
-		}
-		if _, exists := schema.Properties[programBackgroundArg]; exists {
-			return errors.New("background auto adds a background parameter and parameters already declares one")
-		}
+	case BackgroundNever, BackgroundAuto, BackgroundAlways:
 	default:
 		return fmt.Errorf("background %q must be one of never, auto, always", tool.Background)
 	}
@@ -196,34 +191,59 @@ func (tool *ProgramTool) normalize() error {
 	return nil
 }
 
-func normalizeProgramSchema(raw json.RawMessage) (json.RawMessage, error) {
+func normalizeProgramSchemas(raw json.RawMessage, addBackground bool) (json.RawMessage, json.RawMessage, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = json.RawMessage(`{"type":"object"}`)
 	}
 	var schema map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if err := decoder.Decode(&schema); err != nil {
-		return nil, fmt.Errorf("parameters must be a JSON Schema object: %w", err)
+		return nil, nil, fmt.Errorf("parameters must be a JSON Schema object: %w", err)
 	}
 	if schema == nil {
-		return nil, errors.New("parameters must be a JSON Schema object")
+		return nil, nil, errors.New("parameters must be a JSON Schema object")
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, errors.New("parameters contains multiple JSON values")
+		return nil, nil, errors.New("parameters contains multiple JSON values")
 	}
 	if kind, exists := schema["type"]; exists {
 		var name string
 		if err := json.Unmarshal(kind, &name); err != nil || name != "object" {
-			return nil, errors.New("parameters must have type object")
+			return nil, nil, errors.New("parameters must have type object")
 		}
 	} else {
 		schema["type"] = json.RawMessage(`"object"`)
 	}
-	normalized, err := json.Marshal(schema)
+	parameters, err := json.Marshal(schema)
 	if err != nil {
-		return nil, fmt.Errorf("normalize parameters: %w", err)
+		return nil, nil, fmt.Errorf("normalize parameters: %w", err)
 	}
-	return normalized, nil
+	if !addBackground {
+		return parameters, slices.Clone(parameters), nil
+	}
+
+	var properties map[string]json.RawMessage
+	if rawProperties := schema["properties"]; len(rawProperties) != 0 {
+		if err := json.Unmarshal(rawProperties, &properties); err != nil {
+			return nil, nil, fmt.Errorf("decode parameters: %w", err)
+		}
+	}
+	if _, exists := properties[programBackgroundArg]; exists {
+		return nil, nil, errors.New("background auto adds a background parameter and parameters already declares one")
+	}
+	if properties == nil {
+		properties = make(map[string]json.RawMessage)
+	}
+	properties[programBackgroundArg] = json.RawMessage(`{"type":"boolean","description":"Return a job id immediately and keep the tool running through a durable worker. Use it only when this reply does not need the result."}`)
+	schema["properties"], err = json.Marshal(properties)
+	if err != nil {
+		return nil, nil, fmt.Errorf("normalize parameter properties: %w", err)
+	}
+	inputSchema, err := json.Marshal(schema)
+	if err != nil {
+		return nil, nil, fmt.Errorf("normalize model-visible parameters: %w", err)
+	}
+	return parameters, inputSchema, nil
 }
 
 func validateProgramEnv(environment map[string]string) error {
@@ -252,25 +272,6 @@ func (tool ProgramTool) timeout() time.Duration {
 	return time.Duration(tool.Timeout) * time.Second
 }
 
-func (tool ProgramTool) schema() json.RawMessage {
-	if tool.Background != BackgroundAuto {
-		return slices.Clone(tool.Parameters)
-	}
-	var schema map[string]json.RawMessage
-	_ = json.Unmarshal(tool.Parameters, &schema)
-	var properties map[string]json.RawMessage
-	if raw := schema["properties"]; len(raw) != 0 {
-		_ = json.Unmarshal(raw, &properties)
-	}
-	if properties == nil {
-		properties = make(map[string]json.RawMessage)
-	}
-	properties[programBackgroundArg] = json.RawMessage(`{"type":"boolean","description":"Return a job id immediately and keep the tool running through a durable worker. Use it only when this reply does not need the result."}`)
-	schema["properties"], _ = json.Marshal(properties)
-	result, _ := json.Marshal(schema)
-	return result
-}
-
 // DescribeProgramTools builds catalog entries without consulting PATH or the
 // filesystem. The placeholder runners are a defensive backstop: callers must
 // replace selected entries with ResolveProgramTools results before publishing
@@ -297,7 +298,7 @@ func programAgentTool(declaration ProgramTool, run func(context.Context, string)
 		Spec: agent.ToolSpec{
 			Name:         declaration.Name,
 			Description:  declaration.Description,
-			InputSchema:  declaration.schema(),
+			InputSchema:  slices.Clone(declaration.inputSchema),
 			ParallelSafe: declaration.ParallelSafe,
 		},
 		Run: run,

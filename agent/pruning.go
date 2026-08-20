@@ -56,6 +56,7 @@ func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pe
 	state.ToolPruning = &payload
 	state.ToolPruningCount++
 	state.LastSequence = record.Sequence
+	state.lastRequiredSequence = record.Sequence
 	return state, prunedReport, record.Sequence, nil
 }
 

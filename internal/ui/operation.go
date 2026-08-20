@@ -26,6 +26,17 @@ type activeOperation struct {
 	events        chan tea.Msg
 	renderPending bool
 	changedPaths  []string
+	modelRetry    modelRetryState
+}
+
+type modelRetryState struct {
+	pendingFailure        string
+	pendingPartialRemoved bool
+	blockIndex            int
+	visible               bool
+	count                 int
+	lastFailure           string
+	partialRemoved        bool
 }
 
 func (operation activeOperation) isTurn() bool {

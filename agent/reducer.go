@@ -69,6 +69,9 @@ func (reducer *stateReducer) apply(record Record) error {
 		return err
 	}
 	reducer.state.LastSequence = record.Sequence
+	if !isAuxiliaryRecordKind(record.Kind) {
+		reducer.state.lastRequiredSequence = record.Sequence
+	}
 	return nil
 }
 
@@ -97,14 +100,17 @@ func (reducer *stateReducer) applyRecord(record Record) error {
 	case RecordToolResultsPruned:
 		return reducer.applyToolResultsPruned(record)
 	default:
-		if strings.HasPrefix(string(record.Kind), auxiliaryRecordKindPrefix) {
-			// This reader capability intentionally ships before any aux/ writer.
+		if isAuxiliaryRecordKind(record.Kind) {
 			// Auxiliary records are semantic leaves: ignoring one may change only
 			// LastSequence, and no required record may reference or depend on it.
 			return nil
 		}
 		return fmt.Errorf("unknown record kind %q at sequence %d", record.Kind, record.Sequence)
 	}
+}
+
+func isAuxiliaryRecordKind(kind RecordKind) bool {
+	return strings.HasPrefix(string(kind), auxiliaryRecordKindPrefix)
 }
 
 func (reducer *stateReducer) applySessionStarted(record Record) error {

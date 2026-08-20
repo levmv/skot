@@ -617,20 +617,71 @@ func TestEscapeCancelsAndRestoresQueuedInput(t *testing.T) {
 	}
 }
 
-func TestDiscardedAttemptRemovesPartialAssistant(t *testing.T) {
+func TestRetryNoticeReplacesDiscardedPartialAndSummarizesRecovery(t *testing.T) {
 	fake := &fakeAgent{}
 	model := testScreenModel(t, fake)
 	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-1"})
 	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-1", Text: "partial"})
-	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "stream failed"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-1", Text: "retrying in 1s"})
 
 	for _, block := range model.transcript.blocks {
 		if block.kind == screenBlockAssistant && strings.Contains(block.text, "partial") {
 			t.Fatalf("partial assistant block survived: %#v", block)
 		}
 	}
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "interrupted response removed" {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "retrying in 1s: stream failed (partial response removed)" {
 		t.Fatalf("status = %q", got)
+	}
+
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-2"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-2", Text: "done", Status: agent.RunCompleted})
+	if got := model.transcript.blocks[len(model.transcript.blocks)-2]; got.kind != screenBlockSystem || got.text != "model recovered after 1 retry: stream failed (partial response removed)" {
+		t.Fatalf("recovery notice = %#v", got)
+	}
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1]; got.kind != screenBlockAssistant || got.text != "done" {
+		t.Fatalf("final response = %#v", got)
+	}
+}
+
+func TestRepeatedRetryNoticesUseOneTransientBlock(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.applyAgentEvent(agent.Event{
+		Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "provider is temporarily unavailable",
+	})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-1", Text: "retrying in 1s"})
+	blocks := len(model.transcript.blocks)
+	model.applyAgentEvent(agent.Event{
+		Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-2", Text: "provider is temporarily unavailable",
+	})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-2", Text: "retrying in 2s"})
+
+	if len(model.transcript.blocks) != blocks {
+		t.Fatalf("retry blocks = %d, want %d", len(model.transcript.blocks), blocks)
+	}
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "retrying in 2s after 2 model errors: provider is temporarily unavailable" {
+		t.Fatalf("status = %q", got)
+	}
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-3"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-3", Text: "done", Status: agent.RunCompleted})
+	if got := model.transcript.blocks[len(model.transcript.blocks)-2].text; got != "model recovered after 2 retries: provider is temporarily unavailable" {
+		t.Fatalf("recovery status = %q", got)
+	}
+}
+
+func TestFinalModelFailureReplacesRetryNoticeWithOneError(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.operation.kind = operationTurn
+	initialBlocks := len(model.transcript.blocks)
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "temporarily unavailable"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-1", Text: "retrying in 1s"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-2"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-2", Text: "partial"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-2", Text: "temporarily unavailable"})
+
+	model, _ = model.update(agentDoneMsg{err: errors.New("temporarily unavailable")})
+	if len(model.transcript.blocks) != initialBlocks+1 || model.transcript.blocks[initialBlocks].kind != screenBlockError || model.transcript.blocks[initialBlocks].text != "error: temporarily unavailable (partial response removed)" {
+		t.Fatalf("final transcript = %#v", model.transcript.blocks)
 	}
 }
 

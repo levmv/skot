@@ -327,6 +327,10 @@ const (
 	RecordRunFinished       RecordKind = "run_finished"
 	RecordContextCompacted  RecordKind = "context_compacted"
 	RecordToolResultsPruned RecordKind = "tool_results_pruned"
+
+	// RecordModelAttemptFailed is observational: it preserves diagnostics for
+	// one failed provider call without affecting the replayed session state.
+	RecordModelAttemptFailed RecordKind = "aux/model_attempt_failed"
 )
 
 type Record struct {
@@ -339,6 +343,39 @@ type Record struct {
 type PendingRecord struct {
 	Kind RecordKind
 	Data json.RawMessage
+}
+
+type ModelRequestPurpose string
+
+const (
+	ModelRequestRun        ModelRequestPurpose = "run"
+	ModelRequestCompaction ModelRequestPurpose = "compaction"
+)
+
+// ModelAttemptFailedRecord preserves one failed provider call, including calls
+// recovered by a later retry. ProviderError is absent for failures without
+// structured provider metadata.
+type ModelAttemptFailedRecord struct {
+	RequestID      string                     `json:"request_id"`
+	RunID          string                     `json:"run_id,omitempty"`
+	Purpose        ModelRequestPurpose        `json:"purpose"`
+	Attempt        int                        `json:"attempt"`
+	Backend        string                     `json:"backend"`
+	Provider       string                     `json:"provider,omitempty"`
+	Model          string                     `json:"model"`
+	ProviderEpoch  string                     `json:"provider_epoch,omitempty"`
+	Error          string                     `json:"error"`
+	ErrorTruncated bool                       `json:"error_truncated,omitempty"`
+	ProviderError  *ModelAttemptProviderError `json:"provider_error,omitempty"`
+}
+
+type ModelAttemptProviderError struct {
+	StatusCode int               `json:"status_code,omitempty"`
+	Kind       ProviderErrorKind `json:"kind,omitempty"`
+	Code       string            `json:"code,omitempty"`
+	Type       string            `json:"type,omitempty"`
+	Retryable  bool              `json:"retryable"`
+	RetryAfter string            `json:"retry_after,omitempty"`
 }
 
 type Journal interface {

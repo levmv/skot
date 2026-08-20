@@ -462,21 +462,14 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	}
 }
 
-func TestIncompleteStopReasonsCoverTheNormalizedAdapterSet(t *testing.T) {
-	for _, reason := range []string{
-		"refusal", "pause_turn", "model_context_window_exceeded",
-		// A Responses answer may report an incomplete status with no documented
-		// cause, and DeepSeek reports its own inability to finish.
-		"incomplete", "insufficient_system_resource",
-	} {
-		if !IsIncompleteStopReason(reason) {
-			t.Errorf("stop reason %q is not incomplete", reason)
-		}
-	}
+func TestRuntimeOwnedStopReasonsHaveExpectedCompletionClassification(t *testing.T) {
 	for _, reason := range []string{"stop", "tool_calls"} {
 		if IsIncompleteStopReason(reason) {
 			t.Errorf("stop reason %q is incomplete", reason)
 		}
+	}
+	if !IsIncompleteStopReason(StopReasonOutputLimit) {
+		t.Errorf("stop reason %q is not incomplete", StopReasonOutputLimit)
 	}
 }
 
@@ -560,6 +553,67 @@ func TestRuntimeRetriesWithinFreshLogicalRequestBudget(t *testing.T) {
 	}
 	if attempts != 2 || idleTimeout != 7*time.Millisecond || !hasEvent(events, EventModelRetryScheduled) {
 		t.Fatalf("attempts/idle/events = %d / %s / %#v", attempts, idleTimeout, events)
+	}
+}
+
+func TestRuntimeJournalsBoundedFailedAttemptDiagnostics(t *testing.T) {
+	const secret = "provider-secret"
+	journal := &memoryJournal{}
+	attempts := 0
+	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+		attempts++
+		if attempts <= 2 {
+			return ModelResponse{}, &ProviderError{
+				Cause:      MarkProviderFailure(errors.New("temporarily unavailable: " + secret + strings.Repeat("x", maxModelAttemptErrorBytes))),
+				StatusCode: 503,
+				Kind:       ProviderErrorUnavailable,
+				Code:       "code-" + secret,
+				Type:       "service_error",
+				Retryable:  true,
+				RetryAfter: time.Millisecond,
+			}
+		}
+		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+	})
+	runtime := newTestRuntime(t, Config{
+		Model: model, Journal: journal,
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 3, BaseDelay: time.Millisecond},
+		Sanitize: func(text string) string {
+			return strings.ReplaceAll(text, secret, "[redacted]")
+		},
+	})
+	result, err := runtime.Run(context.Background(), "task", nil)
+	if err != nil || result.Answer != "done" {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	records := journal.snapshot()
+	if count := countRecordKind(records, RecordModelAttemptFailed); count != 2 {
+		t.Fatalf("failed-attempt records = %d, want 2", count)
+	}
+	var diagnostics []ModelAttemptFailedRecord
+	for _, record := range records {
+		if record.Kind == RecordModelAttemptFailed {
+			diagnostic, decodeErr := decodeRecord[ModelAttemptFailedRecord](record)
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			diagnostics = append(diagnostics, diagnostic)
+		}
+	}
+	for index, diagnostic := range diagnostics {
+		if diagnostic.RequestID == "" || diagnostic.RequestID != diagnostics[0].RequestID || diagnostic.RunID != result.RunID ||
+			diagnostic.Purpose != ModelRequestRun || diagnostic.Attempt != index+1 || diagnostic.Backend != "test" ||
+			diagnostic.Provider != "test" || diagnostic.Model != "test" || diagnostic.ProviderEpoch == "" {
+			t.Fatalf("diagnostic %d identity = %#v", index, diagnostic)
+		}
+		if !diagnostic.ErrorTruncated || len(diagnostic.Error) > maxModelAttemptErrorBytes || strings.Contains(diagnostic.Error, secret) {
+			t.Fatalf("bounded diagnostic error = %d bytes / %q", len(diagnostic.Error), diagnostic.Error)
+		}
+		providerErr := diagnostic.ProviderError
+		if providerErr == nil || providerErr.StatusCode != 503 || providerErr.Kind != ProviderErrorUnavailable ||
+			providerErr.Code != "code-[redacted]" || providerErr.Type != "service_error" || !providerErr.Retryable || providerErr.RetryAfter != time.Millisecond.String() {
+			t.Fatalf("provider diagnostic = %#v", providerErr)
+		}
 	}
 }
 
@@ -1174,6 +1228,69 @@ func TestRuntimeCancellationIsDurable(t *testing.T) {
 	}
 }
 
+func TestRuntimeCancellationDuringDeliveryIsDurable(t *testing.T) {
+	tests := []struct {
+		name             string
+		cancelKind       RecordKind
+		cancelOccurrence int
+		queuedInput      string
+		boundaryEvent    *BoundaryEvent
+	}{
+		{name: "queued input", cancelKind: RecordRunInputAdded, cancelOccurrence: 2, queuedInput: "queued"},
+		{name: "boundary event", cancelKind: RecordBoundaryEvent, cancelOccurrence: 1, boundaryEvent: &BoundaryEvent{
+			JobID: "job-cancel", Content: "background job completed",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			journal := &cancellingJournal{
+				memoryJournal: &memoryJournal{},
+				cancel:        cancel,
+				cancelKind:    test.cancelKind,
+				remaining:     test.cancelOccurrence,
+			}
+			modelCalled := false
+			config := Config{
+				Journal: journal,
+				Model: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+					modelCalled = true
+					return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "unexpected"}}, StopReason: "stop"}, nil
+				}),
+			}
+			if test.boundaryEvent != nil {
+				event := *test.boundaryEvent
+				config.ExternalWork = externalWorkFuncs{pending: func(string) []BoundaryEvent {
+					return []BoundaryEvent{event}
+				}}
+			}
+			runtime := newTestRuntime(t, config)
+			if test.queuedInput != "" {
+				if err := runtime.QueueInput(test.queuedInput); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			result, err := runtime.Run(ctx, "start", nil)
+			if !errors.Is(err, context.Canceled) || result.Status != RunCancelled {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if modelCalled {
+				t.Fatal("model was called after delivery cancellation")
+			}
+			records := journal.snapshot()
+			finished, decodeErr := decodeRecord[RunFinishedRecord](records[len(records)-1])
+			if decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if finished.Status != RunCancelled {
+				t.Fatalf("finished = %#v", finished)
+			}
+		})
+	}
+}
+
 func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T) {
 	journal := &memoryJournal{}
 	toolStarted := make(chan struct{})
@@ -1326,6 +1443,23 @@ type failingJournal struct {
 	failMu    sync.Mutex
 	failKind  RecordKind
 	remaining int
+}
+
+type cancellingJournal struct {
+	*memoryJournal
+	cancel     context.CancelFunc
+	cancelKind RecordKind
+	remaining  int
+}
+
+func (journal *cancellingJournal) Append(ctx context.Context, pending PendingRecord) (Record, error) {
+	if pending.Kind == journal.cancelKind {
+		journal.remaining--
+		if journal.remaining == 0 {
+			journal.cancel()
+		}
+	}
+	return journal.memoryJournal.Append(ctx, pending)
 }
 
 func (journal *failingJournal) Append(ctx context.Context, pending PendingRecord) (Record, error) {

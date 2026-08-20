@@ -47,6 +47,9 @@ type State struct {
 	DeliveredJobs    map[string]struct{}
 	DetachedJobs     []string
 	LastSequence     uint64
+	// lastRequiredSequence advances only for records which participate in the
+	// semantic session projection. Auxiliary diagnostics leave it unchanged.
+	lastRequiredSequence uint64
 }
 
 func (state State) hasUnfinishedWork() bool {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ModelRequestPolicy bounds one logical model request. MaxAttempts counts the
@@ -29,7 +30,9 @@ type ModelRequestPolicy struct {
 const (
 	// DefaultMaxToolIterations is an emergency fuse, not an expected working
 	// budget. It is deliberately high enough for long unattended runs.
-	DefaultMaxToolIterations = 128
+	DefaultMaxToolIterations  = 128
+	maxModelAttemptErrorBytes = 32 * 1024
+	maxModelAttemptFieldBytes = 4 * 1024
 
 	toolLimitInstructions = "Tool call limit reached. Do not call any more tools; answer with what you have, and be explicit about anything you could not verify."
 )
@@ -493,26 +496,24 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 			emitEvent(emit, Event{Sequence: queuedInput.Sequence, Kind: EventQueuedInputDelivered, RunID: runID, Text: queuedInput.Text})
 		}
 		if deliveryErr != nil {
-			return runtime.finish(ctx, live, emit, runID, "", RunFailed, deliveryErr)
+			return runtime.finishError(ctx, live, emit, runID, deliveryErr)
 		}
 		boundary, boundaryErr := runtime.deliverBoundaryEvents(ctx, live, runID, live.state.SessionID)
 		for _, event := range boundary {
 			emitEvent(emit, Event{Sequence: event.Sequence, Kind: EventBoundaryDelivered, RunID: runID, Text: event.Content})
 		}
 		if boundaryErr != nil {
-			return runtime.finish(ctx, live, emit, runID, "", RunFailed, boundaryErr)
+			return runtime.finishError(ctx, live, emit, runID, boundaryErr)
 		}
 		state, _, contextErr := runtime.prepareContext(ctx, live.state, "", emit)
 		if contextErr != nil {
-			status, contextErr := runFailure(ctx, contextErr)
-			return runtime.finish(ctx, live, emit, runID, "", status, contextErr)
+			return runtime.finishError(ctx, live, emit, runID, contextErr)
 		}
 		live = reducerFromState(state)
 		runtime.publishSessionStatus(live.state)
 		response, callErr := runtime.complete(ctx, runID, live.state, emit)
 		if callErr != nil {
-			status, callErr := runFailure(ctx, callErr)
-			return runtime.finish(ctx, live, emit, runID, "", status, callErr)
+			return runtime.finishError(ctx, live, emit, runID, callErr)
 		}
 		if ctx.Err() != nil {
 			return runtime.finish(ctx, live, emit, runID, "", RunCancelled, ctx.Err())
@@ -535,8 +536,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 			if runtime.externalWork != nil {
 				continueRun, waitErr := runtime.externalWork.Await(ctx, live.state.SessionID)
 				if waitErr != nil {
-					status, waitErr := runFailure(ctx, waitErr)
-					return runtime.finish(ctx, live, emit, runID, "", status, waitErr)
+					return runtime.finishError(ctx, live, emit, runID, waitErr)
 				}
 				if continueRun {
 					continue
@@ -793,6 +793,7 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 	defer cancel()
 	request.StreamIdleTimeout = runtime.requestPolicy.StreamIdleTimeout
 	var lastErr error
+	requestID := ""
 	for attempt := 1; runtime.attemptAllowed(attempt); attempt++ {
 		attemptID := ""
 		if emit != nil {
@@ -816,6 +817,20 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 			err = MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
 		}
 		lastErr = sanitizeError(err, runtime.sanitize)
+		if ctx.Err() == nil {
+			if requestID == "" {
+				var idErr error
+				requestID, idErr = newID("request")
+				if idErr != nil {
+					return ModelResponse{}, errors.Join(lastErr, idErr)
+				}
+			}
+			if journalErr := runtime.recordModelAttemptFailure(
+				context.WithoutCancel(ctx), requestID, runID, request.ProviderEpoch, attempt, lastErr,
+			); journalErr != nil {
+				return ModelResponse{}, errors.Join(lastErr, journalErr)
+			}
+		}
 		emitEvent(emit, Event{Kind: EventModelAttemptDiscarded, RunID: runID, AttemptID: attemptID, Text: lastErr.Error()})
 		if ctx.Err() != nil || errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrModelRequestBudget) || !runtime.retryable(err) || !runtime.attemptAllowed(attempt+1) {
 			break
@@ -835,6 +850,56 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 		}
 	}
 	return ModelResponse{}, lastErr
+}
+
+func (runtime *Runtime) recordModelAttemptFailure(
+	ctx context.Context,
+	requestID, runID, providerEpoch string,
+	attempt int,
+	cause error,
+) error {
+	purpose := ModelRequestRun
+	if runID == "" {
+		purpose = ModelRequestCompaction
+	}
+	errorText, errorTruncated := boundedModelAttemptText(cause.Error(), maxModelAttemptErrorBytes)
+	backend, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Backend), maxModelAttemptFieldBytes)
+	provider, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Provider), maxModelAttemptFieldBytes)
+	model, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Model), maxModelAttemptFieldBytes)
+	payload := ModelAttemptFailedRecord{
+		RequestID: requestID, RunID: runID, Purpose: purpose, Attempt: attempt,
+		Backend: backend, Provider: provider, Model: model, ProviderEpoch: providerEpoch,
+		Error: errorText, ErrorTruncated: errorTruncated,
+	}
+	var providerErr *ProviderError
+	if errors.As(cause, &providerErr) {
+		kind, _ := boundedModelAttemptText(runtime.sanitize(string(providerErr.Kind)), maxModelAttemptFieldBytes)
+		code, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Code), maxModelAttemptFieldBytes)
+		errorType, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Type), maxModelAttemptFieldBytes)
+		payload.ProviderError = &ModelAttemptProviderError{
+			StatusCode: providerErr.StatusCode, Kind: ProviderErrorKind(kind),
+			Code: code, Type: errorType, Retryable: providerErr.Retryable,
+			RetryAfter: durationSnapshot(providerErr.RetryAfter),
+		}
+	}
+	_, err := appendRecord(ctx, runtime.journal, RecordModelAttemptFailed, payload)
+	return err
+}
+
+func boundedModelAttemptText(value string, limit int) (string, bool) {
+	value = strings.ToValidUTF8(value, "�")
+	if limit <= 0 || len(value) <= limit {
+		return value, false
+	}
+	const marker = "\n[… truncated …]"
+	cut := limit - len(marker)
+	if cut <= 0 {
+		return strings.Repeat(".", limit), true
+	}
+	for cut > 0 && !utf8.ValidString(value[:cut]) {
+		cut--
+	}
+	return value[:cut] + marker, true
 }
 
 func (runtime *Runtime) attemptAllowed(attempt int) bool {
@@ -1043,6 +1108,11 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 
 func (runtime *Runtime) finish(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error) (RunResult, error) {
 	return runtime.finishRun(ctx, reducer, emit, runID, answer, status, cause, false)
+}
+
+func (runtime *Runtime) finishError(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID string, cause error) (RunResult, error) {
+	status, cause := runFailure(ctx, cause)
+	return runtime.finish(ctx, reducer, emit, runID, "", status, cause)
 }
 
 func runFailure(ctx context.Context, cause error) (RunStatus, error) {

@@ -24,7 +24,7 @@ var errNoCompactionBoundary = errors.New("no completed older conversation block 
 // rolling summary plus every newly covered complete conversation block.
 type compactionPlan struct {
 	SessionID              string
-	BaseSequence           uint64
+	BaseRequiredSequence   uint64
 	CoveredThroughSequence uint64
 	FirstVerbatimSequence  uint64
 	Input                  string
@@ -172,7 +172,7 @@ func planCompactionForModelBoundary(state State, keepVerbatimBlocks int) (compac
 	}
 	return compactionPlan{
 		SessionID:              state.SessionID,
-		BaseSequence:           state.LastSequence,
+		BaseRequiredSequence:   state.lastRequiredSequence,
 		CoveredThroughSequence: state.Blocks[compactedEnd-1].EndSequence,
 		FirstVerbatimSequence:  state.Blocks[compactedEnd].StartSequence,
 		Input:                  input.String(),
@@ -197,7 +197,7 @@ func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan,
 	if err != nil {
 		return ContextCompactedRecord{}, Record{}, err
 	}
-	if state.SessionID != plan.SessionID || state.LastSequence != plan.BaseSequence {
+	if state.SessionID != plan.SessionID || state.lastRequiredSequence != plan.BaseRequiredSequence {
 		return ContextCompactedRecord{}, Record{}, errors.New("session changed while compaction summary was being prepared")
 	}
 	payload := ContextCompactedRecord{

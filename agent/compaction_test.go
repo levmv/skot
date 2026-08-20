@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
@@ -386,6 +388,50 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	}
 	if _, err := planCompaction(unfinishedState, 1); err == nil || !strings.Contains(err.Error(), "unfinished") {
 		t.Fatalf("unfinished plan error = %v", err)
+	}
+}
+
+func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{
+		directModelResponse("old answer"),
+		directModelResponse("recent answer"),
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("summarizer temporarily unavailable")),
+				Kind:  ProviderErrorUnavailable, Retryable: true,
+			}
+		},
+		directModelResponse("summary"),
+	}}
+	runtime := newTestRuntime(t, Config{
+		Model: model, Journal: journal,
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 2, BaseDelay: time.Millisecond},
+	})
+	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Compact(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	records := journal.snapshot()
+	if countRecordKind(records, RecordContextCompacted) != 1 || countRecordKind(records, RecordModelAttemptFailed) != 1 {
+		t.Fatalf("compaction records = %#v", records)
+	}
+	for _, record := range records {
+		if record.Kind != RecordModelAttemptFailed {
+			continue
+		}
+		diagnostic, err := decodeRecord[ModelAttemptFailedRecord](record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diagnostic.Purpose != ModelRequestCompaction || diagnostic.RunID != "" || diagnostic.Attempt != 1 {
+			t.Fatalf("compaction diagnostic = %#v", diagnostic)
+		}
 	}
 }
 

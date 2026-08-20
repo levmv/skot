@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -65,15 +66,12 @@ func (m *screenModel) applyAgentEvent(event agent.Event) {
 	case agent.EventTextDelta:
 		m.transcript.appendAssistant(event.AttemptID, event.Text)
 	case agent.EventModelAttemptDiscarded:
-		m.transcript.discardAttempt(event.AttemptID)
-		m.addBlock(screenBlockSystem, "interrupted response removed")
+		m.operation.modelRetry.pendingPartialRemoved = m.transcript.discardAttempt(event.AttemptID)
+		m.operation.modelRetry.pendingFailure = strings.TrimSpace(event.Text)
 	case agent.EventModelRetryScheduled:
-		text := event.Text
-		if text == "" {
-			text = "retrying model request"
-		}
-		m.addBlock(screenBlockSystem, text)
+		m.showModelRetry(event.Text)
 	case agent.EventToolStarted:
+		m.finishModelRetryNotice()
 		if event.Call != nil {
 			m.addToolCallAt(*event.Call, time.Now())
 		}
@@ -82,20 +80,116 @@ func (m *screenModel) applyAgentEvent(event agent.Event) {
 			m.finishTool(*event.Result)
 		}
 	case agent.EventToolRejected:
+		m.finishModelRetryNotice()
 		if event.Call != nil && event.Result != nil {
 			m.addToolCallAt(*event.Call, time.Now())
 			m.finishTool(*event.Result)
 		}
 	case agent.EventQueuedInputDelivered:
+		m.finishModelRetryNotice()
 		m.addBlock(screenBlockUser, event.Text)
-	case agent.EventStatus, agent.EventBoundaryDelivered, agent.EventContextCompacted, agent.EventToolResultsPruned:
+	case agent.EventBoundaryDelivered, agent.EventContextCompacted, agent.EventToolResultsPruned:
+		m.finishModelRetryNotice()
+		m.addBlock(screenBlockSystem, event.Text)
+	case agent.EventStatus:
 		m.addBlock(screenBlockSystem, event.Text)
 	case agent.EventRunFinished:
+		if event.Status == agent.RunCompleted || event.Status == agent.RunIncomplete {
+			m.finishModelRetryNotice()
+		} else {
+			m.removeModelRetryNotice()
+		}
 		if event.ToolLimitReached {
 			m.addBlock(screenBlockSystem, "tool iteration limit reached; final answer uses completed work only")
 		}
 		m.transcript.finishAssistant(event.Text)
 	}
+}
+
+// showModelRetry keeps retry progress compact. Repeated failures update one
+// status block, which becomes a short recovery note after a successful response.
+func (m *screenModel) showModelRetry(retryText string) {
+	retry := &m.operation.modelRetry
+	retryText = strings.TrimSpace(retryText)
+	if retryText == "" {
+		retryText = "retrying model request"
+	}
+	retry.count++
+	retry.lastFailure = compactModelFailure(retry.pendingFailure)
+	retry.partialRemoved = retry.partialRemoved || retry.pendingPartialRemoved
+	if retry.count > 1 {
+		retryText += fmt.Sprintf(" after %d model errors", retry.count)
+	}
+	text := retryText
+	if retry.lastFailure != "" {
+		text += ": " + retry.lastFailure
+	}
+	if retry.pendingPartialRemoved {
+		text += " (partial response removed)"
+	}
+	text = sanitizeTerminalText(text)
+
+	index := retry.blockIndex
+	if retry.visible && index >= 0 && index < len(m.transcript.blocks) && m.transcript.blocks[index].kind == screenBlockSystem {
+		m.transcript.markBlockDirty(index)
+		m.transcript.blocks[index].text = text
+	} else {
+		m.addBlock(screenBlockSystem, text)
+		retry.blockIndex = len(m.transcript.blocks) - 1
+		retry.visible = true
+	}
+	retry.pendingFailure = ""
+	retry.pendingPartialRemoved = false
+}
+
+func compactModelFailure(text string) string {
+	const maxWidth = 160
+	text = strings.Join(strings.Fields(sanitizeTerminalText(text)), " ")
+	if visibleLen(text) <= maxWidth {
+		return text
+	}
+	return truncateANSI(text, maxWidth-1) + "…"
+}
+
+func (m *screenModel) finishModelRetryNotice() {
+	retry := &m.operation.modelRetry
+	index := retry.blockIndex
+	if !retry.visible || index < 0 || index >= len(m.transcript.blocks) || m.transcript.blocks[index].kind != screenBlockSystem {
+		m.resetModelRetryGroup()
+		return
+	}
+	text := fmt.Sprintf("model recovered after %d retries", retry.count)
+	if retry.count == 1 {
+		text = "model recovered after 1 retry"
+	}
+	if retry.lastFailure != "" {
+		text += ": " + retry.lastFailure
+	}
+	if retry.partialRemoved {
+		text += " (partial response removed)"
+	}
+	m.transcript.markBlockDirty(index)
+	m.transcript.blocks[index].text = sanitizeTerminalText(text)
+	m.resetModelRetryGroup()
+}
+
+func (m *screenModel) removeModelRetryNotice() {
+	retry := &m.operation.modelRetry
+	index := retry.blockIndex
+	if retry.visible && index >= 0 && index < len(m.transcript.blocks) && m.transcript.blocks[index].kind == screenBlockSystem {
+		m.transcript.markBlockDirty(index)
+		m.transcript.blocks = append(m.transcript.blocks[:index], m.transcript.blocks[index+1:]...)
+	}
+	m.resetModelRetryGroup()
+}
+
+func (m *screenModel) resetModelRetryGroup() {
+	retry := &m.operation.modelRetry
+	retry.blockIndex = 0
+	retry.visible = false
+	retry.count = 0
+	retry.lastFailure = ""
+	retry.partialRemoved = false
 }
 
 func (transcript *transcriptState) startAttempt(attemptID string) {
@@ -136,7 +230,7 @@ func (transcript *transcriptState) finishAssistant(text string) {
 	transcript.appendBlock(screenBlock{kind: screenBlockAssistant, text: text, attemptID: transcript.currentAttempt})
 }
 
-func (transcript *transcriptState) discardAttempt(attemptID string) {
+func (transcript *transcriptState) discardAttempt(attemptID string) bool {
 	for index := len(transcript.blocks) - 1; index >= 0; index-- {
 		block := transcript.blocks[index]
 		if block.kind != screenBlockAssistant || block.attemptID != attemptID {
@@ -144,6 +238,7 @@ func (transcript *transcriptState) discardAttempt(attemptID string) {
 		}
 		transcript.markBlockDirty(index)
 		transcript.blocks = append(transcript.blocks[:index], transcript.blocks[index+1:]...)
-		return
+		return true
 	}
+	return false
 }

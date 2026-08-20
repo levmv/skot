@@ -249,6 +249,14 @@ func TestParseResponseAcceptsDocumentedIncompleteReasonAlias(t *testing.T) {
 	}
 }
 
+func TestNormalizedIncompleteReasonsAreIncomplete(t *testing.T) {
+	for provider, normalized := range incompleteReasons {
+		if !agent.IsIncompleteStopReason(normalized) {
+			t.Errorf("incomplete reason %q normalized to %q is not incomplete", provider, normalized)
+		}
+	}
+}
+
 func TestCompleteRejectsMismatchedTerminalEventStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -503,8 +511,8 @@ func TestParseResponseKeepsIncompleteStatusWithoutDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != "incomplete" {
-		t.Fatalf("stop reason = %q", response.StopReason)
+	if response.StopReason != "incomplete" || !agent.IsIncompleteStopReason(response.StopReason) {
+		t.Fatalf("response = %#v", response)
 	}
 }
 

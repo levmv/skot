@@ -463,9 +463,19 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		return m, nil
 	case agentDoneMsg:
 		m.refreshSessionStatus()
+		partialRemoved := m.operation.modelRetry.pendingPartialRemoved
+		if msg.err == nil {
+			m.finishModelRetryNotice()
+		} else {
+			m.removeModelRetryNotice()
+		}
 		m.finishTurnChanges()
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
-			m.addBlock(screenBlockError, "error: "+msg.err.Error())
+			text := "error: " + msg.err.Error()
+			if partialRemoved {
+				text += " (partial response removed)"
+			}
+			m.addBlock(screenBlockError, text)
 		}
 		m.finishTurnDuration(time.Now())
 		m.operation.clear()

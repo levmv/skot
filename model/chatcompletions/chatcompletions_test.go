@@ -809,6 +809,15 @@ func TestNormalizeFinishReasonCollapsesKnownSynonyms(t *testing.T) {
 	}
 }
 
+func TestNormalizedFinishReasonsHaveExpectedCompletionClassification(t *testing.T) {
+	for provider, normalized := range finishReasons {
+		wantIncomplete := normalized != "stop" && normalized != "tool_calls"
+		if got := agent.IsIncompleteStopReason(normalized); got != wantIncomplete {
+			t.Errorf("finish reason %q normalized to %q: incomplete = %v, want %v", provider, normalized, got, wantIncomplete)
+		}
+	}
+}
+
 // A filtered or interrupted answer legitimately carries no content. Rejecting
 // it would turn a deliberate incomplete result into a retried request failure.
 func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {

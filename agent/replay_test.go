@@ -39,6 +39,9 @@ func TestReplayIgnoresAuxiliaryRecordExceptForSequence(t *testing.T) {
 	if !reflect.DeepEqual(state, want) {
 		t.Fatalf("state after auxiliary record = %#v, want %#v", state, want)
 	}
+	if state.lastRequiredSequence != 1 {
+		t.Fatalf("last required sequence = %d, want 1", state.lastRequiredSequence)
+	}
 }
 
 func TestReplayRejectsUnknownRequiredRecordKind(t *testing.T) {

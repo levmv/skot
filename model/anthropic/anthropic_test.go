@@ -735,3 +735,12 @@ func TestCompleteRejectsUnknownStopReason(t *testing.T) {
 		t.Fatalf("unknown stop reason error = %v / %#v", err, providerErr)
 	}
 }
+
+func TestNormalizedStopReasonsHaveExpectedCompletionClassification(t *testing.T) {
+	for provider, normalized := range stopReasons {
+		wantIncomplete := normalized != "stop" && normalized != "tool_calls"
+		if got := agent.IsIncompleteStopReason(normalized); got != wantIncomplete {
+			t.Errorf("stop reason %q normalized to %q: incomplete = %v, want %v", provider, normalized, got, wantIncomplete)
+		}
+	}
+}

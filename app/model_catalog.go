@@ -147,18 +147,29 @@ var modelCatalog = []modelSpec{
 		},
 		Compatibility: modelCompatibilitySupported,
 	},
-	// Optional reasoning controls and Chat reasoning replay stay disabled because
-	// the routes do not declare them.
 	{
 		URI: "opencode-go/grok-4.5", Name: "OpenCode Go · Grok 4.5", API: modelAPIResponses,
-		ContextWindow: 500_000, ReasoningEfforts: []string{""}, ResponsesTraits: &responsemodel.RouteTraits{},
-		Compatibility: modelCompatibilitySupported,
+		ContextWindow: 500_000, ReasoningEfforts: []string{"", "low", "medium", "high"},
+		ResponsesTraits: &responsemodel.RouteTraits{},
+		Compatibility:   modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/muse-spark-1.2-contributor", Name: "OpenCode Go · Muse Spark 1.2 Contributor", API: modelAPIResponses,
+		ContextWindow: 1_048_576, ReasoningEfforts: []string{"", "minimal", "low", "medium", "high", "xhigh"},
+		ResponsesTraits: &responsemodel.RouteTraits{},
+		Compatibility:   modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/glm-5.3", Name: "OpenCode Go · GLM-5.3", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		ReasoningEfforts: []string{"", "low", "high", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
+		},
 		Compatibility: modelCompatibilitySupported,
 	},
+	// These routes reason, but do not publish an optional effort vocabulary or
+	// a reasoning replay contract for this endpoint.
 	{
 		URI: "opencode-go/glm-5.1", Name: "OpenCode Go · GLM-5.1", ContextWindow: 202_752,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
@@ -186,7 +197,10 @@ var modelCatalog = []modelSpec{
 	},
 	{
 		URI: "opencode-go/hy3", Name: "OpenCode Go · Hy3", ContextWindow: 256_000,
-		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		ReasoningEfforts: []string{"", "none", "low", "high"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+		},
 		Compatibility: modelCompatibilitySupported,
 	},
 	{
@@ -198,13 +212,6 @@ var modelCatalog = []modelSpec{
 		URI: "opencode-go/minimax-m2.7", Name: "OpenCode Go · MiniMax M2.7", API: modelAPIAnthropicMessages,
 		ContextWindow: 204_800, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
 		Compatibility: modelCompatibilitySupported,
-	},
-	// MiniMax M2.5 remains declared so saved sessions fail explicitly instead
-	// of falling back to Chat Completions, but the provider marks it deprecated.
-	{
-		URI: "opencode-go/minimax-m2.5", Name: "OpenCode Go · MiniMax M2.5", API: modelAPIAnthropicMessages,
-		ContextWindow: 204_800, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilityUnsupported,
 	},
 	{
 		URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: modelAPIAnthropicMessages,
@@ -248,7 +255,7 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	defaults := defaultModelSpec(provider)
 	if providerDescription.requireDeclaredModel && !declared && overrides.API == "" {
 		return resolvedModelRoute{}, fmt.Errorf(
-			"model route %q has no reviewed protocol declaration; select a curated model or set -model-api explicitly",
+			"model %q is not available in Skot's current model list; choose another model or specify this model's API with -model-api",
 			strings.TrimSpace(uri),
 		)
 	}

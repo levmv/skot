@@ -44,7 +44,7 @@ func TestModelAPIUsesProviderDefaultUnlessModelOverridesIt(t *testing.T) {
 
 func TestMixedProtocolProviderDoesNotGuessUnknownModelAPI(t *testing.T) {
 	if _, err := resolveModelRoute("opencode-go/future-model", "", modelRouteOverrides{}, modelRouteEnrichment{}); err == nil ||
-		!strings.Contains(err.Error(), "no reviewed protocol declaration") || !strings.Contains(err.Error(), "-model-api") {
+		!strings.Contains(err.Error(), "not available in Skot's current model list") || !strings.Contains(err.Error(), "-model-api") {
 		t.Fatalf("unknown mixed-protocol route error = %v", err)
 	}
 	route, err := resolveModelRoute("opencode-go/future-model", "", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{})

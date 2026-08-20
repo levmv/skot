@@ -204,27 +204,32 @@ func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
 	}
 }
 
-func TestModelChoicesExposeRunnableRouteFactsAndMarkDeprecatedRoutesUnavailable(t *testing.T) {
+func TestModelChoicesExposeRunnableRouteFacts(t *testing.T) {
 	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", modelRouteOverrides{})
 	var luna *ModelChoice
+	var muse *ModelChoice
 	var minimax *ModelChoice
-	var deprecatedMiniMax *ModelChoice
 	for index := range choices {
 		choice := &choices[index]
 		if choice.URI == "opencode-go/gpt-5.6-luna" {
 			luna = choice
 		}
+		if choice.URI == "opencode-go/muse-spark-1.2-contributor" {
+			muse = choice
+		}
 		if choice.URI == "opencode-go/minimax-m3" {
 			minimax = choice
-		}
-		if choice.URI == "opencode-go/minimax-m2.5" {
-			deprecatedMiniMax = choice
 		}
 	}
 	if luna == nil || luna.Name != "OpenCode Go · GPT 5.6 Luna" || luna.Protocol != "responses" ||
 		luna.ContextWindow != 922_000 || luna.ContextWindowEstimated ||
 		!slices.Equal(luna.ReasoningEfforts, []string{"", "none", "low", "medium", "high", "xhigh", "max"}) {
 		t.Fatalf("Luna choice = %#v", luna)
+	}
+	if muse == nil || muse.Name != "OpenCode Go · Muse Spark 1.2 Contributor" || muse.Protocol != "responses" ||
+		muse.ContextWindow != 1_048_576 || muse.ContextWindowEstimated || muse.Unavailable ||
+		!slices.Equal(muse.ReasoningEfforts, []string{"", "minimal", "low", "medium", "high", "xhigh"}) {
+		t.Fatalf("Muse choice = %#v", muse)
 	}
 	glmIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == "opencode-go/glm-5.2" })
 	if glmIndex < 0 {
@@ -249,14 +254,11 @@ func TestModelChoicesExposeRunnableRouteFactsAndMarkDeprecatedRoutesUnavailable(
 		}
 	}
 	for uri, protocol := range map[string]string{
-		"opencode-go/grok-4.5":       "responses",
-		"opencode-go/glm-5.3":        "chat_completions",
 		"opencode-go/glm-5.1":        "chat_completions",
 		"opencode-go/kimi-k2.7-code": "chat_completions",
 		"opencode-go/kimi-k2.6":      "chat_completions",
 		"opencode-go/mimo-v2.5":      "chat_completions",
 		"opencode-go/mimo-v2.5-pro":  "chat_completions",
-		"opencode-go/hy3":            "chat_completions",
 	} {
 		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == uri })
 		if choiceIndex < 0 {
@@ -268,21 +270,34 @@ func TestModelChoicesExposeRunnableRouteFactsAndMarkDeprecatedRoutesUnavailable(
 			t.Fatalf("OpenCode Go choice %q = %#v", uri, choice)
 		}
 	}
+	for uri, want := range map[string]struct {
+		protocol string
+		efforts  []string
+	}{
+		"opencode-go/grok-4.5": {"responses", []string{"", "low", "medium", "high"}},
+		"opencode-go/glm-5.3":  {"chat_completions", []string{"", "low", "high", "max"}},
+		"opencode-go/hy3":      {"chat_completions", []string{"", "none", "low", "high"}},
+	} {
+		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == uri })
+		if choiceIndex < 0 {
+			t.Fatalf("OpenCode Go choice %q is missing", uri)
+		}
+		choice := choices[choiceIndex]
+		if choice.Protocol != want.protocol || choice.Unavailable || !slices.Equal(choice.ReasoningEfforts, want.efforts) {
+			t.Fatalf("OpenCode Go choice %q = %#v", uri, choice)
+		}
+	}
 	if minimax == nil || minimax.Name != "OpenCode Go · MiniMax M3" || minimax.Protocol != "anthropic_messages" ||
 		minimax.Unavailable || minimax.ContextWindow != 1_000_000 || minimax.ContextWindowEstimated ||
 		!slices.Equal(minimax.ReasoningEfforts, []string{""}) {
 		t.Fatalf("MiniMax choice = %#v", minimax)
-	}
-	if deprecatedMiniMax == nil || deprecatedMiniMax.Protocol != "anthropic_messages" ||
-		!deprecatedMiniMax.Unavailable {
-		t.Fatalf("deprecated MiniMax choice = %#v", deprecatedMiniMax)
 	}
 }
 
 func TestModelChoicesSurfaceRecentRoutesWhichNoLongerResolve(t *testing.T) {
 	choices := modelChoices(nil, "opencode-go/removed-model", modelRouteOverrides{})
 	if len(choices) == 0 || choices[0].URI != "opencode-go/removed-model" || !choices[0].Unavailable ||
-		!strings.Contains(choices[0].UnavailableReason, "no reviewed protocol declaration") {
+		!strings.Contains(choices[0].UnavailableReason, "not available in Skot's current model list") {
 		t.Fatalf("removed recent choice = %#v", choices)
 	}
 }

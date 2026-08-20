@@ -129,13 +129,13 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
+	resources := &openResources{processes: processes}
 	processes.HideModelEnvironment(credentialEnvironmentNames()...)
 	children, err := newChildSupervisor(home, settings.AgentModels, config.AgentModels)
 	if err != nil {
-		_ = processes.Close()
-		return nil, agent.MarkInvalidRequest(err)
+		return resources.fail(agent.MarkInvalidRequest(err))
 	}
-	resources := &openResources{processes: processes, children: children}
+	resources.children = children
 	catalog = append(catalog, children.tool())
 	// Derive this from platform and layout rather than the current scope so a
 	// runtime scope switch does not silently change the active tool set.
@@ -196,13 +196,12 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	currentSession := resources.session
 	journal := opened.journal
 	sessionID := opened.id
-	cleanup := resources.fail
 	if journal.TailRepaired() {
 		notices = append(notices, "repaired an incomplete journal tail; the interrupted final record was discarded")
 	}
 	sessionState, _, err := agent.Reconcile(ctx, journal)
 	if err != nil {
-		return cleanup(fmt.Errorf("reconcile session: %w", err))
+		return resources.fail(fmt.Errorf("reconcile session: %w", err))
 	}
 	runtimeSessionID := sessionID
 	var resumedState *agent.State
@@ -264,24 +263,24 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	modelInfo, backend, err := builder.resolveRestored(ctx, buildParams)
 	if err != nil {
-		return cleanup(err)
+		return resources.fail(err)
 	}
 	config.ReasoningEffort = modelInfo.ReasoningEffort
 	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort); err != nil {
-		return cleanup(agent.MarkInvalidRequest(err))
+		return resources.fail(agent.MarkInvalidRequest(err))
 	}
 	if err := children.Preload(ctx, runtimeSessionID); err != nil {
-		return cleanup(fmt.Errorf("load child agents: %w", err))
+		return resources.fail(fmt.Errorf("load child agents: %w", err))
 	}
 	builder.externalWork = applicationExternalWork{
 		processes: processExternalWork{processes: processes, await: !config.Interactive}, agents: children,
 	}
 	runtime, err := builder.newRuntime(buildParams, modelInfo, backend)
 	if err != nil {
-		return cleanup(err)
+		return resources.fail(err)
 	}
 	if err := processes.AttachSession(runtimeSessionID); err != nil {
-		return cleanup(fmt.Errorf("attach durable jobs: %w", err))
+		return resources.fail(fmt.Errorf("attach durable jobs: %w", err))
 	}
 	notices = append(notices, processes.AttachSessionNotices(runtimeSessionID)...)
 	currentSession.runtime = runtime

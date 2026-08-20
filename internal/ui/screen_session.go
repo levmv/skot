@@ -10,6 +10,7 @@ import (
 )
 
 func (m *screenModel) clearSession() {
+	noticeCount := len(m.agent.StartupNotices())
 	id, err := m.agent.ClearSession(m.ctx)
 	if err != nil {
 		m.addBlock(screenBlockError, "clear session: "+err.Error())
@@ -20,6 +21,11 @@ func (m *screenModel) clearSession() {
 	m.refreshModelChoices()
 	m.refreshSessionStatus()
 	m.addBlock(screenBlockSystem, "new session "+app.ShortSessionID(id))
+	if notices := m.agent.StartupNotices(); noticeCount < len(notices) {
+		for _, notice := range notices[noticeCount:] {
+			m.addBlock(screenBlockError, "clear warning: "+notice)
+		}
+	}
 }
 
 func (m *screenModel) openSessionPicker() {

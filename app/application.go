@@ -25,9 +25,10 @@ import (
 // resuming replaces that session as a unit. This pre-v1 API is intentionally
 // product-specific and is not yet a compatibility promise.
 //
-// Callers must serialize session replacement and model or tool reconfiguration
-// with Run and with one another. SwitchScope is the exception: it may overlap
-// an active Run and affects only subsequently started tool calls and processes.
+// Callers must serialize Close, session replacement, and model or tool
+// reconfiguration with Run and with one another. SwitchScope is the exception:
+// it may overlap an active Run and affects only subsequently started tool calls
+// and processes.
 type Application struct {
 	config applicationConfig
 
@@ -342,10 +343,6 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 		return err
 	}
 	application.mu.Lock()
-	if application.state.session == nil || application.state.session.runtime != runtime {
-		application.mu.Unlock()
-		return errors.New("runtime changed while switching tool set")
-	}
 	application.state.toolSet = toolSet
 	application.mu.Unlock()
 	return application.persistInteractivePreference("tool set", func(preferences *state.InteractiveStore) error {
@@ -705,6 +702,9 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 			return fmt.Errorf("load child agents: %w", err)
 		}
 	}
+	// AttachSession reports only failures which happen before adoption. Invalid
+	// individual jobs become notices, so child preloading is the only work which
+	// needs compensation when this call fails.
 	if err := processes.AttachSession(id); err != nil {
 		if children != nil {
 			_ = children.ReleaseParent(id)
@@ -712,31 +712,32 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		return fmt.Errorf("attach durable jobs: %w", err)
 	}
 	attachNotices := processes.AttachSessionNotices(id)
-	if err := processes.CloseSession(currentRuntimeID); err != nil {
-		if children != nil {
-			_ = children.ReleaseParent(id)
-		}
-		return fmt.Errorf("stop previous session jobs: %w", err)
-	}
-
 	application.mu.Lock()
-	if application.state.session != currentSession {
-		application.mu.Unlock()
-		if children != nil {
-			_ = children.ReleaseParent(id)
-		}
-		return errors.New("runtime changed while switching session")
-	}
 	application.state.session = nextSession
 	application.state.startupNotices = append(application.state.startupNotices, attachNotices...)
 	if children != nil {
 		children.setSessionDefaults(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), instructions, security.snapshot())
 	}
 	application.mu.Unlock()
-	if children != nil {
-		_ = children.ReleaseParent(currentRuntimeID)
+
+	var retireErr error
+	if err := processes.CloseSession(currentRuntimeID); err != nil {
+		retireErr = errors.Join(retireErr, fmt.Errorf("stop previous session jobs: %w", err))
 	}
-	_ = currentSession.close()
+	if children != nil {
+		retireErr = errors.Join(retireErr, children.ReleaseParent(currentRuntimeID))
+	}
+	retireErr = errors.Join(retireErr, currentSession.close())
+	if retireErr != nil {
+		detail := retireErr.Error()
+		if application.config.masker != nil {
+			detail = application.config.masker.Redact(detail)
+		}
+		notice := "switched session but could not fully release the previous session: " + detail
+		application.mu.Lock()
+		application.state.startupNotices = append(application.state.startupNotices, notice)
+		application.mu.Unlock()
+	}
 	return nil
 }
 

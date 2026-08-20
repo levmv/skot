@@ -61,6 +61,31 @@ func TestReplayRequiresSessionStartBeforeAuxiliaryRecords(t *testing.T) {
 	}
 }
 
+func TestReplayRejectsNonIncreasingRecordSequence(t *testing.T) {
+	tests := []struct {
+		name      string
+		sequences []uint64
+	}{
+		{name: "zero", sequences: []uint64{1, 0}},
+		{name: "duplicate", sequences: []uint64{1, 2, 2}},
+		{name: "backwards", sequences: []uint64{1, 3, 2}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			records := []Record{recordForTest(t, test.sequences[0], RecordSessionStarted, SessionStartedRecord{
+				SchemaVersion: JournalSchemaVersion,
+				SessionID:     "session",
+			})}
+			for _, sequence := range test.sequences[1:] {
+				records = append(records, recordForTest(t, sequence, RecordKind("aux/trace"), struct{}{}))
+			}
+			if _, err := Replay(records); err == nil || !strings.Contains(err.Error(), "not strictly increasing") {
+				t.Fatalf("Replay() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestReplayRequiresExplicitModelProvider(t *testing.T) {
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),

@@ -46,7 +46,7 @@ func TestSessionJobsSnapshotsStartTimeWhileSorting(t *testing.T) {
 	wait.Wait()
 }
 
-func TestJobMetadataRequiresCurrentProtocolAndConcreteScope(t *testing.T) {
+func TestJobMetadataRequiresCurrentProtocolTimingAndConcreteScope(t *testing.T) {
 	id := "job-metadata"
 	metadata := jobMetadata{
 		Version: jobProtocolVersion, JobID: id, SessionID: "session", Command: "true",
@@ -56,14 +56,63 @@ func TestJobMetadataRequiresCurrentProtocolAndConcreteScope(t *testing.T) {
 	if err := validateJobMetadata(metadata, jobDir); err != nil {
 		t.Fatalf("current metadata rejected: %v", err)
 	}
-	metadata.Version--
-	if err := validateJobMetadata(metadata, jobDir); err == nil || !strings.Contains(err.Error(), "unsupported job protocol") {
-		t.Fatalf("old protocol error = %v", err)
+	tests := []struct {
+		name, want string
+		mutate     func(*jobMetadata)
+	}{
+		{name: "old protocol", want: "unsupported job protocol", mutate: func(value *jobMetadata) { value.Version-- }},
+		{name: "empty command", want: "timing metadata", mutate: func(value *jobMetadata) { value.Command = " " }},
+		{name: "missing start time", want: "timing metadata", mutate: func(value *jobMetadata) { value.StartedAt = time.Time{} }},
+		{name: "zero timeout", want: "timing metadata", mutate: func(value *jobMetadata) { value.TimeoutMillis = 0 }},
+		{name: "unresolved scope", want: "scope", mutate: func(value *jobMetadata) { value.Scope = ScopeAuto }},
 	}
-	metadata.Version = jobProtocolVersion
-	metadata.Scope = ScopeAuto
-	if err := validateJobMetadata(metadata, jobDir); err == nil || !strings.Contains(err.Error(), "scope") {
-		t.Fatalf("unresolved scope error = %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := metadata
+			test.mutate(&candidate)
+			if err := validateJobMetadata(candidate, jobDir); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateJobMetadata() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestJobTerminalResultRequiresCurrentProtocolIdentityStatusAndFinishTime(t *testing.T) {
+	id := "job-result"
+	jobDir := filepath.Join(t.TempDir(), id)
+	if err := os.MkdirAll(jobDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := jobTerminalResult{
+		Version: jobProtocolVersion, JobID: id, Started: true, Status: ProcessCompleted,
+		FinishedAt: time.Now().UTC(),
+	}
+	if err := writeJSONAtomic(filepath.Join(jobDir, jobResultFile), result, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, terminal, err := readJobTerminalResult(jobDir, id); err != nil || !terminal {
+		t.Fatalf("current terminal result = terminal %t, error %v", terminal, err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*jobTerminalResult)
+	}{
+		{name: "old protocol", mutate: func(value *jobTerminalResult) { value.Version-- }},
+		{name: "wrong job", mutate: func(value *jobTerminalResult) { value.JobID = "job-other" }},
+		{name: "nonterminal status", mutate: func(value *jobTerminalResult) { value.Status = ProcessRunning }},
+		{name: "missing finish time", mutate: func(value *jobTerminalResult) { value.FinishedAt = time.Time{} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := result
+			test.mutate(&candidate)
+			if err := writeJSONAtomic(filepath.Join(jobDir, jobResultFile), candidate, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readJobTerminalResult(jobDir, id); err == nil || !strings.Contains(err.Error(), "terminal job result is invalid") {
+				t.Fatalf("readJobTerminalResult() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -1066,6 +1115,43 @@ func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
 	if err := writeJSONAtomic(filepath.Join(jobDir, jobMetadataFile), metadata, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	zero := 0
+	writeCompletedResult := func(jobDir, jobID string) {
+		t.Helper()
+		if err := writeJSONAtomic(filepath.Join(jobDir, jobResultFile), jobTerminalResult{
+			Version:    jobProtocolVersion,
+			JobID:      jobID,
+			Started:    true,
+			Status:     ProcessCompleted,
+			ExitCode:   &zero,
+			FinishedAt: time.Now().UTC(),
+		}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrongSessionID := "job-wrong-session"
+	wrongSessionDir := jobDirectory(filepath.Join(home, "jobs"), sessionID, wrongSessionID)
+	if err := os.MkdirAll(wrongSessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrongSessionMetadata := metadata
+	wrongSessionMetadata.JobID = wrongSessionID
+	wrongSessionMetadata.SessionID = "another-session"
+	if err := writeJSONAtomic(filepath.Join(wrongSessionDir, jobMetadataFile), wrongSessionMetadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCompletedResult(wrongSessionDir, wrongSessionID)
+	wrongDirectoryID := "job-wrong-directory"
+	wrongDirectoryDir := jobDirectory(filepath.Join(home, "jobs"), sessionID, wrongDirectoryID)
+	if err := os.MkdirAll(wrongDirectoryDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrongDirectoryMetadata := metadata
+	wrongDirectoryMetadata.JobID = "job-declared-elsewhere"
+	if err := writeJSONAtomic(filepath.Join(wrongDirectoryDir, jobMetadataFile), wrongDirectoryMetadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCompletedResult(wrongDirectoryDir, wrongDirectoryMetadata.JobID)
 	validID := "job-valid-result"
 	validDir := jobDirectory(filepath.Join(home, "jobs"), sessionID, validID)
 	if err := os.MkdirAll(validDir, 0o700); err != nil {
@@ -1077,17 +1163,7 @@ func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
 	if err := writeJSONAtomic(filepath.Join(validDir, jobMetadataFile), validMetadata, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	zero := 0
-	if err := writeJSONAtomic(filepath.Join(validDir, jobResultFile), jobTerminalResult{
-		Version:    jobProtocolVersion,
-		JobID:      validID,
-		Started:    true,
-		Status:     ProcessCompleted,
-		ExitCode:   &zero,
-		FinishedAt: time.Now().UTC(),
-	}, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeCompletedResult(validDir, validID)
 	manager := newProcessManagerForTest(t, t.TempDir(), home)
 	if err := manager.AttachSession(sessionID); err != nil {
 		t.Fatal(err)
@@ -1098,12 +1174,78 @@ func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
 	if job := manager.get(id); job != nil {
 		t.Fatalf("unobservable durable job was invented: %#v", job)
 	}
+	if job := manager.get(wrongSessionID); job != nil {
+		t.Fatalf("job owned by another session was loaded: %#v", job)
+	}
+	if job := manager.get(wrongDirectoryMetadata.JobID); job != nil {
+		t.Fatalf("job with mismatched directory was loaded: %#v", job)
+	}
 	notices := strings.Join(manager.AttachSessionNotices(sessionID), "\n")
 	if !strings.Contains(notices, id) || !strings.Contains(notices, "control") || !strings.Contains(notices, "left untouched") {
 		t.Fatalf("attach notices = %q", notices)
 	}
+	for _, want := range []string{
+		wrongSessionID, `belongs to session "another-session"`,
+		wrongDirectoryID, "job id does not match its directory",
+	} {
+		if !strings.Contains(notices, want) {
+			t.Fatalf("attach notices = %q, want %q", notices, want)
+		}
+	}
+	for _, directory := range []string{jobDir, wrongSessionDir, wrongDirectoryDir} {
+		if _, err := os.Stat(directory); err != nil {
+			t.Fatalf("unobservable job directory %s was mutated: %v", directory, err)
+		}
+	}
+}
+
+func TestAttachSessionKeepsDeliveredOutputForAlreadyLoadedSession(t *testing.T) {
+	home := t.TempDir()
+	sessionID := "session-already-loaded"
+	id := "job-delivered-output"
+	jobDir := jobDirectory(filepath.Join(home, "jobs"), sessionID, id)
+	if err := os.MkdirAll(jobDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now().UTC()
+	if err := writeJSONAtomic(filepath.Join(jobDir, jobMetadataFile), jobMetadata{
+		Version: jobProtocolVersion, JobID: id, SessionID: sessionID, Command: "printf retained",
+		StartedAt: startedAt, TimeoutMillis: int64(time.Minute / time.Millisecond), Scope: ScopeMachine,
+	}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	if err := writeJSONAtomic(filepath.Join(jobDir, jobResultFile), jobTerminalResult{
+		Version: jobProtocolVersion, JobID: id, Started: true, Status: ProcessCompleted,
+		ExitCode: &zero, StartedAt: startedAt, FinishedAt: startedAt.Add(time.Second), StdoutBytes: 8,
+	}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, jobStdoutFile), []byte("retained"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := newProcessManagerForTest(t, t.TempDir(), home)
+	if err := manager.AttachSession(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	job := manager.get(id)
+	if job == nil || job.status != ProcessCompleted {
+		t.Fatalf("adopted job = %#v", job)
+	}
+	manager.MarkCompletionDelivered(id)
+	if _, err := os.Stat(filepath.Join(jobDir, jobDeliveredFile)); err != nil {
+		t.Fatalf("delivery marker was not written: %v", err)
+	}
+	if err := manager.AttachSession(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	output, _ := manager.jobOutput(job, 1024)
+	if string(output) != "retained" {
+		t.Fatalf("output after repeated attach = %q", output)
+	}
 	if _, err := os.Stat(jobDir); err != nil {
-		t.Fatalf("unobservable job directory was mutated: %v", err)
+		t.Fatalf("repeated attach removed delivered job state: %v", err)
 	}
 }
 

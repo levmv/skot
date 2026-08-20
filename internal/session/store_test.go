@@ -187,6 +187,38 @@ func TestStoreDoesNotRepairCompleteMalformedRecord(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsCompleteStructurallyInvalidRecords(t *testing.T) {
+	const (
+		validFirst = `{"sequence":1,"time":"2026-08-20T12:00:00Z","kind":"aux/test","data":{}}` + "\n"
+		validThird = `{"sequence":3,"time":"2026-08-20T12:00:01Z","kind":"aux/test","data":{}}` + "\n"
+	)
+	tests := []struct {
+		name, contents, want string
+	}{
+		{name: "sequence does not start at one", contents: `{"sequence":2,"time":"2026-08-20T12:00:00Z","kind":"aux/test","data":{}}` + "\n", want: "journal sequence"},
+		{name: "sequence repeats", contents: validFirst + validFirst, want: "journal sequence"},
+		{name: "sequence skips", contents: validFirst + validThird, want: "journal sequence"},
+		{name: "missing time", contents: `{"sequence":1,"kind":"aux/test","data":{}}` + "\n", want: "invalid journal record"},
+		{name: "empty kind", contents: `{"sequence":1,"time":"2026-08-20T12:00:00Z","kind":"","data":{}}` + "\n", want: "invalid journal record"},
+		{name: "missing data", contents: `{"sequence":1,"time":"2026-08-20T12:00:00Z","kind":"aux/test"}` + "\n", want: "invalid journal record"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := Open(path)
+			if store != nil {
+				_ = store.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Open() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestStoreRejectsConcurrentWriter(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	first, err := Open(path)

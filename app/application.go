@@ -102,14 +102,24 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 	return result, runErr
 }
 
-func (application *Application) SwitchModel(ctx context.Context, uri, effort string) error {
+// SwitchModel selects a route for the live session. api is the protocol the
+// caller chose for a route this build does not declare; it is ignored for a
+// declared route and for a process-wide protocol override.
+func (application *Application) SwitchModel(ctx context.Context, uri, effort, api string) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return err
 	}
+	// A protocol supplied for this switch is user input and must be rejected
+	// when it is not one Skot implements; a protocol remembered by another
+	// build is tolerated and simply stops applying.
+	if _, err := parseModelAPI(api); err != nil {
+		return agent.MarkInvalidRequest(err)
+	}
+	selectionAPI := string(selectionModelAPI(uri, api))
 	overrides := modelRouteOverrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
-	}
+	}.withSelection(uri, selectionAPI)
 	route, err := resolveModelRoute(uri, effort, overrides, modelRouteEnrichment{})
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
@@ -118,7 +128,7 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	currentEffort := runtime.CurrentReasoningEffort()
 	if strings.EqualFold(route.URI, currentModel) && route.ReasoningEffort == currentEffort {
 		return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
-			return preferences.SetModelSelection(currentModel, currentEffort)
+			return preferences.SetModelSelection(currentModel, currentEffort, selectionAPI)
 		})
 	}
 	route, err = activateModelRoute(ctx, uri, effort, overrides,
@@ -141,10 +151,10 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort str
 	children := application.state.children
 	application.mu.RUnlock()
 	if children != nil {
-		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort())
+		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), selectionAPI)
 	}
 	return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
-		return preferences.SetModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort())
+		return preferences.SetModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), selectionAPI)
 	})
 }
 
@@ -193,19 +203,22 @@ func (application *Application) persistInteractivePreference(setting string, per
 }
 
 func (application *Application) ModelChoices() []ModelChoice {
-	current := application.CurrentModel()
-	choices := modelChoices(application.config.interactive, current, modelRouteOverrides{
+	overrides := modelRouteOverrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
-	})
+	}
 	runtime := application.runtimeOrNil()
 	if runtime == nil {
-		return choices
+		return modelChoices(application.config.interactive, "", "", overrides)
 	}
 	info := runtime.CurrentModelInfo()
+	current := runtime.CurrentModel()
+	// The live session already proves which protocol the current route speaks,
+	// so it stays selectable even when no stored selection describes it.
+	choices := modelChoices(application.config.interactive, current, string(modelAPIFromBackendID(info.BackendID)), overrides)
 	for index := range choices {
 		if strings.EqualFold(choices[index].URI, current) {
-			if protocol, _, ok := strings.Cut(info.BackendID, "."); ok && knownModelAPI(modelAPI(protocol)) {
-				choices[index].Protocol = protocol
+			if protocol := modelAPIFromBackendID(info.BackendID); protocol != "" {
+				choices[index].Protocol = string(protocol)
 			}
 			choices[index].ContextWindow = info.ContextWindow
 			choices[index].ContextWindowEstimated = info.ContextWindowEstimated
@@ -689,10 +702,21 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 			processes: processExternalWork{processes: processes, await: awaitRequiredJobs}, agents: children,
 		},
 	}
-	runtime, err := builder.buildRestored(ctx, runtimeBuildParams{
-		journal: journal, sessionID: id, modelURI: modelURI, reasoningEffort: reasoningEffort, instructions: instructions,
+	// The session being replaced proves the protocol of the route it runs, so a
+	// route this build does not declare survives clearing and resuming.
+	selectionAPI := ""
+	if current := application.runtimeOrNil(); current != nil {
+		info := current.CurrentModelInfo()
+		if modelInfoMatchesURI(info, modelURI) {
+			selectionAPI = string(modelAPIFromBackendID(info.BackendID))
+		}
+	}
+	params := runtimeBuildParams{
+		journal: journal, sessionID: id, modelURI: modelURI, reasoningEffort: reasoningEffort,
+		modelSelectionAPI: selectionAPI, instructions: instructions,
 		resumedState: resumedState, knownModel: knownModel,
-	})
+	}
+	runtime, err := builder.buildRestored(ctx, params)
 	if err != nil {
 		return err
 	}
@@ -716,7 +740,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	application.state.session = nextSession
 	application.state.startupNotices = append(application.state.startupNotices, attachNotices...)
 	if children != nil {
-		children.setSessionDefaults(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), instructions, security.snapshot())
+		children.setSessionDefaults(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), params.selectionAPI(), instructions, security.snapshot())
 	}
 	application.mu.Unlock()
 

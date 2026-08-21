@@ -1401,7 +1401,7 @@ func TestRunHeadlessIgnoresInteractivePreferencesAndHonorsExplicitInputs(t *test
 	if err := preferences.SetToolSetSelection(toolpolicy.ToolSetEdit); err != nil {
 		t.Fatal(err)
 	}
-	if err := preferences.SetModelSelection("deepseek/saved-model", "high"); err != nil {
+	if err := preferences.SetModelSelection("deepseek/saved-model", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	interactiveBefore, err := os.ReadFile(filepath.Join(home, "interactive.json"))

@@ -271,3 +271,33 @@ func TestBuildModelBackendSelectsResponsesAdapter(t *testing.T) {
 		t.Fatalf("Responses backend info = %#v", info)
 	}
 }
+
+func TestSelectionProtocolResolvesUndeclaredRouteAndYieldsToDeclarations(t *testing.T) {
+	overrides := modelRouteOverrides{}.withSelection("opencode-go/future-model", "responses")
+	route, err := resolveModelRoute("opencode-go/future-model", "", overrides, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.API != modelAPIResponses || route.Compatibility != modelCompatibilityUnverified {
+		t.Fatalf("selected route = %#v", route)
+	}
+	// A reviewed declaration owns the protocol of its route, so a protocol
+	// remembered while the route was undeclared must not survive it.
+	declared := modelRouteOverrides{}.withSelection("opencode-go/minimax-m3", "chat_completions")
+	route, err = resolveModelRoute("opencode-go/minimax-m3", "", declared, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.API != modelAPIAnthropicMessages || route.Compatibility != modelCompatibilitySupported {
+		t.Fatalf("declared route = %#v", route)
+	}
+	// The process-wide override stays the stronger instruction.
+	forced := modelRouteOverrides{API: modelAPIChatCompletions}.withSelection("opencode-go/future-model", "responses")
+	route, err = resolveModelRoute("opencode-go/future-model", "", forced, modelRouteEnrichment{})
+	if err != nil || route.API != modelAPIChatCompletions {
+		t.Fatalf("forced route = %#v, err = %v", route, err)
+	}
+	if !IsModelAPIRequired(&ModelAPIRequiredError{URI: "opencode-go/future-model"}) {
+		t.Fatal("protocol-required error is not recognizable")
+	}
+}

@@ -139,8 +139,7 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 	input := m.selectedInput()
 	if m.loginProvider != "" {
 		provider := m.loginProvider
-		pendingModel := m.loginModel
-		pendingEffort := m.loginEffort
+		pending := m.loginSelection
 		m.cancelLogin()
 		if input == "" {
 			m.addBlock(screenBlockError, "login: API key is required")
@@ -149,8 +148,8 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 		} else {
 			m.addBlock(screenBlockSystem, "logged in to "+provider)
 			m.refreshProviderStatuses()
-			if pendingModel != "" {
-				m.switchModel(pendingModel, pendingEffort)
+			if pending.uri != "" {
+				m.switchModel(pending)
 			}
 		}
 		m.refreshTranscript()
@@ -200,8 +199,7 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 
 func (m *screenModel) cancelLogin() {
 	m.loginProvider = ""
-	m.loginModel = ""
-	m.loginEffort = ""
+	m.loginSelection = modelSelection{}
 	m.loginReturn = pickerState{}
 	m.secret.Reset()
 	m.syncCommandSuggestions()

@@ -223,8 +223,11 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			}
 		}
 	}
+	modelSelectionAPI := ""
 	if !sessionModelSelected {
-		notices = append(notices, applyRememberedModelPreference(&config, workspaceSettings, lastModel, root, modelAPIOverride)...)
+		rememberedAPI, rememberedNotices := applyRememberedModelPreference(&config, workspaceSettings, lastModel, root, modelAPIOverride)
+		modelSelectionAPI = rememberedAPI
+		notices = append(notices, rememberedNotices...)
 	}
 	var knownModel *agent.ModelInfo
 	if resumedState != nil {
@@ -252,11 +255,12 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		sanitize:          masker.Redact,
 	}
 	buildParams := runtimeBuildParams{
-		journal:         journal,
-		sessionID:       runtimeSessionID,
-		modelURI:        config.ModelURI,
-		reasoningEffort: config.ReasoningEffort,
-		instructions:    instructions,
+		journal:           journal,
+		sessionID:         runtimeSessionID,
+		modelURI:          config.ModelURI,
+		reasoningEffort:   config.ReasoningEffort,
+		modelSelectionAPI: modelSelectionAPI,
+		instructions:      instructions,
 		modelOptions: modelBackendOptions{
 			requireCredential: !config.Interactive,
 		},
@@ -268,7 +272,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return resources.fail(err)
 	}
 	config.ReasoningEffort = modelInfo.ReasoningEffort
-	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort); err != nil {
+	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort, buildParams.selectionAPI()); err != nil {
 		return resources.fail(agent.MarkInvalidRequest(err))
 	}
 	if err := children.Preload(ctx, runtimeSessionID); err != nil {
@@ -326,12 +330,14 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 // applyRememberedModelPreference resolves the interactive model fallback. A
 // workspace record is a deliberate choice for that workspace and wins; the
 // shared last selection only fills in for a workspace which has never made one.
-func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelAPI) []string {
+func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelAPI) (string, []string) {
 	if config.ModelExplicit {
-		return nil
+		return "", nil
 	}
 	if strings.TrimSpace(workspace.Model) != "" {
-		preference := state.ModelPreference{Model: workspace.Model, ReasoningEffort: workspace.ReasoningEffort}
+		preference := state.ModelPreference{
+			Model: workspace.Model, ReasoningEffort: workspace.ReasoningEffort, ModelAPI: workspace.ModelAPI,
+		}
 		return applyModelPreference(config, preference, "workspace", root, api)
 	}
 	return applyModelPreference(config, last, "remembered", "", api)
@@ -339,9 +345,9 @@ func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSet
 
 // kind and root name the invalid value in a notice: a workspace preference is
 // reported with the path whose record must be corrected.
-func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelAPI) []string {
+func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelAPI) (string, []string) {
 	if strings.TrimSpace(preference.Model) == "" {
-		return nil
+		return "", nil
 	}
 	location := ""
 	if root != "" {
@@ -351,26 +357,29 @@ func applyModelPreference(config *Config, preference state.ModelPreference, kind
 	if !config.ReasoningEffortExplicit && preference.ReasoningEffort != nil {
 		effort = *preference.ReasoningEffort
 	}
+	selectionAPI := string(selectionModelAPI(preference.Model, preference.ModelAPI))
 	if config.ReasoningEffortExplicit {
 		config.ModelURI = preference.Model
-		return nil
+		return selectionAPI, nil
 	}
-	overrides := modelRouteOverrides{BaseURL: config.BaseURL, API: api, ContextWindow: config.ContextWindow}
+	overrides := modelRouteOverrides{
+		BaseURL: config.BaseURL, API: api, ContextWindow: config.ContextWindow,
+	}.withSelection(preference.Model, selectionAPI)
 	_, err := resolveModelRoute(preference.Model, effort, overrides, modelRouteEnrichment{})
 	if err == nil {
 		config.ModelURI = preference.Model
 		config.ReasoningEffort = effort
-		return nil
+		return selectionAPI, nil
 	}
 	// A remembered effort the route rejects must not disqualify the model itself.
 	if preference.ReasoningEffort != nil {
 		if _, fallbackErr := resolveModelRoute(preference.Model, "", overrides, modelRouteEnrichment{}); fallbackErr == nil {
 			config.ModelURI = preference.Model
 			config.ReasoningEffort = ""
-			return []string{fmt.Sprintf("invalid %s reasoning_effort %q%s; ignored: %v", kind, effort, location, err)}
+			return selectionAPI, []string{fmt.Sprintf("invalid %s reasoning_effort %q%s; ignored: %v", kind, effort, location, err)}
 		}
 	}
-	return []string{fmt.Sprintf("invalid %s model preference %q%s; ignored: %v", kind, preference.Model, location, err)}
+	return "", []string{fmt.Sprintf("invalid %s model preference %q%s; ignored: %v", kind, preference.Model, location, err)}
 }
 
 func modelRequestPolicy(retryBudget, streamIdleTimeout time.Duration) agent.ModelRequestPolicy {

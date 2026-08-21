@@ -119,19 +119,20 @@ type childSnapshot struct {
 type childSupervisor struct {
 	mu sync.Mutex
 
-	home          string
-	builder       runtimeBuilder
-	instructions  string
-	defaultModel  string
-	defaultEffort string
-	allowedModels map[string]struct{}
-	configured    bool
-	closed        bool
-	children      map[string]map[string]*childAgent
-	loaded        map[string]bool
-	change        chan struct{}
-	lifetime      context.Context
-	cancel        context.CancelFunc
+	home                string
+	builder             runtimeBuilder
+	instructions        string
+	defaultModel        string
+	defaultEffort       string
+	defaultSelectionAPI string
+	allowedModels       map[string]struct{}
+	configured          bool
+	closed              bool
+	children            map[string]map[string]*childAgent
+	loaded              map[string]bool
+	change              chan struct{}
+	lifetime            context.Context
+	cancel              context.CancelFunc
 }
 
 func newChildSupervisor(home string, configuredModels ...[]string) (*childSupervisor, error) {
@@ -167,7 +168,7 @@ func normalizeChildModel(value string) (string, error) {
 	return provider + "/" + model, nil
 }
 
-func (supervisor *childSupervisor) configure(builder runtimeBuilder, instructions, model, effort string) error {
+func (supervisor *childSupervisor) configure(builder runtimeBuilder, instructions, model, effort, selectionAPI string) error {
 	canonicalModel, err := normalizeChildModel(model)
 	if err != nil {
 		return fmt.Errorf("configure child default model: %w", err)
@@ -195,6 +196,7 @@ func (supervisor *childSupervisor) configure(builder runtimeBuilder, instruction
 	supervisor.instructions = instructions
 	supervisor.defaultModel = canonicalModel
 	supervisor.defaultEffort = effort
+	supervisor.defaultSelectionAPI = selectionAPI
 	supervisor.configured = true
 	return nil
 }
@@ -212,21 +214,33 @@ func childReadOnlyToolNames(catalog []agent.Tool) []string {
 	return names
 }
 
-func (supervisor *childSupervisor) setModelSelection(model, effort string) {
+func (supervisor *childSupervisor) setModelSelection(model, effort, selectionAPI string) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	if !supervisor.closed {
 		supervisor.defaultModel = model
 		supervisor.defaultEffort = effort
+		supervisor.defaultSelectionAPI = selectionAPI
 	}
 }
 
-func (supervisor *childSupervisor) setSessionDefaults(model, effort, instructions string, scope agent.ScopeSnapshot) {
+// selectionAPILocked applies the parent's chosen protocol only to the parent's
+// own route. A child which selects a different model from the allowlist stands
+// on that route's own declaration.
+func (supervisor *childSupervisor) selectionAPILocked(model string) string {
+	if !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(supervisor.defaultModel)) {
+		return ""
+	}
+	return supervisor.defaultSelectionAPI
+}
+
+func (supervisor *childSupervisor) setSessionDefaults(model, effort, selectionAPI, instructions string, scope agent.ScopeSnapshot) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	if !supervisor.closed {
 		supervisor.defaultModel = model
 		supervisor.defaultEffort = effort
+		supervisor.defaultSelectionAPI = selectionAPI
 		supervisor.instructions = instructions
 		supervisor.builder.scope = scope
 	}
@@ -518,7 +532,8 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 	}
 	runtime, err := supervisor.builder.build(ctx, runtimeBuildParams{
 		journal: journal, sessionID: sessionID, modelURI: model, reasoningEffort: effort,
-		instructions: supervisor.instructions, modelOptions: modelBackendOptions{requireCredential: true},
+		modelSelectionAPI: supervisor.selectionAPILocked(model),
+		instructions:      supervisor.instructions, modelOptions: modelBackendOptions{requireCredential: true},
 	})
 	if err != nil {
 		child := &childAgent{metadata: metadata, dir: stagingDir, journal: journal}

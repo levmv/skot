@@ -94,7 +94,7 @@ func TestInteractiveStorePersistsExplicitProviderDefaultAndWorkspaceMap(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.SetModelSelection("openai/gpt-5", ""); err != nil {
+	if err := first.SetModelSelection("openai/gpt-5", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	second, err := OpenInteractive(home, secondRoot)
@@ -146,7 +146,7 @@ func TestLastModelSelectionIsVisibleFromWorkspacesWithoutOwnRecord(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.SetModelSelection("openai/gpt-5", "high"); err != nil {
+	if err := first.SetModelSelection("openai/gpt-5", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	settings, err := second.Settings()
@@ -159,10 +159,10 @@ func TestLastModelSelectionIsVisibleFromWorkspacesWithoutOwnRecord(t *testing.T)
 	}
 	// Reselecting the model this workspace already records must still publish it
 	// for workspaces which have none.
-	if err := second.SetModelSelection("deepseek/other-model", ""); err != nil {
+	if err := second.SetModelSelection("deepseek/other-model", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := first.SetModelSelection("openai/gpt-5", "high"); err != nil {
+	if err := first.SetModelSelection("openai/gpt-5", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	settings, err = first.Settings()
@@ -195,7 +195,7 @@ func TestLegacyRecentModelsKeyIsIgnoredAndDroppedOnTheNextWrite(t *testing.T) {
 	if settings.Theme != ThemeDark || len(settings.ModelHistory) != 0 {
 		t.Fatalf("settings = %#v", settings)
 	}
-	if err := store.SetModelSelection("openai/gpt-5", ""); err != nil {
+	if err := store.SetModelSelection("openai/gpt-5", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -488,4 +488,40 @@ func TestInteractiveStoreRejectsUnknownFieldsAndSymlinks(t *testing.T) {
 			t.Fatal("symlinked interactive state was accepted")
 		}
 	})
+}
+
+func TestInteractiveStoreRemembersAndClearsSelectionAPI(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if _, err := Open(home); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenInteractive(home, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetModelSelection("opencode-go/ox-alpha-free", "high", "Chat_Completions"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := store.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Workspace.ModelAPI != "chat_completions" || settings.LastModel().ModelAPI != "chat_completions" {
+		t.Fatalf("stored selection API = %#v", settings)
+	}
+	// Selecting a route which describes itself must not leave the previous
+	// protocol behind for it.
+	if err := store.SetModelSelection("deepseek/deepseek-v4-flash", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = store.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Workspace.ModelAPI != "" || settings.LastModel().ModelAPI != "" {
+		t.Fatalf("cleared selection API = %#v", settings)
+	}
+	if len(settings.ModelHistory) != 2 || settings.ModelHistory[1].ModelAPI != "chat_completions" {
+		t.Fatalf("model history = %#v", settings.ModelHistory)
+	}
 }

@@ -23,13 +23,13 @@ func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetModelSelection("openrouter/recent-model", ""); err != nil {
+	if err := store.SetModelSelection("openrouter/recent-model", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetModelSelection("deepseek/saved-model", "high"); err != nil {
+	if err := store.SetModelSelection("deepseek/saved-model", "high", ""); err != nil {
 		t.Fatal(err)
 	}
-	models := knownModelURIs(store, "openai/current-model")
+	models := knownModelURIList(knownModelSelections(store, "openai/current-model", ""))
 	wantPrefix := []string{"openai/current-model", "deepseek/saved-model", "openrouter/recent-model"}
 	if len(models) < len(wantPrefix) || !slices.Equal(models[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("models = %#v", models)
@@ -191,8 +191,16 @@ func TestActivateOpenRouterResponsesRouteUsesProtocolIndependentEnrichment(t *te
 	}
 }
 
+func knownModelURIList(selections []modelSelection) []string {
+	models := make([]string, 0, len(selections))
+	for _, selection := range selections {
+		models = append(models, selection.URI)
+	}
+	return models
+}
+
 func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
-	models := knownModelURIs(nil, "DEEPSEEK/deepseek-v4-flash")
+	models := knownModelURIList(knownModelSelections(nil, "DEEPSEEK/deepseek-v4-flash", ""))
 	count := 0
 	for _, model := range models {
 		if model == "DEEPSEEK/deepseek-v4-flash" || model == "deepseek/deepseek-v4-flash" {
@@ -205,7 +213,7 @@ func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
 }
 
 func TestModelChoicesExposeRunnableRouteFacts(t *testing.T) {
-	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", modelRouteOverrides{})
+	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", "", modelRouteOverrides{})
 	var luna *ModelChoice
 	var muse *ModelChoice
 	var minimax *ModelChoice
@@ -295,15 +303,45 @@ func TestModelChoicesExposeRunnableRouteFacts(t *testing.T) {
 }
 
 func TestModelChoicesSurfaceRecentRoutesWhichNoLongerResolve(t *testing.T) {
-	choices := modelChoices(nil, "opencode-go/removed-model", modelRouteOverrides{})
+	choices := modelChoices(nil, "opencode-go/removed-model", "", modelRouteOverrides{})
 	if len(choices) == 0 || choices[0].URI != "opencode-go/removed-model" || !choices[0].Unavailable ||
 		!strings.Contains(choices[0].UnavailableReason, "not available in Skot's current model list") {
 		t.Fatalf("removed recent choice = %#v", choices)
 	}
 }
 
+func TestModelChoicesKeepRoutesSelectedWithTheirOwnProtocol(t *testing.T) {
+	home := t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenInteractive(home, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetModelSelection("opencode-go/ox-alpha-free", "", "responses"); err != nil {
+		t.Fatal(err)
+	}
+	choices := modelChoices(store, "deepseek/deepseek-v4-flash", "", modelRouteOverrides{})
+	remembered := slices.IndexFunc(choices, func(choice ModelChoice) bool {
+		return choice.URI == "opencode-go/ox-alpha-free"
+	})
+	if remembered < 0 || choices[remembered].Unavailable ||
+		choices[remembered].Protocol != "responses" || !choices[remembered].ProtocolExplicit {
+		t.Fatalf("remembered protocol choice = %#v", choices)
+	}
+	// A declared route reports the protocol it was reviewed with, and that fact
+	// is not the user's to own.
+	declared := slices.IndexFunc(choices, func(choice ModelChoice) bool {
+		return choice.URI == "opencode-go/minimax-m3"
+	})
+	if declared < 0 || choices[declared].Protocol != "anthropic_messages" || choices[declared].ProtocolExplicit {
+		t.Fatalf("declared route choice = %#v", choices[declared])
+	}
+}
+
 func TestModelChoicesApplyGlobalProtocolOverride(t *testing.T) {
-	choices := modelChoices(nil, "", modelRouteOverrides{API: modelAPIResponses})
+	choices := modelChoices(nil, "", "", modelRouteOverrides{API: modelAPIResponses})
 	wanted := map[string]bool{
 		"deepseek/deepseek-v4-flash": false,
 		"opencode-go/gpt-5.6-luna":   false,

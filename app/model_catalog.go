@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,6 +42,52 @@ type modelRouteOverrides struct {
 	BaseURL       string
 	API           modelAPI
 	ContextWindow int
+}
+
+// withSelection adds the protocol carried by one model selection. The
+// process-wide override wins: it is the more recent explicit instruction, and
+// the picker must describe the route the backend will build.
+func (overrides modelRouteOverrides) withSelection(uri, api string) modelRouteOverrides {
+	if overrides.API == "" {
+		overrides.API = selectionModelAPI(uri, api)
+	}
+	return overrides
+}
+
+// selectionModelAPI is the protocol a user attached to one undeclared route.
+// It stops applying as soon as this build declares that route: a reviewed
+// declaration owns the protocol, and the remembered guess is then discarded
+// rather than competing with it.
+func selectionModelAPI(uri, api string) modelAPI {
+	value := modelAPI(strings.ToLower(strings.TrimSpace(api)))
+	if value == "" || !knownModelAPI(value) {
+		return ""
+	}
+	if _, declared := catalogModelSpec(uri); declared {
+		return ""
+	}
+	return value
+}
+
+// ModelAPIRequiredError reports a route which a mixed-protocol gateway serves
+// and this build does not declare. Its protocol cannot be inferred from the
+// provider, so a frontend must obtain one before the route can be selected.
+type ModelAPIRequiredError struct {
+	URI string
+}
+
+func (failure *ModelAPIRequiredError) Error() string {
+	return fmt.Sprintf(
+		"model %q is not available in Skot's current model list; choose another model or specify this model's API with -model-api",
+		strings.TrimSpace(failure.URI),
+	)
+}
+
+// IsModelAPIRequired reports a selection which only needs a protocol to become
+// usable, so a frontend can offer that choice instead of the error.
+func IsModelAPIRequired(err error) bool {
+	var failure *ModelAPIRequiredError
+	return errors.As(err, &failure)
 }
 
 type modelRouteEnrichment struct {
@@ -254,10 +301,7 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	declaration, declared := catalogModelSpec(uri)
 	defaults := defaultModelSpec(provider)
 	if providerDescription.requireDeclaredModel && !declared && overrides.API == "" {
-		return resolvedModelRoute{}, fmt.Errorf(
-			"model %q is not available in Skot's current model list; choose another model or specify this model's API with -model-api",
-			strings.TrimSpace(uri),
-		)
+		return resolvedModelRoute{}, &ModelAPIRequiredError{URI: uri}
 	}
 	api := providerDescription.defaultAPI
 	if declaration.API != "" {
@@ -431,10 +475,26 @@ func canonicalOpenRouterModelID(modelID string) string {
 	return modelID
 }
 
-func knownModelURIs(store *state.InteractiveStore, current string) []string {
-	models := make([]string, 0, len(modelCatalog)+4)
-	seen := make(map[string]struct{}, cap(models))
-	add := func(uri string) {
+// modelSelection is one known route together with the protocol its last
+// deliberate selection carried. An empty API means the route describes itself.
+type modelSelection struct {
+	URI string
+	API string
+}
+
+func knownModelSelections(store *state.InteractiveStore, current, currentAPI string) []modelSelection {
+	var stored []modelSelection
+	if store != nil {
+		if settings, err := store.Settings(); err == nil {
+			stored = append(stored, modelSelection{URI: settings.Workspace.Model, API: settings.Workspace.ModelAPI})
+			for _, selection := range settings.ModelHistory {
+				stored = append(stored, modelSelection{URI: selection.Model, API: selection.ModelAPI})
+			}
+		}
+	}
+	selections := make([]modelSelection, 0, len(modelCatalog)+len(stored)+1)
+	seen := make(map[string]struct{}, cap(selections))
+	add := func(uri, api string) {
 		uri = strings.TrimSpace(uri)
 		key := strings.ToLower(uri)
 		if key == "" {
@@ -444,28 +504,26 @@ func knownModelURIs(store *state.InteractiveStore, current string) []string {
 			return
 		}
 		seen[key] = struct{}{}
-		models = append(models, uri)
+		selections = append(selections, modelSelection{URI: uri, API: api})
 	}
-	add(current)
-	if store != nil {
-		if settings, err := store.Settings(); err == nil {
-			add(settings.Workspace.Model)
-			for _, selection := range settings.ModelHistory {
-				add(selection.Model)
-			}
-		}
+	add(current, currentAPI)
+	for _, selection := range stored {
+		add(selection.URI, selection.API)
 	}
 	for _, spec := range modelCatalog {
-		add(spec.URI)
+		add(spec.URI, "")
 	}
-	return models
+	return selections
 }
 
-func modelChoices(store *state.InteractiveStore, current string, overrides modelRouteOverrides) []ModelChoice {
+func modelChoices(store *state.InteractiveStore, current, currentAPI string, overrides modelRouteOverrides) []ModelChoice {
 	choices := make([]ModelChoice, 0, len(modelCatalog)+4)
-	for _, uri := range knownModelURIs(store, current) {
+	for _, selection := range knownModelSelections(store, current, currentAPI) {
+		uri := selection.URI
 		declaration, _ := catalogModelSpec(uri)
-		route, err := resolveModelRoute(uri, "", overrides, modelRouteEnrichment{})
+		selected := overrides.withSelection(uri, selection.API)
+		explicitProtocol := selected.API != "" && overrides.API == ""
+		route, err := resolveModelRoute(uri, "", selected, modelRouteEnrichment{})
 		if err != nil {
 			api := declaration.API
 			if api == "" {
@@ -495,7 +553,8 @@ func modelChoices(store *state.InteractiveStore, current string, overrides model
 		}
 		choices = append(choices, ModelChoice{
 			URI: uri, Name: declaration.Name, Protocol: string(route.API),
-			ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
+			ProtocolExplicit: explicitProtocol,
+			ContextWindow:    route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 			ReasoningEfforts: append([]string(nil), route.ReasoningEfforts...),
 		})
 	}

@@ -73,7 +73,8 @@ func parseModelAPI(value string) (modelAPI, error) {
 	if api == "" || knownModelAPI(api) {
 		return api, nil
 	}
-	return "", fmt.Errorf("unsupported model API %q", strings.TrimSpace(value))
+	return "", fmt.Errorf("unsupported model API %q; expected %s, %s, or %s", strings.TrimSpace(value),
+		modelAPIChatCompletions, modelAPIResponses, modelAPIAnthropicMessages)
 }
 
 func knownModelAPI(api modelAPI) bool {
@@ -83,6 +84,20 @@ func knownModelAPI(api modelAPI) bool {
 	default:
 		return false
 	}
+}
+
+// modelAPIFromBackendID recovers the protocol a built backend speaks. Backend
+// identifiers are protocol-prefixed, which makes a session that already ran the
+// authority on its own route.
+func modelAPIFromBackendID(backendID string) modelAPI {
+	protocol, _, ok := strings.Cut(strings.TrimSpace(backendID), ".")
+	if !ok {
+		return ""
+	}
+	if api := modelAPI(protocol); knownModelAPI(api) {
+		return api
+	}
+	return ""
 }
 
 func implementedModelAPI(api modelAPI) bool {

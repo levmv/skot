@@ -46,9 +46,13 @@ type runtimeBuildParams struct {
 	sessionID       string
 	modelURI        string
 	reasoningEffort string
-	instructions    string
-	modelOptions    modelBackendOptions
-	resumedState    *agent.State
+	// modelSelectionAPI is the protocol chosen for a route this build does not
+	// declare. A session being reopened supplies its own, so a route selected
+	// that way stays usable across resume.
+	modelSelectionAPI string
+	instructions      string
+	modelOptions      modelBackendOptions
+	resumedState      *agent.State
 	// knownModel may only describe the same saved selection being reopened, or
 	// the current Runtime selection carried through ClearSession. It permits an
 	// inspectable Runtime when that exact route no longer resolves.
@@ -87,7 +91,7 @@ func (builder runtimeBuilder) resolveRestored(ctx context.Context, params runtim
 		// A route which resolves with its default effort is still available: the
 		// original failure was validation of the requested effort, not a reason to
 		// silently fall back to the saved descriptor.
-		if _, routeErr := resolveModelRoute(params.modelURI, "", builder.modelOverrides(), modelRouteEnrichment{}); routeErr == nil {
+		if _, routeErr := resolveModelRoute(params.modelURI, "", builder.modelOverrides(params), modelRouteEnrichment{}); routeErr == nil {
 			return agent.ModelInfo{}, nil, agent.MarkInvalidRequest(err)
 		}
 		return *params.knownModel, nil, nil
@@ -97,13 +101,32 @@ func (builder runtimeBuilder) resolveRestored(ctx context.Context, params runtim
 
 func (builder runtimeBuilder) activateRoute(ctx context.Context, params runtimeBuildParams) (resolvedModelRoute, error) {
 	return activateModelRoute(
-		ctx, params.modelURI, params.reasoningEffort, builder.modelOverrides(),
+		ctx, params.modelURI, params.reasoningEffort, builder.modelOverrides(params),
 		savedModelContextFromState(params.resumedState), builder.metadataLookup,
 	)
 }
 
-func (builder runtimeBuilder) modelOverrides() modelRouteOverrides {
-	return modelRouteOverrides{BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
+func (builder runtimeBuilder) modelOverrides(params runtimeBuildParams) modelRouteOverrides {
+	overrides := modelRouteOverrides{BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
+	return overrides.withSelection(params.modelURI, params.selectionAPI())
+}
+
+// selectionAPI prefers the protocol the caller chose. A session which already
+// ran on the same route records the protocol it used, and reopening it must not
+// depend on that choice still being remembered elsewhere.
+func (params runtimeBuildParams) selectionAPI() string {
+	if strings.TrimSpace(params.modelSelectionAPI) != "" {
+		return params.modelSelectionAPI
+	}
+	if params.resumedState == nil {
+		return ""
+	}
+	selection := params.resumedState.Selection
+	saved := strings.TrimSpace(selection.Provider) + "/" + strings.TrimSpace(selection.Model)
+	if !strings.EqualFold(strings.TrimSpace(params.modelURI), saved) {
+		return ""
+	}
+	return string(modelAPIFromBackendID(selection.Backend))
 }
 
 func (builder runtimeBuilder) modelForRoute(route resolvedModelRoute, options modelBackendOptions) (agent.ModelInfo, agent.Backend, error) {

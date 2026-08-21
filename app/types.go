@@ -93,9 +93,13 @@ type ProviderStatus struct {
 // ModelChoice is one locally known route presented to frontends. Unavailable
 // choices are descriptive only and must not appear as ordinary selections.
 type ModelChoice struct {
-	URI                    string
-	Name                   string
-	Protocol               string
+	URI      string
+	Name     string
+	Protocol string
+	// ProtocolExplicit marks a route whose protocol the user chose, because
+	// this build does not describe it. It is a fact the user owns and can act
+	// on, unlike the reviewed protocol of a declared route.
+	ProtocolExplicit       bool
 	ContextWindow          int
 	ContextWindowEstimated bool
 	ReasoningEfforts       []string

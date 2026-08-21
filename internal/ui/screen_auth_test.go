@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/app"
 )
 
 func TestMissingStartupCredentialOpensLoginPicker(t *testing.T) {
@@ -168,16 +169,16 @@ func TestStartupLoginToAlternativeProviderFinishesModelSwitch(t *testing.T) {
 	model := testScreenModel(t, fake)
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyDown, BaseCode: tea.KeyDown})
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
-	if model.loginProvider != "openrouter" || model.loginModel != "openrouter/free" || model.secret.EchoMode != textinput.EchoPassword {
-		t.Fatalf("pending login: provider=%q model=%q", model.loginProvider, model.loginModel)
+	if model.loginProvider != "openrouter" || model.loginSelection.uri != "openrouter/free" || model.secret.EchoMode != textinput.EchoPassword {
+		t.Fatalf("pending login: provider=%q model=%q", model.loginProvider, model.loginSelection.uri)
 	}
 	model.secret.SetValue("openrouter-secret")
 	model, _ = model.submitInput()
 	if fake.loginProvider != "openrouter" || fake.loginToken != "openrouter-secret" || fake.model != "openrouter/free" {
 		t.Fatalf("login/switch: provider=%q token=%q model=%q", fake.loginProvider, fake.loginToken, fake.model)
 	}
-	if fake.model != "openrouter/free" || model.loginProvider != "" || model.loginModel != "" {
-		t.Fatalf("screen state: model=%q login=%q pending=%q", fake.model, model.loginProvider, model.loginModel)
+	if fake.model != "openrouter/free" || model.loginProvider != "" || model.loginSelection.uri != "" {
+		t.Fatalf("screen state: model=%q login=%q pending=%q", fake.model, model.loginProvider, model.loginSelection.uri)
 	}
 }
 
@@ -198,8 +199,8 @@ func TestModelPickerShowsCredentialStateAndDefersMissingLogin(t *testing.T) {
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Text: "openrouter", Code: 'o', BaseCode: 'o'})
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
-	if fake.model != "deepseek/model" || model.loginProvider != "openrouter" || model.loginModel != "openrouter/free" {
-		t.Fatalf("deferred selection: model=%q login=%q pending=%q", fake.model, model.loginProvider, model.loginModel)
+	if fake.model != "deepseek/model" || model.loginProvider != "openrouter" || model.loginSelection.uri != "openrouter/free" {
+		t.Fatalf("deferred selection: model=%q login=%q pending=%q", fake.model, model.loginProvider, model.loginSelection.uri)
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape, BaseCode: tea.KeyEscape})
 	if model.loginProvider != "" || model.picker.kind != pickerModel || model.picker.query != "openrouter" || model.picker.items[model.picker.index].value != "openrouter/free" {
@@ -439,5 +440,67 @@ func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
 	if !strings.Contains(details, "MiniMax M3 (opencode-go/minimax-m3)") ||
 		!strings.Contains(details, "anthropic messages") || fake.model != "deepseek/model" {
 		t.Fatalf("unavailable details = %q, model = %q", details, fake.model)
+	}
+}
+
+func TestModelPickerAsksForProtocolOnlyWhenTheRouteNeedsOne(t *testing.T) {
+	fake := &fakeAgent{
+		model:    "deepseek/model",
+		modelErr: &app.ModelAPIRequiredError{URI: "opencode-go/ox-alpha-free"},
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/model"},
+			{URI: "opencode-go/minimax-m3", Protocol: "anthropic_messages"},
+			{URI: "opencode-go/glm-5.3", Protocol: "chat_completions"},
+		},
+		providers: []ProviderStatus{
+			{Name: "deepseek", Source: "auth store"},
+			{Name: "opencode-go", Source: "auth store"},
+		},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model opencode-go/ox-alpha-free")
+	model, _ = model.submitInput()
+	if model.picker.kind != pickerModelAPI || len(model.picker.items) != 3 || model.picker.pendingModel.uri != "opencode-go/ox-alpha-free" {
+		t.Fatalf("protocol picker = %#v", model.picker)
+	}
+	if model.picker.items[2].value != "anthropic_messages" || model.picker.items[2].description != "like minimax-m3" {
+		t.Fatalf("protocol rows = %#v", model.picker.items)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "3", Code: '3', BaseCode: '3'})
+	if fake.model != "opencode-go/ox-alpha-free" || fake.modelAPI != "anthropic_messages" || model.picker.active() {
+		t.Fatalf("selected route = %q protocol %q picker %#v", fake.model, fake.modelAPI, model.picker)
+	}
+}
+
+func TestModelProtocolChoiceCancelsIntoTheTypedForm(t *testing.T) {
+	fake := &fakeAgent{
+		model:     "deepseek/model",
+		modelErr:  &app.ModelAPIRequiredError{URI: "opencode-go/ox-alpha-free"},
+		providers: []ProviderStatus{{Name: "opencode-go", Source: "auth store"}},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model opencode-go/ox-alpha-free")
+	model, _ = model.submitInput()
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape, BaseCode: tea.KeyEscape})
+	transcript := strings.Join(model.transcript.lines, "\n")
+	if model.picker.active() || fake.model != "deepseek/model" {
+		t.Fatalf("cancelled protocol choice: model=%q picker=%#v", fake.model, model.picker)
+	}
+	// The transcript wraps, so the retry line is checked by its parts.
+	if !strings.Contains(transcript, "retry with /model") || !strings.Contains(transcript, "chat_completions") {
+		t.Fatalf("cancel notice = %q", transcript)
+	}
+}
+
+func TestModelPickerNamesProtocolOnlyForRoutesTheUserChoseItFor(t *testing.T) {
+	chosen := modelChoiceActiveDetail(ModelChoice{
+		Protocol: "chat_completions", ProtocolExplicit: true,
+		ContextWindow: 128 * 1024, ContextWindowEstimated: true,
+	})
+	reviewed := modelChoiceActiveDetail(ModelChoice{
+		Protocol: "chat_completions", ContextWindow: 1_000_000,
+	})
+	if chosen != "~131K context · chat completions" || reviewed != "1M context" {
+		t.Fatalf("active details = %q / %q", chosen, reviewed)
 	}
 }

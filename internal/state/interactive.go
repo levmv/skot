@@ -29,16 +29,20 @@ const (
 type WorkspaceSettings struct {
 	Model           string
 	ReasoningEffort *string
+	ModelAPI        string
 	ToolSet         string
 	Scope           string
 }
 
 // ModelPreference is one remembered model selection. A nil ReasoningEffort
 // means no override; a non-nil empty value means the provider default was
-// explicitly selected.
+// explicitly selected. ModelAPI is the protocol the user attached to a route
+// this build does not describe; it is an opaque string here, and the caller
+// which owns the protocol vocabulary decides whether it still applies.
 type ModelPreference struct {
 	Model           string
 	ReasoningEffort *string
+	ModelAPI        string
 }
 
 // InteractiveSettings is one read-only view of the machine-owned interactive
@@ -78,10 +82,12 @@ type interactiveUIDocument struct {
 }
 
 // modelHistoryDocument always carries the effort the selection was made with;
-// "default" is the explicitly selected provider default.
+// "default" is the explicitly selected provider default. An api is recorded
+// only for a selection whose protocol the user had to choose.
 type modelHistoryDocument struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	API             string `json:"api,omitempty"`
 }
 
 // Pointer fields preserve absent versus present-but-invalid values. Mutating a
@@ -90,6 +96,7 @@ type modelHistoryDocument struct {
 type workspaceDocument struct {
 	Model           *string `json:"model,omitempty"`
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+	ModelAPI        *string `json:"model_api,omitempty"`
 	ToolSet         *string `json:"tool_set,omitempty"`
 	Scope           *string `json:"scope,omitempty"`
 }
@@ -144,7 +151,10 @@ func (store *InteractiveStore) Settings() (InteractiveSettings, error) {
 	return document.settings(store.workspace), nil
 }
 
-func (store *InteractiveStore) SetModelSelection(model, reasoningEffort string) error {
+// SetModelSelection records one deliberate selection. An empty api removes a
+// protocol recorded earlier: the route either describes itself now or is being
+// selected without that choice.
+func (store *InteractiveStore) SetModelSelection(model, reasoningEffort, api string) error {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return errors.New("model is required")
@@ -154,15 +164,23 @@ func (store *InteractiveStore) SetModelSelection(model, reasoningEffort string) 
 	if encodedEffort == "" {
 		encodedEffort = "default"
 	}
+	api = strings.ToLower(strings.TrimSpace(api))
 	return store.mutate(func(document *interactiveDocument) bool {
 		workspace := document.workspace(store.workspace)
-		history := pushModelHistory(document.UI.ModelHistory, modelHistoryDocument{Model: model, ReasoningEffort: encodedEffort})
+		history := pushModelHistory(document.UI.ModelHistory, modelHistoryDocument{
+			Model: model, ReasoningEffort: encodedEffort, API: api,
+		})
+		storedAPI := storedStringEquals(workspace.ModelAPI, api) || (workspace.ModelAPI == nil && api == "")
 		if storedStringEquals(workspace.Model, model) && storedStringEquals(workspace.ReasoningEffort, encodedEffort) &&
-			slices.Equal(history, document.UI.ModelHistory) {
+			storedAPI && slices.Equal(history, document.UI.ModelHistory) {
 			return false
 		}
 		workspace.Model = stringPointer(model)
 		workspace.ReasoningEffort = stringPointer(encodedEffort)
+		workspace.ModelAPI = nil
+		if api != "" {
+			workspace.ModelAPI = stringPointer(api)
+		}
 		document.Workspaces[store.workspace] = workspace
 		document.UI.ModelHistory = history
 		return true
@@ -288,6 +306,7 @@ func (document interactiveDocument) settings(workspace string) InteractiveSettin
 	preference := storedModelPreference(raw.Model, raw.ReasoningEffort, workspace, &settings.Notices)
 	settings.Workspace.Model = preference.Model
 	settings.Workspace.ReasoningEffort = preference.ReasoningEffort
+	settings.Workspace.ModelAPI = strings.ToLower(validWorkspaceString("model_api", raw.ModelAPI, workspace, &settings.Notices))
 	settings.Workspace.ToolSet = validWorkspaceString("tool_set", raw.ToolSet, workspace, &settings.Notices)
 	if raw.Scope != nil {
 		scope := strings.ToLower(strings.TrimSpace(*raw.Scope))
@@ -371,7 +390,10 @@ func validModelHistory(entries []modelHistoryDocument, notices *[]string) []Mode
 			continue
 		}
 		seen[key] = struct{}{}
-		history = append(history, ModelPreference{Model: model, ReasoningEffort: decodeReasoningEffort(entry.ReasoningEffort)})
+		history = append(history, ModelPreference{
+			Model: model, ReasoningEffort: decodeReasoningEffort(entry.ReasoningEffort),
+			ModelAPI: strings.ToLower(strings.TrimSpace(entry.API)),
+		})
 	}
 	if len(history) != len(entries) {
 		*notices = append(*notices, "interactive model_history contains empty, duplicate, or excess entries; invalid entries were ignored")

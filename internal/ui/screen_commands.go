@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/app"
 )
 
 type tuiCommand struct {
@@ -55,7 +56,7 @@ func init() {
 		{name: "/clear", description: "start a new session", usage: "/clear", run: runClearCommand},
 		{name: "/resume", description: "choose or resume a previous session", usage: "/resume [id-or-prefix]", maxArgs: 1, run: runResumeCommand},
 		{name: "/login", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
-		{name: "/model", description: "list or switch models", usage: "/model [provider/model]", maxArgs: 1, run: runModelCommand},
+		{name: "/model", description: "list or switch models", usage: "/model [provider/model [api]]", maxArgs: 2, run: runModelCommand},
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
 		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [auto|workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
@@ -272,7 +273,7 @@ func runLoginCommand(m *screenModel, input string, args []string) tea.Cmd {
 		return nil
 	}
 	m.acceptCommand(input)
-	m.startProviderLogin(args[0], "", "", pickerState{})
+	m.startProviderLogin(args[0], modelSelection{}, pickerState{})
 	return nil
 }
 
@@ -294,11 +295,14 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 		return nil
 	}
 	m.acceptCommand(input)
-	effort := ""
-	if strings.EqualFold(args[0], m.agent.CurrentModel()) {
-		effort = m.agent.CurrentReasoningEffort()
+	selection := modelSelection{uri: args[0]}
+	if len(args) > 1 {
+		selection.api = args[1]
 	}
-	m.selectModel(args[0], effort, pickerState{})
+	if strings.EqualFold(selection.uri, m.agent.CurrentModel()) {
+		selection.effort = m.agent.CurrentReasoningEffort()
+	}
+	m.selectModel(selection, pickerState{})
 	return nil
 }
 
@@ -432,7 +436,7 @@ func (m *screenModel) openModelPicker() {
 		item := pickerItem{
 			value: model, label: model,
 			description:  description,
-			activeDetail: modelChoiceDescription(choice),
+			activeDetail: modelChoiceActiveDetail(choice),
 			dimmed:       loginRequired,
 			efforts:      efforts, effortIndex: effortIndex,
 		}
@@ -461,6 +465,71 @@ func (m *screenModel) openModelPicker() {
 	}
 	items = append(items, pickerItem{label: "Enter model URI…", description: "provider/model", custom: true})
 	m.openPicker(pickerModel, items, markCurrentPickerItem(items, current))
+}
+
+// askModelAPI offers the protocols Skot implements for a route it does not
+// describe. It appears only after a URI has been entered and only for the
+// gateways which serve more than one protocol, so an ordinary selection never
+// meets it.
+func (m *screenModel) askModelAPI(selection modelSelection) {
+	items := modelAPIPickerItems(m.modelChoices, modelProvider(selection.uri))
+	m.addBlock(screenBlockSystem, selection.uri+" is not in Skot's model list; choose the API it speaks")
+	m.openPicker(pickerModelAPI, items, 0)
+	m.picker.pendingModel = selection
+}
+
+// cancelModelAPIChoice leaves the selection unchanged and names the typed form
+// of the same answer, so declining the list is not a dead end.
+func (m *screenModel) cancelModelAPIChoice(selection modelSelection) {
+	m.addBlock(screenBlockError, fmt.Sprintf(
+		"model: %s needs the API it speaks; retry with /model %s %s",
+		selection.uri, selection.uri, modelAPIChatCompletions,
+	))
+}
+
+// The protocol names a user types or picks. They are the same vocabulary the
+// -model-api flag documents, which is why the frontend spells them out rather
+// than deriving them.
+const (
+	modelAPIChatCompletions   = "chat_completions"
+	modelAPIResponses         = "responses"
+	modelAPIAnthropicMessages = "anthropic_messages"
+)
+
+func modelAPIPickerItems(choices []ModelChoice, provider string) []pickerItem {
+	items := make([]pickerItem, 0, 3)
+	for _, protocol := range []string{modelAPIChatCompletions, modelAPIResponses, modelAPIAnthropicMessages} {
+		items = append(items, pickerItem{
+			value: protocol, label: modelProtocolLabel(protocol),
+			description: modelAPIExamples(choices, provider, protocol),
+		})
+	}
+	return items
+}
+
+// modelAPIExamples names routes of the same gateway which already speak a
+// protocol. A model is usually recognizable by the company it keeps, and these
+// are the only evidence Skot has to offer.
+func modelAPIExamples(choices []ModelChoice, provider, protocol string) string {
+	var names []string
+	for _, choice := range choices {
+		if choice.Unavailable || choice.ProtocolExplicit || choice.Protocol != protocol {
+			continue
+		}
+		if modelProvider(choice.URI) != provider {
+			continue
+		}
+		if _, model, ok := strings.Cut(choice.URI, "/"); ok {
+			names = append(names, model)
+		}
+		if len(names) == 2 {
+			break
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "like " + strings.Join(names, ", ")
 }
 
 // orderedReasoningEfforts puts the provider default in the middle of the
@@ -522,9 +591,24 @@ func modelChoiceDescription(choice ModelChoice) string {
 	return ""
 }
 
+// modelChoiceActiveDetail names the protocol only for a route whose protocol
+// the user chose. For every other row it is a reviewed fact the user cannot act
+// on, and it belongs in diagnostics rather than beside the selection.
+func modelChoiceActiveDetail(choice ModelChoice) string {
+	description := modelChoiceDescription(choice)
+	if !choice.ProtocolExplicit {
+		return description
+	}
+	return appendDescription(description, modelProtocolLabel(choice.Protocol))
+}
+
+func modelProtocolLabel(protocol string) string {
+	return strings.ReplaceAll(strings.TrimSpace(protocol), "_", " ")
+}
+
 func modelChoiceDiagnosticDescription(choice ModelChoice) string {
 	description := modelChoiceDescription(choice)
-	if protocol := strings.ReplaceAll(strings.TrimSpace(choice.Protocol), "_", " "); protocol != "" {
+	if protocol := modelProtocolLabel(choice.Protocol); protocol != "" {
 		description = appendDescription(protocol, description)
 	}
 	return description
@@ -599,8 +683,11 @@ func (m *screenModel) openPicker(kind pickerKind, items []pickerItem, selected i
 // every row except the current one, and the descriptions are already carrying
 // what distinguishes the rows from each other.
 func pickerNoteFor(kind pickerKind) string {
-	if kind == pickerToolSet {
+	switch kind {
+	case pickerToolSet:
 		return "switching resets the prompt cache, so the next message costs full price"
+	case pickerModelAPI:
+		return "a wrong protocol fails on the first request"
 	}
 	return ""
 }
@@ -640,7 +727,7 @@ func pickerNavigationFor(kind pickerKind) pickerNavigation {
 	switch kind {
 	case pickerModel:
 		return navigationSearch
-	case pickerToolSet, pickerScope, pickerTheme, pickerLogin, pickerSession:
+	case pickerModelAPI, pickerToolSet, pickerScope, pickerTheme, pickerLogin, pickerSession:
 		return navigationNumbers
 	default:
 		// Logout keeps arrows only: it is the one destructive picker, and rare
@@ -730,7 +817,12 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 	navigation := pickerNavigationFor(m.picker.kind)
 	switch {
 	case isEscapeKey(message) || isInterruptKey(message):
+		kind, pending := m.picker.kind, m.picker.pendingModel
 		m.closePicker()
+		if kind == pickerModelAPI {
+			m.cancelModelAPIChoice(pending)
+			m.refreshTranscript()
+		}
 		return m, nil
 	case isUpKey(message):
 		m.picker.moveSelection(-1)
@@ -806,8 +898,11 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			m.syncCommandSuggestions()
 			return m, nil
 		}
-		effort := selectedModelEffort(item)
-		m.selectModel(item.value, effort, picker)
+		m.selectModel(modelSelection{uri: item.value, effort: selectedModelEffort(item)}, picker)
+	case pickerModelAPI:
+		selection := picker.pendingModel
+		selection.api = item.value
+		m.switchModel(selection)
 	case pickerToolSet:
 		before := m.agent.CurrentToolSet()
 		switchErr := m.agent.SwitchToolSet(m.ctx, item.value)
@@ -840,7 +935,7 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if picker.startupLogin {
 			pendingModel = item.modelURI
 		}
-		m.startProviderLogin(item.value, pendingModel, "", pickerState{})
+		m.startProviderLogin(item.value, modelSelection{uri: pendingModel}, pickerState{})
 	case pickerLogout:
 		m.logoutProvider(item.value)
 	case pickerSession:
@@ -960,7 +1055,7 @@ func (m *screenModel) openLogoutPicker() {
 	m.openPicker(pickerLogout, items, 0)
 }
 
-func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort string, returnPicker pickerState) {
+func (m *screenModel) startProviderLogin(provider string, pending modelSelection, returnPicker pickerState) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if err := m.refreshProviderStatuses(); err != nil {
 		m.addBlock(screenBlockError, "login: "+err.Error())
@@ -970,14 +1065,12 @@ func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort s
 		if status.Name != provider {
 			continue
 		}
-		pendingModel = strings.TrimSpace(pendingModel)
-		if strings.EqualFold(pendingModel, m.agent.CurrentModel()) {
-			if pendingEffort == m.agent.CurrentReasoningEffort() {
-				pendingModel = ""
-			}
+		pending.uri = strings.TrimSpace(pending.uri)
+		if strings.EqualFold(pending.uri, m.agent.CurrentModel()) && pending.effort == m.agent.CurrentReasoningEffort() {
+			pending.uri = ""
 		}
-		if pendingModel != "" && status.Source != "none" {
-			m.switchModel(pendingModel, pendingEffort)
+		if pending.uri != "" && status.Source != "none" {
+			m.switchModel(pending)
 			return
 		}
 		if status.Source == "environment override" {
@@ -985,8 +1078,7 @@ func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort s
 			return
 		}
 		m.loginProvider = provider
-		m.loginModel = pendingModel
-		m.loginEffort = pendingEffort
+		m.loginSelection = pending
 		m.loginReturn = returnPicker
 		m.secret.Reset()
 		m.secret.EchoMode = textinput.EchoPassword
@@ -1004,11 +1096,11 @@ func (m *screenModel) startProviderLogin(provider, pendingModel, pendingEffort s
 	m.addBlock(screenBlockError, "login: unsupported provider "+provider)
 }
 
-func (m *screenModel) selectModel(uri, effort string, returnPicker pickerState) {
-	uri = strings.TrimSpace(uri)
-	provider := modelProvider(uri)
+func (m *screenModel) selectModel(selection modelSelection, returnPicker pickerState) {
+	selection.uri = strings.TrimSpace(selection.uri)
+	provider := modelProvider(selection.uri)
 	if provider == "" {
-		m.switchModel(uri, effort)
+		m.switchModel(selection)
 		return
 	}
 	if err := m.refreshProviderStatuses(); err != nil {
@@ -1017,21 +1109,28 @@ func (m *screenModel) selectModel(uri, effort string, returnPicker pickerState) 
 	}
 	for _, status := range m.providers {
 		if status.Name == provider {
-			if strings.EqualFold(uri, m.agent.CurrentModel()) && effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
-				m.switchModel(uri, effort)
+			if strings.EqualFold(selection.uri, m.agent.CurrentModel()) && selection.effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
+				m.switchModel(selection)
 				return
 			}
-			m.startProviderLogin(provider, uri, effort, returnPicker)
+			m.startProviderLogin(provider, selection, returnPicker)
 			return
 		}
 	}
-	m.switchModel(uri, effort)
+	m.switchModel(selection)
 }
 
-func (m *screenModel) switchModel(uri, effort string) {
+func (m *screenModel) switchModel(selection modelSelection) {
 	before := m.agent.CurrentModel()
-	switchErr := m.agent.SwitchModel(m.ctx, uri, effort)
+	switchErr := m.agent.SwitchModel(m.ctx, selection.uri, selection.effort, selection.api)
 	if switchErr != nil && !preferenceAppliedDespiteError(switchErr) {
+		// A route whose gateway serves several protocols needs one fact Skot
+		// does not have. Asking for it here keeps the answer attached to the
+		// selection being made instead of to the whole process.
+		if selection.api == "" && app.IsModelAPIRequired(switchErr) {
+			m.askModelAPI(selection)
+			return
+		}
 		m.addBlock(screenBlockError, "model: "+switchErr.Error())
 		return
 	}

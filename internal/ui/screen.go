@@ -58,7 +58,7 @@ type Agent interface {
 	SwitchToolSet(context.Context, string) error
 	CurrentModel() string
 	ModelChoices() []app.ModelChoice
-	SwitchModel(context.Context, string, string) error
+	SwitchModel(context.Context, string, string, string) error
 	CurrentReasoningEffort() string
 	CurrentScope() string
 	EffectiveScope() string
@@ -104,6 +104,7 @@ type pickerKind uint8
 const (
 	pickerNone pickerKind = iota
 	pickerModel
+	pickerModelAPI
 	pickerToolSet
 	pickerScope
 	pickerTheme
@@ -143,11 +144,22 @@ const (
 )
 
 type pickerState struct {
-	kind         pickerKind
-	items        []pickerItem
-	index        int
-	query        string
+	kind  pickerKind
+	items []pickerItem
+	index int
+	query string
+	// pendingModel is the selection a protocol picker is completing. It carries
+	// the model and effort already chosen, so the answer finishes that switch.
+	pendingModel modelSelection
 	startupLogin bool
+}
+
+// modelSelection is one model switch in progress. api is only present for a
+// route Skot does not describe, whose protocol the user had to supply.
+type modelSelection struct {
+	uri    string
+	effort string
+	api    string
 }
 
 func (picker pickerState) active() bool {
@@ -188,13 +200,12 @@ type screenModel struct {
 	picker     pickerState
 	transcript transcriptState
 
-	modelChoices  []ModelChoice
-	providers     []ProviderStatus
-	loginProvider string
-	loginModel    string
-	loginEffort   string
-	loginReturn   pickerState
-	sessionStatus agent.SessionStatus
+	modelChoices   []ModelChoice
+	providers      []ProviderStatus
+	loginProvider  string
+	loginSelection modelSelection
+	loginReturn    pickerState
+	sessionStatus  agent.SessionStatus
 
 	width     int
 	height    int

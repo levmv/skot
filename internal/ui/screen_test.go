@@ -31,6 +31,7 @@ type fakeAgent struct {
 	toolSetTools     map[string][]string
 	toolSetErr       error
 	model            string
+	modelAPI         string
 	reasoningEffort  string
 	reasoningEfforts map[string][]string
 	modelErr         error
@@ -169,13 +170,23 @@ func (fake *fakeAgent) ModelChoices() []ModelChoice {
 	return choices
 }
 
-func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort string) error {
-	if fake.modelErr != nil && !preferenceAppliedDespiteError(fake.modelErr) {
-		return fake.modelErr
+func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort, api string) error {
+	err := fake.modelErr
+	if app.IsModelAPIRequired(err) {
+		// The refusal stands until the caller supplies the protocol, exactly as
+		// the application refuses an undeclared mixed-protocol route.
+		if api == "" {
+			return err
+		}
+		err = nil
+	}
+	if err != nil && !preferenceAppliedDespiteError(err) {
+		return err
 	}
 	fake.model = model
+	fake.modelAPI = api
 	fake.reasoningEffort = effort
-	return fake.modelErr
+	return err
 }
 
 func (fake *fakeAgent) CurrentReasoningEffort() string { return fake.reasoningEffort }

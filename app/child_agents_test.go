@@ -260,7 +260,7 @@ func TestExistingChildKeepsItsModelAfterParentSwitch(t *testing.T) {
 	}
 	runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{childID}, Wait: "all"})
 
-	if err := application.SwitchModel(context.Background(), "deepseek/new-parent", ""); err != nil {
+	if err := application.SwitchModel(context.Background(), "deepseek/new-parent", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	runChildTestTool(t, tool, parentID, childToolArgs{Action: "send", ID: childID, Prompt: "after switch"})
@@ -362,7 +362,7 @@ func TestResumePreservesUnavailableChildWithoutChangingItsModel(t *testing.T) {
 
 	child := application.state.children.children[parentID][childID]
 	appendApplicationRecord(t, child.journal, agent.RecordModelSelected, agent.ModelSelectedRecord{
-		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
+		Backend: "legacy_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
 	})
 	child.mu.Lock()
 	metadata := child.metadata

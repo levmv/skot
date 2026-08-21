@@ -285,7 +285,7 @@ func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := preferences.SetModelSelection("ollama/saved-model", ""); err != nil {
+	if err := preferences.SetModelSelection("ollama/saved-model", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := preferences.SetToolSetSelection(toolpolicy.ToolSetReadOnly); err != nil {
@@ -335,14 +335,14 @@ func TestOpenPrefersWorkspaceModelOverNewerSelectionElsewhere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pinned.SetModelSelection("ollama/pinned-model", ""); err != nil {
+	if err := pinned.SetModelSelection("ollama/pinned-model", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	other, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, otherRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := other.SetModelSelection("ollama/latest-model", ""); err != nil {
+	if err := other.SetModelSelection("ollama/latest-model", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	application, err := Open(context.Background(), Config{Home: home, Root: pinnedRoot, Interactive: true})
@@ -464,7 +464,7 @@ func TestOpenCanonicalWorkspaceAliasSharesPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := preferences.SetModelSelection("ollama/aliased", ""); err != nil {
+	if err := preferences.SetModelSelection("ollama/aliased", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	application, err := Open(context.Background(), Config{
@@ -1210,7 +1210,7 @@ func TestScopeSummaryReportsRunningProcessesWithEarlierScope(t *testing.T) {
 
 func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
 	application, preferences, _ := newModelSwitchApplication(t)
-	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err != nil {
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := preferences.Settings()
@@ -1224,7 +1224,7 @@ func TestApplicationKeepsSwitchedModelWhenSavingSelectionFails(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err == nil || !IsPreferenceNotPersisted(err) {
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high", ""); err == nil || !IsPreferenceNotPersisted(err) {
 		t.Fatalf("switch error = %v", err)
 	}
 	if got := application.CurrentModel(); got != "deepseek/new-model" {
@@ -1233,7 +1233,7 @@ func TestApplicationKeepsSwitchedModelWhenSavingSelectionFails(t *testing.T) {
 	if err := os.Remove(filepath.Join(home, "interactive.lock")); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high"); err != nil {
+	if err := application.SwitchModel(context.Background(), "deepseek/new-model", "high", ""); err != nil {
 		t.Fatalf("retry current model: %v", err)
 	}
 	stored, err := preferences.Settings()
@@ -1244,12 +1244,12 @@ func TestApplicationKeepsSwitchedModelWhenSavingSelectionFails(t *testing.T) {
 
 func TestApplicationRestoresSavedModelWhenRuntimeRejectsSwitch(t *testing.T) {
 	application, preferences, _ := newModelSwitchApplication(t)
-	if err := preferences.SetModelSelection("deepseek/old-model", "high"); err != nil {
+	if err := preferences.SetModelSelection("deepseek/old-model", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := application.SwitchModel(ctx, "deepseek/new-model", "high"); !errors.Is(err, context.Canceled) {
+	if err := application.SwitchModel(ctx, "deepseek/new-model", "high", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("switch error = %v", err)
 	}
 	stored, err := preferences.Settings()
@@ -1508,7 +1508,7 @@ func TestApplicationResumeOpensHistoryWhenSavedModelIsUnavailable(t *testing.T) 
 	currentChoice := slices.IndexFunc(choices, func(choice ModelChoice) bool {
 		return strings.EqualFold(choice.URI, application.CurrentModel())
 	})
-	if currentChoice < 0 || choices[currentChoice].Protocol != "anthropic_messages" {
+	if currentChoice < 0 || !choices[currentChoice].Unavailable || choices[currentChoice].UnavailableReason == "" {
 		t.Fatalf("restored model choice = %#v", choices)
 	}
 	opened, err := application.State(context.Background())
@@ -1529,7 +1529,7 @@ func TestApplicationResumeOpensHistoryWhenSavedModelIsUnavailable(t *testing.T) 
 	if len(unchanged.Items) != 1 || unchanged.Selection.Model != "minimax-m2.5" {
 		t.Fatalf("failed continuation changed history = %#v", unchanged)
 	}
-	if err := application.SwitchModel(context.Background(), "deepseek/initial-model", ""); err != nil {
+	if err := application.SwitchModel(context.Background(), "deepseek/initial-model", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	result, err := application.Run(context.Background(), "continue it", nil)
@@ -1633,6 +1633,53 @@ func TestResumeDoesNotTreatInvalidEffortAsAnUnavailableModel(t *testing.T) {
 	}
 }
 
+func TestSwitchModelRejectsAMistypedProtocol(t *testing.T) {
+	application, _ := newSessionApplication(t)
+	err := application.SwitchModel(context.Background(), "opencode-go/ox-alpha-free", "", "chat-completions")
+	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unsupported model API "chat-completions"`) {
+		t.Fatalf("mistyped protocol error = %v", err)
+	}
+	if application.CurrentModel() == "opencode-go/ox-alpha-free" {
+		t.Fatal("mistyped protocol switched the model")
+	}
+}
+
+func TestApplicationResumeRebuildsUndeclaredRouteFromItsRecordedProtocol(t *testing.T) {
+	application, _ := newSessionApplication(t)
+	source, sourceID, err := session.Create(application.config.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: application.config.root,
+	})
+	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "ox-alpha-free", Epoch: "epoch-typed",
+	})
+	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "typed-run"})
+	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "typed-run", Text: "saved question"})
+	appendApplicationRecord(t, source, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "typed-run", Status: agent.RunCompleted})
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.ResumeSession(context.Background(), session.ShortID(sourceID)); err != nil {
+		t.Fatal(err)
+	}
+	// The session itself is the evidence for a protocol Skot cannot infer, so
+	// reopening it must not degrade a route which was already running.
+	choices := application.ModelChoices()
+	current := slices.IndexFunc(choices, func(choice ModelChoice) bool {
+		return strings.EqualFold(choice.URI, "opencode-go/ox-alpha-free")
+	})
+	if current < 0 || choices[current].Unavailable || choices[current].Protocol != "anthropic_messages" ||
+		!choices[current].ProtocolExplicit {
+		t.Fatalf("resumed route choice = %#v", choices)
+	}
+}
+
+// createUnavailableModelSession records a route this build cannot rebuild: its
+// gateway needs a declaration, and the protocol the session ran on is no longer
+// one Skot implements.
 func createUnavailableModelSession(t *testing.T, home, root string) string {
 	t.Helper()
 	source, sourceID, err := session.Create(home)
@@ -1643,7 +1690,7 @@ func createUnavailableModelSession(t *testing.T, home, root string) string {
 		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: root,
 	})
 	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
-		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
+		Backend: "legacy_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
 	})
 	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "saved-run"})
 	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "saved-run", Text: "saved question"})
@@ -1735,10 +1782,10 @@ func TestApplicationReselectUsesCurrentOpenRouterContextWhenLookupFails(t *testi
 		return 0, errors.New("offline")
 	}
 
-	if err := application.SwitchModel(context.Background(), "openrouter/~x-ai/grok-latest", ""); err != nil {
+	if err := application.SwitchModel(context.Background(), "openrouter/~x-ai/grok-latest", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.SwitchModel(context.Background(), "openrouter/~x-ai/grok-latest", "high"); err != nil {
+	if err := application.SwitchModel(context.Background(), "openrouter/~x-ai/grok-latest", "high", ""); err != nil {
 		t.Fatal(err)
 	}
 	state, err := application.State(context.Background())
@@ -1812,7 +1859,7 @@ func TestApplicationDoesNotWarnWhenSelectingAnUnreviewedRoute(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "secret")
 
 	for range 2 {
-		if err := application.SwitchModel(context.Background(), "deepseek/unreviewed-model", "high"); err != nil {
+		if err := application.SwitchModel(context.Background(), "deepseek/unreviewed-model", "high", ""); err != nil {
 			t.Fatal(err)
 		}
 	}

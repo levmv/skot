@@ -101,10 +101,28 @@ Web tools use separate credentials:
 | Exa | `EXA_API_KEY` | Web search and fetch |
 | Firecrawl | `FIRECRAWL_API_KEY` | Web fetch |
 
-An explicit `-model-api` or `-base-url` can make a route unverified. Skot
-retains conservative protocol defaults in that case and reports a compatibility
-hint if the provider rejects the request. Route-specific features such as a
-thinking switch are not carried across an incompatible protocol override.
+### Models Skot does not list
+
+Any `provider/model` can be entered by hand, through `Enter model URI…` in the
+`/model` picker or as `/model provider/model`. Most providers speak one API, so
+an unlisted model of theirs is selected like any other, with a conservative
+context estimate until the route is described.
+
+A subscription gateway such as OpenCode Go serves several APIs at once, and the
+API of a model Skot does not list cannot be guessed from the provider. Selecting
+one asks which API it speaks; answer with the list, or name the API directly as
+`/model opencode-go/some-model chat_completions`. The answer belongs to that
+model: it is remembered for later selections and for reopening the session, it
+is not applied to any other route, and it is dropped once a Skot release
+describes the model itself. Choosing the wrong API is not dangerous — the
+request fails at the provider.
+
+An explicit `-model-api` or `-base-url` can make a route unverified. Unlike an
+answer given for one model, `-model-api` applies to every model selected in that
+run. Skot retains conservative protocol defaults in either case and reports a
+compatibility hint if the provider rejects the request. Route-specific features
+such as a thinking switch are not carried across an incompatible protocol
+override.
 
 ## Data directory and configuration
 

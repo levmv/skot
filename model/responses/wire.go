@@ -204,18 +204,7 @@ type streamEvent struct {
 	Message  string        `json:"message,omitempty"`
 }
 
-type apiError struct {
-	Message string `json:"message"`
-	Type    string `json:"type,omitempty"`
-	Code    any    `json:"code,omitempty"`
-}
-
-func (apiError *apiError) message() string {
-	if apiError == nil || strings.TrimSpace(apiError.Message) == "" {
-		return "unknown error"
-	}
-	return strings.TrimSpace(apiError.Message)
-}
+type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request agent.ModelRequest) (responseRequest, error) {
 	input := make([]json.RawMessage, 0, len(request.Items)+1)
@@ -396,7 +385,7 @@ func (backend *Backend) matchesProviderContext(context *agent.ProviderContext, e
 
 func (backend *Backend) parseResponse(response wireResponse) (agent.ModelResponse, error) {
 	if response.Error != nil {
-		return agent.ModelResponse{}, fmt.Errorf("%s Responses API error: %s", backend.provider, response.Error.message())
+		return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, response.Error)
 	}
 	items := make([]agent.Item, 0, len(response.Output))
 	hasToolCall := false

@@ -117,11 +117,6 @@ func (usage usageAccumulator) modelUsage() agent.ModelUsage {
 	}
 }
 
-type apiError struct {
-	Type    string `json:"type,omitempty"`
-	Message string `json:"message,omitempty"`
-}
-
 type streamBlock struct {
 	kind      string
 	id        string

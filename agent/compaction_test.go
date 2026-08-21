@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,173 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	if report.Window != 16*1024 || report.TotalInputTokens > report.InputLimit || report.CompactionCount != 1 {
 		t.Fatalf("context report = %#v", report)
 	}
+}
+
+func TestRuntimePreflightCompactsUntilEstimatedRequestFits(t *testing.T) {
+	journal := &memoryJournal{}
+	seedRuntime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
+		}),
+		Journal: journal,
+	})
+	oldInput := strings.Repeat("old context ", 3_000)
+	for range 18 {
+		if _, err := seedRuntime.Run(context.Background(), oldInput, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	compactions := 0
+	mainRequests := 0
+	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		if request.Instructions == compactionSystemInstructions {
+			compactions++
+			return ModelResponse{
+				Items:      []Item{{Kind: ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
+				StopReason: "stop",
+			}, nil
+		}
+		mainRequests++
+		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "fits"}}, StopReason: "stop"}, nil
+	})
+	runtime := newTestRuntime(t, Config{
+		Model: ModelInfo{
+			BackendID: "test", Provider: "test", Model: "test", ContextWindow: 96 * 1024,
+		},
+		Backend: model,
+		Journal: journal,
+	})
+	result, err := runtime.Run(context.Background(), "new question", nil)
+	if err != nil || result.Answer != "fits" {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	if compactions < 2 || mainRequests != 1 {
+		t.Fatalf("compactions/main requests = %d/%d, want repeated compaction and one main request", compactions, mainRequests)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CompactionCount != compactions || runtime.SessionStatus().ContextReport.TotalInputTokens > runtime.SessionStatus().ContextReport.InputLimit {
+		t.Fatalf("state/status = compactions %d, report %#v", state.CompactionCount, runtime.SessionStatus().ContextReport)
+	}
+}
+
+func TestRuntimeCompactsUntilRequestTooLargeRecovers(t *testing.T) {
+	journal := &memoryJournal{}
+	seedRuntime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
+		}),
+		Journal: journal,
+	})
+	oldInput := strings.Repeat("old context ", 3_000)
+	for range 18 {
+		if _, err := seedRuntime.Run(context.Background(), oldInput, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mainAttempts := 0
+	compactions := 0
+	const requestLimit = 250 * 1024
+	var mainRequestSizes []int
+	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		if request.Instructions == compactionSystemInstructions {
+			compactions++
+			if len(request.Tools) != 0 || len(request.Items) != 1 || request.Items[0].Kind != ItemUserText {
+				t.Fatalf("compaction request = %#v", request)
+			}
+			return ModelResponse{
+				Items:      []Item{{Kind: ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
+				StopReason: "stop",
+			}, nil
+		}
+		mainAttempts++
+		requestSize := encodedTestModelRequestBytes(t, request)
+		mainRequestSizes = append(mainRequestSizes, requestSize)
+		if requestSize > requestLimit {
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(fmt.Errorf("payload is %d bytes, limit is %d", requestSize, requestLimit)),
+				Kind:  ProviderErrorRequestTooLarge,
+			}
+		}
+		if request.Summary != fmt.Sprintf("summary %d", compactions) {
+			t.Fatalf("recovered request summary = %q after %d compactions", request.Summary, compactions)
+		}
+		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
+	})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
+	var events []Event
+	result, err := runtime.Run(context.Background(), "new question", func(event Event) {
+		assertEventCommittedAtEmission(t, journal, event)
+		events = append(events, event)
+	})
+	if err != nil || result.Answer != "recovered" {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	if compactions < 2 || mainAttempts != compactions+1 {
+		t.Fatalf("main attempts/compactions = %d/%d", mainAttempts, compactions)
+	}
+	for index, size := range mainRequestSizes {
+		if index > 0 && mainRequestSizes[index-1] <= size {
+			t.Fatalf("main request sizes did not decrease: %v", mainRequestSizes)
+		}
+		if (index < len(mainRequestSizes)-1) != (size > requestLimit) {
+			t.Fatalf("main request sizes = %v, limit %d", mainRequestSizes, requestLimit)
+		}
+	}
+	records := journal.snapshot()
+	if countRecordKind(records, RecordModelAttemptFailed) != compactions || countRecordKind(records, RecordContextCompacted) != compactions {
+		t.Fatalf("recovery records = %#v", records)
+	}
+	compactionEvents := 0
+	for _, event := range events {
+		if event.Kind == EventContextCompacted {
+			compactionEvents++
+		}
+	}
+	if compactionEvents != compactions {
+		t.Fatalf("recovery events = %#v", events)
+	}
+	assertAuthoritativeEvents(t, events, records)
+}
+
+func TestRuntimeStopsRequestTooLargeRecoveryWithoutCompactionBoundary(t *testing.T) {
+	journal := &memoryJournal{}
+	attempts := 0
+	runtime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			attempts++
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge, Retryable: true,
+			}
+		}),
+		Journal: journal, RequestPolicy: ModelRequestPolicy{MaxAttempts: 3},
+	})
+	result, err := runtime.Run(context.Background(), "only active block", nil)
+	if err == nil || result.Status != RunFailed || !errors.Is(err, ErrModelRequestTooLarge) || !strings.Contains(err.Error(), "payload too large") ||
+		!strings.Contains(err.Error(), "automatic context reduction") {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	if attempts != 1 {
+		t.Fatalf("model attempts = %d, want 1", attempts)
+	}
+	records := journal.snapshot()
+	if countRecordKind(records, RecordModelAttemptFailed) != 1 || countRecordKind(records, RecordContextCompacted) != 0 ||
+		countRecordKind(records, RecordRunFinished) != 1 {
+		t.Fatalf("terminal records = %#v", records)
+	}
+}
+
+func encodedTestModelRequestBytes(t *testing.T, request ModelRequest) int {
+	t.Helper()
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(body)
 }
 
 func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {

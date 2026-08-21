@@ -113,7 +113,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode Responses request: %w", err))
 	}
 	if len(body) > backend.maxRequestBytes {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("responses request is %d bytes, limit is %d", len(body), backend.maxRequestBytes))
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("%w: responses request is %d bytes, limit is %d", agent.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -183,18 +183,14 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			return backend.parseResponse(*event.Response)
 		case "response.failed":
 			if event.Response != nil && event.Response.Error != nil {
-				return agent.ModelResponse{}, fmt.Errorf("%s Responses API error: %s", backend.provider, event.Response.Error.message())
+				return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Response.Error)
 			}
 			return agent.ModelResponse{}, fmt.Errorf("%s Responses API failed", backend.provider)
 		case "error":
-			message := strings.TrimSpace(event.Message)
 			if event.Error != nil {
-				message = event.Error.message()
+				return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Error)
 			}
-			if message == "" {
-				message = "unknown error"
-			}
-			return agent.ModelResponse{}, fmt.Errorf("%s Responses stream error: %s", backend.provider, message)
+			return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, &apiError{Message: event.Message, Code: event.Code})
 		}
 	}
 }

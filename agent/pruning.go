@@ -12,21 +12,20 @@ const (
 	defaultPrunedToolTailBytes = 2 * 1024
 )
 
-func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pendingInput string, includeTools bool) (State, ContextReport, uint64, error) {
-	report := runtime.contextReportForRequest(state, includeTools, pendingInput)
+func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, ContextReport, error) {
 	if len(state.Blocks) < 2 {
-		return state, report, 0, nil
+		return Record{}, report, nil
 	}
 	boundaryIndex := len(state.Blocks) - 2
 	if state.hasUnfinishedWork() {
 		unfinishedStart, ok := state.firstUnfinishedBlock()
 		if !ok {
-			return state, report, 0, errors.New("cannot locate unfinished conversation block")
+			return Record{}, report, errors.New("cannot locate unfinished conversation block")
 		}
 		boundaryIndex = min(boundaryIndex, unfinishedStart-1)
 	}
 	if boundaryIndex < 0 {
-		return state, report, 0, nil
+		return Record{}, report, nil
 	}
 	payload := ToolResultsPrunedRecord{
 		ThroughSequence: state.Blocks[boundaryIndex].EndSequence,
@@ -35,29 +34,25 @@ func (runtime *Runtime) tryPruneToolResults(ctx context.Context, state State, pe
 	}
 	if state.ToolPruning != nil {
 		if payload.ThroughSequence <= state.ToolPruning.ThroughSequence {
-			return state, report, 0, nil
+			return Record{}, report, nil
 		}
 		payload.HeadBytes = state.ToolPruning.HeadBytes
 		payload.TailBytes = state.ToolPruning.TailBytes
 	}
 	projected := state
 	projected.ToolPruning = &payload
-	prunedReport := runtime.contextReportForRequest(projected, includeTools, pendingInput)
-	if prunedReport.Window == 0 || prunedReport.TotalInputTokens > prunedReport.InputLimit || prunedReport.TotalInputTokens >= report.TotalInputTokens {
-		return state, prunedReport, 0, nil
+	prunedReport := runtime.requestReport(projected, spec)
+	if prunedReport.TotalInputTokens >= report.TotalInputTokens {
+		return Record{}, report, nil
 	}
 	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1, state.hasUnfinishedWork()); err != nil {
-		return state, report, 0, err
+		return Record{}, report, err
 	}
 	record, err := appendRecord(ctx, runtime.journal, RecordToolResultsPruned, payload)
 	if err != nil {
-		return state, report, 0, err
+		return Record{}, report, err
 	}
-	state.ToolPruning = &payload
-	state.ToolPruningCount++
-	state.LastSequence = record.Sequence
-	state.lastRequiredSequence = record.Sequence
-	return state, prunedReport, record.Sequence, nil
+	return record, prunedReport, nil
 }
 
 func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, recordSequence uint64, unfinished bool) error {

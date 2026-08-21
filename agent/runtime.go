@@ -37,6 +37,13 @@ const (
 	toolLimitInstructions = "Tool call limit reached. Do not call any more tools; answer with what you have, and be explicit about anything you could not verify."
 )
 
+// runRequestSpec describes the parts of a run request which are not already
+// durable session state. Its zero value is the ordinary tools-enabled request.
+type runRequestSpec struct {
+	omitTools     bool
+	extraUserText string
+}
+
 type Config struct {
 	// Model always identifies the selected model and its effective, secret-free
 	// configuration. Backend may be nil when a persisted selection remains
@@ -470,11 +477,10 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 	if err := runtime.prepareSession(ctx, live); err != nil {
 		return RunResult{}, err
 	}
-	state, _, err := runtime.prepareContext(ctx, live.state, input, emit)
+	_, err = runtime.prepareRunRequestContext(ctx, live, runRequestSpec{extraUserText: input}, emit)
 	if err != nil {
 		return RunResult{}, err
 	}
-	live = reducerFromState(state)
 	runtime.syncExternalWorkCommits(live.state)
 
 	runID, err := newID("run")
@@ -508,13 +514,13 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 		if boundaryErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, boundaryErr)
 		}
-		state, _, contextErr := runtime.prepareContext(ctx, live.state, "", emit)
+		requestSpec := runRequestSpec{}
+		report, contextErr := runtime.prepareRunRequestContext(ctx, live, requestSpec, emit)
 		if contextErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, contextErr)
 		}
-		live = reducerFromState(state)
 		runtime.publishSessionStatus(live.state)
-		response, callErr := runtime.complete(ctx, runID, live.state, emit)
+		response, callErr := runtime.completeRunRequest(ctx, runID, live, requestSpec, report, emit)
 		if callErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, callErr)
 		}
@@ -612,21 +618,17 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunCancelled, ctx.Err())
 	}
 
-	toolLimitInstructions := live.state.Configured.ModelContext.ToolLimitInstructions
-	state, _, contextErr := runtime.prepareContextForRequest(ctx, live.state, toolLimitInstructions, false, emit)
+	requestSpec := runRequestSpec{
+		omitTools:     true,
+		extraUserText: live.state.Configured.ModelContext.ToolLimitInstructions,
+	}
+	report, contextErr := runtime.prepareRunRequestContext(ctx, live, requestSpec, emit)
 	if contextErr != nil {
 		status, contextErr := runFailure(ctx, contextErr)
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, contextErr)
 	}
-	live = reducerFromState(state)
 	runtime.publishSessionStatus(live.state)
-	request, err := runtime.modelRequest(live.state)
-	if err != nil {
-		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunFailed, err)
-	}
-	request.Tools = nil
-	request.Items = append(request.Items, Item{Kind: ItemUserText, Text: toolLimitInstructions})
-	response, callErr := runtime.completeRequest(ctx, runID, request, emit)
+	response, callErr := runtime.completeRunRequest(ctx, runID, live, requestSpec, report, emit)
 	if callErr != nil {
 		status, callErr := runFailure(ctx, callErr)
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, callErr)
@@ -778,12 +780,33 @@ func (runtime *Runtime) syncExternalWorkCommits(state State) {
 	}
 }
 
-func (runtime *Runtime) complete(ctx context.Context, runID string, state State, emit EmitFunc) (ModelResponse, error) {
-	request, err := runtime.modelRequest(state)
-	if err != nil {
-		return ModelResponse{}, err
+func (runtime *Runtime) completeRunRequest(
+	ctx context.Context,
+	runID string,
+	live *stateReducer,
+	spec runRequestSpec,
+	report ContextReport,
+	emit EmitFunc,
+) (ModelResponse, error) {
+	for {
+		request, err := runtime.modelRequestForRun(live.state, spec)
+		if err != nil {
+			return ModelResponse{}, err
+		}
+		response, err := runtime.completeRequest(ctx, runID, request, emit)
+		if err == nil || ctx.Err() != nil || !errors.Is(err, ErrModelRequestTooLarge) {
+			return response, err
+		}
+
+		var shrinkErr error
+		report, shrinkErr = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
+		if shrinkErr != nil {
+			return ModelResponse{}, errors.Join(
+				err,
+				fmt.Errorf("automatic context reduction after oversized model request failed: %w", shrinkErr),
+			)
+		}
 	}
-	return runtime.completeRequest(ctx, runID, request, emit)
 }
 
 func (runtime *Runtime) completeRequest(ctx context.Context, runID string, request ModelRequest, emit EmitFunc) (ModelResponse, error) {
@@ -835,7 +858,8 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 			}
 		}
 		emitEvent(emit, Event{Kind: EventModelAttemptDiscarded, RunID: runID, AttemptID: attemptID, Text: lastErr.Error()})
-		if ctx.Err() != nil || errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrModelRequestBudget) || !runtime.retryable(err) || !runtime.attemptAllowed(attempt+1) {
+		if ctx.Err() != nil || errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrModelRequestTooLarge) ||
+			errors.Is(err, ErrModelRequestBudget) || !runtime.retryable(err) || !runtime.attemptAllowed(attempt+1) {
 			break
 		}
 		delay := runtime.retryDelay(err, attempt)
@@ -914,8 +938,7 @@ func (runtime *Runtime) retryable(err error) bool {
 	if errors.As(err, &providerErr) {
 		return providerErr.Retryable
 	}
-	// Models predating ProviderError have no richer retry signal. Preserve the
-	// runtime's established behavior for their unclassified failures.
+	// Unclassified backend errors use the generic retryable default.
 	return !errors.Is(err, ErrInvalidRequest)
 }
 
@@ -961,7 +984,7 @@ func waitForModelRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (runtime *Runtime) modelRequest(state State) (ModelRequest, error) {
+func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (ModelRequest, error) {
 	if state.Configured == nil {
 		return ModelRequest{}, errors.New("session has no effective configuration")
 	}
@@ -969,17 +992,24 @@ func (runtime *Runtime) modelRequest(state State) (ModelRequest, error) {
 	if state.Compaction != nil {
 		summary = state.Compaction.Summary
 	}
-	return ModelRequest{
+	items := state.verbatimModelItems()
+	if spec.extraUserText != "" {
+		items = append(items, Item{Kind: ItemUserText, Text: spec.extraUserText})
+	}
+	request := ModelRequest{
 		SessionID:     state.SessionID,
 		ProviderEpoch: state.Selection.Epoch,
 		Instructions:  state.Configured.ModelContext.Instructions,
 		Summary:       summary,
-		Items: runtime.projectModelItems(state.verbatimModelItems(), ProviderContext{
+		Items: runtime.projectModelItems(items, ProviderContext{
 			Backend: state.Selection.Backend,
 			Epoch:   state.Selection.Epoch,
 		}),
-		Tools: cloneToolSpecs(state.Configured.ModelContext.Tools),
-	}, nil
+	}
+	if !spec.omitTools {
+		request.Tools = cloneToolSpecs(state.Configured.ModelContext.Tools)
+	}
+	return request, nil
 }
 
 // projectModelItems applies runtime ownership filtering before the adapter's

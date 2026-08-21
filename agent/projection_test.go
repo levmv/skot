@@ -77,7 +77,7 @@ func TestContextEstimateMatchesTheProjectedRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := runtime.modelRequest(state)
+			request, err := runtime.modelRequestForRun(state, runRequestSpec{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -134,5 +134,40 @@ func TestContextEstimateProjectsPendingInputAsTheNextUserMessage(t *testing.T) {
 					estimate.HistoryTokens, estimate.PendingTokens, sent)
 			}
 		})
+	}
+}
+
+func TestRunRequestProjectsExtraUserTextWithHistory(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &reasoningModel{replay: replayCurrentTurn}
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
+	if _, err := runtime.Run(context.Background(), "question", nil); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := runRequestSpec{omitTools: true, extraUserText: toolLimitInstructions}
+	request, err := runtime.modelRequestForRun(state, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range request.Items {
+		if item.Kind == ItemReasoning {
+			t.Fatalf("extra user text was projected after history: %#v", request.Items)
+		}
+	}
+	if last := request.Items[len(request.Items)-1]; last.Kind != ItemUserText || last.Text != toolLimitInstructions {
+		t.Fatalf("extra user text = %#v", last)
+	}
+	report := runtime.contextReportForRequest(state, false, toolLimitInstructions)
+	if report.HistoryTokens+report.PendingTokens != estimateItemsTokens(request.Items) {
+		t.Fatalf("estimate = %d (history %d + pending %d), request = %d",
+			report.HistoryTokens+report.PendingTokens,
+			report.HistoryTokens,
+			report.PendingTokens,
+			estimateItemsTokens(request.Items),
+		)
 	}
 }

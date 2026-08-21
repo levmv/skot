@@ -13,8 +13,8 @@ import (
 	productlimits "github.com/levmv/skot/internal/limits"
 )
 
-// ProviderErrorDetails is the protocol-neutral part of an HTTP provider
-// failure.
+// ProviderErrorDetails is the protocol-neutral classification input shared by
+// HTTP and in-band provider failures.
 type ProviderErrorDetails struct {
 	Provider   string
 	Model      string
@@ -24,6 +24,53 @@ type ProviderErrorDetails struct {
 	Code       string
 	Type       string
 	RetryAfter time.Duration
+}
+
+// ProviderErrorEnvelope is the common structured error object used by the
+// supported model protocols and compatible gateways.
+type ProviderErrorEnvelope struct {
+	Message string `json:"message"`
+	Type    string `json:"type,omitempty"`
+	Code    any    `json:"code,omitempty"`
+	// Compatible gateways use unrelated metadata shapes, so keep the value raw.
+	// ErrorType recognizes OpenRouter's string metadata.error_type when present.
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+func (envelope *ProviderErrorEnvelope) messageText() string {
+	if envelope == nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Message)
+}
+
+func (envelope *ProviderErrorEnvelope) errorType() string {
+	if envelope == nil {
+		return ""
+	}
+	var metadata struct {
+		ErrorType string `json:"error_type,omitempty"`
+	}
+	if json.Unmarshal(envelope.Metadata, &metadata) == nil && strings.TrimSpace(metadata.ErrorType) != "" {
+		return strings.TrimSpace(metadata.ErrorType)
+	}
+	return strings.TrimSpace(envelope.Type)
+}
+
+// NewProviderEnvelopeError converts an in-band provider error, which has no
+// HTTP status, into the same classified error used for HTTP responses.
+func NewProviderEnvelopeError(provider, model string, envelope *ProviderErrorEnvelope) error {
+	code := ""
+	if envelope != nil {
+		code = ErrorCode(envelope.Code)
+	}
+	return NewProviderError(ProviderErrorDetails{
+		Provider: provider,
+		Model:    model,
+		Message:  envelope.messageText(),
+		Code:     code,
+		Type:     envelope.errorType(),
+	})
 }
 
 // DecodeProviderError reads the common error envelope used by Skot's HTTP model
@@ -38,18 +85,14 @@ func DecodeProviderError(provider, model, label string, response *http.Response)
 		body = body[:productlimits.MaxModelCompletionBytes]
 	}
 	var envelope struct {
-		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type,omitempty"`
-			Code    any    `json:"code,omitempty"`
-		} `json:"error"`
+		Error *ProviderErrorEnvelope `json:"error"`
 	}
 	message, code, errorType := "", "", ""
 	structured := json.Unmarshal(body, &envelope) == nil && envelope.Error != nil
 	if structured {
-		message = strings.TrimSpace(envelope.Error.Message)
+		message = envelope.Error.messageText()
 		code = ErrorCode(envelope.Error.Code)
-		errorType = strings.TrimSpace(envelope.Error.Type)
+		errorType = envelope.Error.errorType()
 	}
 	if message == "" && !structured {
 		message = strings.TrimSpace(string(body))
@@ -81,21 +124,30 @@ func NewProviderError(details ProviderErrorDetails) error {
 	provider := strings.TrimSpace(details.Provider)
 	model := strings.TrimSpace(details.Model)
 	status := strings.TrimSpace(details.Status)
-	if status == "" {
+	if status == "" && details.StatusCode > 0 {
 		status = fmt.Sprintf("%d %s", details.StatusCode, http.StatusText(details.StatusCode))
 	}
 	message := strings.TrimSpace(details.Message)
 	if message == "" {
-		message = http.StatusText(details.StatusCode)
+		message = strings.TrimSpace(http.StatusText(details.StatusCode))
+		if message == "" {
+			message = "unknown error"
+		}
 	}
 	code := strings.ToLower(strings.TrimSpace(details.Code))
 	errorType := strings.ToLower(strings.TrimSpace(details.Type))
 	kind := classifyProviderError(provider, details.StatusCode, code, errorType)
-	cause := agent.MarkProviderFailure(fmt.Errorf(
-		"%s (HTTP %s): %s",
-		providerErrorSummary(provider, model, kind), status, message,
-	))
+	summary := providerErrorSummary(provider, model, kind)
+	var cause error
+	if status == "" {
+		cause = agent.MarkProviderFailure(fmt.Errorf("%s: %s", summary, message))
+	} else {
+		cause = agent.MarkProviderFailure(fmt.Errorf("%s (HTTP %s): %s", summary, status, message))
+	}
+	// A statusless, unclassified in-band error has no structured signal that
+	// retrying unchanged is futile. A recognized kind supplies its own policy.
 	retryable := details.StatusCode == http.StatusRequestTimeout ||
+		(details.StatusCode == 0 && kind == "") ||
 		kind == agent.ProviderErrorRateLimit || kind == agent.ProviderErrorUnavailable
 	return &agent.ProviderError{
 		Cause: cause, StatusCode: details.StatusCode, Kind: kind, Code: code, Type: errorType,
@@ -104,6 +156,10 @@ func NewProviderError(details ProviderErrorDetails) error {
 }
 
 func classifyProviderError(provider string, status int, code, errorType string) agent.ProviderErrorKind {
+	// NewProviderError normalizes both structured signals before classification.
+	if isRequestTooLargeSignal(code) || isRequestTooLargeSignal(errorType) {
+		return agent.ProviderErrorRequestTooLarge
+	}
 	// DeepSeek's stable quota signal wins over HTTP 429, which otherwise means
 	// a temporary rate limit. Do not add message fragments here: prose is not a
 	// routing contract.
@@ -111,7 +167,13 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 		(code == "insufficient_quota" || errorType == "insufficient_quota") {
 		return agent.ProviderErrorQuota
 	}
+	// Anthropic's context-window overflow shares the generic 400
+	// invalid_request_error used by ordinary invalid requests. Treating that pair
+	// as oversized would compact unrelated failures, and provider prose is not a
+	// stable routing signal.
 	switch status {
+	case http.StatusRequestEntityTooLarge:
+		return agent.ProviderErrorRequestTooLarge
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return agent.ProviderErrorRequest
 	case http.StatusUnauthorized:
@@ -127,6 +189,15 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 			return agent.ProviderErrorUnavailable
 		}
 		return ""
+	}
+}
+
+func isRequestTooLargeSignal(value string) bool {
+	switch value {
+	case "request_too_large", "context_length_exceeded":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -151,6 +222,8 @@ func providerErrorSummary(provider, model string, kind agent.ProviderErrorKind) 
 		return target + " is temporarily rate limited"
 	case agent.ProviderErrorRequest:
 		return target + " rejected the request"
+	case agent.ProviderErrorRequestTooLarge:
+		return target + " rejected the oversized request"
 	case agent.ProviderErrorUnavailable:
 		return target + " is temporarily unavailable"
 	default:

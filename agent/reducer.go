@@ -38,26 +38,6 @@ func reduceRecords(records []Record) (*stateReducer, error) {
 	return reducer, nil
 }
 
-func reducerFromState(state State) *stateReducer {
-	if state.DeliveredJobs == nil {
-		state.DeliveredJobs = make(map[string]struct{})
-	}
-	reducer := &stateReducer{
-		state:      state,
-		active:     make(map[string]struct{}, len(state.ActiveRuns)),
-		blockByRun: make(map[string]int, len(state.ActiveRuns)),
-	}
-	for _, runID := range state.ActiveRuns {
-		reducer.active[runID] = struct{}{}
-	}
-	for index, block := range state.Blocks {
-		if _, active := reducer.active[block.RunID]; active {
-			reducer.blockByRun[block.RunID] = index
-		}
-	}
-	return reducer
-}
-
 func (reducer *stateReducer) apply(record Record) error {
 	if record.Sequence == 0 || record.Sequence <= reducer.state.LastSequence {
 		return fmt.Errorf("record sequence %d is not strictly increasing", record.Sequence)

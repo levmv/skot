@@ -368,7 +368,7 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) || requests.Load() != 0 {
+	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) || requests.Load() != 0 {
 		t.Fatalf("error/requests = %v/%d", err, requests.Load())
 	}
 }
@@ -402,6 +402,24 @@ func TestCompleteReturnsStreamError(t *testing.T) {
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "overloaded") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "error", "error": map[string]any{"type": "request_too_large", "message": "opaque detail"},
+		})
+	}))
+	defer server.Close()
+	backend := newTestBackend(t, server.URL)
+	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Type != "request_too_large" ||
+		providerErr.Retryable {
+		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
 }
 

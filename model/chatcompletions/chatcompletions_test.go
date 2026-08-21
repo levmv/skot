@@ -189,7 +189,7 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) {
+	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) {
 		t.Fatalf("error = %v", err)
 	}
 	if requests.Load() != 0 {
@@ -554,6 +554,25 @@ func TestCompleteClassifiesPaymentRequiredAsNonRetryableProviderFailure(t *testi
 	if !errors.Is(err, agent.ErrProviderFailure) || errors.Is(err, agent.ErrInvalidRequest) ||
 		!errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable {
 		t.Fatalf("402 class/metadata = %v / %#v", err, providerErr)
+	}
+}
+
+func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"error\":{\"message\":\"opaque detail\",\"type\":\"invalid_request_error\",\"code\":400,\"metadata\":{\"error_type\":\"request_too_large\"}}}\n\n")
+	}))
+	defer server.Close()
+
+	backend := newTestBackend(t, server.URL)
+	_, err := backend.Complete(context.Background(), agent.ModelRequest{
+		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	}, nil)
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Type != "request_too_large" ||
+		providerErr.StatusCode != 0 || providerErr.Retryable || strings.Contains(err.Error(), "HTTP 0") {
+		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
 }
 

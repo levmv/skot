@@ -111,7 +111,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode chat completion request: %w", err))
 	}
 	if len(body) > backend.maxRequestBytes {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("chat completion request is %d bytes, limit is %d", len(body), backend.maxRequestBytes))
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("%w: chat completion request is %d bytes, limit is %d", agent.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -177,7 +177,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			return agent.ModelResponse{}, fmt.Errorf("decode %s stream chunk: %w", backend.provider, err)
 		}
 		if chunk.Error != nil {
-			return agent.ModelResponse{}, fmt.Errorf("%s API error: %s", backend.provider, chunk.Error.message())
+			return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, chunk.Error)
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage.modelUsage()

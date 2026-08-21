@@ -28,6 +28,8 @@ const (
 // be replayed verbatim during a tool turn.
 const ProviderStateContract agent.ProviderStateContract = "anthropic_messages.thinking_replay.v1"
 
+type apiError = modelhttp.ProviderErrorEnvelope
+
 type Authorizer = modelhttp.Authorizer
 type AuthorizerFunc = modelhttp.AuthorizerFunc
 
@@ -131,7 +133,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode Anthropic Messages request: %w", err))
 	}
 	if len(body) > backend.maxRequestBytes {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("messages request is %d bytes, limit is %d", len(body), backend.maxRequestBytes))
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("%w: messages request is %d bytes, limit is %d", agent.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -250,11 +252,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		case "message_stop":
 			terminal = true
 		case "error":
-			message := "unknown error"
-			if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
-				message = strings.TrimSpace(event.Error.Message)
-			}
-			return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages stream error: %s", backend.provider, message)
+			return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Error)
 		case "ping":
 		default:
 			// Anthropic's versioning contract permits adding new stream events.

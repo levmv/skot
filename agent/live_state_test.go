@@ -18,7 +18,7 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			expected, err := runtime.modelRequest(replayed)
+			expected, err := runtime.modelRequestForRun(replayed, runRequestSpec{})
 			if err != nil {
 				t.Fatal(err)
 			}

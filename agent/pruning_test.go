@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -11,26 +12,7 @@ import (
 func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testing.T) {
 	journal := &memoryJournal{}
 	largeResult := "BEGIN\n" + strings.Repeat("tool-output ", 16*1024) + "\nEND"
-	tool := Tool{
-		Spec: ToolSpec{Name: "large_output", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		Run: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: largeResult}, nil
-		},
-	}
-	seedModel := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "large_output", RawArguments: `{}`}}}}, nil
-		},
-		directModelResponse("old tool work complete"),
-		directModelResponse("recent answer"),
-	}}
-	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal, Tools: []Tool{tool}})
-	if _, err := seedRuntime.Run(context.Background(), "inspect a large result", nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := seedRuntime.Run(context.Background(), "recent question", nil); err != nil {
-		t.Fatal(err)
-	}
+	tool := seedCompletedToolResultHistory(t, journal, largeResult, "inspect a large result")
 
 	model := &scriptedModel{
 		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 32 * 1024},
@@ -89,27 +71,10 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	}
 }
 
-func TestInsufficientToolPruningFallsThroughToCompaction(t *testing.T) {
+func TestToolPruningMakesProgressBeforeCompaction(t *testing.T) {
 	journal := &memoryJournal{}
 	largeResult := strings.Repeat("large tool output ", 8*1024)
-	tool := Tool{
-		Spec: ToolSpec{Name: "large_output", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: largeResult}, nil },
-	}
-	seedModel := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "large_output", RawArguments: `{}`}}}}, nil
-		},
-		directModelResponse("old answer"),
-		directModelResponse("recent answer"),
-	}}
-	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal, Tools: []Tool{tool}})
-	if _, err := seedRuntime.Run(context.Background(), strings.Repeat("large user context ", 4*1024), nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := seedRuntime.Run(context.Background(), "recent question", nil); err != nil {
-		t.Fatal(err)
-	}
+	tool := seedCompletedToolResultHistory(t, journal, largeResult, strings.Repeat("large user context ", 4*1024))
 
 	model := &scriptedModel{
 		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
@@ -130,9 +95,134 @@ func TestInsufficientToolPruningFallsThroughToCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.ToolPruning != nil || state.CompactionCount != 1 {
+	if state.ToolPruning == nil || state.ToolPruningCount != 1 || state.CompactionCount != 1 {
 		t.Fatalf("maintenance state: pruning=%#v compactions=%d", state.ToolPruning, state.CompactionCount)
 	}
+	records := journal.snapshot()
+	pruningIndex, compactionIndex := -1, -1
+	for index, record := range records {
+		switch record.Kind {
+		case RecordToolResultsPruned:
+			pruningIndex = index
+		case RecordContextCompacted:
+			compactionIndex = index
+		}
+	}
+	if pruningIndex < 0 || compactionIndex <= pruningIndex {
+		t.Fatalf("maintenance record order = %#v", records)
+	}
+}
+
+func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
+	journal := &memoryJournal{}
+	largeResult := "BEGIN\n" + strings.Repeat("tool-output ", 16*1024) + "\nEND"
+	tool := seedCompletedToolResultHistory(t, journal, largeResult, "inspect a large result")
+
+	attempts := 0
+	model := &scriptedModel{
+		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test"},
+		steps: []modelStep{
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				attempts++
+				for _, item := range request.Items {
+					if item.Kind == ItemToolResult && item.ToolResult != nil && item.ToolResult.Content == largeResult {
+						return ModelResponse{}, &ProviderError{
+							Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
+						}
+					}
+				}
+				t.Fatalf("first request did not contain the full tool result: %#v", request.Items)
+				return ModelResponse{}, nil
+			},
+			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				attempts++
+				for _, item := range request.Items {
+					if item.Kind == ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content, "bytes omitted from old tool result") {
+						return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
+					}
+				}
+				t.Fatalf("retry did not contain the pruned tool result: %#v", request.Items)
+				return ModelResponse{}, nil
+			},
+		},
+	}
+	var events []Event
+	result, err := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}}).Run(context.Background(), "new question", func(event Event) {
+		events = append(events, event)
+	})
+	if err != nil || result.Answer != "recovered" || attempts != 2 {
+		t.Fatalf("result/error/attempts = %#v / %v / %d", result, err, attempts)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ToolPruningCount != 1 || state.CompactionCount != 0 || !hasEvent(events, EventToolResultsPruned) || hasEvent(events, EventContextCompacted) {
+		t.Fatalf("state/events = pruning %d, compactions %d / %#v", state.ToolPruningCount, state.CompactionCount, events)
+	}
+}
+
+func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T) {
+	journal := &memoryJournal{}
+	largeResult := strings.Repeat("tool-output ", 16*1024)
+	tool := seedCompletedToolResultHistory(t, journal, largeResult, "inspect a large result")
+
+	mainAttempts, summaryAttempts := 0, 0
+	summaryErr := errors.New("summary failed")
+	runtime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if request.Instructions == compactionSystemInstructions {
+				summaryAttempts++
+				return ModelResponse{}, MarkInvalidRequest(summaryErr)
+			}
+			mainAttempts++
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
+			}
+		}),
+		Journal: journal,
+		Tools:   []Tool{tool},
+	})
+	result, err := runtime.Run(context.Background(), "new question", nil)
+	if result.Status != RunFailed || !errors.Is(err, ErrModelRequestTooLarge) || !errors.Is(err, summaryErr) ||
+		mainAttempts != 2 || summaryAttempts != 1 {
+		t.Fatalf("result/error/attempts = %#v / %v / %d/%d", result, err, mainAttempts, summaryAttempts)
+	}
+	state, replayErr := Replay(journal.snapshot())
+	if replayErr != nil {
+		t.Fatal(replayErr)
+	}
+	if state.ToolPruningCount != 1 || state.CompactionCount != 0 {
+		t.Fatalf("replayed maintenance = pruning %d, compactions %d", state.ToolPruningCount, state.CompactionCount)
+	}
+	if got, want := runtime.SessionStatus(), runtime.calculateSessionStatus(state); got != want {
+		t.Fatalf("live status diverged from replay\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func seedCompletedToolResultHistory(t *testing.T, journal *memoryJournal, content, firstInput string) Tool {
+	t.Helper()
+	tool := Tool{
+		Spec: ToolSpec{Name: "large_output", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(context.Context, string) (ToolOutput, error) {
+			return ToolOutput{Content: content}, nil
+		},
+	}
+	seedModel := &scriptedModel{steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "large_output", RawArguments: `{}`}}}}, nil
+		},
+		directModelResponse("old tool work complete"),
+		directModelResponse("recent answer"),
+	}}
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal, Tools: []Tool{tool}})
+	if _, err := seedRuntime.Run(context.Background(), firstInput, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seedRuntime.Run(context.Background(), "recent question", nil); err != nil {
+		t.Fatal(err)
+	}
+	return tool
 }
 
 func TestPruneToolResultKeepsUTF8HeadAndTail(t *testing.T) {

@@ -207,18 +207,7 @@ func (delta *streamDelta) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type apiError struct {
-	Message string `json:"message"`
-	Type    string `json:"type,omitempty"`
-	Code    any    `json:"code,omitempty"`
-}
-
-func (e *apiError) message() string {
-	if e == nil || strings.TrimSpace(e.Message) == "" {
-		return "unknown error"
-	}
-	return strings.TrimSpace(e.Message)
-}
+type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, error) {
 	// Direct callers may supply unprojected, caller-owned items. Project a copy.

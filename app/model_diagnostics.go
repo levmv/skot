@@ -32,7 +32,7 @@ func providerFailureHasIndependentExplanation(err error) bool {
 	}
 	switch providerErr.Kind {
 	case agent.ProviderErrorAuthentication, agent.ProviderErrorPermission, agent.ProviderErrorSubscription, agent.ProviderErrorQuota,
-		agent.ProviderErrorRateLimit, agent.ProviderErrorUnavailable:
+		agent.ProviderErrorRateLimit, agent.ProviderErrorRequestTooLarge, agent.ProviderErrorUnavailable:
 		return true
 	default:
 		return false

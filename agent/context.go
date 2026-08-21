@@ -68,39 +68,53 @@ func (runtime *Runtime) storeSessionStatus(sequence uint64, status SessionStatus
 	runtime.sessionStatus = status
 }
 
-func (runtime *Runtime) prepareContext(ctx context.Context, state State, pendingInput string, emit EmitFunc) (State, ContextReport, error) {
-	return runtime.prepareContextForRequest(ctx, state, pendingInput, true, emit)
+func (runtime *Runtime) prepareRunRequestContext(ctx context.Context, live *stateReducer, spec runRequestSpec, emit EmitFunc) (ContextReport, error) {
+	report := runtime.requestReport(live.state, spec)
+	for report.Window > 0 && report.TotalInputTokens > report.InputLimit {
+		var err error
+		report, err = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
+		if err != nil {
+			return report, fmt.Errorf("estimated model input is %d tokens (limit %d) and automatic context reduction failed: %w", report.TotalInputTokens, report.InputLimit, err)
+		}
+	}
+	return report, nil
 }
 
-func (runtime *Runtime) prepareContextForRequest(ctx context.Context, state State, pendingInput string, includeTools bool, emit EmitFunc) (State, ContextReport, error) {
-	report := runtime.contextReportForRequest(state, includeTools, pendingInput)
-	if report.Window == 0 || report.TotalInputTokens <= report.InputLimit {
-		return state, report, nil
-	}
-	prunedState, prunedReport, pruningSequence, err := runtime.tryPruneToolResults(ctx, state, pendingInput, includeTools)
+// shrinkRunRequestOnce advances durable context maintenance by one step on a
+// successful return. Cheap pruning of old tool-result projections gets the
+// first chance; if it cannot advance its boundary, the oldest available
+// conversation prefix is summarized. The returned report describes the
+// request rebuilt from the committed state.
+func (runtime *Runtime) shrinkRunRequestOnce(ctx context.Context, live *stateReducer, spec runRequestSpec, report ContextReport, emit EmitFunc) (ContextReport, error) {
+	pruningRecord, nextReport, err := runtime.pruneOldToolResultsOnce(ctx, live.state, spec, report)
 	if err != nil {
-		return state, report, fmt.Errorf("prune old tool results: %w", err)
+		return report, fmt.Errorf("prune old tool results: %w", err)
 	}
-	if pruningSequence != 0 {
-		emitEvent(emit, Event{Sequence: pruningSequence, Kind: EventToolResultsPruned, Text: "pruned old tool results"})
-		return prunedState, prunedReport, nil
+	if pruningRecord.Sequence != 0 {
+		if err := live.apply(pruningRecord); err != nil {
+			return report, fmt.Errorf("apply committed tool-result pruning: %w", err)
+		}
+		nextReport.ToolPruningCount = live.state.ToolPruningCount
+		runtime.publishSessionStatus(live.state)
+		emitEvent(emit, Event{Sequence: pruningRecord.Sequence, Kind: EventToolResultsPruned, Text: "pruned old tool results"})
+		return nextReport, nil
 	}
+
 	emitEvent(emit, Event{Kind: EventStatus, Text: "compacting context"})
-	_, compactionRecord, err := runtime.compactLocked(ctx, state, 1, emit)
+	_, compactionRecord, err := runtime.compactLocked(ctx, live.state, 1, emit)
 	if err != nil {
-		return state, report, fmt.Errorf("estimated model input is %d tokens (limit %d) and automatic compaction failed: %w", report.TotalInputTokens, report.InputLimit, err)
+		return report, fmt.Errorf("compact context: %w", err)
 	}
-	emitEvent(emit, Event{Sequence: compactionRecord.Sequence, Kind: EventContextCompacted, Text: "context compacted"})
-	live := reducerFromState(state)
 	if err := live.apply(compactionRecord); err != nil {
-		return State{}, ContextReport{}, err
+		return report, fmt.Errorf("apply committed context compaction: %w", err)
 	}
-	state = live.state
-	report = runtime.contextReportForRequest(state, includeTools, pendingInput)
-	if report.TotalInputTokens > report.InputLimit {
-		return state, report, fmt.Errorf("estimated model input remains %d tokens after compaction (limit %d, window %d)", report.TotalInputTokens, report.InputLimit, report.Window)
-	}
-	return state, report, nil
+	runtime.publishSessionStatus(live.state)
+	emitEvent(emit, Event{Sequence: compactionRecord.Sequence, Kind: EventContextCompacted, Text: "context compacted"})
+	return runtime.requestReport(live.state, spec), nil
+}
+
+func (runtime *Runtime) requestReport(state State, spec runRequestSpec) ContextReport {
+	return runtime.contextReportForRequest(state, !spec.omitTools, spec.extraUserText)
 }
 
 func (runtime *Runtime) contextReport(state State, pendingInputs ...string) ContextReport {

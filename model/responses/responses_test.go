@@ -348,7 +348,7 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) || requests.Load() != 0 {
+	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) || requests.Load() != 0 {
 		t.Fatalf("error/requests = %v/%d", err, requests.Load())
 	}
 }
@@ -372,9 +372,10 @@ func TestCompleteReturnsStructuredProviderHTTPError(t *testing.T) {
 
 func TestCompleteReturnsStructuredStreamErrors(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		event streamEvent
-		want  string
+		name     string
+		event    streamEvent
+		want     string
+		tooLarge bool
 	}{
 		{
 			name: "failed response", want: "model failed",
@@ -383,6 +384,10 @@ func TestCompleteReturnsStructuredStreamErrors(t *testing.T) {
 		{
 			name: "error event", want: "bad request",
 			event: streamEvent{Type: "error", Code: "invalid_request", Message: "bad request"},
+		},
+		{
+			name: "context limit error event", want: "context rejected", tooLarge: true,
+			event: streamEvent{Type: "error", Code: "context_length_exceeded", Message: "context rejected"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -395,7 +400,8 @@ func TestCompleteReturnsStructuredStreamErrors(t *testing.T) {
 			_, err := backend.Complete(context.Background(), agent.ModelRequest{
 				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 			}, nil)
-			if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) {
+			if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) ||
+				errors.Is(err, agent.ErrModelRequestTooLarge) != test.tooLarge {
 				t.Fatalf("error = %v", err)
 			}
 		})

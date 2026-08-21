@@ -18,6 +18,9 @@ var (
 	// ErrModelRequestBudget reports that one logical model request used all of
 	// its wall-clock allowance, including attempts and retry delays.
 	ErrModelRequestBudget = errors.New("model request retry budget exhausted")
+	// ErrModelRequestTooLarge reports that a logical model request must be
+	// reduced before another attempt can succeed.
+	ErrModelRequestTooLarge = errors.New("model request too large")
 	// ErrModelStreamIdle reports that an open model stream produced no payload
 	// within its configured idle interval.
 	ErrModelStreamIdle = errors.New("model stream idle timeout")
@@ -56,19 +59,20 @@ type ProviderError struct {
 	RetryAfter time.Duration
 }
 
-// ProviderErrorKind describes the caller action suggested by a structured
+// ProviderErrorKind describes the recovery action suggested by a structured
 // provider failure. The empty value means the response was not specific enough
 // to classify without guessing.
 type ProviderErrorKind string
 
 const (
-	ProviderErrorAuthentication ProviderErrorKind = "authentication"
-	ProviderErrorPermission     ProviderErrorKind = "permission"
-	ProviderErrorSubscription   ProviderErrorKind = "subscription"
-	ProviderErrorQuota          ProviderErrorKind = "quota"
-	ProviderErrorRateLimit      ProviderErrorKind = "rate_limit"
-	ProviderErrorRequest        ProviderErrorKind = "request"
-	ProviderErrorUnavailable    ProviderErrorKind = "unavailable"
+	ProviderErrorAuthentication  ProviderErrorKind = "authentication"
+	ProviderErrorPermission      ProviderErrorKind = "permission"
+	ProviderErrorSubscription    ProviderErrorKind = "subscription"
+	ProviderErrorQuota           ProviderErrorKind = "quota"
+	ProviderErrorRateLimit       ProviderErrorKind = "rate_limit"
+	ProviderErrorRequest         ProviderErrorKind = "request"
+	ProviderErrorRequestTooLarge ProviderErrorKind = "request_too_large"
+	ProviderErrorUnavailable     ProviderErrorKind = "unavailable"
 )
 
 func (err *ProviderError) Error() string {
@@ -83,6 +87,10 @@ func (err *ProviderError) Unwrap() error {
 		return nil
 	}
 	return err.Cause
+}
+
+func (err *ProviderError) Is(target error) bool {
+	return err != nil && target == ErrModelRequestTooLarge && err.Kind == ProviderErrorRequestTooLarge
 }
 
 type classifiedError struct {

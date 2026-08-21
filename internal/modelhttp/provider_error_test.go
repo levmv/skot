@@ -18,6 +18,8 @@ func TestDecodeProviderErrorFallbacks(t *testing.T) {
 		{name: "empty structured message", body: `{"error":{"message":"","type":"request_error"}}`, want: "): Bad Request", notWant: `{"error":`},
 		{name: "plain body", body: "upstream proxy failed", want: "upstream proxy failed"},
 		{name: "status text", want: "): " + http.StatusText(http.StatusBadRequest)},
+		{name: "unknown metadata shape", body: `{"error":{"message":"opaque detail","type":"request_error","metadata":["gateway detail"]}}`, want: "opaque detail", notWant: `{"error":`},
+		{name: "unknown metadata field shape", body: `{"error":{"message":"opaque detail","type":"request_error","metadata":{"error_type":{"nested":true}}}}`, want: "opaque detail", notWant: `{"error":`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -49,6 +51,7 @@ func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.
 		{name: "access denied", status: http.StatusForbidden, wantKind: agent.ProviderErrorPermission, wantText: "denied access"},
 		{name: "temporary rate limit", status: http.StatusTooManyRequests, wantKind: agent.ProviderErrorRateLimit, wantText: "temporarily rate limited", retryable: true},
 		{name: "bad request", status: http.StatusBadRequest, wantKind: agent.ProviderErrorRequest, wantText: "rejected the request"},
+		{name: "request too large", status: http.StatusRequestEntityTooLarge, wantKind: agent.ProviderErrorRequestTooLarge, wantText: "rejected the oversized request"},
 		{name: "service failure", status: http.StatusBadGateway, wantKind: agent.ProviderErrorUnavailable, wantText: "temporarily unavailable", retryable: true},
 	}
 	for _, test := range tests {
@@ -62,6 +65,9 @@ func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.
 			if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) {
 				t.Fatalf("error = %v", err)
 			}
+			if got := errors.Is(err, agent.ErrModelRequestTooLarge); got != (test.wantKind == agent.ProviderErrorRequestTooLarge) {
+				t.Fatalf("request-too-large classification = %v", got)
+			}
 			if providerErr.Kind != test.wantKind || providerErr.Code != "route_code" || providerErr.Type != "" ||
 				providerErr.Retryable != test.retryable || providerErr.RetryAfter != 3*time.Second {
 				t.Fatalf("metadata = %#v", providerErr)
@@ -70,6 +76,55 @@ func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.
 				t.Fatalf("text = %q", err)
 			}
 		})
+	}
+}
+
+func TestStructuredContextLimitSignalsClassifyOversizedRequests(t *testing.T) {
+	for _, test := range []struct {
+		name, code, errorType string
+	}{
+		{name: "request too large code", code: "REQUEST_TOO_LARGE"},
+		{name: "request too large type", errorType: "request_too_large"},
+		{name: "context length code", code: "context_length_exceeded"},
+		{name: "context length type", errorType: "CONTEXT_LENGTH_EXCEEDED"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := NewProviderError(ProviderErrorDetails{
+				Provider: "compatible", Model: "model", StatusCode: http.StatusBadRequest,
+				Code: test.code, Type: test.errorType, Message: "opaque provider detail",
+			})
+			var providerErr *agent.ProviderError
+			if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+				providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Retryable {
+				t.Fatalf("error/metadata = %v / %#v", err, providerErr)
+			}
+		})
+	}
+}
+
+func TestAnthropicGenericBadRequestDoesNotGuessContextOverflow(t *testing.T) {
+	err := NewProviderError(ProviderErrorDetails{
+		Provider: "anthropic", StatusCode: http.StatusBadRequest,
+		Type: "invalid_request_error", Message: "provider prose says the prompt is too long",
+	})
+	var providerErr *agent.ProviderError
+	if errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != agent.ProviderErrorRequest {
+		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
+	}
+}
+
+func TestDecodeProviderErrorUsesMetadataErrorType(t *testing.T) {
+	response := &http.Response{
+		Status: "400 Bad Request", StatusCode: http.StatusBadRequest, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"opaque detail","type":"invalid_request_error","code":"invalid_prompt","metadata":{"error_type":"context_length_exceeded"}}}`)),
+	}
+	err := DecodeProviderError("openrouter", "model", "API", response)
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Code != "invalid_prompt" ||
+		providerErr.Type != "context_length_exceeded" {
+		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
 }
 

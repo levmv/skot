@@ -334,6 +334,83 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 	}
 }
 
+func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
+	journal := &memoryJournal{}
+	seedRuntime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
+		}),
+		Journal: journal,
+	})
+	if _, err := seedRuntime.Run(context.Background(), strings.Repeat("old context ", 2_700), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	const requestLimit = 50 * 1024
+	largeArguments := `{"padding":"` + strings.Repeat("x", 32*1024) + `"}`
+	normalRequests := 0
+	finalRequests := 0
+	compactions := 0
+	var finalRequestSizes []int
+	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		if request.Instructions == compactionSystemInstructions {
+			compactions++
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old work summarized"}}, StopReason: "stop"}, nil
+		}
+		requestSize := encodedTestModelRequestBytes(t, request)
+		if len(request.Tools) != 0 {
+			normalRequests++
+			switch normalRequests {
+			case 1:
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+			case 2:
+				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
+			default:
+				t.Fatalf("unexpected tools-enabled request %d", normalRequests)
+			}
+		}
+		finalRequests++
+		finalRequestSizes = append(finalRequestSizes, requestSize)
+		if request.Items[len(request.Items)-1].Kind != ItemUserText || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
+			t.Fatalf("tool-limit instructions missing from request: %#v", request)
+		}
+		if requestSize > requestLimit {
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
+			}
+		}
+		if request.Summary != "old work summarized" {
+			t.Fatalf("recovered tool-limit request = %#v", request)
+		}
+		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "best effort"}}, StopReason: "stop"}, nil
+	})
+	executed := 0
+	runtime := newTestRuntime(t, Config{
+		Backend: model, Journal: journal, MaxToolIterations: 1,
+		Tools: []Tool{{
+			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Run: func(context.Context, string) (ToolOutput, error) {
+				executed++
+				return ToolOutput{Content: "ok"}, nil
+			},
+		}},
+	})
+	result, err := runtime.Run(context.Background(), "inspect current state", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "best effort" || !result.ToolLimitReached || executed != 1 {
+		t.Fatalf("result/executed = %#v / %d", result, executed)
+	}
+	if normalRequests != 2 || finalRequests != 2 || compactions != 1 || len(finalRequestSizes) != 2 ||
+		finalRequestSizes[0] <= requestLimit || finalRequestSizes[1] > requestLimit || finalRequestSizes[0] <= finalRequestSizes[1] {
+		t.Fatalf("requests/compactions/sizes = %d/%d/%d/%v", normalRequests, finalRequests, compactions, finalRequestSizes)
+	}
+	if records := journal.snapshot(); countRecordKind(records, RecordModelAttemptFailed) != 1 || countRecordKind(records, RecordContextCompacted) != 1 {
+		t.Fatalf("recovery records = %#v", records)
+	}
+}
+
 func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
 	journal := &memoryJournal{}
 	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`

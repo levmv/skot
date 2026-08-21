@@ -37,7 +37,7 @@ func TestInteractiveStoreReadOnlyOpenCreatesNeitherStateNorLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Theme != "" || settings.Workspace.Model != "" || settings.Workspace.ReasoningEffort != nil || len(settings.RecentModels) != 0 {
+	if settings.Theme != "" || settings.Workspace.Model != "" || settings.Workspace.ReasoningEffort != nil || len(settings.ModelHistory) != 0 {
 		t.Fatalf("empty settings = %#v", settings)
 	}
 	for _, name := range []string{"interactive.json", "interactive.lock"} {
@@ -133,18 +133,95 @@ func TestInteractiveStorePersistsExplicitProviderDefaultAndWorkspaceMap(t *testi
 	}
 }
 
-func TestRecentModelsAreCaseInsensitiveUniqueAndBounded(t *testing.T) {
-	models := []string{"OPENAI/Old", "deepseek/one", "openrouter/two", "openai/old"}
+func TestLastModelSelectionIsVisibleFromWorkspacesWithoutOwnRecord(t *testing.T) {
+	home, firstRoot, secondRoot := t.TempDir(), t.TempDir(), t.TempDir()
+	if _, err := Open(home); err != nil {
+		t.Fatal(err)
+	}
+	first, err := OpenInteractive(home, firstRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenInteractive(home, secondRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.SetModelSelection("openai/gpt-5", "high"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := second.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Workspace.Model != "" || settings.LastModel().Model != "openai/gpt-5" ||
+		settings.LastModel().ReasoningEffort == nil || *settings.LastModel().ReasoningEffort != "high" {
+		t.Fatalf("second workspace = %#v, history = %#v", settings.Workspace, settings.ModelHistory)
+	}
+	// Reselecting the model this workspace already records must still publish it
+	// for workspaces which have none.
+	if err := second.SetModelSelection("deepseek/other-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.SetModelSelection("openai/gpt-5", "high"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err = first.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.LastModel().Model != "openai/gpt-5" {
+		t.Fatalf("history = %#v", settings.ModelHistory)
+	}
+}
+
+func TestLegacyRecentModelsKeyIsIgnoredAndDroppedOnTheNextWrite(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	if _, err := Open(home); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "interactive.json")
+	legacy := `{"version":1,"ui":{"theme":"dark","recent_models":["openrouter/older"]}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenInteractive(home, root)
+	if err != nil {
+		t.Fatalf("a pre-history document must stay readable: %v", err)
+	}
+	settings, err := store.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Theme != ThemeDark || len(settings.ModelHistory) != 0 {
+		t.Fatalf("settings = %#v", settings)
+	}
+	if err := store.SetModelSelection("openai/gpt-5", ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "recent_models") || !strings.Contains(string(raw), "model_history") {
+		t.Fatalf("rewritten document = %s", raw)
+	}
+}
+
+func TestModelHistoryLeadsWithTheSelectionAndStaysUniqueAndBounded(t *testing.T) {
+	history := []modelHistoryDocument{{Model: "OPENAI/Old", ReasoningEffort: "high"}, {Model: "deepseek/one"}}
 	for index := 0; index < 30; index++ {
-		models = append(models, fmt.Sprintf("provider/model-%02d", index))
+		history = append(history, modelHistoryDocument{Model: fmt.Sprintf("provider/model-%02d", index)})
 	}
-	recent := recentModels(models, "openai/previous", "OPENAI/OLD")
-	if len(recent) != maxRecentModels || recent[0] != "openai/previous" || recent[1] != "deepseek/one" {
-		t.Fatalf("recent models = %#v", recent)
+	updated := pushModelHistory(history, modelHistoryDocument{Model: "openai/old", ReasoningEffort: "default"})
+	if len(updated) != maxModelHistory || updated[0].Model != "openai/old" || updated[0].ReasoningEffort != "default" {
+		t.Fatalf("history = %#v", updated)
 	}
-	for _, model := range recent {
-		if strings.EqualFold(model, "openai/old") {
-			t.Fatalf("current model leaked into recent list: %#v", recent)
+	if updated[1].Model != "deepseek/one" {
+		t.Fatalf("earlier selections lost their order: %#v", updated)
+	}
+	for _, entry := range updated[1:] {
+		if strings.EqualFold(entry.Model, "openai/old") {
+			t.Fatalf("reselected model was kept twice: %#v", updated)
 		}
 	}
 }

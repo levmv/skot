@@ -450,8 +450,8 @@ func knownModelURIs(store *state.InteractiveStore, current string) []string {
 	if store != nil {
 		if settings, err := store.Settings(); err == nil {
 			add(settings.Workspace.Model)
-			for _, uri := range settings.RecentModels {
-				add(uri)
+			for _, selection := range settings.ModelHistory {
+				add(selection.Model)
 			}
 		}
 	}

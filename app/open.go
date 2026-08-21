@@ -64,6 +64,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	theme := state.ThemeAuto
 	var interactiveStore *state.InteractiveStore
 	var workspaceSettings state.WorkspaceSettings
+	var lastModel state.ModelPreference
 	workspaceToolSet := false
 	if config.Interactive {
 		legacyKeys, err := settingsStore.LegacyInteractiveKeys()
@@ -86,6 +87,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			theme = interactiveSettings.Theme
 		}
 		workspaceSettings = interactiveSettings.Workspace
+		lastModel = interactiveSettings.LastModel()
 		if !config.ToolSetExplicit && workspaceSettings.ToolSet != "" {
 			config.ToolSet = workspaceSettings.ToolSet
 			workspaceToolSet = true
@@ -222,7 +224,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		}
 	}
 	if !sessionModelSelected {
-		notices = append(notices, applyWorkspaceModelPreference(&config, workspaceSettings, root, modelAPIOverride)...)
+		notices = append(notices, applyRememberedModelPreference(&config, workspaceSettings, lastModel, root, modelAPIOverride)...)
 	}
 	var knownModel *agent.ModelInfo
 	if resumedState != nil {
@@ -321,33 +323,54 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}, nil
 }
 
-func applyWorkspaceModelPreference(config *Config, workspace state.WorkspaceSettings, root string, api modelAPI) []string {
-	if config.ModelExplicit || strings.TrimSpace(workspace.Model) == "" {
+// applyRememberedModelPreference resolves the interactive model fallback. A
+// workspace record is a deliberate choice for that workspace and wins; the
+// shared last selection only fills in for a workspace which has never made one.
+func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelAPI) []string {
+	if config.ModelExplicit {
 		return nil
 	}
+	if strings.TrimSpace(workspace.Model) != "" {
+		preference := state.ModelPreference{Model: workspace.Model, ReasoningEffort: workspace.ReasoningEffort}
+		return applyModelPreference(config, preference, "workspace", root, api)
+	}
+	return applyModelPreference(config, last, "remembered", "", api)
+}
+
+// kind and root name the invalid value in a notice: a workspace preference is
+// reported with the path whose record must be corrected.
+func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelAPI) []string {
+	if strings.TrimSpace(preference.Model) == "" {
+		return nil
+	}
+	location := ""
+	if root != "" {
+		location = " for " + root
+	}
 	effort := config.ReasoningEffort
-	if !config.ReasoningEffortExplicit && workspace.ReasoningEffort != nil {
-		effort = *workspace.ReasoningEffort
+	if !config.ReasoningEffortExplicit && preference.ReasoningEffort != nil {
+		effort = *preference.ReasoningEffort
 	}
 	if config.ReasoningEffortExplicit {
-		config.ModelURI = workspace.Model
+		config.ModelURI = preference.Model
 		return nil
 	}
 	overrides := modelRouteOverrides{BaseURL: config.BaseURL, API: api, ContextWindow: config.ContextWindow}
-	if _, err := resolveModelRoute(workspace.Model, effort, overrides, modelRouteEnrichment{}); err == nil {
-		config.ModelURI = workspace.Model
+	_, err := resolveModelRoute(preference.Model, effort, overrides, modelRouteEnrichment{})
+	if err == nil {
+		config.ModelURI = preference.Model
 		config.ReasoningEffort = effort
 		return nil
-	} else if workspace.ReasoningEffort != nil {
-		if _, fallbackErr := resolveModelRoute(workspace.Model, "", overrides, modelRouteEnrichment{}); fallbackErr == nil {
-			config.ModelURI = workspace.Model
-			config.ReasoningEffort = ""
-			return []string{fmt.Sprintf("invalid workspace reasoning_effort %q for %s; ignored: %v", effort, root, err)}
-		}
-		return []string{fmt.Sprintf("invalid workspace model preference %q for %s; ignored: %v", workspace.Model, root, err)}
-	} else {
-		return []string{fmt.Sprintf("invalid workspace model preference %q for %s; ignored: %v", workspace.Model, root, err)}
 	}
+	// A remembered effort the route rejects must not disqualify the model itself.
+	if preference.ReasoningEffort != nil {
+		if _, fallbackErr := resolveModelRoute(preference.Model, "", overrides, modelRouteEnrichment{}); fallbackErr == nil {
+			config.ModelURI = preference.Model
+			config.ReasoningEffort = ""
+			return []string{fmt.Sprintf("invalid %s reasoning_effort %q%s; ignored: %v", kind, effort, location, err)}
+		}
+	}
+	return []string{fmt.Sprintf("invalid %s model preference %q%s; ignored: %v", kind, preference.Model, location, err)}
 }
 
 func modelRequestPolicy(retryBudget, streamIdleTimeout time.Duration) agent.ModelRequestPolicy {

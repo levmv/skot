@@ -276,7 +276,7 @@ func TestOpenIgnoresInvalidInteractiveThemeWithoutRewritingIt(t *testing.T) {
 	}
 }
 
-func TestOpenLoadsWorkspacePreferencesOnlyForMatchingInteractiveWorkspace(t *testing.T) {
+func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T) {
 	home, firstRoot, secondRoot := t.TempDir(), t.TempDir(), t.TempDir()
 	if _, err := state.Open(home); err != nil {
 		t.Fatal(err)
@@ -317,10 +317,41 @@ func TestOpenLoadsWorkspacePreferencesOnlyForMatchingInteractiveWorkspace(t *tes
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if second.CurrentModel() != DefaultModelURI || second.CurrentToolSet() != toolpolicy.ToolSetDefault ||
+	// Model, effort, and theme are shared; tool set and scope stay workspace-local.
+	if second.CurrentModel() != "ollama/saved-model" || second.CurrentReasoningEffort() != "" ||
+		second.CurrentToolSet() != toolpolicy.ToolSetDefault ||
 		second.CurrentScope() != ScopeAuto || second.CurrentTheme() != state.ThemeDark {
-		t.Fatalf("second workspace: model=%q tools=%q scope=%q theme=%q",
-			second.CurrentModel(), second.CurrentToolSet(), second.CurrentScope(), second.CurrentTheme())
+		t.Fatalf("second workspace: model=%q effort=%q tools=%q scope=%q theme=%q",
+			second.CurrentModel(), second.CurrentReasoningEffort(), second.CurrentToolSet(), second.CurrentScope(), second.CurrentTheme())
+	}
+}
+
+func TestOpenPrefersWorkspaceModelOverNewerSelectionElsewhere(t *testing.T) {
+	home, pinnedRoot, otherRoot := t.TempDir(), t.TempDir(), t.TempDir()
+	if _, err := state.Open(home); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, pinnedRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pinned.SetModelSelection("ollama/pinned-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	other, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, otherRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.SetModelSelection("ollama/latest-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(context.Background(), Config{Home: home, Root: pinnedRoot, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if got := application.CurrentModel(); got != "ollama/pinned-model" {
+		t.Fatalf("workspace model = %q; a newer selection elsewhere must not replace it", got)
 	}
 }
 

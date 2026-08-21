@@ -62,9 +62,10 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 `NO_COLOR` disables styling.
 
 For a new interactive session, an explicit flag or environment variable wins
-over the current workspace preference, which wins over the product default.
-Interactive resume additionally restores the session-recorded model and effort
-between explicit input and the workspace preference.
+over the current workspace preference, which wins over the model and effort last
+selected in any workspace, which wins over the product default. Interactive
+resume additionally restores the session-recorded model and effort between
+explicit input and the workspace preference.
 
 Headless runs never read interactive preferences. A fresh one-shot or
 `-save-session` run uses only explicit CLI/environment input and product
@@ -152,9 +153,9 @@ are rejected. A representative configuration is:
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
 | `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
 
-Interactive theme and recent models are shared across workspaces. Model,
-reasoning effort, tool set, and requested filesystem scope are remembered per
-canonical workspace path; symlink aliases share preferences, while separate
+Interactive theme and the model selection history are shared across workspaces.
+Model, reasoning effort, tool set, and requested filesystem scope are remembered
+per canonical workspace path; symlink aliases share preferences, while separate
 clones and worktrees do not. Skot manages these preferences in
 `interactive.json`; headless runs do not read them.
 

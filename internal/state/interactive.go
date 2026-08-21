@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ import (
 
 const (
 	interactiveVersion    = 1
-	maxRecentModels       = 20
+	maxModelHistory       = 20
 	defaultLockTimeout    = time.Second
 	interactiveStateLabel = "interactive state"
 )
@@ -32,14 +33,32 @@ type WorkspaceSettings struct {
 	Scope           string
 }
 
+// ModelPreference is one remembered model selection. A nil ReasoningEffort
+// means no override; a non-nil empty value means the provider default was
+// explicitly selected.
+type ModelPreference struct {
+	Model           string
+	ReasoningEffort *string
+}
+
 // InteractiveSettings is one read-only view of the machine-owned interactive
 // state. Notices describe known invalid values which were ignored without
 // rewriting the source document.
 type InteractiveSettings struct {
-	Theme        string
-	RecentModels []string
+	Theme string
+	// ModelHistory is every deliberate selection from any workspace, most
+	// recent first.
+	ModelHistory []ModelPreference
 	Workspace    WorkspaceSettings
 	Notices      []string
+}
+
+// LastModel is the selection a workspace without its own record starts from.
+func (settings InteractiveSettings) LastModel() ModelPreference {
+	if len(settings.ModelHistory) == 0 {
+		return ModelPreference{}
+	}
+	return settings.ModelHistory[0]
 }
 
 type interactiveDocument struct {
@@ -49,8 +68,20 @@ type interactiveDocument struct {
 }
 
 type interactiveUIDocument struct {
-	Theme        *string  `json:"theme,omitempty"`
-	RecentModels []string `json:"recent_models,omitempty"`
+	Theme        *string                `json:"theme,omitempty"`
+	ModelHistory []modelHistoryDocument `json:"model_history,omitempty"`
+
+	// LegacyRecentModels accepts the pre-history key so an existing document
+	// does not turn a strict decode into a startup failure. Its entries are
+	// never exposed through Settings and are dropped on the next write.
+	LegacyRecentModels json.RawMessage `json:"recent_models,omitempty"`
+}
+
+// modelHistoryDocument always carries the effort the selection was made with;
+// "default" is the explicitly selected provider default.
+type modelHistoryDocument struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // Pointer fields preserve absent versus present-but-invalid values. Mutating a
@@ -125,14 +156,15 @@ func (store *InteractiveStore) SetModelSelection(model, reasoningEffort string) 
 	}
 	return store.mutate(func(document *interactiveDocument) bool {
 		workspace := document.workspace(store.workspace)
-		if storedStringEquals(workspace.Model, model) && storedStringEquals(workspace.ReasoningEffort, encodedEffort) {
+		history := pushModelHistory(document.UI.ModelHistory, modelHistoryDocument{Model: model, ReasoningEffort: encodedEffort})
+		if storedStringEquals(workspace.Model, model) && storedStringEquals(workspace.ReasoningEffort, encodedEffort) &&
+			slices.Equal(history, document.UI.ModelHistory) {
 			return false
 		}
-		previous := validStoredString(workspace.Model)
 		workspace.Model = stringPointer(model)
 		workspace.ReasoningEffort = stringPointer(encodedEffort)
 		document.Workspaces[store.workspace] = workspace
-		document.UI.RecentModels = recentModels(document.UI.RecentModels, previous, model)
+		document.UI.ModelHistory = history
 		return true
 	})
 }
@@ -205,6 +237,7 @@ func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (r
 	if !change(&document) {
 		return nil
 	}
+	document.UI.LegacyRecentModels = nil
 	return saveJSONAtomic(store.dir, store.path, "interactive", document)
 }
 
@@ -239,9 +272,8 @@ func (document *interactiveDocument) workspace(root string) workspaceDocument {
 }
 
 func (document interactiveDocument) settings(workspace string) InteractiveSettings {
-	settings := InteractiveSettings{
-		RecentModels: validRecentModels(document.UI.RecentModels),
-	}
+	settings := InteractiveSettings{}
+	settings.ModelHistory = validModelHistory(document.UI.ModelHistory, &settings.Notices)
 	if document.UI.Theme != nil {
 		if theme, err := NormalizeTheme(*document.UI.Theme); err == nil {
 			settings.Theme = theme
@@ -249,14 +281,13 @@ func (document interactiveDocument) settings(workspace string) InteractiveSettin
 			settings.Notices = append(settings.Notices, err.Error()+" in interactive state; ignored")
 		}
 	}
-	if len(settings.RecentModels) != len(document.UI.RecentModels) {
-		settings.Notices = append(settings.Notices, "interactive recent_models contains empty, duplicate, or excess entries; invalid entries were ignored")
-	}
 	raw, exists := document.Workspaces[workspace]
 	if !exists {
 		return settings
 	}
-	settings.Workspace.Model = validWorkspaceString("model", raw.Model, workspace, &settings.Notices)
+	preference := storedModelPreference(raw.Model, raw.ReasoningEffort, workspace, &settings.Notices)
+	settings.Workspace.Model = preference.Model
+	settings.Workspace.ReasoningEffort = preference.ReasoningEffort
 	settings.Workspace.ToolSet = validWorkspaceString("tool_set", raw.ToolSet, workspace, &settings.Notices)
 	if raw.Scope != nil {
 		scope := strings.ToLower(strings.TrimSpace(*raw.Scope))
@@ -266,18 +297,41 @@ func (document interactiveDocument) settings(workspace string) InteractiveSettin
 			settings.Notices = append(settings.Notices, fmt.Sprintf("invalid workspace scope %q for %s; ignored", *raw.Scope, workspace))
 		}
 	}
-	if raw.ReasoningEffort != nil {
-		effort := strings.ToLower(strings.TrimSpace(*raw.ReasoningEffort))
-		switch effort {
-		case "":
-			settings.Notices = append(settings.Notices, fmt.Sprintf("empty reasoning_effort for %s; use \"default\" for provider default; ignored", workspace))
-		case "default":
-			settings.Workspace.ReasoningEffort = stringPointer("")
-		default:
-			settings.Workspace.ReasoningEffort = stringPointer(effort)
+	return settings
+}
+
+// storedModelPreference decodes the model and effort recorded for one
+// workspace. Absent and present-but-invalid values stay distinguishable.
+func storedModelPreference(model, effort *string, workspace string, notices *[]string) ModelPreference {
+	preference := ModelPreference{}
+	if model != nil {
+		preference.Model = strings.TrimSpace(*model)
+		if preference.Model == "" {
+			*notices = append(*notices, fmt.Sprintf("empty workspace model for %s; ignored", workspace))
 		}
 	}
-	return settings
+	if effort == nil {
+		return preference
+	}
+	if strings.TrimSpace(*effort) == "" {
+		*notices = append(*notices, fmt.Sprintf("empty reasoning_effort for %s; use \"default\" for provider default; ignored", workspace))
+		return preference
+	}
+	preference.ReasoningEffort = decodeReasoningEffort(*effort)
+	return preference
+}
+
+// decodeReasoningEffort maps a stored effort to an override. A nil result means
+// no override; "default" means the provider default was chosen deliberately.
+func decodeReasoningEffort(value string) *string {
+	switch value = strings.ToLower(strings.TrimSpace(value)); value {
+	case "":
+		return nil
+	case "default":
+		return stringPointer("")
+	default:
+		return stringPointer(value)
+	}
 }
 
 func validWorkspaceString(name string, value *string, workspace string, notices *[]string) string {
@@ -289,13 +343,6 @@ func validWorkspaceString(name string, value *string, workspace string, notices 
 		*notices = append(*notices, fmt.Sprintf("empty workspace %s for %s; ignored", name, workspace))
 	}
 	return normalized
-}
-
-func validStoredString(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return strings.TrimSpace(*value)
 }
 
 func storedStringEquals(value *string, expected string) bool {
@@ -311,51 +358,45 @@ func validScope(value string) bool {
 	}
 }
 
-func validRecentModels(models []string) []string {
-	result := make([]string, 0, min(maxRecentModels, len(models)))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
+func validModelHistory(entries []modelHistoryDocument, notices *[]string) []ModelPreference {
+	history := make([]ModelPreference, 0, min(maxModelHistory, len(entries)))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		model := strings.TrimSpace(entry.Model)
 		key := normalizeModelURI(model)
-		if key == "" {
+		if key == "" || len(history) == maxModelHistory {
 			continue
 		}
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
-		result = append(result, model)
-		if len(result) == maxRecentModels {
-			break
-		}
+		history = append(history, ModelPreference{Model: model, ReasoningEffort: decodeReasoningEffort(entry.ReasoningEffort)})
 	}
-	return result
+	if len(history) != len(entries) {
+		*notices = append(*notices, "interactive model_history contains empty, duplicate, or excess entries; invalid entries were ignored")
+	}
+	return history
 }
 
-func recentModels(models []string, previous, current string) []string {
-	recent := make([]string, 0, min(maxRecentModels, len(models)+1))
-	seen := make(map[string]struct{}, cap(recent)+1)
-	currentKey := normalizeModelURI(current)
-	if currentKey != "" {
-		seen[currentKey] = struct{}{}
-	}
-	add := func(model string) {
-		model = strings.TrimSpace(model)
-		key := normalizeModelURI(model)
-		if key == "" || len(recent) == maxRecentModels {
-			return
+// pushModelHistory records one selection as the most recent, so the head is
+// always the model a workspace without its own record starts from.
+func pushModelHistory(history []modelHistoryDocument, selection modelHistoryDocument) []modelHistoryDocument {
+	updated := make([]modelHistoryDocument, 0, min(maxModelHistory, len(history)+1))
+	updated = append(updated, selection)
+	seen := map[string]struct{}{normalizeModelURI(selection.Model): {}}
+	for _, entry := range history {
+		key := normalizeModelURI(entry.Model)
+		if key == "" || len(updated) == maxModelHistory {
+			continue
 		}
 		if _, exists := seen[key]; exists {
-			return
+			continue
 		}
 		seen[key] = struct{}{}
-		recent = append(recent, model)
+		updated = append(updated, entry)
 	}
-	add(previous)
-	for _, model := range models {
-		add(model)
-	}
-	return recent
+	return updated
 }
 
 func normalizeModelURI(model string) string {

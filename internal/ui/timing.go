@@ -6,10 +6,13 @@ import (
 	"time"
 )
 
-func formatDuration(duration time.Duration) string {
-	duration = max(time.Duration(0), duration)
+// formatToolDuration reports a wait worth noticing and returns "" for anything
+// shorter than a second. Nearly every tool call finishes in single-digit
+// milliseconds, so timing every line is noise that crowds out the argument the
+// line exists to show; with a floor, a printed duration marks the slow call.
+func formatToolDuration(duration time.Duration) string {
 	if duration < time.Second {
-		return fmt.Sprintf("%dms", duration.Milliseconds())
+		return ""
 	}
 	if duration < 10*time.Second {
 		return fmt.Sprintf("%.1fs", duration.Seconds())

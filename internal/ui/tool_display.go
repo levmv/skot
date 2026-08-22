@@ -26,7 +26,7 @@ func splitToolDisplay(text string) (name, arguments string) {
 	return text, ""
 }
 
-func describeToolCall(name, rawArguments string) compactToolCall {
+func describeToolCall(name, rawArguments, root string) compactToolCall {
 	name = strings.TrimSpace(name)
 	fallback := compactToolCall{Text: compactSingleLine(name, 80)}
 	if fallback.Text == "" {
@@ -43,7 +43,7 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 		if !decodeToolDisplayArgs(rawArguments, &args) || strings.TrimSpace(args.Path) == "" {
 			return fallback
 		}
-		cleaned := cleanDisplayPath(args.Path)
+		cleaned := displayToolPath(root, args.Path)
 		dir, item := path.Dir(cleaned), path.Base(cleaned)
 		if args.Offset > 1 {
 			item += fmt.Sprintf(":%d", args.Offset)
@@ -65,7 +65,7 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 		if !decodeToolDisplayArgs(rawArguments, &args) {
 			return fallback
 		}
-		text := "list  " + cleanDisplayPath(args.Path)
+		text := "list  " + displayToolPath(root, args.Path)
 		if args.Offset > 1 {
 			text += fmt.Sprintf(":%d", args.Offset)
 		}
@@ -81,7 +81,7 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 		}
 		parts := []string{"grep  " + quoteToolValue(args.Pattern, 100)}
 		if strings.TrimSpace(args.Path) != "" {
-			parts = append(parts, cleanDisplayPath(args.Path))
+			parts = append(parts, displayToolPath(root, args.Path))
 		}
 		if strings.TrimSpace(args.Include) != "" {
 			parts = append(parts, compactSingleLine(args.Include, 80))
@@ -97,7 +97,7 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 		}
 		text := "glob  " + compactSingleLine(args.Pattern, 120)
 		if strings.TrimSpace(args.Path) != "" {
-			text += " · " + cleanDisplayPath(args.Path)
+			text += " · " + displayToolPath(root, args.Path)
 		}
 		return compactToolCall{Text: text}
 	case "edit", "write":
@@ -107,7 +107,7 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 		if !decodeToolDisplayArgs(rawArguments, &args) || strings.TrimSpace(args.Path) == "" {
 			return fallback
 		}
-		return compactToolCall{Text: name + "  " + cleanDisplayPath(args.Path)}
+		return compactToolCall{Text: name + "  " + displayToolPath(root, args.Path)}
 	case "bash":
 		var args struct {
 			Command    string `json:"command"`
@@ -119,7 +119,7 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 		}
 		text := "$ " + compactCommand(args.Command, 180)
 		if strings.TrimSpace(args.Workdir) != "" {
-			text += " · in " + cleanDisplayPath(args.Workdir)
+			text += " · in " + displayToolPath(root, args.Workdir)
 		}
 		if args.Background {
 			text += " · background"
@@ -193,6 +193,26 @@ func describeToolCall(name, rawArguments string) compactToolCall {
 
 func decodeToolDisplayArgs(raw string, target any) bool {
 	return strings.TrimSpace(raw) != "" && json.Unmarshal([]byte(raw), target) == nil
+}
+
+// displayToolPath names a path the way the file tools name it in their own
+// results: relative to the workspace root inside it, absolute outside it.
+// Models pass either form for the same file, so printing the argument verbatim
+// both stretched the line with a prefix every path shares and split one
+// directory's reads into two groups that never merged.
+func displayToolPath(root, value string) string {
+	cleaned := cleanDisplayPath(value)
+	root = path.Clean(strings.TrimSpace(root))
+	if !path.IsAbs(cleaned) || !path.IsAbs(root) {
+		return cleaned
+	}
+	if cleaned == root {
+		return "."
+	}
+	if rest, inside := strings.CutPrefix(cleaned, root+"/"); inside {
+		return rest
+	}
+	return cleaned
 }
 
 func cleanDisplayPath(value string) string {

@@ -336,6 +336,7 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 		darkTheme:    darkTheme,
 		useStyle:     useStyle,
 		modelChoices: runtime.ModelChoices(),
+		transcript:   transcriptState{root: config.Root},
 	}
 	m.applyTerminalTheme(darkTheme)
 	m.syncCommandSuggestions()

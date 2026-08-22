@@ -61,6 +61,7 @@ type renderedScreenBlock struct {
 type transcriptState struct {
 	blocks         []screenBlock
 	currentAttempt string
+	root           string
 
 	renderCache      []renderedScreenBlock
 	renderCacheLines []string
@@ -172,7 +173,7 @@ func (m *screenModel) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
 }
 
 func (transcript *transcriptState) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
-	display := describeToolCall(call.Name, call.RawArguments)
+	display := describeToolCall(call.Name, call.RawArguments, transcript.root)
 	if display.GroupKey != "" && len(transcript.blocks) > 0 {
 		last := &transcript.blocks[len(transcript.blocks)-1]
 		if last.kind == screenBlockTool && last.tool != nil && !last.tool.failed && last.tool.group != nil && last.tool.group.key == display.GroupKey {
@@ -180,11 +181,13 @@ func (transcript *transcriptState) addToolCallAt(call agent.ToolCall, startedAt 
 			items := append(splitCompactToolItems(last.tool.group.items), display.GroupItem)
 			last.text = sanitizeTerminalText(formatReadGroup(last.tool.group.dir, items))
 			last.tool.group.items = strings.Join(items, compactToolItemSeparator)
-			last.tool.callIDs = append(last.tool.callIDs, call.ID)
-			last.tool.done = false
-			if last.tool.startedAt.IsZero() {
+			// Joining an idle group restarts the clock: the gap since the last
+			// read is the model thinking, not a wait any tool spent.
+			if len(last.tool.callIDs) == 0 {
 				last.tool.startedAt = startedAt
 			}
+			last.tool.callIDs = append(last.tool.callIDs, call.ID)
+			last.tool.done = false
 			return
 		}
 	}
@@ -233,8 +236,10 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 		transcript.markBlockDirty(index)
 		tool.callIDs = append(tool.callIDs[:callIndex], tool.callIDs[callIndex+1:]...)
 		tool.done = len(tool.callIDs) == 0
+		// A group keeps the longest stretch it measured, so a slow read stays
+		// reported instead of vanishing when a fast one joins its line.
 		if tool.done && !tool.startedAt.IsZero() {
-			tool.elapsed = max(time.Duration(0), time.Since(tool.startedAt))
+			tool.elapsed = max(tool.elapsed, time.Since(tool.startedAt))
 		}
 		failed := result.Error || result.Unknown
 		tool.failed = tool.failed || failed
@@ -388,8 +393,8 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 			return m.renderFileChangeLines(block.text, *tool.fileChange, m.toolMarker(tool.failed))
 		}
 		detail := ""
-		if tool.done && tool.elapsed > 0 {
-			detail = formatDuration(tool.elapsed)
+		if tool.done {
+			detail = formatToolDuration(tool.elapsed)
 		}
 		return m.renderToolSummaryLines(m.toolMarker(tool.failed), block.text, detail)
 	case screenBlockError:

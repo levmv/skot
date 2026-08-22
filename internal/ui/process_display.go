@@ -95,7 +95,10 @@ func omittedOutputLabel(lines int) string {
 }
 
 func processStatusText(result processResultMeta) string {
-	parts := []string{formatDuration(time.Duration(result.DurationMillis) * time.Millisecond)}
+	var parts []string
+	if duration := formatToolDuration(time.Duration(result.DurationMillis) * time.Millisecond); duration != "" {
+		parts = append(parts, duration)
+	}
 	if result.Status == agent.ProcessRunning {
 		parts = append(parts, "running")
 		if result.JobID != "" {

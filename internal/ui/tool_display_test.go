@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/levmv/skot/agent"
 )
@@ -12,9 +13,12 @@ func TestDescribeToolCallUsesToolArguments(t *testing.T) {
 		name string
 		tool string
 		args string
+		root string
 		want string
 	}{
 		{name: "read", tool: "read", args: `{"path":"skot/main.go","offset":201,"limit":50}`, want: "read  skot/main.go:201+50"},
+		{name: "read inside the workspace", tool: "read", args: `{"path":"/workspaces/skot/agent/runtime.go"}`, root: "/workspaces/skot", want: "read  agent/runtime.go"},
+		{name: "read outside the workspace", tool: "read", args: `{"path":"/tmp/review.diff"}`, root: "/workspaces/skot", want: "read  /tmp/review.diff"},
 		{name: "list", tool: "ls", args: `{"path":"skot/internal","offset":201}`, want: "list  skot/internal:201"},
 		{name: "grep", tool: "grep", args: `{"pattern":"func \\(m \\*Model\\)","path":"skot","include":"*.go"}`, want: `grep  "func \\(m \\*Model\\)" · skot · *.go`},
 		{name: "glob", tool: "glob", args: `{"pattern":"**/*_test.go","path":"skot"}`, want: "glob  **/*_test.go · skot"},
@@ -31,7 +35,7 @@ func TestDescribeToolCallUsesToolArguments(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := describeToolCall(test.tool, test.args).Text; got != test.want {
+			if got := describeToolCall(test.tool, test.args, test.root).Text; got != test.want {
 				t.Fatalf("description = %q, want %q", got, test.want)
 			}
 		})
@@ -41,7 +45,9 @@ func TestDescribeToolCallUsesToolArguments(t *testing.T) {
 func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 	fake := &fakeAgent{}
 	model := testScreenModel(t, fake)
-	for index, file := range []string{"skot/main.go", "skot/config.go", "skot/process.go"} {
+	model.transcript.root = "/home/dev"
+	// Models name the same directory both ways, so both forms join one group.
+	for index, file := range []string{"skot/main.go", "/home/dev/skot/config.go", "skot/process.go"} {
 		model.addToolCall(agent.ToolCall{
 			ID:           string(rune('a' + index)),
 			Name:         "read",
@@ -62,6 +68,23 @@ func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 	last = model.transcript.blocks[len(model.transcript.blocks)-1]
 	if last.tool == nil || !last.tool.done || len(last.tool.callIDs) != 0 {
 		t.Fatalf("completed group = %#v", last)
+	}
+}
+
+func TestReadGroupTimesOnlyTheToolWorkAcrossSeparateCalls(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.addToolCallAt(agent.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"agent/runtime.go"}`}, time.Now())
+	model.finishTool(agent.ToolResult{CallID: "first"})
+	// Backdate the finished read: the model then spent three seconds thinking
+	// before asking for the next file in the same directory.
+	model.transcript.blocks[len(model.transcript.blocks)-1].tool.startedAt = time.Now().Add(-3 * time.Second)
+
+	model.addToolCallAt(agent.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"agent/details.go"}`}, time.Now())
+	model.finishTool(agent.ToolResult{CallID: "second"})
+
+	rendered := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
+	if strings.ContainsAny(rendered, "0123456789") {
+		t.Fatalf("grouped read charged the model gap to the tool: %q", rendered)
 	}
 }
 

@@ -122,7 +122,7 @@ func TestFileChangeStylesOnlyDiffSignsAndDeletedContent(t *testing.T) {
 	}
 }
 
-func TestCompletedToolShowsElapsedTime(t *testing.T) {
+func TestCompletedToolShowsElapsedTimeOnlyWhenItIsWorthNoticing(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.addToolCallAt(agent.ToolCall{ID: "call-1", Name: "read", RawArguments: `{"path":"main.go"}`}, time.Now().Add(-1500*time.Millisecond))
 	model.finishTool(agent.ToolResult{CallID: "call-1"})
@@ -133,6 +133,13 @@ func TestCompletedToolShowsElapsedTime(t *testing.T) {
 	}
 	if rendered := strings.Join(model.renderBlockLines(block), "\n"); !strings.Contains(rendered, "1.5s") {
 		t.Fatalf("rendered tool timing = %q", rendered)
+	}
+
+	model.addToolCallAt(agent.ToolCall{ID: "call-2", Name: "read", RawArguments: `{"path":"internal/other.go"}`}, time.Now())
+	model.finishTool(agent.ToolResult{CallID: "call-2"})
+	quick := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
+	if strings.ContainsAny(quick, "0123456789") {
+		t.Fatalf("instant read reported a duration: %q", quick)
 	}
 }
 

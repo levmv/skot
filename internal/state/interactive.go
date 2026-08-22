@@ -206,7 +206,7 @@ func (store *InteractiveStore) SetToolSetSelection(toolSet string) error {
 func (store *InteractiveStore) SetScopeSelection(scope string) error {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	if !validScope(scope) {
-		return fmt.Errorf("invalid filesystem scope %q; expected auto, workspace, or machine", scope)
+		return fmt.Errorf("invalid filesystem scope %q; expected workspace or machine", scope)
 	}
 	return store.mutate(func(document *interactiveDocument) bool {
 		workspace := document.workspace(store.workspace)
@@ -370,7 +370,7 @@ func storedStringEquals(value *string, expected string) bool {
 
 func validScope(value string) bool {
 	switch value {
-	case "auto", "workspace", "machine":
+	case "workspace", "machine":
 		return true
 	default:
 		return false

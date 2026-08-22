@@ -11,6 +11,7 @@ type screenBlockKind uint8
 
 const (
 	screenBlockSystem screenBlockKind = iota
+	screenBlockScopeChange
 	screenBlockUser
 	screenBlockAssistant
 	screenBlockTool
@@ -377,6 +378,8 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 	switch block.kind {
 	case screenBlockSystem:
 		return m.padded(m.wrappedMarked(" ", m.renderSystemText(block.text)))
+	case screenBlockScopeChange:
+		return m.padded(m.wrappedMarked(" ", m.renderScopeChangeText(block.text)))
 	case screenBlockUser:
 		return m.renderUserBlock(block.text)
 	case screenBlockAssistant:
@@ -434,6 +437,16 @@ func (m screenModel) renderSystemText(text string) string {
 
 func (m screenModel) renderSystemLine(line string) string {
 	return m.mutedStyle.Render(line)
+}
+
+// renderScopeChangeText keeps the deliberate transition readable as ordinary
+// text while leaving persistent-policy details visually secondary.
+func (m screenModel) renderScopeChangeText(text string) string {
+	lines := strings.Split(text, "\n")
+	for index := 1; index < len(lines); index++ {
+		lines[index] = m.mutedStyle.Render(lines[index])
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m screenModel) renderAssistantBlock(text string) []string {

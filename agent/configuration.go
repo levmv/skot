@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -147,9 +148,6 @@ func validateEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) error {
 	if snapshot.RuntimePolicy.MaxRequestBytes < 0 || snapshot.RuntimePolicy.MaxCompletionBytes < 0 {
 		return errors.New("configured model byte limits cannot be negative")
 	}
-	if snapshot.Environment.Scope.ProtectedPathCount < 0 {
-		return errors.New("configured protected path count cannot be negative")
-	}
 	tools, err := NormalizeToolSpecs(snapshot.ModelContext.Tools)
 	if err != nil {
 		return fmt.Errorf("configured model tools: %w", err)
@@ -216,6 +214,7 @@ func cloneEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) EffectiveCon
 	for index, tool := range snapshot.ModelContext.Tools {
 		cloned.ModelContext.Tools[index] = cloneToolSpec(tool)
 	}
+	cloned.Environment.Scope.ProtectedPaths = append([]string(nil), snapshot.Environment.Scope.ProtectedPaths...)
 	cloned.Environment.ProgramTools = make([]ProgramToolSnapshot, len(snapshot.Environment.ProgramTools))
 	for index, tool := range snapshot.Environment.ProgramTools {
 		cloned.Environment.ProgramTools[index] = tool
@@ -239,10 +238,12 @@ func cloneToolSpecs(specs []ToolSpec) []ToolSpec {
 }
 
 func sanitizeScopeSnapshot(snapshot ScopeSnapshot, sanitize func(string) string) ScopeSnapshot {
-	snapshot.RequestedScope = sanitize(strings.TrimSpace(snapshot.RequestedScope))
-	snapshot.EffectiveScope = sanitize(strings.TrimSpace(snapshot.EffectiveScope))
+	snapshot.Scope = sanitize(strings.TrimSpace(snapshot.Scope))
+	snapshot.ProtectedPaths = append([]string(nil), snapshot.ProtectedPaths...)
+	for index := range snapshot.ProtectedPaths {
+		snapshot.ProtectedPaths[index] = sanitize(strings.TrimSpace(snapshot.ProtectedPaths[index]))
+	}
 	snapshot.Backend = sanitize(strings.TrimSpace(snapshot.Backend))
-	snapshot.Container = sanitize(strings.TrimSpace(snapshot.Container))
 	snapshot.Network = sanitize(strings.TrimSpace(snapshot.Network))
 	return snapshot
 }
@@ -255,7 +256,7 @@ func (runtime *Runtime) SetScopeSnapshot(ctx context.Context, scope ScopeSnapsho
 	scope = sanitizeScopeSnapshot(scope, runtime.sanitize)
 	runtime.configMu.Lock()
 	defer runtime.configMu.Unlock()
-	if scope == runtime.scope {
+	if equalScopeSnapshots(scope, runtime.scope) {
 		return nil
 	}
 	records, err := runtime.journal.Records(ctx)
@@ -272,4 +273,11 @@ func (runtime *Runtime) SetScopeSnapshot(ctx context.Context, scope ScopeSnapsho
 	}
 	runtime.scope = scope
 	return nil
+}
+
+func equalScopeSnapshots(left, right ScopeSnapshot) bool {
+	return left.Scope == right.Scope &&
+		slices.Equal(left.ProtectedPaths, right.ProtectedPaths) &&
+		left.Backend == right.Backend &&
+		left.Network == right.Network
 }

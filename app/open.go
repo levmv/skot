@@ -113,8 +113,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 
 	masker := newSecretMasker(settingsStore)
-	security := resolveSecurityState(ctx, scope, protection.Paths())
-	access, err := workspacetools.NewFilesystemAccess(root, security.EffectiveScope, protection)
+	security := newSecurityState(scope, protection.Paths())
+	access, err := workspacetools.NewFilesystemAccess(root, security.Scope, protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize filesystem policy: %w", err))
 	}
@@ -161,18 +161,18 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	config.ToolSet = selectedToolSet
 	if config.Interactive || toolSetNeedsProcessBoundary(toolSets, builtCatalog.programDeclarations, config.ToolSet) {
 		toolHome := ""
-		if security.EffectiveScope == workspacetools.ScopeWorkspace {
+		if security.Scope == workspacetools.ScopeWorkspace {
 			toolHome, err = processes.ToolHome()
 			if err != nil {
 				return resources.fail(agent.MarkInvalidRequest(err))
 			}
 		}
-		security = buildProcessSecurityState(ctx, security, root, toolHome, protection.Paths())
+		security = buildProcessSecurityState(ctx, security, root, toolHome)
 		if err := validateSecurity(security); err != nil {
 			return resources.fail(agent.MarkInvalidRequest(err))
 		}
 	}
-	if notice := protectedPathsNotice(security, root, protection.Paths()); notice != "" {
+	if notice := protectedPathsNotice(security, root); notice != "" {
 		notices = append(notices, notice)
 	}
 	catalog, programSnapshots, err := bindProgramToolsForSet(
@@ -302,7 +302,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			systemPrompt:        config.SystemPrompt,
 			root:                root,
 			home:                home,
-			protectedPaths:      protection.Paths(),
 			protection:          protection,
 			baseURL:             config.BaseURL,
 			modelAPI:            modelAPIOverride,
@@ -319,7 +318,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			processes:      processes,
 			children:       children,
 			toolSet:        config.ToolSet,
-			requestedScope: scope,
 			theme:          theme,
 			security:       security,
 			startupNotices: notices,

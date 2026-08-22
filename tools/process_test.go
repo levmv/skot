@@ -46,7 +46,7 @@ func TestSessionJobsSnapshotsStartTimeWhileSorting(t *testing.T) {
 	wait.Wait()
 }
 
-func TestJobMetadataRequiresCurrentProtocolTimingAndConcreteScope(t *testing.T) {
+func TestJobMetadataRequiresCurrentProtocolTimingAndValidScope(t *testing.T) {
 	id := "job-metadata"
 	metadata := jobMetadata{
 		Version: jobProtocolVersion, JobID: id, SessionID: "session", Command: "true",
@@ -64,7 +64,7 @@ func TestJobMetadataRequiresCurrentProtocolTimingAndConcreteScope(t *testing.T) 
 		{name: "empty command", want: "timing metadata", mutate: func(value *jobMetadata) { value.Command = " " }},
 		{name: "missing start time", want: "timing metadata", mutate: func(value *jobMetadata) { value.StartedAt = time.Time{} }},
 		{name: "zero timeout", want: "timing metadata", mutate: func(value *jobMetadata) { value.TimeoutMillis = 0 }},
-		{name: "unresolved scope", want: "scope", mutate: func(value *jobMetadata) { value.Scope = ScopeAuto }},
+		{name: "unknown scope", want: "scope", mutate: func(value *jobMetadata) { value.Scope = Scope("unknown") }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

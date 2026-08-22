@@ -9,7 +9,7 @@ import (
 
 func TestNormalizeScopeValues(t *testing.T) {
 	for input, want := range map[string]Scope{
-		"": ScopeAuto, "AUTO": ScopeAuto,
+		"":          ScopeWorkspace,
 		"workspace": ScopeWorkspace, "machine": ScopeMachine,
 	} {
 		got, err := NormalizeScope(input)
@@ -17,16 +17,16 @@ func TestNormalizeScopeValues(t *testing.T) {
 			t.Fatalf("NormalizeScope(%q) = %q, %v; want %q", input, got, err, want)
 		}
 	}
-	for _, input := range []string{"masked", "off", "require"} {
+	for _, input := range []string{"auto", "masked", "off", "require"} {
 		if _, err := NormalizeScope(input); err == nil {
 			t.Fatalf("NormalizeScope accepted obsolete or unknown value %q", input)
 		}
 	}
 }
 
-func TestBoundaryLayoutRejectsUnresolvedAuto(t *testing.T) {
-	if err := (Boundary{Scope: ScopeAuto}).ValidateLayout(); err == nil {
-		t.Fatal("process layer accepted unresolved auto policy")
+func TestBoundaryLayoutRejectsUnknownScope(t *testing.T) {
+	if err := (Boundary{Scope: Scope("unknown")}).ValidateLayout(); err == nil {
+		t.Fatal("process layer accepted an unknown scope")
 	}
 }
 
@@ -44,10 +44,10 @@ func TestBoundaryNeedsBackendOnlyForActualRestrictions(t *testing.T) {
 	}
 }
 
-func TestBoundaryCommandRejectsUnresolvedScope(t *testing.T) {
-	_, err := BoundaryBashCommand("true", t.TempDir(), Boundary{Scope: ScopeAuto})
+func TestBoundaryCommandRejectsUnknownScope(t *testing.T) {
+	_, err := BoundaryBashCommand("true", t.TempDir(), Boundary{Scope: Scope("unknown")})
 	if err == nil {
-		t.Fatal("BoundaryBashCommand accepted unresolved auto scope")
+		t.Fatal("BoundaryBashCommand accepted an unknown scope")
 	}
 }
 

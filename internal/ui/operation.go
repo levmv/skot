@@ -17,8 +17,9 @@ const (
 	operationCompaction
 )
 
-// activeOperation is the screen's single cancellable-operation slot. A model
-// turn and maintenance work cannot own independent cancellation state.
+// activeOperation is the screen's single exclusive cancellable-operation slot.
+// A scope switch lives separately because it may overlap a model turn; the
+// screen projects it into this slot's maintenance view once no turn is active.
 type activeOperation struct {
 	kind          operationKind
 	startedAt     time.Time
@@ -70,6 +71,22 @@ func (operation activeOperation) label() string {
 	default:
 		return "Working"
 	}
+}
+
+// maintenanceOperation is the single source of truth for whether the UI is
+// occupied by maintenance. Scope switching is concurrent only with a turn: if
+// that turn finishes first, the still-pending switch immediately becomes the
+// maintenance owner without an event-order-dependent state transfer.
+func (m screenModel) maintenanceOperation() activeOperation {
+	if m.operation.isMaintenance() {
+		return m.operation
+	}
+	if m.scope.pending && !m.operation.isTurn() {
+		return activeOperation{
+			kind: operationScope, startedAt: m.scope.startedAt, cancel: m.scope.cancel,
+		}
+	}
+	return activeOperation{}
 }
 
 func (operation *activeOperation) clear() {

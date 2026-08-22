@@ -109,7 +109,7 @@ for that threat model. See [scope details](docs/reference.md#filesystem-access).
 ## Documentation
 
 See the [complete user reference](docs/reference.md). Run `sk -help` for CLI
-syntax, or `/help` inside the interactive UI for commands and keyboard
+syntax, type `/` in the interactive UI for commands, or use `/help` for keyboard
 shortcuts.
 
 ## Credits

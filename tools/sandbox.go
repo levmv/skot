@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	ScopeAuto      = "auto"
 	ScopeWorkspace = "workspace"
 	ScopeMachine   = "machine"
 )
@@ -21,15 +20,13 @@ const (
 // Scope is the filesystem reach selected for model-owned operations.
 type Scope string
 
-// Boundary describes the concrete filesystem boundary applied to one
-// model-owned process. Scope is always concrete here: auto is resolved by the
-// application before a process reaches the tools package.
+// Boundary describes the filesystem boundary applied to one model-owned
+// process.
 type Boundary struct {
 	Scope     Scope  `json:"scope"`
 	Workspace string `json:"workspace"`
 	ToolHome  string `json:"tool_home"`
-	// ProtectedPaths are inaccessible to model-owned processes under both
-	// concrete scopes.
+	// ProtectedPaths are inaccessible to model-owned processes under both scopes.
 	ProtectedPaths []string `json:"protected_paths,omitempty"`
 }
 
@@ -39,9 +36,9 @@ func (boundary Boundary) NeedsBackend() bool {
 	return boundary.Scope == ScopeWorkspace || len(boundary.ProtectedPaths) != 0
 }
 
-// ValidateLayout checks the path relationships required by a concrete scope.
+// ValidateLayout checks the path relationships required by a scope.
 func (boundary Boundary) ValidateLayout() error {
-	if err := validateConcreteScope(boundary.Scope); err != nil {
+	if err := validateScope(boundary.Scope); err != nil {
 		return err
 	}
 	for _, path := range boundary.ProtectedPaths {
@@ -65,22 +62,24 @@ func (boundary Boundary) ValidateLayout() error {
 func NormalizeScope(value string) (Scope, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
-		return ScopeAuto, nil
+		// An unset scope takes the narrow one. Widening the model's reach is an
+		// act the user performs, never something a caller gets by omission.
+		return ScopeWorkspace, nil
 	}
 	switch Scope(value) {
-	case ScopeAuto, ScopeWorkspace, ScopeMachine:
+	case ScopeWorkspace, ScopeMachine:
 		return Scope(value), nil
 	default:
-		return "", fmt.Errorf("unknown filesystem scope %q (want auto, workspace, or machine)", value)
+		return "", fmt.Errorf("unknown filesystem scope %q (want workspace or machine)", value)
 	}
 }
 
-func validateConcreteScope(scope Scope) error {
+func validateScope(scope Scope) error {
 	switch scope {
 	case ScopeWorkspace, ScopeMachine:
 		return nil
 	default:
-		return fmt.Errorf("filesystem scope must be concrete, got %q", scope)
+		return fmt.Errorf("unknown filesystem scope %q", scope)
 	}
 }
 

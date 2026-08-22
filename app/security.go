@@ -17,55 +17,32 @@ import (
 )
 
 type securityState struct {
-	RequestedScope     workspacetools.Scope
-	Backend            string
-	Failure            string
-	EffectiveScope     workspacetools.Scope
-	Container          string
-	ProtectedPathCount int
-	BackendRequired    bool
+	Scope           workspacetools.Scope
+	ProtectedPaths  []string
+	Backend         string
+	Failure         string
+	BackendRequired bool
 }
 
 func (state securityState) snapshot() agent.ScopeSnapshot {
 	return agent.ScopeSnapshot{
-		RequestedScope:     string(state.RequestedScope),
-		EffectiveScope:     string(state.EffectiveScope),
-		ProtectedPathCount: state.ProtectedPathCount,
-		Backend:            state.Backend,
-		Container:          state.Container,
-		Network:            "inherited",
+		Scope:          string(state.Scope),
+		ProtectedPaths: append([]string(nil), state.ProtectedPaths...),
+		Backend:        state.Backend,
+		Network:        "inherited",
 	}
 }
 
-func buildSecurityStateWithToolHome(ctx context.Context, requested workspacetools.Scope, root, toolHome string, protectedSets ...[]string) securityState {
-	state := resolveSecurityState(ctx, requested, protectedSets...)
-	return buildProcessSecurityState(ctx, state, root, toolHome, protectedSets...)
+func newSecurityState(scope workspacetools.Scope, protectedPaths []string) securityState {
+	return securityState{
+		Scope:          scope,
+		ProtectedPaths: append([]string(nil), protectedPaths...),
+	}
 }
 
-func resolveSecurityState(ctx context.Context, requested workspacetools.Scope, protectedSets ...[]string) securityState {
-	container := ""
-	if requested == workspacetools.ScopeAuto {
-		container = detectContainer(ctx)
-	}
-	effective := resolveScope(requested, container)
-	var protected []string
-	if len(protectedSets) > 0 {
-		protected = append([]string(nil), protectedSets[0]...)
-	}
-	state := securityState{
-		RequestedScope: requested, EffectiveScope: effective, Container: container,
-		ProtectedPathCount: len(protected),
-	}
-	return state
-}
-
-func buildProcessSecurityState(ctx context.Context, state securityState, root, toolHome string, protectedSets ...[]string) securityState {
-	var protected []string
-	if len(protectedSets) > 0 {
-		protected = append([]string(nil), protectedSets[0]...)
-	}
+func buildProcessSecurityState(ctx context.Context, state securityState, root, toolHome string) securityState {
 	boundary := workspacetools.Boundary{
-		Scope: state.EffectiveScope, Workspace: root, ToolHome: toolHome, ProtectedPaths: protected,
+		Scope: state.Scope, Workspace: root, ToolHome: toolHome, ProtectedPaths: state.ProtectedPaths,
 	}
 	state.BackendRequired = boundary.NeedsBackend()
 	if err := boundary.ValidateLayout(); err != nil {
@@ -178,13 +155,13 @@ func unavailableBoundary(state securityState, probe string) securityState {
 	return state
 }
 
-func protectedPathsNotice(state securityState, root string, paths []string) string {
+func protectedPathsNotice(state securityState, root string) string {
 	if state.Backend != "landlock" {
 		return ""
 	}
-	affected := state.EffectiveScope == workspacetools.ScopeMachine && len(paths) != 0
-	if state.EffectiveScope == workspacetools.ScopeWorkspace {
-		for _, path := range paths {
+	affected := state.Scope == workspacetools.ScopeMachine && len(state.ProtectedPaths) != 0
+	if state.Scope == workspacetools.ScopeWorkspace {
+		for _, path := range state.ProtectedPaths {
 			if canonicalpath.Contains(root, path) && !canonicalpath.Contains(path, root) {
 				affected = true
 				break
@@ -201,138 +178,12 @@ func landlockProtectedPathsNeedBuiltInLS(backend string, paths []string) bool {
 	return backend == "landlock" && len(paths) != 0
 }
 
-func resolveScope(requested workspacetools.Scope, container string) workspacetools.Scope {
-	if requested != workspacetools.ScopeAuto {
-		return requested
-	}
-	if container != "" {
-		return workspacetools.ScopeMachine
-	}
-	return workspacetools.ScopeWorkspace
-}
-
 func (state securityState) Summary() string {
-	text := "scope: " + string(state.EffectiveScope)
-	var detail []string
-	if state.RequestedScope == workspacetools.ScopeAuto {
-		detail = append(detail, "auto")
-	}
-	if state.Container != "" {
-		detail = append(detail, state.Container)
-	}
-	if len(detail) != 0 {
-		text += " (" + strings.Join(detail, ", ") + ")"
-	}
-	if state.ProtectedPathCount != 0 {
-		text += fmt.Sprintf(" · protected paths: %d", state.ProtectedPathCount)
-	}
-	if state.EffectiveScope == workspacetools.ScopeMachine && !state.BackendRequired {
-		text += " · no additional filesystem boundary"
+	text := "scope: " + string(state.Scope)
+	if len(state.ProtectedPaths) != 0 {
+		text += " · protected paths: " + strings.Join(state.ProtectedPaths, ", ")
 	}
 	return text
-}
-
-func detectContainer(ctx context.Context) string {
-	for _, marker := range []struct {
-		path string
-		id   string
-	}{
-		{path: "/run/.containerenv", id: "podman"},
-		{path: "/.dockerenv", id: "docker"},
-	} {
-		if _, err := os.Stat(marker.path); err == nil {
-			return marker.id
-		}
-	}
-	for _, source := range []string{"/run/systemd/container", "/proc/1/environ"} {
-		if raw, err := os.ReadFile(source); err == nil {
-			if id := trustedContainerID(raw); id != "" {
-				return id
-			}
-		}
-	}
-	if raw, err := os.ReadFile("/proc/self/cgroup"); err == nil {
-		if id := cgroupContainerID(raw); id != "" {
-			return id
-		}
-	}
-	detectCtx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	for _, path := range []string{
-		"/usr/bin/systemd-detect-virt",
-		"/bin/systemd-detect-virt",
-		"/run/current-system/sw/bin/systemd-detect-virt",
-	} {
-		if raw, err := exec.CommandContext(detectCtx, path, "--container").Output(); err == nil {
-			return trustedContainerID(raw)
-		}
-	}
-	return ""
-}
-
-func cgroupContainerID(raw []byte) string {
-	for _, line := range strings.Split(string(raw), "\n") {
-		firstColon := strings.IndexByte(line, ':')
-		if firstColon < 0 {
-			continue
-		}
-		secondColon := strings.IndexByte(line[firstColon+1:], ':')
-		if secondColon < 0 {
-			continue
-		}
-		path := line[firstColon+1+secondColon+1:]
-		parts := strings.Split(strings.ToLower(path), "/")
-		for index, part := range parts {
-			switch part {
-			case "kubepods", "kubepods.slice":
-				return "kubernetes"
-			case "docker", "containerd":
-				if index+1 < len(parts) && containerID(parts[index+1]) {
-					return part
-				}
-			}
-			for _, runtime := range []struct {
-				prefix string
-				id     string
-			}{
-				{prefix: "docker-", id: "docker"},
-				{prefix: "libpod-", id: "podman"},
-				{prefix: "cri-containerd-", id: "containerd"},
-			} {
-				if strings.HasPrefix(part, runtime.prefix) && strings.HasSuffix(part, ".scope") &&
-					containerID(strings.TrimSuffix(strings.TrimPrefix(part, runtime.prefix), ".scope")) {
-					return runtime.id
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func containerID(value string) bool {
-	if len(value) < 12 {
-		return false
-	}
-	for _, character := range value {
-		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func trustedContainerID(raw []byte) string {
-	for _, field := range strings.FieldsFunc(string(raw), func(r rune) bool {
-		return r == 0 || r == '\n' || r == '\r'
-	}) {
-		field = strings.ToLower(strings.TrimSpace(field))
-		field = strings.TrimPrefix(field, "container=")
-		switch field {
-		case "docker", "podman", "containerd", "lxc", "systemd-nspawn":
-			return field
-		}
-	}
-	return ""
 }
 
 func bashQuote(value string) string {
@@ -346,10 +197,10 @@ func validateSecurity(state securityState) error {
 	if state.Backend != "" {
 		return nil
 	}
-	message := fmt.Sprintf("%s scope is unavailable: %s", state.EffectiveScope, state.Failure)
-	if state.EffectiveScope == workspacetools.ScopeWorkspace && state.ProtectedPathCount == 0 {
+	message := fmt.Sprintf("%s scope is unavailable: %s", state.Scope, state.Failure)
+	if state.Scope == workspacetools.ScopeWorkspace && len(state.ProtectedPaths) == 0 {
 		message += "; set -scope=machine (or SK_SCOPE=machine) to run without a filesystem boundary"
-	} else if state.EffectiveScope == workspacetools.ScopeMachine && state.ProtectedPathCount != 0 {
+	} else if state.Scope == workspacetools.ScopeMachine && len(state.ProtectedPaths) != 0 {
 		message += "; protected_paths require an active filesystem boundary even in machine scope"
 	}
 	return errors.New(message)

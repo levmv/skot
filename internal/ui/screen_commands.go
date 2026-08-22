@@ -31,6 +31,7 @@ const tuiCommandHelp = `Keys
   enter                    send
   shift/alt+enter, ctrl+j  insert a newline
   tab                      accept the suggestion
+  shift+tab                cycle filesystem scope
   up/down, ctrl+p/ctrl+n   walk input history
   ctrl+a/e/b/f             start, end, back, forward
   ctrl+u/k/w               erase to start, to end, word
@@ -58,7 +59,7 @@ func init() {
 		{name: "/login", description: "store a provider or service API key", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
 		{name: "/model", description: "list or switch models", usage: "/model [provider/model [api]]", maxArgs: 2, run: runModelCommand},
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
-		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [auto|workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
+		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
 		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
 		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
@@ -70,9 +71,17 @@ func init() {
 }
 
 var scopePickerItems = []pickerItem{
-	{value: "auto", label: "auto", description: "workspace on a host, machine inside a container"},
 	{value: "workspace", label: "workspace", description: "keep model-owned file access in the workspace"},
 	{value: "machine", label: "machine", description: "allow model-owned file access outside the workspace"},
+}
+
+func nextScope(current string) string {
+	for index, item := range scopePickerItems {
+		if strings.EqualFold(item.value, current) {
+			return scopePickerItems[(index+1)%len(scopePickerItems)].value
+		}
+	}
+	return scopePickerItems[0].value
 }
 
 var themePickerItems = []pickerItem{
@@ -122,7 +131,7 @@ func (m *screenModel) syncCommandSuggestions() {
 
 func (m screenModel) commandSuggestionsVisible() bool {
 	value := strings.TrimSpace(m.composer.value())
-	return m.loginProvider == "" && !m.operation.isMaintenance() && !m.picker.active() && strings.HasPrefix(value, "/") && m.composer.hasSuggestions()
+	return m.loginProvider == "" && !m.maintenanceOperation().isMaintenance() && !m.picker.active() && strings.HasPrefix(value, "/") && m.composer.hasSuggestions()
 }
 
 func (m screenModel) currentCommandSuggestion() string {
@@ -678,18 +687,24 @@ func (m *screenModel) openPicker(kind pickerKind, items []pickerItem, selected i
 	m.syncCommandSuggestions()
 }
 
-// pickerNoteFor is a caveat about the act of choosing, shown once under the
-// rows. It lives here rather than in a row description because it is true of
-// every row except the current one, and the descriptions are already carrying
-// what distinguishes the rows from each other.
-func pickerNoteFor(kind pickerKind) string {
+type pickerNote struct {
+	text    string
+	warning bool
+}
+
+// pickerNoteFor is contextual guidance about the act of choosing, shown once
+// under the rows. It lives here rather than in a row description because it is
+// not one of the differences the rows are meant to compare.
+func pickerNoteFor(kind pickerKind) pickerNote {
 	switch kind {
 	case pickerToolSet:
-		return "switching resets the prompt cache, so the next message costs full price"
+		return pickerNote{text: "switching resets the prompt cache, so the next message costs full price", warning: true}
 	case pickerModelAPI:
-		return "a wrong protocol fails on the first request"
+		return pickerNote{text: "a wrong protocol fails on the first request", warning: true}
+	case pickerScope:
+		return pickerNote{text: "Shift+Tab cycles scope without opening this menu"}
 	}
-	return ""
+	return pickerNote{}
 }
 
 // currentPickerMark flags the active row. Its width is reserved on every row of
@@ -1229,7 +1244,7 @@ func (m screenModel) renderPicker() []string {
 			break
 		}
 	}
-	if note != "" {
+	if note.text != "" {
 		// The note gets a blank line of its own so it reads as a caveat about
 		// the picker rather than as a trailing row.
 		reservedLines += 2
@@ -1308,8 +1323,12 @@ func (m screenModel) renderPicker() []string {
 		}
 		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+shortcut+truncateANSI(label, availableWidth))
 	}
-	if note != "" {
-		lines = append(lines, "", strings.Repeat(" ", transcriptGutter)+m.warningStyle.Render(note))
+	if note.text != "" {
+		style := m.mutedStyle
+		if note.warning {
+			style = m.warningStyle
+		}
+		lines = append(lines, "", strings.Repeat(" ", transcriptGutter)+style.Render(note.text))
 	}
 	return lines
 }

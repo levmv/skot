@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -321,7 +322,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 		t.Fatal("resumed child is absent from application tool status")
 	}
 
-	sandbox := agent.ScopeSnapshot{RequestedScope: "test", EffectiveScope: "test", Backend: "test"}
+	sandbox := agent.ScopeSnapshot{Scope: "test", ProtectedPaths: []string{"/private"}, Backend: "test"}
 	if err := application.state.children.setScopeSnapshot(context.Background(), sandbox); err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +331,9 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Configured == nil || state.Configured.Environment.Scope != sandbox {
+	if state.Configured == nil || state.Configured.Environment.Scope.Scope != sandbox.Scope ||
+		!slices.Equal(state.Configured.Environment.Scope.ProtectedPaths, sandbox.ProtectedPaths) ||
+		state.Configured.Environment.Scope.Backend != sandbox.Backend {
 		t.Fatalf("child sandbox snapshot = %#v", state.Configured)
 	}
 }

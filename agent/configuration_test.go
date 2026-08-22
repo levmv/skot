@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,8 +37,8 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 			ToolSet: "read-only", AwaitRequiredJobs: true,
 			Build: BuildSnapshot{Version: "v1.2.3", Revision: "abc123", Modified: &modified},
 			Scope: ScopeSnapshot{
-				RequestedScope: "auto", EffectiveScope: "machine", ProtectedPathCount: 2,
-				Container: "secret container", Network: "inherited",
+				Scope: "workspace", ProtectedPaths: []string{"/secret/private"},
+				Backend: "secret backend", Network: "inherited",
 			},
 		},
 	})
@@ -74,7 +75,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if configured.RuntimePolicy.ContextWindow != 64_000 || !configured.RuntimePolicy.ContextWindowEstimated || configured.RuntimePolicy.MaxModelAttempts != 3 || configured.RuntimePolicy.MaxToolIterations != 7 || configured.RuntimePolicy.MaxRequestBytes != 1_000_000 || configured.RuntimePolicy.MaxCompletionBytes != 100_000 || !configured.RuntimePolicy.AwaitRequiredJobs {
 		t.Fatalf("runtime policy snapshot = %#v", configured.RuntimePolicy)
 	}
-	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Scope.Container != "[redacted] container" {
+	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Scope.Backend != "[redacted] backend" || !slices.Equal(configured.Environment.Scope.ProtectedPaths, []string{"/[redacted]/private"}) {
 		t.Fatalf("execution environment snapshot = %#v", configured.Environment)
 	}
 	if configured.Environment.Build.Version != "v1.2.3" || configured.Environment.Build.Revision != "abc123" || configured.Environment.Build.Modified == nil || *configured.Environment.Build.Modified {
@@ -93,7 +94,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if got := countRecordKind(journal.snapshot(), RecordSessionConfigured); got != 2 {
 		t.Fatalf("configuration records after tools = %d, want 2", got)
 	}
-	scope := ScopeSnapshot{RequestedScope: "workspace", EffectiveScope: "workspace", Backend: "landlock", Network: "inherited"}
+	scope := ScopeSnapshot{Scope: "workspace", Backend: "landlock", Network: "inherited"}
 	if err := runtime.SetScopeSnapshot(context.Background(), scope); err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +169,12 @@ func TestRuntimeReplacesToolsAndProgramMetadataAtomically(t *testing.T) {
 	}
 }
 
-func TestCloneEffectiveConfigSnapshotDoesNotAliasBuildStatus(t *testing.T) {
+func TestCloneEffectiveConfigSnapshotDoesNotAliasMutableState(t *testing.T) {
 	modified := false
 	snapshot := EffectiveConfigSnapshot{
 		Environment: ExecutionEnvironmentSnapshot{
 			Build: BuildSnapshot{Modified: &modified},
+			Scope: ScopeSnapshot{ProtectedPaths: []string{"/private"}},
 		},
 	}
 	cloned := cloneEffectiveConfigSnapshot(snapshot)
@@ -182,6 +184,31 @@ func TestCloneEffectiveConfigSnapshotDoesNotAliasBuildStatus(t *testing.T) {
 	*cloned.Environment.Build.Modified = true
 	if *snapshot.Environment.Build.Modified {
 		t.Fatal("cloned build status aliases the source snapshot")
+	}
+	cloned.Environment.Scope.ProtectedPaths[0] = "/changed"
+	if snapshot.Environment.Scope.ProtectedPaths[0] != "/private" {
+		t.Fatal("cloned protected paths alias the source snapshot")
+	}
+}
+
+func TestScopeSnapshotKeepsEffectiveScopeJournalName(t *testing.T) {
+	encoded, err := json.Marshal(ScopeSnapshot{
+		Scope: "workspace", ProtectedPaths: []string{"/private"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `"effective_scope":"workspace"`) || !strings.Contains(text, `"protected_paths":["/private"]`) || strings.Contains(text, "requested_scope") {
+		t.Fatalf("scope snapshot JSON = %s", text)
+	}
+
+	var decoded ScopeSnapshot
+	if err := json.Unmarshal([]byte(`{"requested_scope":"auto","effective_scope":"machine","protected_path_count":2}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Scope != "machine" || len(decoded.ProtectedPaths) != 0 {
+		t.Fatalf("decoded schema-three scope = %#v", decoded)
 	}
 }
 

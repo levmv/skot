@@ -50,7 +50,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-root path` | `SK_ROOT` | Primary workspace and default path base for model-owned file and process tools. Default: current directory. |
 | `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |
 | `-tools-file path` | `SK_TOOLS_FILE` | Load custom program tool definitions. Default: `tools.json` in the Skot data directory. |
-| `-scope value` | `SK_SCOPE` | Select the filesystem reach of built-in file tools and model-owned processes: `auto`, `workspace`, or `machine`. Default: `auto`. |
+| `-scope value` | `SK_SCOPE` | Select the filesystem reach of built-in file tools and model-owned processes: `workspace` or `machine`. Default: `workspace`. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
 | `-journal path` | — | Use an explicit JSONL session journal. |
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
@@ -172,7 +172,7 @@ are rejected. A representative configuration is:
 | `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
 
 Interactive theme and the model selection history are shared across workspaces.
-Model, reasoning effort, tool set, and requested filesystem scope are remembered
+Model, reasoning effort, tool set, and filesystem scope are remembered
 per canonical workspace path; symlink aliases share preferences, while separate
 clones and worktrees do not. Skot manages these preferences in
 `interactive.json`; headless runs do not read them.
@@ -185,13 +185,11 @@ Running `sk` with no prompt creates a managed persistent session. A one-shot
 run is ephemeral unless `-save-session` or `-journal` is used, it creates a
 child agent, or it leaves detached work running.
 
-Fresh one-shot runs whose selected tool set contains only built-in
-non-process tools keep their event journal in memory, so normal exit and abrupt
-process termination leave no conversation data in `SK_HOME`. Tool sets with
-`bash`, `job`, `agent`, program tools, or application-provided tools use a
-provisional on-disk journal because they may create work whose state must
-survive the frontend. That journal is discarded after an ordinary one-shot
-unless the run makes the session resumable.
+Without `-save-session` or `-journal`, a one-shot run with only built-in
+non-process tools keeps its conversation in memory and leaves no journal in
+`SK_HOME`. A run whose tools can create durable work uses a temporary on-disk
+journal; it is removed after normal completion unless the session becomes
+resumable.
 
 ```sh
 sk -save-session "fix the failing tests"
@@ -214,15 +212,16 @@ recent session for that workspace.
 | `/login [provider]` | Store a provider or service key. |
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
-| `/scope [auto|workspace|machine]` | Show or switch the filesystem scope for built-in file tools and model-owned processes. |
+| `/scope [workspace|machine]` | Show or switch the filesystem scope for built-in file tools and model-owned processes. |
 | `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
 | `/logout [provider]` | Remove a stored key. |
 | `/exit`, `/quit`, `/q` | Exit Skot. |
 
-Enter sends a message. Shift/Alt+Enter or Ctrl+J inserts a newline. Escape
-cancels the active turn, Alt+Up recalls queued input, and Ctrl+C exits.
+Enter sends a message. Shift/Alt+Enter or Ctrl+J inserts a newline. Shift+Tab
+cycles the filesystem scope, including while a turn is running. Escape cancels
+the active turn, Alt+Up recalls queued input, and Ctrl+C exits.
 
 `! command` runs a shell command and includes its result in the conversation.
 `!! command` runs it privately. Both are user-owned commands and therefore use
@@ -340,10 +339,9 @@ an outer container when whole-process-tree containment matters.
 
 ## Context management
 
-`/context` reports the estimated input budget for the actual route projection,
-including instructions, tool definitions, rolling summary, history, and queued
-input. Provider-owned reasoning that the selected route will not replay is not
-charged to the estimate.
+`/context` estimates the input budget for the next model request, including
+instructions, tool definitions, rolling summary, history, and queued input.
+Reasoning data that will not be sent again is excluded.
 
 When the next request would exceed its input limit, Skot first tries to prune
 older tool-result bodies and then compacts an older completed prefix into a
@@ -373,28 +371,25 @@ ordinary environment and filesystem permissions.
 
 ### Filesystem scopes
 
-- `auto` (default) resolves to `workspace` on a host and `machine` inside a
-  detected container;
-- `workspace` keeps built-in file operations inside the workspace and gives
-  model-owned processes the workspace, required runtime files, and a disposable
-  per-workspace tool home;
+- `workspace` (default) keeps built-in file operations inside the workspace and
+  gives model-owned processes the workspace, required runtime files, and a
+  disposable per-workspace tool home;
 - `machine` lets explicit built-in file paths and model-owned processes reach
   the surrounding filesystem, minus any explicit protected paths. Inside a
   container, “machine” means that container's filesystem boundary, not the host
   filesystem.
 
-The interactive footer shows `scope: machine` whenever the effective scope is
-`machine`.
+In interactive mode, use `/scope` or Shift+Tab to change scope. The choice is
+remembered per workspace.
 
 Content exposed to model-owned tools may be included in requests to the selected
 model provider. `read-only` prevents writes and command execution; it is not a
 confidentiality boundary for readable data.
 
-An absolute path inside the workspace is valid in either concrete scope.
+An absolute path inside the workspace is valid in either scope.
 Relative paths always start at the workspace, so `../sibling` reaches outside
-it only in `machine`. `auto` resolves to a concrete scope before use. `/scope`
-affects new file-tool calls and process launches; calls and processes already
-running are unchanged.
+it only in `machine`. Changing scope affects new file-tool calls and process
+launches; calls and processes already running are unchanged.
 
 `workspace` uses a minimal environment, sets `HOME` to the disposable tool
 home, and keeps `TMPDIR` inside it. `machine` preserves the ambient environment
@@ -406,15 +401,15 @@ boundary.
 Process launches in `workspace` always require a platform filesystem backend.
 In `machine`, they require one only when protected paths are configured.
 Built-in file tools enforce their path policy independently. Skot verifies any
-required process boundary at startup and stops rather than silently widening
+required process boundary before use and stops rather than silently widening
 access if it is unavailable or ineffective. On Linux, installed boundaries
 require Landlock ABI V3; macOS uses Seatbelt.
 
 ### Protected paths
 
-`protected_paths` is empty by default and contains only paths written by the
-user. The Skot data directory has no special status: add `~/.skot` explicitly
-if it should be hidden, just like any other sensitive directory.
+`protected_paths` is empty by default. The Skot data directory is not protected
+automatically: add `~/.skot` explicitly if it should be hidden, just like any
+other sensitive directory.
 
 ```json
 {
@@ -430,9 +425,7 @@ contains the whole workspace. Protecting a child inside the workspace is valid.
 Protection applies independently of scope to `read`, `ls`, `grep`, `glob`,
 `edit`, `write`, model-owned Bash, and program tools. A configured executable
 or workdir cannot be inside a protected tree. Symlink aliases do not bypass the
-check. Protected entries are omitted by listing and search tools, and protected
-`AGENTS.md` files are not added to model instructions. Switching `/scope` does
-not enable or disable this list.
+check. Protected entries are omitted by listing and search tools.
 
 Landlock is allow-list based. On Linux, protecting a child of a writable
 directory can prevent model-owned processes from listing that parent or

@@ -32,7 +32,7 @@ func canonicalApplicationTestRoot(t *testing.T, root string) string {
 	return canonical
 }
 
-func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
+func TestApplicationSwitchesAndPersistsScope(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 	settings, err := state.Open(home)
@@ -43,7 +43,7 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
+	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,18 +60,17 @@ func TestApplicationSwitchesAndPersistsRequestedScope(t *testing.T) {
 	application := &Application{
 		config: applicationConfig{settings: settings, interactive: preferences, root: root, home: home},
 		state: applicationState{
-			session:        newLiveSession("", runtime, nil, false),
-			processes:      processes,
-			requestedScope: workspacetools.ScopeAuto,
-			security:       securityState{RequestedScope: workspacetools.ScopeAuto, EffectiveScope: workspacetools.ScopeMachine, Backend: "landlock", Container: "docker"},
+			session:   newLiveSession("", runtime, nil, false),
+			processes: processes,
+			security:  securityState{Scope: workspacetools.ScopeWorkspace, Backend: "landlock", BackendRequired: true},
 		},
 	}
 
 	if err := application.SwitchScope(context.Background(), workspacetools.ScopeMachine); err != nil {
 		t.Fatal(err)
 	}
-	if application.CurrentScope() != workspacetools.ScopeMachine || application.EffectiveScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine · no additional filesystem boundary" {
-		t.Fatalf("scope = %q/%q, summary = %q", application.CurrentScope(), application.EffectiveScope(), application.ScopeSummary())
+	if application.CurrentScope() != workspacetools.ScopeMachine || application.ScopeSummary() != "scope: machine" {
+		t.Fatalf("scope = %q, summary = %q", application.CurrentScope(), application.ScopeSummary())
 	}
 	stored, err := preferences.Settings()
 	if err != nil || stored.Workspace.Scope != workspacetools.ScopeMachine {
@@ -95,7 +94,7 @@ func TestApplicationKeepsSwitchedScopeWhenPreferenceIsNotPersisted(t *testing.T)
 	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeMachine)
+	processes, err := workspacetools.NewProcessManager(root, home, t.TempDir(), workspacetools.ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,16 +112,15 @@ func TestApplicationKeepsSwitchedScopeWhenPreferenceIsNotPersisted(t *testing.T)
 		config: applicationConfig{settings: settings, interactive: preferences, root: root, home: home},
 		state: applicationState{
 			session: newLiveSession("", runtime, nil, false), processes: processes,
-			requestedScope: ScopeAuto,
-			security:       securityState{RequestedScope: ScopeAuto, EffectiveScope: ScopeMachine, Container: "docker"},
+			security: securityState{Scope: ScopeWorkspace, Backend: "landlock", BackendRequired: true},
 		},
 	}
 	err = application.SwitchScope(context.Background(), ScopeMachine)
 	if err == nil || !IsPreferenceNotPersisted(err) {
 		t.Fatalf("scope persistence error = %v", err)
 	}
-	if application.CurrentScope() != ScopeMachine || application.EffectiveScope() != ScopeMachine {
-		t.Fatalf("live scope = %q/%q", application.CurrentScope(), application.EffectiveScope())
+	if application.CurrentScope() != ScopeMachine {
+		t.Fatalf("live scope = %q", application.CurrentScope())
 	}
 	stored, readErr := preferences.Settings()
 	if readErr != nil || stored.Workspace.Scope != "" {
@@ -155,8 +153,8 @@ func TestApplicationGivesNestedHomeNoSpecialStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = application.Close() })
-	if slices.Contains(application.config.protectedPaths, canonicalpath.Resolve(home)) {
-		t.Fatalf("Skot home became protected: %#v", application.config.protectedPaths)
+	if slices.Contains(application.state.security.ProtectedPaths, canonicalpath.Resolve(home)) {
+		t.Fatalf("Skot home became protected: %#v", application.state.security.ProtectedPaths)
 	}
 	if tools := application.ToolSetTools(toolpolicy.ToolSetDefault); slices.Contains(tools, "ls") {
 		t.Fatalf("nested home changed default tools = %#v", tools)
@@ -320,7 +318,7 @@ func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T)
 	// Model, effort, and theme are shared; tool set and scope stay workspace-local.
 	if second.CurrentModel() != "ollama/saved-model" || second.CurrentReasoningEffort() != "" ||
 		second.CurrentToolSet() != toolpolicy.ToolSetDefault ||
-		second.CurrentScope() != ScopeAuto || second.CurrentTheme() != state.ThemeDark {
+		second.CurrentScope() != ScopeWorkspace || second.CurrentTheme() != state.ThemeDark {
 		t.Fatalf("second workspace: model=%q effort=%q tools=%q scope=%q theme=%q",
 			second.CurrentModel(), second.CurrentReasoningEffort(), second.CurrentToolSet(), second.CurrentScope(), second.CurrentTheme())
 	}
@@ -367,7 +365,7 @@ func TestOpenLegacyInteractiveConfigIsIgnoredAndNoticedOnlyInteractively(t *test
 		t.Fatal(err)
 	}
 	if interactive.CurrentModel() != DefaultModelURI || interactive.CurrentToolSet() != toolpolicy.ToolSetDefault ||
-		interactive.CurrentScope() != ScopeAuto || interactive.CurrentTheme() != state.ThemeAuto {
+		interactive.CurrentScope() != ScopeWorkspace || interactive.CurrentTheme() != state.ThemeAuto {
 		t.Fatalf("legacy values leaked: model=%q tools=%q scope=%q theme=%q",
 			interactive.CurrentModel(), interactive.CurrentToolSet(), interactive.CurrentScope(), interactive.CurrentTheme())
 	}
@@ -445,8 +443,8 @@ func TestOpenHeadlessDoesNotInheritStoredMachineScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer application.Close()
-	if application.CurrentScope() != ScopeAuto {
-		t.Fatalf("headless inherited requested scope %q", application.CurrentScope())
+	if application.CurrentScope() != ScopeWorkspace {
+		t.Fatalf("headless inherited scope %q", application.CurrentScope())
 	}
 }
 
@@ -626,7 +624,7 @@ func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	if snapshot.ModelContext.ToolSet != toolpolicy.ToolSetReadOnly || len(snapshot.ModelContext.Tools) == 0 || snapshot.ModelContext.CompactionInstructions == "" {
 		t.Fatalf("model context = %#v", snapshot.ModelContext)
 	}
-	if snapshot.Environment.Endpoint != "https://api.deepseek.com/v1" || snapshot.Environment.Scope.RequestedScope != workspacetools.ScopeMachine || snapshot.Environment.Scope.EffectiveScope != workspacetools.ScopeMachine || snapshot.Environment.Scope.Network != "inherited" {
+	if snapshot.Environment.Endpoint != "https://api.deepseek.com/v1" || snapshot.Environment.Scope.Scope != workspacetools.ScopeMachine || snapshot.Environment.Scope.Network != "inherited" {
 		t.Fatalf("environment = %#v", snapshot.Environment)
 	}
 	if snapshot.RuntimePolicy.AwaitRequiredJobs || snapshot.RuntimePolicy.ContextWindow != 1_000_000 || snapshot.RuntimePolicy.MaxRequestBytes == 0 || snapshot.RuntimePolicy.MaxCompletionBytes == 0 || snapshot.RuntimePolicy.MaxModelAttempts != -1 || snapshot.RuntimePolicy.RetryBudget != DefaultRetryBudget.String() || snapshot.RuntimePolicy.StreamIdleTimeout != DefaultStreamIdleTimeout.String() || snapshot.RuntimePolicy.MaxToolIterations != agent.DefaultMaxToolIterations {
@@ -661,11 +659,25 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 		canonicalpath.Resolve(filepath.Join(root, "settings-secret")),
 		canonicalpath.Resolve(filepath.Join(root, "api-secret")),
 	}
-	for _, want := range wantPaths {
-		if !slices.Contains(application.config.protectedPaths, want) {
-			t.Fatalf("protected paths = %#v; missing %q", application.config.protectedPaths, want)
+	assertJournalPaths := func() {
+		t.Helper()
+		state, stateErr := application.State(context.Background())
+		if stateErr != nil {
+			t.Fatal(stateErr)
+		}
+		if state.Configured == nil {
+			t.Fatal("application session has no effective configuration")
+		}
+		for _, want := range wantPaths {
+			if !slices.Contains(state.Configured.Environment.Scope.ProtectedPaths, want) {
+				t.Fatalf("journaled protected paths = %#v; missing %q", state.Configured.Environment.Scope.ProtectedPaths, want)
+			}
 		}
 	}
+	if _, err := application.RunShell(context.Background(), "true"); err != nil {
+		t.Fatal(err)
+	}
+	assertJournalPaths()
 	read := func() error {
 		for _, tool := range application.config.tools {
 			if tool.Spec.Name == "read" {
@@ -681,8 +693,39 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 	if err := application.SwitchScope(context.Background(), ScopeWorkspace); err != nil {
 		t.Fatal(err)
 	}
+	assertJournalPaths()
 	if err := read(); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("workspace read error = %v", err)
+	}
+}
+
+func TestInteractiveScopeSwitchKeepsProcessBoundaryReadyAcrossToolSets(t *testing.T) {
+	if workspacetools.BoundaryBackend() == "" {
+		t.Skip("platform filesystem boundary is unavailable")
+	}
+	application, err := Open(context.Background(), Config{
+		Home: t.TempDir(), Root: t.TempDir(), Interactive: true,
+		ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
+		ToolSet: toolpolicy.ToolSetReadOnly, ToolSetExplicit: true,
+		Scope: ScopeMachine, ScopeExplicit: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+
+	if err := application.SwitchScope(context.Background(), ScopeWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.RunShell(context.Background(), "true"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := application.State(context.Background())
+	if err != nil || state.Configured == nil || state.Configured.Environment.Scope.Backend == "" {
+		t.Fatalf("workspace boundary was not kept ready: %#v, %v", state.Configured, err)
+	}
+	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetDefault); err != nil {
+		t.Fatalf("enable process tools: %v", err)
 	}
 }
 
@@ -1170,11 +1213,11 @@ func TestOpenReadOnlyValidationPreservesExistingModes(t *testing.T) {
 }
 
 func TestApplicationRejectsUnknownScopeWithoutChangingState(t *testing.T) {
-	application := &Application{state: applicationState{requestedScope: workspacetools.ScopeAuto}}
+	application := &Application{state: applicationState{security: securityState{Scope: workspacetools.ScopeWorkspace}}}
 	if err := application.SwitchScope(context.Background(), "magic"); err == nil {
 		t.Fatal("unknown scope accepted")
 	}
-	if application.CurrentScope() != workspacetools.ScopeAuto {
+	if application.CurrentScope() != workspacetools.ScopeWorkspace {
 		t.Fatalf("scope changed to %q", application.CurrentScope())
 	}
 }
@@ -1198,8 +1241,7 @@ func TestScopeSummaryReportsRunningProcessesWithEarlierScope(t *testing.T) {
 		state: applicationState{
 			processes: processes,
 			security: securityState{
-				RequestedScope: workspacetools.ScopeWorkspace,
-				EffectiveScope: workspacetools.ScopeWorkspace,
+				Scope: workspacetools.ScopeWorkspace,
 			},
 		},
 	}
@@ -1946,7 +1988,7 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 		},
 		state: applicationState{
 			session: newLiveSession(id, runtime, journal, true), processes: processes,
-			toolSet: toolpolicy.ToolSetDefault, requestedScope: workspacetools.ScopeMachine,
+			toolSet: toolpolicy.ToolSetDefault, security: securityState{Scope: workspacetools.ScopeMachine},
 		},
 	}, journal
 }

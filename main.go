@@ -95,7 +95,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.root, "root", envOr("SK_ROOT", "."), "workspace root")
 	flags.StringVar(&config.toolSet, "tools", envOr("SK_TOOLS", app.ToolSetDefault), "tool set available to the model")
 	flags.BoolVar(&config.saveSession, "save-session", false, "keep a resumable session for a one-shot invocation")
-	flags.StringVar(&config.scope, "scope", envOr("SK_SCOPE", string(app.ScopeAuto)), "model filesystem scope: auto, workspace, or machine")
+	flags.StringVar(&config.scope, "scope", envOr("SK_SCOPE", string(app.ScopeWorkspace)), "model filesystem scope: workspace or machine")
 	flags.BoolVar(&config.verbose, "v", false, "show model attempts and status")
 	flags.BoolVar(&config.jsonOutput, "json", false, "emit one versioned JSON result on stdout")
 	flags.BoolVar(&config.showVersion, "version", false, "print the Skot version and exit")

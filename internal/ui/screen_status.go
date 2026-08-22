@@ -43,9 +43,9 @@ func (m screenModel) footerLine() string {
 	if toolSet == app.ToolSetDefault {
 		toolSet = ""
 	}
-	effectiveScope := ""
-	if strings.TrimSpace(m.agent.EffectiveScope()) == string(app.ScopeMachine) {
-		effectiveScope = "scope: machine"
+	scope := ""
+	if strings.TrimSpace(m.agent.CurrentScope()) == string(app.ScopeMachine) {
+		scope = "scope: machine"
 	}
 
 	// The tool set sits away from the model, where a bare "default" next to a
@@ -56,12 +56,12 @@ func (m screenModel) footerLine() string {
 		model,
 		contextStatus,
 		toolSet,
-		effectiveScope,
+		scope,
 	)
 	root := sanitizeTerminalText(strings.TrimSpace(m.config.Root))
 	root = truncateFooterRoot(root, beforeRoot, "", m.contentWidth())
 
-	parts := []string{model, contextStatus, toolSet, effectiveScope, root}
+	parts := []string{model, contextStatus, toolSet, scope, root}
 	rendered := make([]string, 0, len(parts))
 	for index, part := range parts {
 		part = sanitizeTerminalText(strings.TrimSpace(part))
@@ -70,6 +70,8 @@ func (m screenModel) footerLine() string {
 		}
 		style := m.mutedStyle
 		if index == 1 && contextUsagePercent(m.sessionStatus.ContextReport) >= footerContextWarningPercent {
+			style = m.warningStyle
+		} else if index == 3 && scope != "" {
 			style = m.warningStyle
 		}
 		rendered = append(rendered, style.Render(part))

@@ -106,11 +106,11 @@ func TestFooterNamesTheToolSetOnlyWhenItIsNotTheDefault(t *testing.T) {
 	}
 }
 
-func TestFooterShowsLiveEffectiveMachineScopeBeforeRoot(t *testing.T) {
+func TestFooterShowsLiveMachineScopeBeforeRoot(t *testing.T) {
 	t.Setenv("SK_COLOR", "never")
 	fake := &fakeAgent{
 		model: "openai/gpt-5.2", toolSet: toolpolicy.ToolSetDefault, theme: ThemeLight,
-		scope: "auto", effectiveScope: "machine",
+		scope: "machine",
 	}
 	model, err := newScreenModel(context.Background(), fake, Config{Root: "/work"}, &bytes.Buffer{})
 	if err != nil {
@@ -120,9 +120,24 @@ func TestFooterShowsLiveEffectiveMachineScopeBeforeRoot(t *testing.T) {
 	if got := model.footerLine(); got != "openai/gpt-5.2 · scope: machine · /work" {
 		t.Fatalf("machine footer = %q", got)
 	}
-	fake.effectiveScope = "workspace"
+	fake.scope = "workspace"
 	if got := model.footerLine(); got != "openai/gpt-5.2 · /work" {
 		t.Fatalf("updated workspace footer = %q", got)
+	}
+}
+
+func TestFooterHighlightsMachineScope(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("SK_COLOR", "always")
+	fake := &fakeAgent{model: "openai/gpt-5.2", scope: "machine", theme: ThemeDark}
+	model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := model.footerLine()
+	if !strings.Contains(got, model.warningStyle.Render("scope: machine")) ||
+		strings.Contains(got, model.mutedStyle.Render("scope: machine")) {
+		t.Fatalf("machine footer = %q", got)
 	}
 }
 

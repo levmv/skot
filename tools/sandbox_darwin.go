@@ -23,7 +23,7 @@ func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd
 
 func sandboxedProgramCommand(program string, argv []string, workdir string, boundary Boundary, environment map[string]string) (*exec.Cmd, error) {
 	argv = resolvedProgramArgv(program, argv)
-	if err := validateConcreteScope(boundary.Scope); err != nil {
+	if err := validateScope(boundary.Scope); err != nil {
 		return nil, err
 	}
 	if !boundary.NeedsBackend() {

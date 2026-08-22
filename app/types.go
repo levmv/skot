@@ -19,7 +19,6 @@ const (
 	ToolSetEdit     = toolpolicy.ToolSetEdit
 	ToolSetReadOnly = toolpolicy.ToolSetReadOnly
 
-	ScopeAuto      = workspacetools.ScopeAuto
 	ScopeWorkspace = workspacetools.ScopeWorkspace
 	ScopeMachine   = workspacetools.ScopeMachine
 

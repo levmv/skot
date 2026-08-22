@@ -148,6 +148,8 @@ type ModelRequest struct {
 }
 
 type ModelInfo struct {
+	// BackendID keeps the historical "backend" JSON name for journal
+	// compatibility after the Go field was made explicit.
 	BackendID       string `json:"backend"`
 	Provider        string `json:"provider,omitempty"`
 	Model           string `json:"model"`
@@ -496,12 +498,12 @@ type ProgramToolSnapshot struct {
 // ScopeSnapshot describes an execution boundary owned and enforced outside
 // agent.Runtime. The runtime records it but does not interpret or implement it.
 type ScopeSnapshot struct {
-	RequestedScope     string `json:"requested_scope,omitempty"`
-	EffectiveScope     string `json:"effective_scope,omitempty"`
-	ProtectedPathCount int    `json:"protected_path_count,omitempty"`
-	Backend            string `json:"backend,omitempty"`
-	Container          string `json:"container,omitempty"`
-	Network            string `json:"network,omitempty"`
+	// Scope keeps the historical "effective_scope" JSON name so schema-v3
+	// journals remain compatible after requested and effective scopes merged.
+	Scope          string   `json:"effective_scope,omitempty"`
+	ProtectedPaths []string `json:"protected_paths,omitempty"`
+	Backend        string   `json:"backend,omitempty"`
+	Network        string   `json:"network,omitempty"`
 }
 
 type RunInputAddedRecord struct {

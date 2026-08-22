@@ -38,7 +38,6 @@ type fakeAgent struct {
 	knownModels      []string
 	modelChoices     []ModelChoice
 	scope            string
-	effectiveScope   string
 	scopeSummary     string
 	scopeNotice      string
 	scopeErr         error
@@ -200,8 +199,6 @@ func (fake *fakeAgent) ReasoningEfforts(uri string) []string {
 
 func (fake *fakeAgent) CurrentScope() string { return fake.scope }
 
-func (fake *fakeAgent) EffectiveScope() string { return fake.effectiveScope }
-
 func (fake *fakeAgent) ScopeSummary() string { return fake.scopeSummary }
 
 func (fake *fakeAgent) ScopeNotice() string { return fake.scopeNotice }
@@ -211,14 +208,7 @@ func (fake *fakeAgent) SwitchScope(_ context.Context, policy string) error {
 		return fake.scopeErr
 	}
 	fake.scope = policy
-	effective := policy
-	detail := ""
-	if policy == "auto" {
-		effective = "workspace"
-		detail = " (auto)"
-	}
-	fake.effectiveScope = effective
-	fake.scopeSummary = "scope: " + effective + detail
+	fake.scopeSummary = "scope: " + policy
 	return fake.scopeErr
 }
 
@@ -556,7 +546,7 @@ func TestCurrentPickerSelectionReportsPreferencePersistenceFailure(t *testing.T)
 
 	t.Run("scope", func(t *testing.T) {
 		fake := &fakeAgent{
-			scope: "auto", scopeSummary: "scope: workspace (auto)",
+			scope: "workspace", scopeSummary: "scope: workspace",
 			scopeErr: preferenceError("filesystem scope"),
 		}
 		model := testScreenModel(t, fake)
@@ -570,7 +560,7 @@ func TestCurrentPickerSelectionReportsPreferencePersistenceFailure(t *testing.T)
 			t.Fatalf("scope result has unexpected type")
 		}
 		model.finishScopeSwitch(message)
-		if fake.scope != "auto" {
+		if fake.scope != "workspace" {
 			t.Fatalf("scope = %q", fake.scope)
 		}
 		assertReported(t, model)

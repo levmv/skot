@@ -37,7 +37,7 @@ func runSandboxChildIfRequested() bool {
 func sandboxBackend() string { return "landlock" }
 
 func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
-	if err := validateConcreteScope(boundary.Scope); err != nil {
+	if err := validateScope(boundary.Scope); err != nil {
 		return nil, err
 	}
 	if !boundary.NeedsBackend() {
@@ -52,7 +52,7 @@ func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd
 
 func sandboxedProgramCommand(program string, argv []string, workdir string, boundary Boundary, environment map[string]string) (*exec.Cmd, error) {
 	argv = resolvedProgramArgv(program, argv)
-	if err := validateConcreteScope(boundary.Scope); err != nil {
+	if err := validateScope(boundary.Scope); err != nil {
 		return nil, err
 	}
 	if !boundary.NeedsBackend() {
@@ -167,7 +167,7 @@ func applyToolLandlock(boundary Boundary) error {
 		}
 		return landlock.V3.RestrictPaths(rules...)
 	default:
-		return fmt.Errorf("unsupported concrete filesystem scope %q", boundary.Scope)
+		return fmt.Errorf("unsupported filesystem scope %q", boundary.Scope)
 	}
 }
 

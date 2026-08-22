@@ -51,7 +51,6 @@ type applicationConfig struct {
 	systemPrompt        string
 	root                string
 	home                string
-	protectedPaths      []string
 	protection          *workspacetools.ProtectedPathPolicy
 	baseURL             string
 	modelAPI            modelAPI
@@ -71,7 +70,6 @@ type applicationState struct {
 	processes      *workspacetools.ProcessManager
 	children       *childSupervisor
 	toolSet        string
-	requestedScope workspacetools.Scope
 	theme          string
 	security       securityState
 	startupNotices []string
@@ -382,13 +380,7 @@ func (application *Application) Compact(ctx context.Context) (agent.ContextCompa
 func (application *Application) CurrentScope() string {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
-	return string(application.state.requestedScope)
-}
-
-func (application *Application) EffectiveScope() string {
-	application.mu.RLock()
-	defer application.mu.RUnlock()
-	return string(application.state.security.EffectiveScope)
+	return string(application.state.security.Scope)
 }
 
 func modelInfoForRoute(route resolvedModelRoute) (agent.ModelInfo, error) {
@@ -813,7 +805,7 @@ func (application *Application) ScopeSummary() string {
 	scopes := processes.RunningScopes()
 	var retained []string
 	for _, scope := range []workspacetools.Scope{workspacetools.ScopeWorkspace, workspacetools.ScopeMachine} {
-		if count := scopes[scope]; count > 0 && scope != security.EffectiveScope {
+		if count := scopes[scope]; count > 0 && scope != security.Scope {
 			retained = append(retained, fmt.Sprintf("%s (%d)", scope, count))
 		}
 	}
@@ -830,45 +822,49 @@ func (application *Application) ScopeNotice() string {
 	application.mu.RLock()
 	security := application.state.security
 	application.mu.RUnlock()
-	return protectedPathsNotice(security, application.config.root, application.config.protectedPaths)
+	return protectedPathsNotice(security, application.config.root)
 }
 
 func (application *Application) SwitchScope(ctx context.Context, value string) error {
 	application.scopeMu.Lock()
 	defer application.scopeMu.Unlock()
 
-	requested, err := workspacetools.NormalizeScope(value)
+	scope, err := workspacetools.NormalizeScope(value)
 	if err != nil {
 		return err
 	}
 	application.mu.RLock()
-	if requested == application.state.requestedScope {
+	if scope == application.state.security.Scope {
 		application.mu.RUnlock()
 		return application.persistInteractivePreference("filesystem scope", func(preferences *state.InteractiveStore) error {
-			return preferences.SetScopeSelection(string(requested))
+			return preferences.SetScopeSelection(string(scope))
 		})
 	}
 	processes := application.state.processes
 	currentSession := application.state.session
+	protectedPaths := append([]string(nil), application.state.security.ProtectedPaths...)
 	application.mu.RUnlock()
 	root := application.config.root
-	protectedPaths := application.config.protectedPaths
 	if processes == nil || currentSession == nil || currentSession.runtime == nil {
 		return fmt.Errorf("application is closed")
 	}
 	runtime := currentSession.runtime
 
-	security := resolveSecurityState(ctx, requested, protectedPaths)
-	if toolSetNeedsProcessBoundary(application.config.toolSets, application.config.programDeclarations, application.CurrentToolSet()) {
+	security := newSecurityState(scope, protectedPaths)
+	// An interactive session may enable process tools later, so keep its process
+	// boundary validated even while the active tool set does not need one.
+	needsProcessBoundary := application.config.interactive != nil ||
+		toolSetNeedsProcessBoundary(application.config.toolSets, application.config.programDeclarations, application.CurrentToolSet())
+	if needsProcessBoundary {
 		toolHome := ""
-		if security.EffectiveScope == workspacetools.ScopeWorkspace {
+		if security.Scope == workspacetools.ScopeWorkspace {
 			var err error
 			toolHome, err = processes.ToolHome()
 			if err != nil {
 				return fmt.Errorf("cannot switch scope: %w", err)
 			}
 		}
-		security = buildProcessSecurityState(ctx, security, root, toolHome, protectedPaths)
+		security = buildProcessSecurityState(ctx, security, root, toolHome)
 	}
 	if err := validateSecurity(security); err != nil {
 		return fmt.Errorf("cannot switch scope: %w", err)
@@ -879,7 +875,7 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 		application.mu.Unlock()
 		return fmt.Errorf("runtime changed while switching scope")
 	}
-	if err := processes.SetScopeAfter(security.EffectiveScope, func() error {
+	if err := processes.SetScopeAfter(security.Scope, func() error {
 		previous := application.state.security.snapshot()
 		if err := runtime.SetScopeSnapshot(ctx, security.snapshot()); err != nil {
 			return err
@@ -894,10 +890,9 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 		application.mu.Unlock()
 		return err
 	}
-	application.state.requestedScope = requested
 	application.state.security = security
 	application.mu.Unlock()
 	return application.persistInteractivePreference("filesystem scope", func(preferences *state.InteractiveStore) error {
-		return preferences.SetScopeSelection(string(requested))
+		return preferences.SetScopeSelection(string(scope))
 	})
 }

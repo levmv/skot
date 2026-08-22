@@ -61,7 +61,6 @@ type Agent interface {
 	SwitchModel(context.Context, string, string, string) error
 	CurrentReasoningEffort() string
 	CurrentScope() string
-	EffectiveScope() string
 	ScopeSummary() string
 	ScopeNotice() string
 	SwitchScope(context.Context, string) error
@@ -176,11 +175,10 @@ type shellDoneMsg struct {
 }
 
 type scopeDoneMsg struct {
-	scope      string
-	summary    string
-	notice     string
-	concurrent bool
-	err        error
+	scope   string
+	summary string
+	notice  string
+	err     error
 }
 
 type compactionDoneMsg struct{ err error }
@@ -454,7 +452,7 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		if m.refreshProcessResults() {
 			m.refreshTranscript()
 		}
-		if !m.operation.isTurn() && !m.operation.isMaintenance() && !m.hasRunningProcesses() {
+		if !m.operation.isTurn() && !m.maintenanceOperation().isMaintenance() && !m.hasRunningProcesses() {
 			return m, nil
 		}
 		return m, scheduleTurnTick()
@@ -519,9 +517,9 @@ func (m screenModel) inlineFrame() inlineFrame {
 		dynamic = append(dynamic, working)
 	}
 	editorDynamicStart := -1
-	if m.operation.isMaintenance() {
-		elapsed := formatTurnDuration(time.Since(m.operation.startedAt))
-		dynamic = append(dynamic, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render(m.operation.label()+" ("+elapsed+" · esc to interrupt)"))
+	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() {
+		elapsed := formatTurnDuration(time.Since(maintenance.startedAt))
+		dynamic = append(dynamic, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render(maintenance.label()+" ("+elapsed+" · esc to interrupt)"))
 	} else if m.picker.active() {
 		dynamic = append(dynamic, m.renderPicker()...)
 	} else {

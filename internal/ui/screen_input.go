@@ -17,10 +17,10 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	keyString := msg.String()
 	hasCtrl := key.Mod&tea.ModCtrl != 0
 	baseKey := keyLayoutBase(msg)
-	if m.operation.isMaintenance() {
+	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() {
 		if isInterruptKey(msg) || isEscapeKey(msg) {
-			if m.operation.cancel != nil {
-				m.operation.cancel()
+			if maintenance.cancel != nil {
+				maintenance.cancel()
 			}
 		}
 		return m, nil
@@ -34,6 +34,10 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		}
 		m.quitting = true
 		return m, tea.Quit
+	case isShiftTab(msg):
+		command := m.startScopeSwitch(nextScope(m.agent.CurrentScope()))
+		m.refreshTranscript()
+		return m, command
 	case keyIsCtrl(msg, 'd'):
 		if !m.operation.isTurn() && strings.TrimSpace(m.composer.value()) == "" {
 			m.quitting = true

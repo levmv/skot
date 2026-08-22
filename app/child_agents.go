@@ -242,7 +242,7 @@ func (supervisor *childSupervisor) setSessionDefaults(model, effort, selectionAP
 		supervisor.defaultEffort = effort
 		supervisor.defaultSelectionAPI = selectionAPI
 		supervisor.instructions = instructions
-		supervisor.builder.scope = scope
+		supervisor.builder.scope = cloneAgentScopeSnapshot(scope)
 	}
 }
 
@@ -253,9 +253,6 @@ func (supervisor *childSupervisor) setScopeSnapshot(ctx context.Context, scope a
 		return errors.New("child supervisor is closed")
 	}
 	previous := supervisor.builder.scope
-	if previous == scope {
-		return nil
-	}
 	var updated []*agent.Runtime
 	for _, group := range supervisor.children {
 		for _, child := range group {
@@ -270,8 +267,13 @@ func (supervisor *childSupervisor) setScopeSnapshot(ctx context.Context, scope a
 			updated = append(updated, child.runtime)
 		}
 	}
-	supervisor.builder.scope = scope
+	supervisor.builder.scope = cloneAgentScopeSnapshot(scope)
 	return nil
+}
+
+func cloneAgentScopeSnapshot(snapshot agent.ScopeSnapshot) agent.ScopeSnapshot {
+	snapshot.ProtectedPaths = append([]string(nil), snapshot.ProtectedPaths...)
+	return snapshot
 }
 
 func (supervisor *childSupervisor) tool() agent.Tool {
@@ -852,7 +854,7 @@ func (supervisor *childSupervisor) PreloadSession(ctx context.Context, parentID,
 	supervisor.mu.Lock()
 	builder := supervisor.builder
 	supervisor.mu.Unlock()
-	builder.scope = scope
+	builder.scope = cloneAgentScopeSnapshot(scope)
 	return supervisor.preloadWith(ctx, parentID, builder, instructions)
 }
 

@@ -25,8 +25,7 @@ type filesystemPolicy struct {
 	protection *ProtectedPathPolicy
 }
 
-// NewFilesystemAccess creates one shared authority state. Scope must already
-// be concrete; auto is resolved by the application composition root.
+// NewFilesystemAccess creates one shared authority state.
 func NewFilesystemAccess(root string, scope Scope, protection *ProtectedPathPolicy) (*FilesystemAccess, error) {
 	root, err := ResolveWorkspaceRoot(root)
 	if err != nil {
@@ -73,7 +72,7 @@ func (policy *filesystemPolicy) validate() error {
 	if policy == nil {
 		return errors.New("filesystem policy is nil")
 	}
-	if err := validateConcreteScope(policy.scope); err != nil {
+	if err := validateScope(policy.scope); err != nil {
 		return err
 	}
 	if policy.workspace == "" || !filepath.IsAbs(policy.workspace) {

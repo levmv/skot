@@ -43,6 +43,11 @@ func isNewlineShortcut(message tea.KeyPressMsg) bool {
 	return modifiedEnter || keyIsCtrl(message, 'j')
 }
 
+func isShiftTab(message tea.KeyPressMsg) bool {
+	key := message.Key()
+	return key.Code == tea.KeyTab && key.Mod&tea.ModShift != 0 || message.String() == "shift+tab"
+}
+
 func isAltUp(message tea.KeyPressMsg) bool {
 	key := message.Key()
 	return isUpKey(message) && (key.Mod&tea.ModAlt != 0 || message.String() == "alt+up")

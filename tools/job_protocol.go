@@ -171,7 +171,7 @@ func validateJobMetadata(metadata jobMetadata, jobDir string) error {
 	if strings.TrimSpace(metadata.Command) == "" || metadata.StartedAt.IsZero() || metadata.TimeoutMillis <= 0 {
 		return errors.New("job timing metadata is invalid")
 	}
-	if err := validateConcreteScope(metadata.Scope); err != nil {
+	if err := validateScope(metadata.Scope); err != nil {
 		return fmt.Errorf("job filesystem scope is invalid: %w", err)
 	}
 	return nil

@@ -27,16 +27,28 @@ type activeOperation struct {
 	renderPending bool
 	changedPaths  []string
 	modelRetry    modelRetryState
+	// partialRemoved records that the transcript is missing streamed text the
+	// user had already read, and that no message has explained it yet. It
+	// outlives every retry group of the turn: a run that ends badly emits
+	// RunFinished before the turn does, tearing the group down first.
+	partialRemoved bool
+}
+
+// withPartialRemovedNote appends the standing explanation for text that vanished
+// from the transcript, so every message that can end a turn words it the same.
+func (operation activeOperation) withPartialRemovedNote(text string) string {
+	if !operation.partialRemoved {
+		return text
+	}
+	return text + " (partial response removed)"
 }
 
 type modelRetryState struct {
-	pendingFailure        string
-	pendingPartialRemoved bool
-	blockIndex            int
-	visible               bool
-	count                 int
-	lastFailure           string
-	partialRemoved        bool
+	pendingFailure string
+	blockIndex     int
+	visible        bool
+	count          int
+	lastFailure    string
 }
 
 func (operation activeOperation) isTurn() bool {

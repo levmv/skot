@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -66,7 +67,9 @@ func (m *screenModel) applyAgentEvent(event agent.Event) {
 	case agent.EventTextDelta:
 		m.transcript.appendAssistant(event.AttemptID, event.Text)
 	case agent.EventModelAttemptDiscarded:
-		m.operation.modelRetry.pendingPartialRemoved = m.transcript.discardAttempt(event.AttemptID)
+		if m.transcript.discardAttempt(event.AttemptID) {
+			m.operation.partialRemoved = true
+		}
 		m.operation.modelRetry.pendingFailure = strings.TrimSpace(event.Text)
 	case agent.EventModelRetryScheduled:
 		m.showModelRetry(event.Text)
@@ -116,7 +119,6 @@ func (m *screenModel) showModelRetry(retryText string) {
 	}
 	retry.count++
 	retry.lastFailure = compactModelFailure(retry.pendingFailure)
-	retry.partialRemoved = retry.partialRemoved || retry.pendingPartialRemoved
 	if retry.count > 1 {
 		retryText += fmt.Sprintf(" after %d model errors", retry.count)
 	}
@@ -124,10 +126,7 @@ func (m *screenModel) showModelRetry(retryText string) {
 	if retry.lastFailure != "" {
 		text += ": " + retry.lastFailure
 	}
-	if retry.pendingPartialRemoved {
-		text += " (partial response removed)"
-	}
-	text = sanitizeTerminalText(text)
+	text = sanitizeTerminalText(m.operation.withPartialRemovedNote(text))
 
 	index := retry.blockIndex
 	if retry.visible && index >= 0 && index < len(m.transcript.blocks) && m.transcript.blocks[index].kind == screenBlockSystem {
@@ -139,7 +138,6 @@ func (m *screenModel) showModelRetry(retryText string) {
 		retry.visible = true
 	}
 	retry.pendingFailure = ""
-	retry.pendingPartialRemoved = false
 }
 
 func compactModelFailure(text string) string {
@@ -165,12 +163,25 @@ func (m *screenModel) finishModelRetryNotice() {
 	if retry.lastFailure != "" {
 		text += ": " + retry.lastFailure
 	}
-	if retry.partialRemoved {
-		text += " (partial response removed)"
-	}
 	m.transcript.markBlockDirty(index)
-	m.transcript.blocks[index].text = sanitizeTerminalText(text)
+	m.transcript.blocks[index].text = sanitizeTerminalText(m.operation.withPartialRemovedNote(text))
+	// Only a message that carried the note clears it; every other teardown path
+	// leaves the debt for whatever ends the turn.
+	m.operation.partialRemoved = false
 	m.resetModelRetryGroup()
+}
+
+// reportFailedTurn closes a turn that produced no answer. An interrupt is the
+// user's own doing and needs no epitaph of its own, but streamed text taken down
+// with the attempt must not vanish unexplained.
+func (m *screenModel) reportFailedTurn(err error) {
+	if !errors.Is(err, context.Canceled) {
+		m.addBlock(screenBlockError, m.operation.withPartialRemovedNote("error: "+err.Error()))
+		return
+	}
+	if m.operation.partialRemoved {
+		m.addBlock(screenBlockSystem, m.operation.withPartialRemovedNote("interrupted"))
+	}
 }
 
 func (m *screenModel) removeModelRetryNotice() {
@@ -189,7 +200,6 @@ func (m *screenModel) resetModelRetryGroup() {
 	retry.visible = false
 	retry.count = 0
 	retry.lastFailure = ""
-	retry.partialRemoved = false
 }
 
 func (transcript *transcriptState) startAttempt(attemptID string) {
@@ -230,6 +240,11 @@ func (transcript *transcriptState) finishAssistant(text string) {
 	transcript.appendBlock(screenBlock{kind: screenBlockAssistant, text: text, attemptID: transcript.currentAttempt})
 }
 
+// discardAttempt drops the streamed block of a failed attempt, whose text never
+// reaches the journal and so must not keep standing in the transcript. It
+// reports whether that block held anything the user could actually read:
+// providers routinely open a response with a whitespace-only delta, and
+// announcing the removal of a blank block explains nothing.
 func (transcript *transcriptState) discardAttempt(attemptID string) bool {
 	for index := len(transcript.blocks) - 1; index >= 0; index-- {
 		block := transcript.blocks[index]
@@ -238,7 +253,7 @@ func (transcript *transcriptState) discardAttempt(attemptID string) bool {
 		}
 		transcript.markBlockDirty(index)
 		transcript.blocks = append(transcript.blocks[:index], transcript.blocks[index+1:]...)
-		return true
+		return strings.TrimSpace(block.text) != ""
 	}
 	return false
 }

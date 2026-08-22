@@ -689,10 +689,115 @@ func TestFinalModelFailureReplacesRetryNoticeWithOneError(t *testing.T) {
 	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-2"})
 	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-2", Text: "partial"})
 	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-2", Text: "temporarily unavailable"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-2", Status: agent.RunFailed})
 
 	model, _ = model.update(agentDoneMsg{err: errors.New("temporarily unavailable")})
 	if len(model.transcript.blocks) != initialBlocks+1 || model.transcript.blocks[initialBlocks].kind != screenBlockError || model.transcript.blocks[initialBlocks].text != "error: temporarily unavailable (partial response removed)" {
 		t.Fatalf("final transcript = %#v", model.transcript.blocks)
+	}
+}
+
+func TestBlankStreamedDeltaIsDiscardedWithoutANotice(t *testing.T) {
+	// Providers routinely open a response with a whitespace-only delta. Nothing
+	// was legible on screen, so nothing needs explaining away.
+	model := testScreenModel(t, &fakeAgent{})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-1"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-1", Text: "\n\n"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "overloaded"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-1", Text: "retrying in 1s"})
+
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "retrying in 1s: overloaded" {
+		t.Fatalf("status = %q", got)
+	}
+	for _, block := range model.transcript.blocks {
+		if block.kind == screenBlockAssistant {
+			t.Fatalf("blank attempt block survived: %#v", block)
+		}
+	}
+}
+
+func TestRemovalNoticeSurvivesLaterAttemptsThatStreamNothing(t *testing.T) {
+	// The retry group shares one rewritten block, so the notice describes the
+	// group rather than the newest attempt.
+	model := testScreenModel(t, &fakeAgent{})
+	model.operation.kind = operationTurn
+	initialBlocks := len(model.transcript.blocks)
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-1"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-1", Text: "partial"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "overloaded"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-1", Text: "retrying in 1s"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-2"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-2", Text: "overloaded"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-2", Text: "retrying in 2s"})
+
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != "retrying in 2s after 2 model errors: overloaded (partial response removed)" {
+		t.Fatalf("status = %q", got)
+	}
+
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-3"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-3", Text: "overloaded"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-3", Status: agent.RunFailed})
+	model, _ = model.update(agentDoneMsg{err: errors.New("overloaded")})
+	if len(model.transcript.blocks) != initialBlocks+1 {
+		t.Fatalf("final transcript = %#v", model.transcript.blocks)
+	}
+	if got := model.transcript.blocks[initialBlocks]; got.kind != screenBlockError || got.text != "error: overloaded (partial response removed)" {
+		t.Fatalf("final error = %#v", got)
+	}
+}
+
+func TestReportedRemovalIsNotRepeatedByALaterFailure(t *testing.T) {
+	// The recovery line already told the user why the text went. A second group
+	// that removes nothing must not inherit the explanation.
+	model := testScreenModel(t, &fakeAgent{})
+	model.operation.kind = operationTurn
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-1"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-1", Text: "partial"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "overloaded"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelRetryScheduled, AttemptID: "attempt-1", Text: "retrying in 1s"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-2"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventToolStarted, AttemptID: "attempt-2"})
+
+	recovery := model.transcript.blocks[len(model.transcript.blocks)-1].text
+	if recovery != "model recovered after 1 retry: overloaded (partial response removed)" {
+		t.Fatalf("recovery = %q", recovery)
+	}
+
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-3"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-3", Text: "overloaded"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-3", Status: agent.RunFailed})
+	model, _ = model.update(agentDoneMsg{err: errors.New("overloaded")})
+
+	last := model.transcript.blocks[len(model.transcript.blocks)-1]
+	if last.kind != screenBlockError || last.text != "error: overloaded" {
+		t.Fatalf("final error = %#v", last)
+	}
+}
+
+func TestInterruptExplainsRemovedTextAndStaysSilentOtherwise(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.operation.kind = operationTurn
+	initialBlocks := len(model.transcript.blocks)
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-1"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventTextDelta, AttemptID: "attempt-1", Text: "half an answer"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "context canceled"})
+	model.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-1", Status: agent.RunCancelled})
+
+	model, _ = model.update(agentDoneMsg{err: context.Canceled})
+	if got := model.transcript.blocks[initialBlocks]; got.kind != screenBlockSystem || got.text != "interrupted (partial response removed)" {
+		t.Fatalf("interrupt notice = %#v", got)
+	}
+
+	quiet := testScreenModel(t, &fakeAgent{})
+	quiet.operation.kind = operationTurn
+	quietBlocks := len(quiet.transcript.blocks)
+	quiet.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptStarted, AttemptID: "attempt-1"})
+	quiet.applyAgentEvent(agent.Event{Kind: agent.EventModelAttemptDiscarded, AttemptID: "attempt-1", Text: "context canceled"})
+	quiet.applyAgentEvent(agent.Event{Kind: agent.EventRunFinished, AttemptID: "attempt-1", Status: agent.RunCancelled})
+
+	quiet, _ = quiet.update(agentDoneMsg{err: context.Canceled})
+	if len(quiet.transcript.blocks) != quietBlocks {
+		t.Fatalf("silent interrupt added %#v", quiet.transcript.blocks[quietBlocks:])
 	}
 }
 

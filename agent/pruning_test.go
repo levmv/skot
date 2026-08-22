@@ -71,45 +71,15 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	}
 }
 
-func TestToolPruningMakesProgressBeforeCompaction(t *testing.T) {
-	journal := &memoryJournal{}
-	largeResult := strings.Repeat("large tool output ", 8*1024)
-	tool := seedCompletedToolResultHistory(t, journal, largeResult, strings.Repeat("large user context ", 4*1024))
-
-	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
-		steps: []modelStep{
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-				if request.Instructions != compactionSystemInstructions {
-					t.Fatalf("first request was not compaction: %#v", request)
-				}
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "compacted old work"}}, StopReason: "stop"}, nil
-			},
-			directModelResponse("final answer"),
-		},
+func TestToolResultPruningRequiresACompactionSizedResult(t *testing.T) {
+	before := ContextReport{Window: 1_000_000, InputLimit: 968_000, HistoryTokens: 900_000, TotalInputTokens: 970_000}
+	stillLarge := ContextReport{Window: before.Window, InputLimit: before.InputLimit, HistoryTokens: 600_000, TotalInputTokens: 670_000}
+	if toolResultPruningIsDecisive(before, stillLarge) {
+		t.Fatal("large but still expensive projection qualified for pruning")
 	}
-	if _, err := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}}).Run(context.Background(), "new question", nil); err != nil {
-		t.Fatal(err)
-	}
-	state, err := Replay(journal.snapshot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.ToolPruning == nil || state.ToolPruningCount != 1 || state.CompactionCount != 1 {
-		t.Fatalf("maintenance state: pruning=%#v compactions=%d", state.ToolPruning, state.CompactionCount)
-	}
-	records := journal.snapshot()
-	pruningIndex, compactionIndex := -1, -1
-	for index, record := range records {
-		switch record.Kind {
-		case RecordToolResultsPruned:
-			pruningIndex = index
-		case RecordContextCompacted:
-			compactionIndex = index
-		}
-	}
-	if pruningIndex < 0 || compactionIndex <= pruningIndex {
-		t.Fatalf("maintenance record order = %#v", records)
+	compactSized := ContextReport{Window: before.Window, InputLimit: before.InputLimit, HistoryTokens: 30_000, TotalInputTokens: 100_000}
+	if !toolResultPruningIsDecisive(before, compactSized) {
+		t.Fatal("tool-dominated projection did not qualify for pruning")
 	}
 }
 
@@ -168,12 +138,11 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 	tool := seedCompletedToolResultHistory(t, journal, largeResult, "inspect a large result")
 
 	mainAttempts, summaryAttempts := 0, 0
-	summaryErr := errors.New("summary failed")
 	runtime := newTestRuntime(t, Config{
 		Backend: modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			if request.Instructions == compactionSystemInstructions {
+			if isCompactionRequest(request) {
 				summaryAttempts++
-				return ModelResponse{}, MarkInvalidRequest(summaryErr)
+				t.Fatal("unexpected compaction request after decisive pruning")
 			}
 			mainAttempts++
 			return ModelResponse{}, &ProviderError{
@@ -184,8 +153,8 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 		Tools:   []Tool{tool},
 	})
 	result, err := runtime.Run(context.Background(), "new question", nil)
-	if result.Status != RunFailed || !errors.Is(err, ErrModelRequestTooLarge) || !errors.Is(err, summaryErr) ||
-		mainAttempts != 2 || summaryAttempts != 1 {
+	if result.Status != RunFailed || !errors.Is(err, ErrModelRequestTooLarge) || !errors.Is(err, errCompactionNotNeeded) ||
+		mainAttempts != 2 || summaryAttempts != 0 {
 		t.Fatalf("result/error/attempts = %#v / %v / %d/%d", result, err, mainAttempts, summaryAttempts)
 	}
 	state, replayErr := Replay(journal.snapshot())

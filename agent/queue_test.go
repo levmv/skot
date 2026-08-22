@@ -121,9 +121,9 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 			},
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-				if request.Instructions != compactionSystemInstructions || !strings.Contains(request.Items[0].Text, "old context") ||
-					!strings.Contains(request.Items[0].Text, "recent context") || strings.Contains(request.Items[0].Text, "current work") ||
-					strings.Contains(request.Items[0].Text, "queued context") {
+				if !isCompactionRequest(request) || !itemsContainText(request.Items, "old context") ||
+					!itemsContainText(request.Items, "recent context") || itemsContainText(request.Items, "current work") ||
+					itemsContainText(request.Items, "queued context") {
 					t.Fatalf("model-boundary compaction request = %#v", request)
 				}
 				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil

@@ -421,10 +421,10 @@ func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 	if err != nil || result.Answer != "" {
 		t.Fatalf("runtime result = %#v, %v", result, err)
 	}
-	if _, err := runtime.Run(context.Background(), "second", nil); err != nil {
+	if _, err := runtime.Run(context.Background(), "second "+strings.Repeat("x", 132*1024), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Compact(context.Background(), 1); err != nil {
+	if _, err := runtime.Compact(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "third", nil); err != nil {
@@ -599,7 +599,7 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 type childReplayModel struct{ calls int }
 
 func (model *childReplayModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	if len(request.Tools) == 0 {
+	if len(request.Items) != 0 && strings.HasSuffix(request.Items[len(request.Items)-1].Text, "Output only the summary.") {
 		return agent.ModelResponse{
 			Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "summary"}},
 			Usage: agent.ModelUsage{ReasoningTokens: 4, TotalTokens: 9},

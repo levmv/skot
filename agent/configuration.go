@@ -21,7 +21,7 @@ func (runtime *Runtime) effectiveConfigSnapshotWithProgramToolsLocked(modelInfo 
 	return EffectiveConfigSnapshot{
 		ModelContext: ModelContextSnapshot{
 			Instructions:           runtime.instructions,
-			CompactionInstructions: compactionSystemInstructions,
+			CompactionInstructions: compactionInstructions,
 			ToolLimitInstructions:  toolLimitInstructions,
 			ToolSet:                strings.TrimSpace(toolSet),
 			Tools:                  toolSpecs,

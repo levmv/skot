@@ -371,12 +371,12 @@ func (application *Application) SessionStatus() agent.SessionStatus {
 	return runtime.SessionStatus()
 }
 
-func (application *Application) Compact(ctx context.Context, keepRecent int) (agent.ContextCompactedRecord, error) {
+func (application *Application) Compact(ctx context.Context) (agent.ContextCompactedRecord, error) {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return agent.ContextCompactedRecord{}, err
 	}
-	return runtime.Compact(ctx, keepRecent)
+	return runtime.Compact(ctx)
 }
 
 func (application *Application) CurrentScope() string {

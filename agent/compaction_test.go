@@ -17,7 +17,8 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 		directModelResponse("recent answer"),
 	}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
-	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+	oldQuestion := compactionTestText("old question", 132*1024)
+	if _, err := runtime.Run(context.Background(), oldQuestion, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
@@ -27,12 +28,13 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planCompaction(state, 1)
+	plan, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan.Input, "old question") || !strings.Contains(plan.Input, "old answer") || !strings.Contains(plan.Input, "[run_finished status=completed]") || strings.Contains(plan.Input, "recent question") {
-		t.Fatalf("compaction input = %q", plan.Input)
+	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, plan)
+	if !itemsContainText(request.Items, "old question") || !itemsContainText(request.Items, "old answer") || itemsContainText(request.Items, "recent question") {
+		t.Fatalf("compaction items = %#v", request.Items)
 	}
 	if _, _, err := commitCompaction(context.Background(), journal, plan, "Objective: continue recent work. Old answer was recorded.", ModelUsage{}); err != nil {
 		t.Fatal(err)
@@ -63,32 +65,118 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 	}
 }
 
-func TestRuntimeCompactSummarizesWithoutToolsAndCommitsTailBoundary(t *testing.T) {
+func TestCompactionRetainsRecentTailByProjectedTokenBudget(t *testing.T) {
 	journal := &memoryJournal{}
-	model := &scriptedModel{steps: []modelStep{
-		directModelResponse("old answer"),
-		directModelResponse("recent answer"),
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			if request.Instructions != compactionSystemInstructions {
-				t.Fatalf("compaction instructions = %q", request.Instructions)
+	const blocks = 14
+	steps := make([]modelStep, blocks)
+	for index := range steps {
+		steps[index] = func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{
+				{Kind: ItemReasoning, Text: strings.Repeat("r", 28*1024)},
+				{Kind: ItemAssistantText, Text: "answer"},
+			}, StopReason: "stop"}, nil
+		}
+	}
+	model := &scriptedModel{
+		steps: steps,
+	}
+	seedRuntime := newTestRuntime(t, Config{Backend: model, Journal: journal})
+	for index := range blocks {
+		if _, err := seedRuntime.Run(context.Background(), fmt.Sprintf("block %02d ", index)+strings.Repeat("x", 4*1024), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := newTestRuntime(t, Config{
+		Model: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 128 * 1024},
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{}, nil
+		}),
+		Journal: journal,
+	})
+	plan, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.FirstVerbatimSequence != state.Blocks[12].StartSequence || plan.CoveredThroughSequence != state.Blocks[11].EndSequence {
+		t.Fatalf("token-budget boundary = %#v", plan)
+	}
+	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, plan)
+	if !itemsContainText(request.Items, "block 11 ") || itemsContainText(request.Items, "block 12 ") || !itemsContainText(request.Items, strings.Repeat("r", 128)) {
+		t.Fatalf("token-budget items = %#v", request.Items)
+	}
+}
+
+func TestCompactionVerbatimTokenBudgetHasAbsoluteBounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		report ContextReport
+		want   int
+	}{
+		{name: "floor", report: ContextReport{Window: 32 * 1024, InputLimit: 24 * 1024}, want: 8 * 1024},
+		{name: "proportional", report: ContextReport{Window: 128 * 1024, InputLimit: 102 * 1024}, want: 128 * 1024 * 15 / 100},
+		{name: "ceiling", report: ContextReport{Window: 1_000_000, InputLimit: 968_000}, want: 32 * 1024},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := compactionVerbatimTokenBudget(test.report); got != test.want {
+				t.Fatalf("verbatim budget = %d, want %d", got, test.want)
 			}
-			if request.Summary != "" || len(request.Tools) != 0 {
-				t.Fatalf("compaction request carries runtime context: %#v", request)
-			}
-			if len(request.Items) != 1 || request.Items[0].Kind != ItemUserText {
-				t.Fatalf("compaction items = %#v", request.Items)
-			}
-			input := request.Items[0].Text
-			if !strings.Contains(input, "old question") || !strings.Contains(input, "old answer") || strings.Contains(input, "recent question") {
-				t.Fatalf("compaction input = %q", input)
-			}
-			return ModelResponse{
-				Items:      []Item{{Kind: ItemAssistantText, Text: "Objective: preserve the recent work."}},
-				Usage:      ModelUsage{InputTokens: 30, OutputTokens: 8, TotalTokens: 38},
-				StopReason: "stop",
-			}, nil
+		})
+	}
+}
+
+func TestRuntimeCompactUsesTokenTailBeforeWindowPressure(t *testing.T) {
+	journal := &memoryJournal{}
+	var compactionRequest ModelRequest
+	steps := make([]modelStep, 0, 5)
+	for range 4 {
+		steps = append(steps, directModelResponse("answer"))
+	}
+	steps = append(steps, func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		compactionRequest = request
+		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "summary"}}, StopReason: "stop"}, nil
+	})
+	runtime := newTestRuntime(t, Config{
+		Model: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 1_000_000},
+		Backend: &scriptedModel{
+			steps: steps,
 		},
-	}}
+		Journal: journal,
+	})
+	for index := range 4 {
+		input := fmt.Sprintf("block %d ", index) + strings.Repeat("x", 40*1024)
+		if _, err := runtime.Run(context.Background(), input, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := runtime.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := runtime.contextReport(before)
+	if report.TotalInputTokens > report.InputLimit || report.HistoryTokens <= maxCompactionVerbatimTokens {
+		t.Fatalf("pre-compaction report = %#v", report)
+	}
+
+	compaction, err := runtime.Compact(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compaction.FirstVerbatimSequence != before.Blocks[1].StartSequence {
+		t.Fatalf("manual compaction boundary = %#v", compaction)
+	}
+	if !isCompactionRequest(compactionRequest) || !itemsContainText(compactionRequest.Items, "block 0 ") || itemsContainText(compactionRequest.Items, "block 1 ") {
+		t.Fatalf("manual compaction request = %#v", compactionRequest)
+	}
+}
+
+func TestRuntimeCompactSkipsHistoryWithinTokenTail(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
 		t.Fatal(err)
@@ -96,8 +184,66 @@ func TestRuntimeCompactSummarizesWithoutToolsAndCommitsTailBoundary(t *testing.T
 	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
 		t.Fatal(err)
 	}
+	recordCount := len(journal.snapshot())
+	if _, err := runtime.Compact(context.Background()); !errors.Is(err, errCompactionNotNeeded) {
+		t.Fatalf("compact small history error = %v", err)
+	}
+	if len(journal.snapshot()) != recordCount || model.next != 2 {
+		t.Fatalf("small-history compaction changed journal or called model: records=%d, calls=%d", len(journal.snapshot()), model.next)
+	}
+}
 
-	compaction, err := runtime.Compact(context.Background(), 1)
+func TestCompactionPromptLeavesInstructionsLast(t *testing.T) {
+	prompt := compactionPrompt("summarize now", "run failed")
+	if !strings.Contains(prompt, "run failed") || !strings.HasSuffix(prompt, "summarize now") {
+		t.Fatalf("compaction prompt = %q", prompt)
+	}
+}
+
+func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T) {
+	journal := &memoryJournal{}
+	tool := Tool{
+		Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(context.Context, string) (ToolOutput, error) {
+			return ToolOutput{}, nil
+		},
+	}
+	oldQuestion := compactionTestText("old question", 132*1024)
+	model := &scriptedModel{steps: []modelStep{
+		directModelResponse("old answer"),
+		directModelResponse("recent answer"),
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if request.Instructions != "main instructions" {
+				t.Fatalf("compaction instructions = %q", request.Instructions)
+			}
+			if request.Summary != "" || len(request.Tools) != 1 || request.Tools[0].Name != "inspect" {
+				t.Fatalf("compaction request carries runtime context: %#v", request)
+			}
+			if len(request.Items) != 3 || request.Items[0].Text != oldQuestion || request.Items[1].Text != "old answer" || !isCompactionRequest(request) {
+				t.Fatalf("compaction items = %#v", request.Items)
+			}
+			if itemsContainText(request.Items, "recent question") {
+				t.Fatalf("compaction request includes verbatim tail: %#v", request.Items)
+			}
+			return ModelResponse{
+				Items: []Item{
+					{Kind: ItemAssistantText, Text: "Objective: preserve the recent work."},
+					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}},
+				},
+				Usage:      ModelUsage{InputTokens: 30, OutputTokens: 8, TotalTokens: 38},
+				StopReason: "tool_calls",
+			}, nil
+		},
+	}}
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Instructions: "main instructions", Tools: []Tool{tool}})
+	if _, err := runtime.Run(context.Background(), oldQuestion, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	compaction, err := runtime.Compact(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,14 +276,14 @@ func TestRuntimeCompactRejectsIncompleteSummaryWithoutJournalRecord(t *testing.T
 		},
 	}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
-	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+	if _, err := runtime.Run(context.Background(), compactionTestText("old question", 132*1024), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
 		t.Fatal(err)
 	}
 	recordCount := len(journal.snapshot())
-	if _, err := runtime.Compact(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "incomplete summary") {
+	if _, err := runtime.Compact(context.Background()); err == nil || !strings.Contains(err.Error(), "incomplete summary") {
 		t.Fatalf("compaction error = %v", err)
 	}
 	if records := journal.snapshot(); len(records) != recordCount || countRecordKind(records, RecordContextCompacted) != 0 {
@@ -152,11 +298,12 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 		directModelResponse("recent answer"),
 	}}
 	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal})
-	oldQuestion := strings.Repeat("old context ", 4_000)
+	oldQuestion := strings.Repeat("old context ", 2_100)
+	recentQuestion := "recent question " + strings.Repeat("r", 8*1024)
 	if _, err := seedRuntime.Run(context.Background(), oldQuestion, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := seedRuntime.Run(context.Background(), "recent question", nil); err != nil {
+	if _, err := seedRuntime.Run(context.Background(), recentQuestion, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -164,11 +311,11 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
-				if request.Instructions != compactionSystemInstructions || len(request.Tools) != 0 || len(request.Items) != 1 {
+				if !isCompactionRequest(request) || len(request.Tools) != 0 {
 					t.Fatalf("automatic compaction request = %#v", request)
 				}
-				if !strings.Contains(request.Items[0].Text, "old context") || strings.Contains(request.Items[0].Text, "recent question") {
-					t.Fatalf("automatic compaction input = %q", request.Items[0].Text)
+				if !itemsContainText(request.Items, "old context") || itemsContainText(request.Items, "recent question") {
+					t.Fatalf("automatic compaction items = %#v", request.Items)
 				}
 				emit(ModelStreamEvent{Kind: EventReasoningSummaryDelta, Text: "internal reasoning"})
 				emit(ModelStreamEvent{Kind: EventTextDelta, Text: "Old work was summarized."})
@@ -182,7 +329,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 				if request.Summary != "Old work was summarized." {
 					t.Fatalf("summary = %q", request.Summary)
 				}
-				if len(request.Items) != 3 || request.Items[0].Text != "recent question" || request.Items[2].Text != "new question" {
+				if len(request.Items) != 3 || request.Items[0].Text != recentQuestion || request.Items[2].Text != "new question" {
 					t.Fatalf("post-compaction items = %#v", request.Items)
 				}
 				emit(ModelStreamEvent{Kind: EventTextDelta, Text: "final answer"})
@@ -237,7 +384,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	}
 }
 
-func TestRuntimePreflightCompactsUntilEstimatedRequestFits(t *testing.T) {
+func TestRuntimePreflightUsesBoundedCacheAlignedCompactionRequests(t *testing.T) {
 	journal := &memoryJournal{}
 	seedRuntime := newTestRuntime(t, Config{
 		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
@@ -255,7 +402,7 @@ func TestRuntimePreflightCompactsUntilEstimatedRequestFits(t *testing.T) {
 	compactions := 0
 	mainRequests := 0
 	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		if request.Instructions == compactionSystemInstructions {
+		if isCompactionRequest(request) {
 			compactions++
 			return ModelResponse{
 				Items:      []Item{{Kind: ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
@@ -277,7 +424,7 @@ func TestRuntimePreflightCompactsUntilEstimatedRequestFits(t *testing.T) {
 		t.Fatalf("result/error = %#v / %v", result, err)
 	}
 	if compactions < 2 || mainRequests != 1 {
-		t.Fatalf("compactions/main requests = %d/%d, want repeated compaction and one main request", compactions, mainRequests)
+		t.Fatalf("compactions/main requests = %d/%d, want bounded compaction requests followed by one main request", compactions, mainRequests)
 	}
 	state, err := Replay(journal.snapshot())
 	if err != nil {
@@ -308,9 +455,9 @@ func TestRuntimeCompactsUntilRequestTooLargeRecovers(t *testing.T) {
 	const requestLimit = 250 * 1024
 	var mainRequestSizes []int
 	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		if request.Instructions == compactionSystemInstructions {
+		if isCompactionRequest(request) {
 			compactions++
-			if len(request.Tools) != 0 || len(request.Items) != 1 || request.Items[0].Kind != ItemUserText {
+			if len(request.Tools) != 0 || request.Items[len(request.Items)-1].Kind != ItemUserText {
 				t.Fatalf("compaction request = %#v", request)
 			}
 			return ModelResponse{
@@ -341,7 +488,7 @@ func TestRuntimeCompactsUntilRequestTooLargeRecovers(t *testing.T) {
 	if err != nil || result.Answer != "recovered" {
 		t.Fatalf("result/error = %#v / %v", result, err)
 	}
-	if compactions < 2 || mainAttempts != compactions+1 {
+	if compactions != 1 || mainAttempts != 2 {
 		t.Fatalf("main attempts/compactions = %d/%d", mainAttempts, compactions)
 	}
 	for index, size := range mainRequestSizes {
@@ -404,6 +551,32 @@ func encodedTestModelRequestBytes(t *testing.T, request ModelRequest) int {
 	return len(body)
 }
 
+func isCompactionRequest(request ModelRequest) bool {
+	if len(request.Items) == 0 {
+		return false
+	}
+	last := request.Items[len(request.Items)-1]
+	return last.Kind == ItemUserText && strings.HasSuffix(last.Text, compactionInstructions)
+}
+
+func mustCompactionRequest(t *testing.T, runtime *Runtime, state State, spec runRequestSpec, plan compactionPlan) ModelRequest {
+	t.Helper()
+	request, err := runtime.compactionRequest(state, spec, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func itemsContainText(items []Item, text string) bool {
+	for _, item := range items {
+		if strings.Contains(item.Text, text) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
@@ -412,7 +585,13 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 		directModelResponse("answer three"),
 	}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
-	for _, input := range []string{"question one", "question two", "question three"} {
+	questions := []string{
+		compactionTestText("question one", 48*1024),
+		compactionTestText("question two", 48*1024),
+		compactionTestText("question three", 48*1024),
+		compactionTestText("question four", 48*1024),
+	}
+	for _, input := range questions[:3] {
 		if _, err := runtime.Run(context.Background(), input, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -421,7 +600,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := planCompaction(state, 2)
+	first, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,21 +609,22 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	}
 
 	fourthModel := &scriptedModel{steps: []modelStep{directModelResponse("answer four")}}
-	if _, err := newTestRuntime(t, Config{Backend: fourthModel, Journal: journal}).Run(context.Background(), "question four", nil); err != nil {
+	if _, err := newTestRuntime(t, Config{Backend: fourthModel, Journal: journal}).Run(context.Background(), questions[3], nil); err != nil {
 		t.Fatal(err)
 	}
 	state, err = Replay(journal.snapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := planCompaction(state, 1)
+	second, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(second.Input, "Previous rolling summary:\nsummary one") ||
-		!strings.Contains(second.Input, "question two") || !strings.Contains(second.Input, "question three") ||
-		strings.Contains(second.Input, "question one") || strings.Contains(second.Input, "question four") {
-		t.Fatalf("rolling input = %q", second.Input)
+	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, second)
+	if request.Summary != "summary one" || !itemsContainText(request.Items, "question two") ||
+		itemsContainText(request.Items, "question three") || itemsContainText(request.Items, "question one") ||
+		itemsContainText(request.Items, "question four") {
+		t.Fatalf("rolling request = %#v", request)
 	}
 	if second.CoveredThroughSequence <= first.CoveredThroughSequence || second.FirstVerbatimSequence <= first.FirstVerbatimSequence {
 		t.Fatalf("boundaries did not advance: first=%#v second=%#v", first, second)
@@ -460,7 +640,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 		t.Fatalf("compaction state = %#v count=%d", state.Compaction, state.CompactionCount)
 	}
 	verbatim := state.VerbatimItems()
-	if len(verbatim) != 2 || verbatim[0].Text != "question four" {
+	if len(verbatim) != 4 || verbatim[0].Text != questions[2] {
 		t.Fatalf("rolling verbatim tail = %#v", verbatim)
 	}
 }
@@ -486,7 +666,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	tool := Tool{
 		Spec: ToolSpec{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
-			return ToolOutput{Content: "echo result: " + arguments}, nil
+			return ToolOutput{Content: "echo result: " + arguments + strings.Repeat("x", 132*1024)}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -500,15 +680,27 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planCompaction(state, 1)
+	plan, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan.Input, `[tool_call] echo args={"text":"hello"}`) || !strings.Contains(plan.Input, "echo result") {
-		t.Fatalf("tool block missing from input: %q", plan.Input)
+	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, plan)
+	var reasoning, call, result *Item
+	for index := range request.Items {
+		item := &request.Items[index]
+		switch item.Kind {
+		case ItemReasoning:
+			reasoning = item
+		case ItemToolCall:
+			call = item
+		case ItemToolResult:
+			result = item
+		}
 	}
-	if strings.Contains(plan.Input, "provider-private reasoning") || strings.Contains(plan.Input, "provider_call") || strings.Contains(plan.Input, "opaque-secret") {
-		t.Fatalf("provider-owned data leaked into summary input: %q", plan.Input)
+	if reasoning == nil || reasoning.Text != "provider-private reasoning" || len(reasoning.ProviderData) != 1 ||
+		call == nil || call.ToolCall == nil || call.ToolCall.RawArguments != `{"text":"hello"}` || len(call.ToolCall.ProviderReferences) != 1 ||
+		result == nil || result.ToolResult == nil || !strings.Contains(result.ToolResult.Content, "echo result") {
+		t.Fatalf("cache-aligned tool block = %#v", request.Items)
 	}
 	invalid := ContextCompactedRecord{
 		CoveredThroughSequence: state.Blocks[0].StartSequence,
@@ -524,7 +716,7 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("one"), directModelResponse("two"), directModelResponse("three")}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
-	if _, err := runtime.Run(context.Background(), "one", nil); err != nil {
+	if _, err := runtime.Run(context.Background(), compactionTestText("one", 132*1024), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "two", nil); err != nil {
@@ -534,7 +726,7 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planCompaction(state, 1)
+	plan, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,12 +742,14 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	mustAppend(t, unfinished, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch"})
 	mustAppend(t, unfinished, RecordRunStarted, RunStartedRecord{RunID: "run"})
 	mustAppend(t, unfinished, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "unfinished"})
-	unfinishedState, err := Replay(unfinished.snapshot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := planCompaction(unfinishedState, 1); err == nil || !strings.Contains(err.Error(), "unfinished") {
-		t.Fatalf("unfinished plan error = %v", err)
+	unfinishedRuntime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{}, nil
+		}),
+		Journal: unfinished,
+	})
+	if _, err := unfinishedRuntime.Compact(context.Background()); err == nil || !strings.Contains(err.Error(), "unfinished") {
+		t.Fatalf("unfinished compaction error = %v", err)
 	}
 }
 
@@ -576,13 +770,13 @@ func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
 		Backend: model, Journal: journal,
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 2, BaseDelay: time.Millisecond},
 	})
-	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+	if _, err := runtime.Run(context.Background(), compactionTestText("old question", 132*1024), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Compact(context.Background(), 1); err != nil {
+	if _, err := runtime.Compact(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	records := journal.snapshot()
@@ -607,7 +801,7 @@ func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
-	if _, err := runtime.Run(context.Background(), "old question", nil); err != nil {
+	if _, err := runtime.Run(context.Background(), compactionTestText("old question", 132*1024), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
@@ -620,11 +814,11 @@ func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planCompactionForModelBoundary(state, 1)
+	plan, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.CoveredThroughSequence != state.Blocks[1].EndSequence || plan.FirstVerbatimSequence != state.Blocks[2].StartSequence {
+	if plan.CoveredThroughSequence >= state.Blocks[2].StartSequence || plan.FirstVerbatimSequence > state.Blocks[2].StartSequence {
 		t.Fatalf("active-boundary plan = %#v", plan)
 	}
 	unsafe := ContextCompactedRecord{
@@ -641,4 +835,8 @@ func directModelResponse(text string) modelStep {
 	return func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: text}}}, nil
 	}
+}
+
+func compactionTestText(text string, paddingBytes int) string {
+	return text + " " + strings.Repeat("x", paddingBytes)
 }

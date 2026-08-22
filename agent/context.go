@@ -100,8 +100,7 @@ func (runtime *Runtime) shrinkRunRequestOnce(ctx context.Context, live *stateRed
 		return nextReport, nil
 	}
 
-	emitEvent(emit, Event{Kind: EventStatus, Text: "compacting context"})
-	_, compactionRecord, err := runtime.compactLocked(ctx, live.state, 1, emit)
+	_, compactionRecord, err := runtime.compactLocked(ctx, live.state, spec, emit)
 	if err != nil {
 		return report, fmt.Errorf("compact context: %w", err)
 	}
@@ -143,9 +142,20 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 	if state.Compaction != nil {
 		report.SummaryTokens = estimateTextTokens(ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
 	}
-	// Project pending input with its history: current-turn routes drop the
-	// previous turn's reasoning once the next user message is appended.
-	items := state.verbatimModelItems()
+	items, boundary := runtime.projectedItemsForRequest(state, state.verbatimModelItems(), pendingInputs...)
+	report.HistoryTokens = estimateItemsTokens(items[:boundary])
+	report.PendingTokens = estimateItemsTokens(items[boundary:])
+	report.TotalInputTokens = report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens
+	if report.Window > 0 {
+		report.AvailableInputTokens = max(0, report.InputLimit-report.TotalInputTokens)
+	}
+	return report
+}
+
+// projectedItemsForRequest projects pending input together with its history:
+// current-turn routes drop the previous turn's reasoning only after the next
+// user message has been appended.
+func (runtime *Runtime) projectedItemsForRequest(state State, items []Item, pendingInputs ...string) ([]Item, int) {
 	pending := 0
 	for _, pendingInput := range pendingInputs {
 		if pendingInput != "" {
@@ -159,13 +169,7 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 	})
 	// Projection may remove reasoning only, so pending users remain the suffix.
 	boundary := max(0, len(projected)-pending)
-	report.HistoryTokens = estimateItemsTokens(projected[:boundary])
-	report.PendingTokens = estimateItemsTokens(projected[boundary:])
-	report.TotalInputTokens = report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens
-	if report.Window > 0 {
-		report.AvailableInputTokens = max(0, report.InputLimit-report.TotalInputTokens)
-	}
-	return report
+	return projected, boundary
 }
 
 func estimateItemsTokens(items []Item) int {

@@ -36,7 +36,7 @@ type ConversationAgent interface {
 	QueuedInputs() []string
 	State(context.Context) (agent.State, error)
 	ToolStatus(string) ([]agent.Detail, bool)
-	Compact(context.Context, int) (agent.ContextCompactedRecord, error)
+	Compact(context.Context) (agent.ContextCompactedRecord, error)
 }
 
 type ShellAgent interface {

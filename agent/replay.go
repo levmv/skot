@@ -89,21 +89,28 @@ func boundaryPrecedesUnfinishedWork(state State, throughSequence uint64) bool {
 }
 
 func (state State) VerbatimItems() []Item {
-	return state.verbatimItems(true)
+	return state.verbatimItemsFromSequence(state.firstVerbatimSequence(), true)
 }
 
 // verbatimModelItems returns an owned projection source without product-only
 // details. Model requests and context estimates discard those details, so
 // copying potentially large JSON payloads here would be pure overhead.
 func (state State) verbatimModelItems() []Item {
-	return state.verbatimItems(false)
+	return state.verbatimModelItemsFromSequence(state.firstVerbatimSequence())
 }
 
-func (state State) verbatimItems(includeDetails bool) []Item {
-	firstSequence := uint64(0)
+func (state State) firstVerbatimSequence() uint64 {
 	if state.Compaction != nil {
-		firstSequence = state.Compaction.FirstVerbatimSequence
+		return state.Compaction.FirstVerbatimSequence
 	}
+	return 0
+}
+
+func (state State) verbatimModelItemsFromSequence(firstSequence uint64) []Item {
+	return state.verbatimItemsFromSequence(firstSequence, false)
+}
+
+func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetails bool) []Item {
 	var items []Item
 	for _, block := range state.Blocks {
 		if firstSequence != 0 && block.StartSequence < firstSequence {

@@ -236,7 +236,7 @@ func (fake *fakeAgent) SessionStatus() agent.SessionStatus {
 	return agent.SessionStatus{ContextReport: fake.contextReport, Usage: fake.state.Usage}
 }
 
-func (fake *fakeAgent) Compact(context.Context, int) (agent.ContextCompactedRecord, error) {
+func (fake *fakeAgent) Compact(context.Context) (agent.ContextCompactedRecord, error) {
 	return fake.compaction, fake.compactionErr
 }
 

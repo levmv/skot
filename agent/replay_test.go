@@ -102,7 +102,7 @@ func TestReplayDoesNotCarryConfigurationAcrossModelSelections(t *testing.T) {
 		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "first", Provider: "first", Model: "model", Epoch: "epoch-first"}),
 		recordForTest(t, 3, RecordSessionConfigured, EffectiveConfigSnapshot{
 			ModelContext: ModelContextSnapshot{
-				CompactionInstructions: compactionSystemInstructions,
+				CompactionInstructions: compactionInstructions,
 				ToolLimitInstructions:  toolLimitInstructions,
 			},
 			RuntimePolicy: RuntimePolicySnapshot{

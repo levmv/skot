@@ -14,7 +14,7 @@ func (m *screenModel) startCompaction() tea.Cmd {
 	operationCtx, cancel := context.WithCancel(m.ctx)
 	m.operation = activeOperation{kind: operationCompaction, startedAt: time.Now(), cancel: cancel}
 	return func() tea.Msg {
-		_, err := m.agent.Compact(operationCtx, 1)
+		_, err := m.agent.Compact(operationCtx)
 		return compactionDoneMsg{err: err}
 	}
 }

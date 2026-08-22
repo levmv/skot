@@ -94,7 +94,7 @@ func TestRuntimeWithoutAvailableModelCanBeInspectedAndReconfigured(t *testing.T)
 	if _, err := runtime.Run(context.Background(), "continue", nil); !errors.Is(err, ErrModelUnavailable) || !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("run unavailable model error = %v", err)
 	}
-	if _, err := runtime.Compact(context.Background(), 1); !errors.Is(err, ErrModelUnavailable) {
+	if _, err := runtime.Compact(context.Background()); !errors.Is(err, ErrModelUnavailable) {
 		t.Fatalf("compact unavailable model error = %v", err)
 	}
 	if records := journal.snapshot(); len(records) != 0 {
@@ -297,7 +297,7 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
 			},
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-				if request.Instructions != compactionSystemInstructions || !strings.Contains(request.Items[0].Text, "old context") {
+				if !isCompactionRequest(request) || !itemsContainText(request.Items, "old context") {
 					t.Fatalf("tool-limit compaction request = %#v", request)
 				}
 				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
@@ -342,7 +342,7 @@ func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
 		}),
 		Journal: journal,
 	})
-	if _, err := seedRuntime.Run(context.Background(), strings.Repeat("old context ", 2_700), nil); err != nil {
+	if _, err := seedRuntime.Run(context.Background(), compactionTestText("old context", 132*1024), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,7 +353,7 @@ func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
 	compactions := 0
 	var finalRequestSizes []int
 	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		if request.Instructions == compactionSystemInstructions {
+		if isCompactionRequest(request) {
 			compactions++
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old work summarized"}}, StopReason: "stop"}, nil
 		}

@@ -42,7 +42,7 @@ func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State
 	projected := state
 	projected.ToolPruning = &payload
 	prunedReport := runtime.requestReport(projected, spec)
-	if prunedReport.TotalInputTokens >= report.TotalInputTokens {
+	if !toolResultPruningIsDecisive(report, prunedReport) {
 		return Record{}, report, nil
 	}
 	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1, state.hasUnfinishedWork()); err != nil {
@@ -53,6 +53,22 @@ func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State
 		return Record{}, report, err
 	}
 	return record, prunedReport, nil
+}
+
+// Pruning changes the cached prefix just like compaction. Select it only when
+// tool output dominates enough to leave a compact-sized projection. Under
+// known token pressure it must also make the next request fit; a provider byte
+// rejection can only be confirmed by retrying the reduced request.
+func toolResultPruningIsDecisive(before, after ContextReport) bool {
+	savedHistory := before.HistoryTokens - after.HistoryTokens
+	if savedHistory <= 0 || savedHistory < after.HistoryTokens {
+		return false
+	}
+	compactHistory := compactionVerbatimTokenBudget(before) + compactionCheckpointTokenBudget
+	if after.HistoryTokens > compactHistory {
+		return false
+	}
+	return before.Window == 0 || before.TotalInputTokens <= before.InputLimit || after.TotalInputTokens <= after.InputLimit
 }
 
 func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, recordSequence uint64, unfinished bool) error {

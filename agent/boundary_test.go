@@ -64,7 +64,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		}},
 	})
 	var events []Event
-	if _, err := runtime.Run(context.Background(), "start it", func(event Event) {
+	if _, err := runtime.Run(context.Background(), compactionTestText("start it", 132*1024), func(event Event) {
 		assertEventCommittedAtEmission(t, journal, event)
 		events = append(events, event)
 	}); err != nil {
@@ -146,12 +146,13 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := planCompaction(state, 1)
+	plan, err := runtime.planCompactionForModelBoundary(state, runRequestSpec{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan.Input, "[boundary] Background job job-test completed") {
-		t.Fatalf("compaction input lost boundary event: %q", plan.Input)
+	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, plan)
+	if !itemsContainText(request.Items, "Background job job-test completed") {
+		t.Fatalf("compaction items lost boundary event: %#v", request.Items)
 	}
 }
 

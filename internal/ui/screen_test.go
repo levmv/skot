@@ -338,6 +338,49 @@ func TestSubmitWhileWorkingQueuesInput(t *testing.T) {
 	}
 }
 
+func TestLeadingPathIsOrdinaryInputWhileWorking(t *testing.T) {
+	fake := &fakeAgent{}
+	model := testScreenModel(t, fake)
+	model.operation.kind = operationTurn
+	blocksBefore := len(model.transcript.blocks)
+	input := "/etc/hosts is the file to read"
+	model.composer.setValue(input)
+
+	model, _ = model.submitInput()
+	if len(fake.queued) != 1 || fake.queued[0] != input {
+		t.Fatalf("queued = %#v", fake.queued)
+	}
+	if got := len(model.transcript.blocks); got != blocksBefore {
+		t.Fatalf("transcript blocks = %d, want %d", got, blocksBefore)
+	}
+}
+
+// A running turn is the harder state: it used to reject every slash input,
+// including paths, and it still refuses a command it cannot run now.
+func TestSlashInputIsRefusedOnlyAsACommandName(t *testing.T) {
+	for _, testCase := range []struct{ input, want string }{
+		{input: "/tmp/notes.md read this"},
+		{input: "/build.sh"},
+		{input: "/mdoel", want: "unknown command: /mdoel"},
+		{input: "/", want: "unknown command: /"},
+		{input: "/clear", want: "commands are unavailable while Skot is working"},
+	} {
+		model := testScreenModel(t, &fakeAgent{})
+		model.operation.kind = operationTurn
+		_, handled := model.dispatchCommand(testCase.input)
+		if handled != (testCase.want != "") {
+			t.Fatalf("input %q: handled = %v", testCase.input, handled)
+		}
+		if testCase.want == "" {
+			continue
+		}
+		last := model.transcript.blocks[len(model.transcript.blocks)-1]
+		if last.kind != screenBlockError || !strings.Contains(last.text, testCase.want) {
+			t.Fatalf("input %q block = %#v", testCase.input, last)
+		}
+	}
+}
+
 func TestCommandMenuRemainsVisibleWhileWorking(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.operation.kind = operationTurn

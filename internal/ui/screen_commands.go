@@ -212,11 +212,10 @@ func (m *screenModel) dispatchCommand(input string) (tea.Cmd, bool) {
 		}
 	}
 	if selected == nil {
-		if m.operation.isTurn() {
-			m.addBlock(screenBlockError, "commands are unavailable while Skot is working; wait or cancel the turn")
-		} else {
-			m.addBlock(screenBlockError, "unknown command: "+input)
+		if !looksLikeCommandName(fields[0]) {
+			return nil, false
 		}
+		m.addBlock(screenBlockError, "unknown command: "+input)
 		m.refreshTranscript()
 		return nil, true
 	}
@@ -234,6 +233,21 @@ func (m *screenModel) dispatchCommand(input string) (tea.Cmd, bool) {
 	command := selected.run(m, input, args)
 	m.refreshTranscript()
 	return command, true
+}
+
+// looksLikeCommandName reports whether a leading slash can only have started a
+// command name: the slash alone, or the slash and one plain word. Text which a
+// slash merely begins, an absolute path above all, is ordinary input and has
+// to reach the model instead of failing as a command.
+func looksLikeCommandName(field string) bool {
+	for _, character := range strings.TrimPrefix(field, "/") {
+		named := character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' || character == '-'
+		if !named {
+			return false
+		}
+	}
+	return true
 }
 
 func (command tuiCommand) matches(value string) bool {

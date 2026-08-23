@@ -7,26 +7,33 @@ import (
 )
 
 func TestBuiltInAndProcessPoliciesAgreeOnUserPathReach(t *testing.T) {
-	workspace, outside := t.TempDir(), t.TempDir()
+	workspace, added, outside := t.TempDir(), t.TempDir(), t.TempDir()
 	inside := filepath.Join(workspace, "inside.txt")
 	privateDir := filepath.Join(workspace, "private")
 	secret := filepath.Join(privateDir, "secret.txt")
+	addedFile := filepath.Join(added, "added.txt")
+	addedSecret := filepath.Join(added, "secret.txt")
 	external := filepath.Join(outside, "external.txt")
 	if err := os.Mkdir(privateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for path, content := range map[string]string{
-		inside: "inside\n", secret: "secret\n", external: "external\n",
+		inside: "inside\n", secret: "secret\n", addedFile: "added\n",
+		addedSecret: "added secret\n", external: "external\n",
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	protection, err := NewProtectedPathPolicy(workspace, []string{"private"})
+	additions, err := NewAddedDirectoryPolicy(workspace, []string{added})
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, err := NewFilesystemAccess(workspace, ScopeMachine, protection)
+	protection, err := NewProtectedPathPolicy(workspace, []string{"private", addedSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, err := NewFilesystemAccess(workspace, ScopeMachine, additions, protection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,14 +67,27 @@ func TestBuiltInAndProcessPoliciesAgreeOnUserPathReach(t *testing.T) {
 
 	assertRead(external, true)
 	assertProcessRead(external, ProcessCompleted)
+	assertRead(addedSecret, false)
+	assertProcessRead(addedSecret, ProcessFailed)
 	assertRead(secret, false)
 	assertProcessRead(secret, ProcessFailed)
 
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertRead(inside, true)
 	assertProcessRead(inside, ProcessCompleted)
+	assertRead(addedFile, true)
+	assertProcessRead(addedFile, ProcessCompleted)
+	assertRead(addedSecret, false)
+	assertProcessRead(addedSecret, ProcessFailed)
 	assertRead(external, false)
 	assertProcessRead(external, ProcessFailed)
+}
+
+// setScopeAfter switches only the scope, keeping the manager's current path
+// policies, the way tests which never touch added or protected paths expect.
+func setScopeAfter(manager *ProcessManager, scope Scope, beforeApply func() error) error {
+	current := manager.access.snapshot()
+	return manager.SetFilesystemPolicyAfter(scope, current.additions, current.protection, beforeApply)
 }

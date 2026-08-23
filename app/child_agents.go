@@ -273,6 +273,7 @@ func (supervisor *childSupervisor) setScopeSnapshot(ctx context.Context, scope a
 
 func cloneAgentScopeSnapshot(snapshot agent.ScopeSnapshot) agent.ScopeSnapshot {
 	snapshot.ProtectedPaths = append([]string(nil), snapshot.ProtectedPaths...)
+	snapshot.AddedPaths = append([]string(nil), snapshot.AddedPaths...)
 	return snapshot
 }
 

@@ -32,6 +32,8 @@ type WorkspaceSettings struct {
 	ModelAPI        string
 	ToolSet         string
 	Scope           string
+	AddedPaths      []string
+	ProtectedPaths  []string
 }
 
 // ModelPreference is one remembered model selection. A nil ReasoningEffort
@@ -90,15 +92,17 @@ type modelHistoryDocument struct {
 	API             string `json:"api,omitempty"`
 }
 
-// Pointer fields preserve absent versus present-but-invalid values. Mutating a
-// different field can therefore rewrite the document atomically without
-// silently healing or deleting the invalid value.
+// Pointer fields preserve absent versus present-but-invalid string values.
+// Mutating a different field can therefore rewrite the document atomically
+// without silently healing or deleting the invalid value.
 type workspaceDocument struct {
-	Model           *string `json:"model,omitempty"`
-	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-	ModelAPI        *string `json:"model_api,omitempty"`
-	ToolSet         *string `json:"tool_set,omitempty"`
-	Scope           *string `json:"scope,omitempty"`
+	Model           *string  `json:"model,omitempty"`
+	ReasoningEffort *string  `json:"reasoning_effort,omitempty"`
+	ModelAPI        *string  `json:"model_api,omitempty"`
+	ToolSet         *string  `json:"tool_set,omitempty"`
+	Scope           *string  `json:"scope,omitempty"`
+	AddedPaths      []string `json:"added_paths,omitempty"`
+	ProtectedPaths  []string `json:"protected_paths,omitempty"`
 }
 
 // InteractiveStore is bound to one canonical workspace but coordinates
@@ -219,6 +223,31 @@ func (store *InteractiveStore) SetScopeSelection(scope string) error {
 	})
 }
 
+// SetFilesystemPaths records the workspace-specific additions to filesystem
+// access. Callers pass canonical paths after validating the live policy.
+func (store *InteractiveStore) SetFilesystemPaths(addedPaths, protectedPaths []string) error {
+	var err error
+	addedPaths, err = normalizedPathList(addedPaths, "added path")
+	if err != nil {
+		return err
+	}
+	protectedPaths, err = normalizedPathList(protectedPaths, "protected path")
+	if err != nil {
+		return err
+	}
+	return store.mutate(func(document *interactiveDocument) bool {
+		workspace := document.workspace(store.workspace)
+		if slices.Equal(workspace.AddedPaths, addedPaths) &&
+			slices.Equal(workspace.ProtectedPaths, protectedPaths) {
+			return false
+		}
+		workspace.AddedPaths = addedPaths
+		workspace.ProtectedPaths = protectedPaths
+		document.Workspaces[store.workspace] = workspace
+		return true
+	})
+}
+
 func (store *InteractiveStore) SetThemeSelection(value string) error {
 	theme, err := NormalizeTheme(value)
 	if err != nil {
@@ -316,6 +345,8 @@ func (document interactiveDocument) settings(workspace string) InteractiveSettin
 			settings.Notices = append(settings.Notices, fmt.Sprintf("invalid workspace scope %q for %s; ignored", *raw.Scope, workspace))
 		}
 	}
+	settings.Workspace.AddedPaths = validWorkspacePathList("added_paths", raw.AddedPaths, workspace, &settings.Notices)
+	settings.Workspace.ProtectedPaths = validWorkspacePathList("protected_paths", raw.ProtectedPaths, workspace, &settings.Notices)
 	return settings
 }
 
@@ -366,6 +397,31 @@ func validWorkspaceString(name string, value *string, workspace string, notices 
 
 func storedStringEquals(value *string, expected string) bool {
 	return value != nil && *value == expected
+}
+
+func normalizedPathList(values []string, label string) ([]string, error) {
+	result := make([]string, len(values))
+	for index, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, fmt.Errorf("%s %d is empty", label, index+1)
+		}
+		result[index] = value
+	}
+	return result, nil
+}
+
+func validWorkspacePathList(name string, value []string, workspace string, notices *[]string) []string {
+	paths := make([]string, 0, len(value))
+	for _, path := range value {
+		if path = strings.TrimSpace(path); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) != len(value) {
+		*notices = append(*notices, fmt.Sprintf("workspace %s for %s contains empty entries; ignored", name, workspace))
+	}
+	return paths
 }
 
 func validScope(value string) bool {

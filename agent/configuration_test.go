@@ -37,7 +37,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 			ToolSet: "read-only", AwaitRequiredJobs: true,
 			Build: BuildSnapshot{Version: "v1.2.3", Revision: "abc123", Modified: &modified},
 			Scope: ScopeSnapshot{
-				Scope: "workspace", ProtectedPaths: []string{"/secret/private"},
+				Scope: "workspace", AddedPaths: []string{"/secret/shared"}, ProtectedPaths: []string{"/secret/private"},
 				Backend: "secret backend", Network: "inherited",
 			},
 		},
@@ -75,7 +75,9 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	if configured.RuntimePolicy.ContextWindow != 64_000 || !configured.RuntimePolicy.ContextWindowEstimated || configured.RuntimePolicy.MaxModelAttempts != 3 || configured.RuntimePolicy.MaxToolIterations != 7 || configured.RuntimePolicy.MaxRequestBytes != 1_000_000 || configured.RuntimePolicy.MaxCompletionBytes != 100_000 || !configured.RuntimePolicy.AwaitRequiredJobs {
 		t.Fatalf("runtime policy snapshot = %#v", configured.RuntimePolicy)
 	}
-	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Scope.Backend != "[redacted] backend" || !slices.Equal(configured.Environment.Scope.ProtectedPaths, []string{"/[redacted]/private"}) {
+	if configured.Environment.Endpoint != "https://[redacted]@example.test/v1?token=[redacted]" || configured.Environment.Scope.Backend != "[redacted] backend" ||
+		!slices.Equal(configured.Environment.Scope.AddedPaths, []string{"/[redacted]/shared"}) ||
+		!slices.Equal(configured.Environment.Scope.ProtectedPaths, []string{"/[redacted]/private"}) {
 		t.Fatalf("execution environment snapshot = %#v", configured.Environment)
 	}
 	if configured.Environment.Build.Version != "v1.2.3" || configured.Environment.Build.Revision != "abc123" || configured.Environment.Build.Modified == nil || *configured.Environment.Build.Modified {
@@ -174,7 +176,7 @@ func TestCloneEffectiveConfigSnapshotDoesNotAliasMutableState(t *testing.T) {
 	snapshot := EffectiveConfigSnapshot{
 		Environment: ExecutionEnvironmentSnapshot{
 			Build: BuildSnapshot{Modified: &modified},
-			Scope: ScopeSnapshot{ProtectedPaths: []string{"/private"}},
+			Scope: ScopeSnapshot{AddedPaths: []string{"/shared"}, ProtectedPaths: []string{"/private"}},
 		},
 	}
 	cloned := cloneEffectiveConfigSnapshot(snapshot)
@@ -186,20 +188,25 @@ func TestCloneEffectiveConfigSnapshotDoesNotAliasMutableState(t *testing.T) {
 		t.Fatal("cloned build status aliases the source snapshot")
 	}
 	cloned.Environment.Scope.ProtectedPaths[0] = "/changed"
+	cloned.Environment.Scope.AddedPaths[0] = "/changed"
 	if snapshot.Environment.Scope.ProtectedPaths[0] != "/private" {
 		t.Fatal("cloned protected paths alias the source snapshot")
+	}
+	if snapshot.Environment.Scope.AddedPaths[0] != "/shared" {
+		t.Fatal("cloned added paths alias the source snapshot")
 	}
 }
 
 func TestScopeSnapshotKeepsEffectiveScopeJournalName(t *testing.T) {
 	encoded, err := json.Marshal(ScopeSnapshot{
-		Scope: "workspace", ProtectedPaths: []string{"/private"},
+		Scope: "workspace", AddedPaths: []string{"/shared"}, ProtectedPaths: []string{"/private"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	if !strings.Contains(text, `"effective_scope":"workspace"`) || !strings.Contains(text, `"protected_paths":["/private"]`) || strings.Contains(text, "requested_scope") {
+	if !strings.Contains(text, `"effective_scope":"workspace"`) || !strings.Contains(text, `"added_paths":["/shared"]`) ||
+		!strings.Contains(text, `"protected_paths":["/private"]`) || strings.Contains(text, "requested_scope") {
 		t.Fatalf("scope snapshot JSON = %s", text)
 	}
 

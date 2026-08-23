@@ -105,16 +105,15 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	config.Scope = string(scope)
 
-	configuredProtectedPaths := append([]string(nil), settings.ProtectedPaths...)
-	configuredProtectedPaths = append(configuredProtectedPaths, config.ProtectedPaths...)
-	protection, err := workspacetools.NewProtectedPathPolicy(root, configuredProtectedPaths)
+	layers, pathNotices, err := resolveFilesystemLayers(root, config.AddedPaths, config.ProtectedPaths, settings.ProtectedPaths, workspaceSettings)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize protected paths: %w", err))
+		return nil, agent.MarkInvalidRequest(err)
 	}
+	notices = append(notices, pathNotices...)
 
 	masker := newSecretMasker(settingsStore)
-	security := newSecurityState(scope, protection.Paths())
-	access, err := workspacetools.NewFilesystemAccess(root, security.Scope, protection)
+	security := newSecurityState(scope, layers.additions.Paths(), layers.protection.Paths())
+	access, err := workspacetools.NewFilesystemAccess(root, security.Scope, layers.additions, layers.protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize filesystem policy: %w", err))
 	}
@@ -122,7 +121,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
 	}
-	projectInstructions, err := loadInstructions(root, protection)
+	projectInstructions, err := loadInstructions(root, layers.protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
@@ -142,7 +141,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	// Derive this from platform and layout rather than the current scope so a
 	// runtime scope switch does not silently change the active tool set.
 	builtInOptions := toolpolicy.BuiltInOptions{
-		DefaultIncludesLS: landlockProtectedPathsNeedBuiltInLS(workspacetools.BoundaryBackend(), protection.Paths()),
+		DefaultIncludesLS: landlockProtectedPathsNeedBuiltInLS(workspacetools.BoundaryBackend(), layers.protection.Paths()),
 	}
 	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes, builtInOptions)
 	if err != nil {
@@ -171,9 +170,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		if err := validateSecurity(security); err != nil {
 			return resources.fail(agent.MarkInvalidRequest(err))
 		}
-	}
-	if notice := protectedPathsNotice(security, root); notice != "" {
-		notices = append(notices, notice)
 	}
 	catalog, programSnapshots, err := bindProgramToolsForSet(
 		catalog, toolSets, config.ToolSet, builtCatalog.programDeclarations,
@@ -292,35 +288,41 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	currentSession.runtime = runtime
 	return &Application{
 		config: applicationConfig{
-			settings:            settingsStore,
-			interactive:         interactiveStore,
-			tools:               append([]agent.Tool(nil), catalog...),
-			programDeclarations: append([]workspacetools.ProgramTool(nil), builtCatalog.programDeclarations...),
-			programToolsFile:    builtCatalog.programToolsFile,
-			applicationBuild:    build,
-			toolSets:            toolSets,
-			systemPrompt:        config.SystemPrompt,
-			root:                root,
-			home:                home,
-			protection:          protection,
-			baseURL:             config.BaseURL,
-			modelAPI:            modelAPIOverride,
-			contextWindow:       config.ContextWindow,
-			metadataLookup:      openRouterContextWindow,
-			retryBudget:         config.RetryBudget,
-			streamIdleTimeout:   config.StreamIdleTimeout,
-			maxToolIterations:   config.MaxToolIterations,
-			masker:              masker,
-			awaitRequiredJobs:   !config.Interactive,
+			settings:                 settingsStore,
+			interactive:              interactiveStore,
+			tools:                    append([]agent.Tool(nil), catalog...),
+			programDeclarations:      append([]workspacetools.ProgramTool(nil), builtCatalog.programDeclarations...),
+			programToolsFile:         builtCatalog.programToolsFile,
+			applicationBuild:         build,
+			toolSets:                 toolSets,
+			systemPrompt:             config.SystemPrompt,
+			root:                     root,
+			home:                     home,
+			invocationAddedPaths:     layers.invocationAdded,
+			invocationProtectedPaths: layers.invocationProtected,
+			settingsProtectedPaths:   layers.settingsProtected,
+			baseURL:                  config.BaseURL,
+			modelAPI:                 modelAPIOverride,
+			contextWindow:            config.ContextWindow,
+			metadataLookup:           openRouterContextWindow,
+			retryBudget:              config.RetryBudget,
+			streamIdleTimeout:        config.StreamIdleTimeout,
+			maxToolIterations:        config.MaxToolIterations,
+			masker:                   masker,
+			awaitRequiredJobs:        !config.Interactive,
 		},
 		state: applicationState{
-			session:        currentSession,
-			processes:      processes,
-			children:       children,
-			toolSet:        config.ToolSet,
-			theme:          theme,
-			security:       security,
-			startupNotices: notices,
+			session:                 currentSession,
+			processes:               processes,
+			children:                children,
+			toolSet:                 config.ToolSet,
+			theme:                   theme,
+			security:                security,
+			additions:               layers.additions,
+			protection:              layers.protection,
+			workspaceAddedPaths:     layers.workspaceAdded,
+			workspaceProtectedPaths: layers.workspaceProtected,
+			startupNotices:          notices,
 		},
 	}, nil
 }

@@ -64,6 +64,11 @@ type Agent interface {
 	ScopeSummary() string
 	ScopeNotice() string
 	SwitchScope(context.Context, string) error
+	FilesystemPaths() (added, protected []FilesystemPath)
+	AddDirectory(context.Context, string) error
+	RemoveAddedDirectory(context.Context, string) error
+	ProtectPath(context.Context, string) error
+	UnprotectPath(context.Context, string) error
 	CurrentTheme() string
 	SwitchTheme(string) error
 
@@ -85,6 +90,8 @@ type ProviderStatus = app.ProviderStatus
 type ModelChoice = app.ModelChoice
 
 type SessionSummary = app.SessionSummary
+
+type FilesystemPath = app.FilesystemPath
 
 func preferenceAppliedDespiteError(err error) bool {
 	return app.IsPreferenceNotPersisted(err)
@@ -119,7 +126,9 @@ type pickerItem struct {
 	label       string
 	description string
 	// activeDetail is shown only while the row is selected: facts that inform
-	// the choice already being made rather than the choice between rows.
+	// the choice already being made rather than the choice between rows. It is
+	// appended after the row's own description, so text already on the line
+	// keeps its place when the selection lands.
 	activeDetail  string
 	current       bool
 	dimmed        bool
@@ -129,7 +138,29 @@ type pickerItem struct {
 	efforts       []string
 	effortIndex   int
 	details       string
+	// filesystemPath marks a scope-picker row which names a path instead of a
+	// scope. Such a row is never numbered and enter does not choose it; it is
+	// managed with the removal key instead.
+	filesystemPath filesystemPathRow
+	// addRow marks the row which opens the path prompt for its section instead
+	// of naming a path of its own.
+	addRow bool
 }
+
+// managedPath reports a row which names a path the menu manages, as opposed to
+// a scope or the row which adds one.
+func (item pickerItem) managedPath() bool {
+	return item.filesystemPath != notFilesystemPath && !item.addRow
+}
+
+// filesystemPathRow is which list a scope-picker path row belongs to.
+type filesystemPathRow uint8
+
+const (
+	notFilesystemPath filesystemPathRow = iota
+	addedDirectoryRow
+	protectedPathRow
+)
 
 // pickerNavigation is how a picker is driven beyond the arrow keys. Digits
 // belong to short lists whose order is fixed; typing belongs to lists long
@@ -179,6 +210,9 @@ type scopeDoneMsg struct {
 	summary string
 	notice  string
 	err     error
+	// change names a filesystem-policy change which is not a scope switch, such
+	// as dropping a remembered path. Empty means the scope itself moved.
+	change string
 }
 
 type compactionDoneMsg struct{ err error }
@@ -203,6 +237,10 @@ type screenModel struct {
 	loginProvider  string
 	loginSelection modelSelection
 	loginReturn    pickerState
+	// pathPrompt is the list a typed path will join once the input line is
+	// collecting one. notFilesystemPath means ordinary input.
+	pathPrompt     filesystemPathRow
+	pathCompletion pathCompletionCache
 	sessionStatus  agent.SessionStatus
 
 	width     int
@@ -525,6 +563,9 @@ func (m screenModel) inlineFrame() inlineFrame {
 	} else {
 		if queued := m.queuedLine(); queued != "" {
 			dynamic = append(dynamic, queued)
+		}
+		if prompt := m.pathPromptLine(); prompt != "" {
+			dynamic = append(dynamic, prompt)
 		}
 		editorDynamicStart = len(dynamic)
 		dynamic = append(dynamic, m.markedEditorLines()...)

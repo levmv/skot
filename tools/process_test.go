@@ -118,7 +118,7 @@ func TestJobTerminalResultRequiresCurrentProtocolIdentityStatusAndFinishTime(t *
 
 func TestBashReportsExitAndUsesIsolatedEnvironment(t *testing.T) {
 	manager := processManagerForTest(t)
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", t.TempDir())
@@ -143,7 +143,7 @@ func TestProcessManagerCreatesPrivateToolTemp(t *testing.T) {
 	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("tool home was not lazy: %v", err)
 	}
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
@@ -161,7 +161,7 @@ func TestProcessManagerCreatesPrivateToolTemp(t *testing.T) {
 
 func TestProcessManagerWithoutExplicitToolRootHasNoAmbientCacheDependency(t *testing.T) {
 	root, home := t.TempDir(), t.TempDir()
-	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestProcessManagerWithoutExplicitToolRootHasNoAmbientCacheDependency(t *tes
 
 func TestUserShellDoesNotPrepareModelToolHome(t *testing.T) {
 	manager := processManagerForTest(t)
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(manager.toolHome); err != nil {
@@ -229,7 +229,7 @@ func TestMachineScopeDoesNotSpecialCaseStateHome(t *testing.T) {
 
 func TestProcessManagerRunShellInheritsAmbientEnvironment(t *testing.T) {
 	manager := processManagerForTest(t)
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -1534,7 +1534,7 @@ func TestRunningProcessesRetainScopeFromLaunch(t *testing.T) {
 	if meta := processResultForTest(t, started); meta.Scope != ScopeMachine {
 		t.Fatalf("launch sandbox = %q", meta.Scope)
 	}
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	if policies := manager.RunningScopes(); policies[ScopeMachine] != 1 || policies[ScopeWorkspace] != 0 {
@@ -1552,7 +1552,7 @@ func TestFilesystemPolicyPublishesAfterSuccessfulCallback(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	called := false
-	if err := manager.SetScopeAfter(ScopeWorkspace, func() error {
+	if err := setScopeAfter(manager, ScopeWorkspace, func() error {
 		called = true
 		if scope := manager.access.snapshot().scope; scope != ScopeMachine {
 			t.Fatalf("policy became visible before callback completed: %q", scope)
@@ -1565,7 +1565,7 @@ func TestFilesystemPolicyPublishesAfterSuccessfulCallback(t *testing.T) {
 		t.Fatalf("called/policy = %v/%q", called, scope)
 	}
 	want := errors.New("journal unavailable")
-	if err := manager.SetScopeAfter(ScopeMachine, func() error { return want }); !errors.Is(err, want) {
+	if err := setScopeAfter(manager, ScopeMachine, func() error { return want }); !errors.Is(err, want) {
 		t.Fatalf("callback error = %v", err)
 	}
 	if scope := manager.access.snapshot().scope; scope != ScopeWorkspace {
@@ -1701,7 +1701,7 @@ func TestProcessLaunchRetainsPolicyCapturedUnderManagerGate(t *testing.T) {
 	if scope := <-acquired; scope != ScopeMachine {
 		t.Fatalf("captured scope = %q", scope)
 	}
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	close(release)

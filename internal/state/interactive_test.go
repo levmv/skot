@@ -104,6 +104,10 @@ func TestInteractiveStorePersistsExplicitProviderDefaultAndWorkspaceMap(t *testi
 	if err := second.SetToolSetSelection("edit"); err != nil {
 		t.Fatal(err)
 	}
+	added, protected := filepath.Join(secondRoot, "shared"), filepath.Join(secondRoot, ".env")
+	if err := second.SetFilesystemPaths([]string{added}, []string{protected}); err != nil {
+		t.Fatal(err)
+	}
 	firstSettings, err := first.Settings()
 	if err != nil {
 		t.Fatal(err)
@@ -115,14 +119,17 @@ func TestInteractiveStorePersistsExplicitProviderDefaultAndWorkspaceMap(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secondSettings.Workspace.ToolSet != "edit" || secondSettings.Workspace.ReasoningEffort != nil {
+	if secondSettings.Workspace.ToolSet != "edit" || secondSettings.Workspace.ReasoningEffort != nil ||
+		len(secondSettings.Workspace.AddedPaths) != 1 || secondSettings.Workspace.AddedPaths[0] != added ||
+		len(secondSettings.Workspace.ProtectedPaths) != 1 || secondSettings.Workspace.ProtectedPaths[0] != protected {
 		t.Fatalf("second workspace = %#v", secondSettings.Workspace)
 	}
 	raw, err := os.ReadFile(filepath.Join(home, "interactive.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"reasoning_effort": "default"`) || !strings.Contains(string(raw), firstRoot) || !strings.Contains(string(raw), secondRoot) {
+	if !strings.Contains(string(raw), `"reasoning_effort": "default"`) || !strings.Contains(string(raw), `"added_paths"`) ||
+		!strings.Contains(string(raw), `"protected_paths"`) || !strings.Contains(string(raw), firstRoot) || !strings.Contains(string(raw), secondRoot) {
 		t.Fatalf("interactive document = %s", raw)
 	}
 	for _, name := range []string{"interactive.json", "interactive.lock"} {

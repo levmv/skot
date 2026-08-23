@@ -108,7 +108,7 @@ func TestWorkspaceToolsConfineReadsAndWrites(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil)
+	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestMachineScopeFileToolsReachExplicitExternalPaths(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestMachineScopeSearchesThroughExternalAliasIntoWorkspace(t *testing.T) {
 	if err := os.Symlink(root, alias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestWorkspaceScopeAcceptsAbsoluteInsideAndRejectsExternalPaths(t *testing.T
 	if err := os.Symlink(root, workspaceAlias); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil)
+	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestWorkspaceScopeRejectsSiblingPathWithSharedPrefix(t *testing.T) {
 	siblingFile := filepath.Join(parent, "workspace-other", "sibling.txt")
 	mustWriteFile(t, filepath.Join(root, "inside.txt"), "inside\n")
 	mustWriteFile(t, siblingFile, "sibling\n")
-	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil)
+	access, err := NewFilesystemAccess(root, ScopeWorkspace, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestSharedFilesystemAccessSwitchesFileTools(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	external := filepath.Join(outside, "external.txt")
 	mustWriteFile(t, external, "external\n")
-	access, err := NewFilesystemAccess(root, ScopeMachine, nil)
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestSharedFilesystemAccessSwitchesFileTools(t *testing.T) {
 	if _, err := runTool(tools, "read", jsonArgs(t, map[string]any{"path": external})); err != nil {
 		t.Fatalf("machine read: %v", err)
 	}
-	if err := manager.SetScopeAfter(ScopeWorkspace, nil); err != nil {
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runTool(tools, "read", jsonArgs(t, map[string]any{"path": external})); err == nil || !strings.Contains(err.Error(), "scope") {
@@ -356,7 +356,7 @@ func TestMachineScopeStillFiltersExternalProtectedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, err := NewFilesystemAccess(root, ScopeMachine, protection)
+	access, err := NewFilesystemAccess(root, ScopeMachine, nil, protection)
 	if err != nil {
 		t.Fatal(err)
 	}

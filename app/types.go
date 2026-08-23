@@ -68,6 +68,9 @@ type Config struct {
 	AgentModels   []string
 	Scope         string
 	ScopeExplicit bool
+	// AddedPaths extends workspace scope with model-accessible directories.
+	// Relative paths are resolved from Root.
+	AddedPaths []string
 	// ProtectedPaths adds model-inaccessible paths to those loaded from
 	// config.json. Relative paths are resolved from Root.
 	ProtectedPaths []string

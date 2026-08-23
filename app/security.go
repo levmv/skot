@@ -18,6 +18,7 @@ import (
 
 type securityState struct {
 	Scope           workspacetools.Scope
+	AddedPaths      []string
 	ProtectedPaths  []string
 	Backend         string
 	Failure         string
@@ -27,22 +28,25 @@ type securityState struct {
 func (state securityState) snapshot() agent.ScopeSnapshot {
 	return agent.ScopeSnapshot{
 		Scope:          string(state.Scope),
+		AddedPaths:     append([]string(nil), state.AddedPaths...),
 		ProtectedPaths: append([]string(nil), state.ProtectedPaths...),
 		Backend:        state.Backend,
 		Network:        "inherited",
 	}
 }
 
-func newSecurityState(scope workspacetools.Scope, protectedPaths []string) securityState {
+func newSecurityState(scope workspacetools.Scope, addedPaths, protectedPaths []string) securityState {
 	return securityState{
 		Scope:          scope,
+		AddedPaths:     append([]string(nil), addedPaths...),
 		ProtectedPaths: append([]string(nil), protectedPaths...),
 	}
 }
 
 func buildProcessSecurityState(ctx context.Context, state securityState, root, toolHome string) securityState {
 	boundary := workspacetools.Boundary{
-		Scope: state.Scope, Workspace: root, ToolHome: toolHome, ProtectedPaths: state.ProtectedPaths,
+		Scope: state.Scope, Workspace: root, ToolHome: toolHome,
+		AddedPaths: state.AddedPaths, ProtectedPaths: state.ProtectedPaths,
 	}
 	state.BackendRequired = boundary.NeedsBackend()
 	if err := boundary.ValidateLayout(); err != nil {
@@ -155,23 +159,33 @@ func unavailableBoundary(state securityState, probe string) securityState {
 	return state
 }
 
+// protectedPathsNotice explains the one consequence of a protected path which
+// is impossible to guess. Landlock has no deny rule, so a directory holding a
+// protected entry cannot be granted to a process at all: listing it or creating
+// entries in it fails for Bash and program tools, while the built-in file tools
+// still reach everything the policy allows.
 func protectedPathsNotice(state securityState, root string) string {
 	if state.Backend != "landlock" {
 		return ""
 	}
-	affected := state.Scope == workspacetools.ScopeMachine && len(state.ProtectedPaths) != 0
-	if state.Scope == workspacetools.ScopeWorkspace {
-		for _, path := range state.ProtectedPaths {
-			if canonicalpath.Contains(root, path) && !canonicalpath.Contains(path, root) {
-				affected = true
-				break
+	reachableRoots := append([]string{root}, state.AddedPaths...)
+	for _, path := range state.ProtectedPaths {
+		if state.Scope == workspacetools.ScopeWorkspace {
+			reachable := false
+			for _, reachableRoot := range reachableRoots {
+				if canonicalpath.Contains(reachableRoot, path) && !canonicalpath.Contains(path, reachableRoot) {
+					reachable = true
+					break
+				}
+			}
+			if !reachable {
+				continue
 			}
 		}
+		return "bash and program tools cannot list " + filepath.Dir(path) +
+			" or the directories above it, because a protected path sits inside; the built-in ls and read still can"
 	}
-	if !affected {
-		return ""
-	}
-	return "On Linux, protected paths may prevent Bash and program tools from listing or creating entries in ancestor directories; use the built-in file tools for those operations"
+	return ""
 }
 
 func landlockProtectedPathsNeedBuiltInLS(backend string, paths []string) bool {
@@ -180,6 +194,12 @@ func landlockProtectedPathsNeedBuiltInLS(backend string, paths []string) bool {
 
 func (state securityState) Summary() string {
 	text := "scope: " + string(state.Scope)
+	// Machine scope already reaches the whole filesystem, so added directories
+	// grant nothing and naming them here would describe reach they do not add.
+	// Going back to workspace prints the list again, so nothing is lost.
+	if len(state.AddedPaths) != 0 && state.Scope != workspacetools.ScopeMachine {
+		text += " · added paths: " + strings.Join(state.AddedPaths, ", ")
+	}
 	if len(state.ProtectedPaths) != 0 {
 		text += " · protected paths: " + strings.Join(state.ProtectedPaths, ", ")
 	}

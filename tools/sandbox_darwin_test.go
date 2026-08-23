@@ -23,6 +23,18 @@ func TestSeatbeltProfileDoesNotGrantSharedTemp(t *testing.T) {
 	}
 }
 
+func TestSeatbeltProfileGrantsAddedDirectoryBeforeProtectedDenies(t *testing.T) {
+	profile := seatbeltProfile(Boundary{
+		Scope: ScopeWorkspace, Workspace: "/workspace", ToolHome: "/tool-home",
+		AddedPaths: []string{"/shared"}, ProtectedPaths: []string{"/shared/private"},
+	})
+	grant := strings.Index(profile, `(subpath "/shared")`)
+	deny := strings.Index(profile, `(deny file-read* file-write* (literal "/shared/private"))`)
+	if grant < 0 || deny < 0 || grant >= deny {
+		t.Fatalf("added-directory grant and protected deny are not ordered:\n%s", profile)
+	}
+}
+
 func TestSeatbeltMaskedAllowsAmbientAuthorityExceptState(t *testing.T) {
 	profile := seatbeltProfile(Boundary{Scope: ScopeMachine, ProtectedPaths: []string{"/private/skot-state"}})
 	for _, want := range []string{"(allow default)", "deny file-read* file-write*", `literal "/private/skot-state"`, `subpath "/private/skot-state"`} {

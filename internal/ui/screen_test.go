@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,12 @@ type fakeAgent struct {
 	modelChoices     []ModelChoice
 	scope            string
 	scopeSummary     string
+	addedPaths       []FilesystemPath
+	protectedPaths   []FilesystemPath
+	removedPath      string
+	removeErr        error
+	addedPath        string
+	addErr           error
 	scopeNotice      string
 	scopeErr         error
 	theme            string
@@ -210,6 +217,46 @@ func (fake *fakeAgent) SwitchScope(_ context.Context, policy string) error {
 	fake.scope = policy
 	fake.scopeSummary = "scope: " + policy
 	return fake.scopeErr
+}
+
+func (fake *fakeAgent) FilesystemPaths() (added, protected []FilesystemPath) {
+	return append([]FilesystemPath(nil), fake.addedPaths...), append([]FilesystemPath(nil), fake.protectedPaths...)
+}
+
+func (fake *fakeAgent) AddDirectory(_ context.Context, path string) error {
+	if fake.addErr != nil {
+		return fake.addErr
+	}
+	fake.addedPath = path
+	fake.addedPaths = append(fake.addedPaths, FilesystemPath{Path: path})
+	return nil
+}
+
+func (fake *fakeAgent) ProtectPath(_ context.Context, path string) error {
+	if fake.addErr != nil {
+		return fake.addErr
+	}
+	fake.addedPath = path
+	fake.protectedPaths = append(fake.protectedPaths, FilesystemPath{Path: path})
+	return nil
+}
+
+func (fake *fakeAgent) RemoveAddedDirectory(_ context.Context, path string) error {
+	if fake.removeErr != nil {
+		return fake.removeErr
+	}
+	fake.removedPath = path
+	fake.addedPaths = slices.DeleteFunc(fake.addedPaths, func(entry FilesystemPath) bool { return entry.Path == path })
+	return nil
+}
+
+func (fake *fakeAgent) UnprotectPath(_ context.Context, path string) error {
+	if fake.removeErr != nil {
+		return fake.removeErr
+	}
+	fake.removedPath = path
+	fake.protectedPaths = slices.DeleteFunc(fake.protectedPaths, func(entry FilesystemPath) bool { return entry.Path == path })
+	return nil
 }
 
 func (fake *fakeAgent) CurrentTheme() string { return fake.theme }

@@ -501,6 +501,7 @@ type ScopeSnapshot struct {
 	// Scope keeps the historical "effective_scope" JSON name so schema-v3
 	// journals remain compatible after requested and effective scopes merged.
 	Scope          string   `json:"effective_scope,omitempty"`
+	AddedPaths     []string `json:"added_paths,omitempty"`
 	ProtectedPaths []string `json:"protected_paths,omitempty"`
 	Backend        string   `json:"backend,omitempty"`
 	Network        string   `json:"network,omitempty"`

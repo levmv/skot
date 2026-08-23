@@ -91,6 +91,10 @@ var themePickerItems = []pickerItem{
 }
 
 func (m *screenModel) syncCommandSuggestions() {
+	if m.pathPrompt != notFilesystemPath {
+		m.composer.setSuggestionCandidates(pathCompletionCandidates(&m.pathCompletion, m.config.Root, m.composer.value()))
+		return
+	}
 	value := strings.ToLower(strings.TrimLeft(m.composer.value(), " \t"))
 	var candidates []string
 	switch {
@@ -131,7 +135,8 @@ func (m *screenModel) syncCommandSuggestions() {
 
 func (m screenModel) commandSuggestionsVisible() bool {
 	value := strings.TrimSpace(m.composer.value())
-	return m.loginProvider == "" && !m.maintenanceOperation().isMaintenance() && !m.picker.active() && strings.HasPrefix(value, "/") && m.composer.hasSuggestions()
+	naming := m.pathPrompt != notFilesystemPath || strings.HasPrefix(value, "/")
+	return m.loginProvider == "" && !m.maintenanceOperation().isMaintenance() && !m.picker.active() && naming && m.composer.hasSuggestions()
 }
 
 func (m screenModel) currentCommandSuggestion() string {
@@ -675,8 +680,120 @@ func toolSetDescription(tools []string) string {
 }
 
 func (m *screenModel) openScopePicker() {
-	items := append([]pickerItem(nil), scopePickerItems...)
+	items := m.scopePickerRows()
 	m.openPicker(pickerScope, items, markCurrentPickerItem(items, m.agent.CurrentScope()))
+}
+
+// refreshScopePicker rebuilds an open scope picker after the policy changed, so
+// a removed path leaves the list without closing the menu.
+func (m *screenModel) refreshScopePicker() {
+	if m.picker.kind != pickerScope {
+		return
+	}
+	items := m.scopePickerRows()
+	m.picker.items = items
+	m.picker.index = min(max(0, m.picker.index), len(items)-1)
+}
+
+// scopePickerRows lists the scopes first, so their digits and the muscle memory
+// of the two top rows survive however many paths follow.
+func (m screenModel) scopePickerRows() []pickerItem {
+	items := append([]pickerItem(nil), scopePickerItems...)
+	added, protected := m.agent.FilesystemPaths()
+	items = append(items, m.filesystemPathSection(added, addedDirectoryRow, "-add-dir",
+		"+ add a directory", "reachable in workspace scope")...)
+	items = append(items, m.filesystemPathSection(protected, protectedPathRow, "-protect-path",
+		"+ protect a path", "hidden from the model")...)
+	return items
+}
+
+// filesystemPathSection is one list and the row which adds to it. The add row
+// closes the section so an empty list still costs a single line.
+func (m screenModel) filesystemPathSection(paths []FilesystemPath, kind filesystemPathRow, flag, label, description string) []pickerItem {
+	rows := m.filesystemPathRows(paths, kind, flag)
+	return append(rows, pickerItem{
+		label: label, description: description, dividerBefore: len(rows) == 0,
+		filesystemPath: kind, addRow: true,
+	})
+}
+
+// filesystemPathRows describes only what departs from the ordinary row: one
+// remembered for this workspace says nothing, because the section it sits in
+// already says what it is.
+func (m screenModel) filesystemPathRows(paths []FilesystemPath, kind filesystemPathRow, flag string) []pickerItem {
+	rows := make([]pickerItem, 0, len(paths))
+	for index, entry := range paths {
+		row := pickerItem{
+			value:          entry.Path,
+			label:          displayToolPath(m.config.Root, entry.Path),
+			dividerBefore:  index == 0,
+			filesystemPath: kind,
+			dimmed:         entry.Origin != app.FilesystemPathRemembered,
+		}
+		switch entry.Origin {
+		case app.FilesystemPathRemembered:
+			row.activeDetail = "(d or backspace to remove)"
+		case app.FilesystemPathInvocation:
+			row.description = flag + " this run"
+		case app.FilesystemPathSettings:
+			row.description = "config.json"
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// openPathPrompt turns the input line into a path field for one list. What it
+// is collecting is named by pathPromptLine, next to the line itself.
+func (m *screenModel) openPathPrompt(kind filesystemPathRow) {
+	m.pathPrompt = kind
+	m.pathCompletion.reset()
+	m.composer.reset()
+	m.syncCommandSuggestions()
+}
+
+// pathPromptLine names what the input line is collecting. It lives in the
+// dynamic area rather than the transcript: it belongs to the prompt, and a
+// transcript line would pile up every time the prompt is opened.
+func (m screenModel) pathPromptLine() string {
+	if m.pathPrompt == notFilesystemPath {
+		return ""
+	}
+	subject := "directory to add"
+	if m.pathPrompt == protectedPathRow {
+		subject = "path to protect"
+	}
+	return strings.Repeat(" ", transcriptGutter) +
+		m.mutedStyle.Render(subject+" · tab completes · esc returns to /scope")
+}
+
+// reopenPathPrompt puts a refused path back in the input line, ready to edit.
+func (m *screenModel) reopenPathPrompt(kind filesystemPathRow, typed string) {
+	m.pathPrompt = kind
+	m.composer.setValue(typed)
+	m.composer.cursorEnd()
+	m.syncCommandSuggestions()
+}
+
+// openScopePickerAt returns to the menu with the section which was just edited
+// under the cursor, so another path costs one keystroke and the new row is in
+// view.
+func (m *screenModel) openScopePickerAt(kind filesystemPathRow) {
+	m.openScopePicker()
+	for index, item := range m.picker.items {
+		if item.addRow && item.filesystemPath == kind {
+			m.picker.index = index
+			break
+		}
+	}
+}
+
+// closePathPrompt returns to the menu the prompt was opened from.
+func (m *screenModel) closePathPrompt() {
+	m.pathPrompt = notFilesystemPath
+	m.pathCompletion.reset()
+	m.composer.reset()
+	m.openScopePicker()
 }
 
 func (m *screenModel) openThemePicker() {
@@ -745,6 +862,11 @@ func (picker pickerState) descriptionColumn() int {
 	}
 	column := 0
 	for _, item := range picker.items {
+		// Managed path rows keep their own width: a long path would otherwise
+		// push the descriptions of the rows being compared off the line.
+		if item.filesystemPath != notFilesystemPath {
+			continue
+		}
 		column = max(column, visibleLen(sanitizeTerminalText(item.label)))
 	}
 	return column + visibleLen(currentPickerMark)
@@ -837,7 +959,20 @@ func (picker *pickerState) moveSelection(delta int) {
 }
 
 func (picker pickerState) numberSelectionEnabled() bool {
-	return pickerNavigationFor(picker.kind) == navigationNumbers && len(picker.items) > 0 && len(picker.items) <= 9
+	count := picker.numberedRows()
+	return pickerNavigationFor(picker.kind) == navigationNumbers && count > 0 && count <= 9
+}
+
+// numberedRows counts the leading rows a digit may select. Managed path rows
+// follow the scopes and are never numbered: their order changes with the policy,
+// and a digit must keep meaning the same scope.
+func (picker pickerState) numberedRows() int {
+	for index, item := range picker.items {
+		if item.filesystemPath != notFilesystemPath {
+			return index
+		}
+	}
+	return len(picker.items)
 }
 
 func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.Cmd) {
@@ -879,8 +1014,13 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 	case navigation == navigationSearch && key.Text != "" && key.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModHyper|tea.ModSuper) == 0:
 		m.picker.appendQuery(key.Text)
 		return m, nil
+	case m.picker.kind == pickerScope && key.Mod == 0 &&
+		(key.Code == tea.KeyBackspace || key.Text == "d") && m.picker.selectedItem().managedPath():
+		// A row the session does not own is refused by the application, which
+		// owns the wording; the row's hint only says which ones can go.
+		return m, m.startFilesystemPathRemoval(m.picker.selectedItem())
 	case m.picker.numberSelectionEnabled() && digit > 0:
-		if digit <= len(m.picker.items) {
+		if digit <= m.picker.numberedRows() {
 			m.picker.index = digit - 1
 			return m.selectPickerItem()
 		}
@@ -890,6 +1030,13 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 	default:
 		return m, nil
 	}
+}
+
+func (picker pickerState) selectedItem() pickerItem {
+	if picker.index < 0 || picker.index >= len(picker.items) {
+		return pickerItem{}
+	}
+	return picker.items[picker.index]
 }
 
 func pickerDigit(message tea.KeyPressMsg) int {
@@ -913,6 +1060,16 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		return m, nil
 	}
 	item := picker.items[picker.index]
+	if item.addRow {
+		m.closePicker()
+		m.openPathPrompt(item.filesystemPath)
+		m.refreshTranscript()
+		return m, nil
+	}
+	if item.managedPath() {
+		// A path row is managed, not chosen; the menu stays open.
+		return m, nil
+	}
 	m.closePicker()
 	switch picker.kind {
 	case pickerModel:
@@ -1312,12 +1469,14 @@ func (m screenModel) renderPicker() []string {
 		if item.current {
 			label += m.mutedStyle.Render(currentPickerMark)
 		}
-		if pad := descriptionColumn - visibleLen(label); pad > 0 {
-			label += strings.Repeat(" ", pad)
+		if item.filesystemPath == notFilesystemPath {
+			if pad := descriptionColumn - visibleLen(label); pad > 0 {
+				label += strings.Repeat(" ", pad)
+			}
 		}
 		description := item.description
 		if index == m.picker.index {
-			description = appendDescription(item.activeDetail, description)
+			description = appendDescription(description, item.activeDetail)
 		}
 		if description != "" {
 			label += m.mutedStyle.Render("  " + sanitizeTerminalText(description))
@@ -1332,7 +1491,12 @@ func (m screenModel) renderPicker() []string {
 		shortcut := ""
 		availableWidth := m.contentWidth()
 		if numbered {
-			shortcut = m.mutedStyle.Render(fmt.Sprintf("%d ", index+1))
+			// Managed path rows keep the digit column empty: their order moves
+			// with the policy, so a number there would not stay the same row.
+			shortcut = "  "
+			if item.filesystemPath == notFilesystemPath {
+				shortcut = m.mutedStyle.Render(fmt.Sprintf("%d ", index+1))
+			}
 			availableWidth = max(1, availableWidth-2)
 		}
 		lines = append(lines, marker+strings.Repeat(" ", transcriptGutter-1)+shortcut+truncateANSI(label, availableWidth))

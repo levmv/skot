@@ -61,6 +61,10 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		}
 		return m, nil
 	case isEscapeKey(msg):
+		if m.pathPrompt != notFilesystemPath {
+			m.closePathPrompt()
+			return m, nil
+		}
 		if m.operation.isTurn() {
 			m.cancelTurn(true)
 		}
@@ -158,6 +162,21 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 		}
 		m.refreshTranscript()
 		return m, nil
+	}
+	if m.pathPrompt != notFilesystemPath {
+		kind := m.pathPrompt
+		m.pathPrompt = notFilesystemPath
+		m.pathCompletion.reset()
+		m.composer.reset()
+		m.syncCommandSuggestions()
+		if input == "" {
+			// An empty line is the other way out of the prompt.
+			m.openScopePicker()
+			return m, nil
+		}
+		command := m.startFilesystemPathAddition(kind, input)
+		m.refreshTranscript()
+		return m, command
 	}
 	if input == "" {
 		return m, nil

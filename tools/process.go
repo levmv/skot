@@ -209,7 +209,7 @@ func NewProcessManager(root, stateHome, toolHomeRoot string, scope Scope, protec
 	if len(protections) == 1 {
 		protection = protections[0]
 	}
-	access, err := NewFilesystemAccess(root, scope, protection)
+	access, err := NewFilesystemAccess(root, scope, nil, protection)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +321,7 @@ func (manager *ProcessManager) HideModelEnvironment(names ...string) {
 }
 
 func (manager *ProcessManager) Tools() []agent.Tool {
-	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory. Relative paths start at the workspace; any path resolving outside it requires machine scope. Defaults to the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
+	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory. Relative paths start at the workspace; outside paths require machine scope or an added directory. Defaults to the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
 	return []agent.Tool{
 		{
 			Spec: agent.ToolSpec{
@@ -821,17 +821,16 @@ func (manager *ProcessManager) DetachedJobs(sessionID string) []string {
 	return ids
 }
 
-// SetScopeAfter makes beforeApply and publishing the shared filesystem policy
-// one linearized boundary with process launch. A model process which acquired
-// its launch policy before the callback keeps it; later process and file-tool
-// calls get the new policy. A callback failure leaves access unchanged.
-func (manager *ProcessManager) SetScopeAfter(scope Scope, beforeApply func() error) error {
+// SetFilesystemPolicyAfter publishes a complete filesystem policy at the same
+// linearized boundary used for process launch. A callback failure leaves the
+// policy unchanged.
+func (manager *ProcessManager) SetFilesystemPolicyAfter(scope Scope, additions *AddedDirectoryPolicy, protection *ProtectedPathPolicy, beforeApply func() error) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if manager.closed {
 		return errors.New("process manager is closed")
 	}
-	next, err := manager.access.policyForScope(scope)
+	next, err := manager.access.policyFor(scope, additions, protection)
 	if err != nil {
 		return err
 	}

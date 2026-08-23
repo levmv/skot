@@ -40,6 +40,8 @@ type cliConfig struct {
 	toolSet           string
 	saveSession       bool
 	scope             string
+	addedPaths        stringListFlag
+	protectedPaths    stringListFlag
 	verbose           bool
 	jsonOutput        bool
 	showVersion       bool
@@ -50,6 +52,19 @@ type cliInvocation struct {
 	update        bool
 	sessionPrefix string
 	args          []string
+}
+
+type stringListFlag []string
+
+func (values *stringListFlag) String() string { return strings.Join(*values, ",") }
+
+func (values *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("path cannot be empty")
+	}
+	*values = append(*values, value)
+	return nil
 }
 
 func main() {
@@ -96,6 +111,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.toolSet, "tools", envOr("SK_TOOLS", app.ToolSetDefault), "tool set available to the model")
 	flags.BoolVar(&config.saveSession, "save-session", false, "keep a resumable session for a one-shot invocation")
 	flags.StringVar(&config.scope, "scope", envOr("SK_SCOPE", string(app.ScopeWorkspace)), "model filesystem scope: workspace or machine")
+	flags.Var(&config.addedPaths, "add-dir", "add a directory tree to workspace scope (repeatable)")
+	flags.Var(&config.protectedPaths, "protect-path", "deny model access to a path (repeatable)")
 	flags.BoolVar(&config.verbose, "v", false, "show model attempts and status")
 	flags.BoolVar(&config.jsonOutput, "json", false, "emit one versioned JSON result on stdout")
 	flags.BoolVar(&config.showVersion, "version", false, "print the Skot version and exit")
@@ -166,6 +183,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		ToolsFile: config.toolsFile,
 		ToolSet:   config.toolSet, ToolSetExplicit: toolSetExplicit,
 		Scope: config.scope, ScopeExplicit: scopeExplicit,
+		AddedPaths: append([]string(nil), config.addedPaths...), ProtectedPaths: append([]string(nil), config.protectedPaths...),
 		JournalPath: config.journalPath, Resume: invocation.resume, ResumePrefix: invocation.sessionPrefix,
 		SaveSession: config.saveSession, Interactive: interactive,
 	})

@@ -322,7 +322,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 		t.Fatal("resumed child is absent from application tool status")
 	}
 
-	sandbox := agent.ScopeSnapshot{Scope: "test", ProtectedPaths: []string{"/private"}, Backend: "test"}
+	sandbox := agent.ScopeSnapshot{Scope: "test", AddedPaths: []string{"/shared"}, ProtectedPaths: []string{"/private"}, Backend: "test"}
 	if err := application.state.children.setScopeSnapshot(context.Background(), sandbox); err != nil {
 		t.Fatal(err)
 	}
@@ -332,6 +332,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	if state.Configured == nil || state.Configured.Environment.Scope.Scope != sandbox.Scope ||
+		!slices.Equal(state.Configured.Environment.Scope.AddedPaths, sandbox.AddedPaths) ||
 		!slices.Equal(state.Configured.Environment.Scope.ProtectedPaths, sandbox.ProtectedPaths) ||
 		state.Configured.Environment.Scope.Backend != sandbox.Backend {
 		t.Fatalf("child sandbox snapshot = %#v", state.Configured)

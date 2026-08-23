@@ -215,6 +215,7 @@ func cloneEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) EffectiveCon
 		cloned.ModelContext.Tools[index] = cloneToolSpec(tool)
 	}
 	cloned.Environment.Scope.ProtectedPaths = append([]string(nil), snapshot.Environment.Scope.ProtectedPaths...)
+	cloned.Environment.Scope.AddedPaths = append([]string(nil), snapshot.Environment.Scope.AddedPaths...)
 	cloned.Environment.ProgramTools = make([]ProgramToolSnapshot, len(snapshot.Environment.ProgramTools))
 	for index, tool := range snapshot.Environment.ProgramTools {
 		cloned.Environment.ProgramTools[index] = tool
@@ -239,6 +240,10 @@ func cloneToolSpecs(specs []ToolSpec) []ToolSpec {
 
 func sanitizeScopeSnapshot(snapshot ScopeSnapshot, sanitize func(string) string) ScopeSnapshot {
 	snapshot.Scope = sanitize(strings.TrimSpace(snapshot.Scope))
+	snapshot.AddedPaths = append([]string(nil), snapshot.AddedPaths...)
+	for index := range snapshot.AddedPaths {
+		snapshot.AddedPaths[index] = sanitize(strings.TrimSpace(snapshot.AddedPaths[index]))
+	}
 	snapshot.ProtectedPaths = append([]string(nil), snapshot.ProtectedPaths...)
 	for index := range snapshot.ProtectedPaths {
 		snapshot.ProtectedPaths[index] = sanitize(strings.TrimSpace(snapshot.ProtectedPaths[index]))
@@ -277,6 +282,7 @@ func (runtime *Runtime) SetScopeSnapshot(ctx context.Context, scope ScopeSnapsho
 
 func equalScopeSnapshots(left, right ScopeSnapshot) bool {
 	return left.Scope == right.Scope &&
+		slices.Equal(left.AddedPaths, right.AddedPaths) &&
 		slices.Equal(left.ProtectedPaths, right.ProtectedPaths) &&
 		left.Backend == right.Backend &&
 		left.Network == right.Network

@@ -26,6 +26,8 @@ type Boundary struct {
 	Scope     Scope  `json:"scope"`
 	Workspace string `json:"workspace"`
 	ToolHome  string `json:"tool_home"`
+	// AddedPaths extend workspace scope. They are redundant in machine scope.
+	AddedPaths []string `json:"added_paths,omitempty"`
 	// ProtectedPaths are inaccessible to model-owned processes under both scopes.
 	ProtectedPaths []string `json:"protected_paths,omitempty"`
 }

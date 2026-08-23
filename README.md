@@ -82,7 +82,7 @@ SK_TOOLS=read-only sk -json "summarize this project" > result.json
 iteration limits bound unattended execution, and exit codes distinguish an
 invalid or incomplete run from a transient provider failure.
 
-Headless runs do not inherit model, tool-set, or filesystem-scope choices made
+Headless runs do not inherit model, tool-set, or filesystem choices made
 in the interactive UI. For non-default behavior, pass flags or set environment
 variables; resumed sessions may restore their recorded model and reasoning
 effort.
@@ -98,13 +98,16 @@ tools; they cannot edit files or create more agents.
 
 ## Filesystem access
 
-Skot does not approve individual commands. A tool set decides what the model
-can do; the filesystem scope decides where both built-in file tools and
-model-owned processes may do it. `workspace` keeps user paths in the project;
-`machine` permits explicit reach into the surrounding filesystem. Protected
-paths remove named trees from either scope. This does not filter network access
-or make hostile code safe to run. Use a dedicated container or virtual machine
-for that threat model. See [scope details](docs/reference.md#filesystem-access).
+Skot does not approve individual commands: every tool in the active tool set may
+act without confirmation. `workspace`, the default scope, limits built-in file
+tools and model-owned processes to the project; `machine` opens the surrounding
+filesystem. Added directories grant access to specific paths outside the
+project without opening the whole machine; protected paths exclude selected
+locations under either scope.
+
+This does not filter network access or make hostile code safe to run. Use a
+dedicated container or virtual machine for that threat model. See
+[filesystem details](docs/reference.md#filesystem-access).
 
 ## Documentation
 

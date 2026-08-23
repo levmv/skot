@@ -128,7 +128,8 @@ var sandboxReadOnlyDirs = []string{
 }
 
 func sandboxWritableDirs(boundary Boundary) []string {
-	return []string{boundary.Workspace, boundary.ToolHome}
+	paths := []string{boundary.Workspace, boundary.ToolHome}
+	return append(paths, boundary.AddedPaths...)
 }
 
 func applyToolLandlock(boundary Boundary) error {

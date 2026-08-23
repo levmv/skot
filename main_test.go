@@ -53,6 +53,18 @@ func TestHelpListsAnthropicMessagesAsImplemented(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsRepeatedAddedDirectoryFlags(t *testing.T) {
+	root, added := t.TempDir(), t.TempDir()
+	missing := filepath.Join(t.TempDir(), "missing")
+	err := run(context.Background(), []string{
+		"-home", t.TempDir(), "-root", root,
+		"-add-dir", added, "-add-dir", missing, "task",
+	}, bytes.NewReader(nil), io.Discard, io.Discard)
+	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), "added directory 2") {
+		t.Fatalf("repeated -add-dir error = %v", err)
+	}
+}
+
 func TestWriteResumeHint(t *testing.T) {
 	for _, test := range []struct {
 		name string

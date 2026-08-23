@@ -32,6 +32,19 @@ func canonicalApplicationTestRoot(t *testing.T, root string) string {
 	return canonical
 }
 
+func emptyApplicationTestFilesystemPolicies(t *testing.T, root string) (*workspacetools.AddedDirectoryPolicy, *workspacetools.ProtectedPathPolicy) {
+	t.Helper()
+	additions, err := workspacetools.NewAddedDirectoryPolicy(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protection, err := workspacetools.NewProtectedPathPolicy(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return additions, protection
+}
+
 func TestApplicationSwitchesAndPersistsScope(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
@@ -57,12 +70,14 @@ func TestApplicationSwitchesAndPersistsScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	additions, protection := emptyApplicationTestFilesystemPolicies(t, root)
 	application := &Application{
 		config: applicationConfig{settings: settings, interactive: preferences, root: root, home: home},
 		state: applicationState{
 			session:   newLiveSession("", runtime, nil, false),
 			processes: processes,
 			security:  securityState{Scope: workspacetools.ScopeWorkspace, Backend: "landlock", BackendRequired: true},
+			additions: additions, protection: protection,
 		},
 	}
 
@@ -108,11 +123,13 @@ func TestApplicationKeepsSwitchedScopeWhenPreferenceIsNotPersisted(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	additions, protection := emptyApplicationTestFilesystemPolicies(t, root)
 	application := &Application{
 		config: applicationConfig{settings: settings, interactive: preferences, root: root, home: home},
 		state: applicationState{
 			session: newLiveSession("", runtime, nil, false), processes: processes,
-			security: securityState{Scope: ScopeWorkspace, Backend: "landlock", BackendRequired: true},
+			security:  securityState{Scope: ScopeWorkspace, Backend: "landlock", BackendRequired: true},
+			additions: additions, protection: protection,
 		},
 	}
 	err = application.SwitchScope(context.Background(), ScopeMachine)
@@ -425,7 +442,7 @@ func TestOpenHeadlessDoesNotInspectInteractiveStateOrLock(t *testing.T) {
 }
 
 func TestOpenHeadlessDoesNotInheritStoredMachineScope(t *testing.T) {
-	home, root := t.TempDir(), t.TempDir()
+	home, root, added := t.TempDir(), t.TempDir(), t.TempDir()
 	if _, err := state.Open(home); err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +451,9 @@ func TestOpenHeadlessDoesNotInheritStoredMachineScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := preferences.SetScopeSelection(string(ScopeMachine)); err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetFilesystemPaths([]string{added}, []string{filepath.Join(root, ".env")}); err != nil {
 		t.Fatal(err)
 	}
 	application, err := Open(context.Background(), Config{
@@ -445,6 +465,9 @@ func TestOpenHeadlessDoesNotInheritStoredMachineScope(t *testing.T) {
 	defer application.Close()
 	if application.CurrentScope() != ScopeWorkspace {
 		t.Fatalf("headless inherited scope %q", application.CurrentScope())
+	}
+	if len(application.state.security.AddedPaths) != 0 || len(application.state.security.ProtectedPaths) != 0 {
+		t.Fatalf("headless inherited workspace filesystem paths: %#v", application.state.security)
 	}
 }
 
@@ -635,20 +658,32 @@ func TestApplicationRecordsResolvedProductConfiguration(t *testing.T) {
 	}
 }
 
-func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testing.T) {
+func TestOpenMergesFilesystemPathsAndScopeSwitchPreservesThem(t *testing.T) {
 	if workspacetools.BoundaryBackend() == "" {
 		t.Skip("platform sandbox is unavailable")
 	}
-	home, root := t.TempDir(), t.TempDir()
+	home, root, added := t.TempDir(), t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"protected_paths":["settings-secret"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "settings-secret"), []byte("settings\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	addedFile := filepath.Join(added, "shared.txt")
+	if err := os.WriteFile(addedFile, []byte("shared\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preferences, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetFilesystemPaths(nil, []string{"workspace-secret"}); err != nil {
+		t.Fatal(err)
+	}
 	application, err := Open(context.Background(), Config{
 		Home: home, Root: root, ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true,
 		Scope: ScopeMachine, ScopeExplicit: true, Interactive: true,
+		AddedPaths:     []string{added},
 		ProtectedPaths: []string{"api-secret"},
 	})
 	if err != nil {
@@ -658,6 +693,7 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 	wantPaths := []string{
 		canonicalpath.Resolve(filepath.Join(root, "settings-secret")),
 		canonicalpath.Resolve(filepath.Join(root, "api-secret")),
+		canonicalpath.Resolve(filepath.Join(root, "workspace-secret")),
 	}
 	assertJournalPaths := func() {
 		t.Helper()
@@ -667,6 +703,9 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 		}
 		if state.Configured == nil {
 			t.Fatal("application session has no effective configuration")
+		}
+		if !slices.Equal(state.Configured.Environment.Scope.AddedPaths, []string{canonicalpath.Resolve(added)}) {
+			t.Fatalf("journaled added paths = %#v", state.Configured.Environment.Scope.AddedPaths)
 		}
 		for _, want := range wantPaths {
 			if !slices.Contains(state.Configured.Environment.Scope.ProtectedPaths, want) {
@@ -678,24 +717,34 @@ func TestOpenMergesConfiguredProtectedPathsAndScopeSwitchPreservesThem(t *testin
 		t.Fatal(err)
 	}
 	assertJournalPaths()
-	read := func() error {
+	read := func(path string) error {
 		for _, tool := range application.config.tools {
 			if tool.Spec.Name == "read" {
-				_, err := tool.Run(context.Background(), `{"path":"settings-secret"}`)
+				arguments, encodeErr := json.Marshal(map[string]string{"path": path})
+				if encodeErr != nil {
+					return encodeErr
+				}
+				_, err := tool.Run(context.Background(), string(arguments))
 				return err
 			}
 		}
 		return errors.New("read tool not found")
 	}
-	if err := read(); err == nil || !strings.Contains(err.Error(), "protected") {
+	if err := read("settings-secret"); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("machine read error = %v", err)
 	}
 	if err := application.SwitchScope(context.Background(), ScopeWorkspace); err != nil {
 		t.Fatal(err)
 	}
 	assertJournalPaths()
-	if err := read(); err == nil || !strings.Contains(err.Error(), "protected") {
+	if err := read("settings-secret"); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("workspace read error = %v", err)
+	}
+	if err := read(addedFile); err != nil {
+		t.Fatalf("workspace could not read added directory: %v", err)
+	}
+	if err := read(filepath.Join(t.TempDir(), "outside.txt")); err == nil || !strings.Contains(err.Error(), "outside workspace scope") {
+		t.Fatalf("workspace reached a directory that was not added: %v", err)
 	}
 }
 
@@ -1234,7 +1283,8 @@ func TestScopeSummaryReportsRunningProcessesWithEarlierScope(t *testing.T) {
 	if _, err := tool.Run(ctx, `{"command":"sleep 30","background":true}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := processes.SetScopeAfter(workspacetools.ScopeWorkspace, nil); err != nil {
+	additions, protection := emptyApplicationTestFilesystemPolicies(t, root)
+	if err := processes.SetFilesystemPolicyAfter(workspacetools.ScopeWorkspace, additions, protection, nil); err != nil {
 		t.Fatal(err)
 	}
 	application := &Application{

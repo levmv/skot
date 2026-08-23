@@ -21,6 +21,16 @@ func TestScopeSummaryMakesBoundaryVisible(t *testing.T) {
 	if got := workspace.Summary(); got != "scope: workspace · protected paths: /private, /secrets" {
 		t.Fatalf("workspace summary = %q", got)
 	}
+	added := securityState{Scope: workspacetools.ScopeWorkspace, AddedPaths: []string{"/shared"}}
+	if got := added.Summary(); got != "scope: workspace · added paths: /shared" {
+		t.Fatalf("added summary = %q", got)
+	}
+	// Machine scope reaches everything, so naming the additions would describe
+	// reach they do not add.
+	added.Scope = workspacetools.ScopeMachine
+	if got := added.Summary(); got != "scope: machine" {
+		t.Fatalf("machine summary = %q", got)
+	}
 }
 
 func TestScopeFailsClosedAfterFailedProbe(t *testing.T) {
@@ -117,9 +127,14 @@ func TestScopeWorkspaceNoticeDescribesLandlockRootLimitation(t *testing.T) {
 		t.Fatalf("seatbelt notice = %q", got)
 	}
 	state.Backend = "landlock"
-	state.ProtectedPaths = []string{t.TempDir()}
+	external := t.TempDir()
+	state.ProtectedPaths = []string{filepath.Join(external, "private")}
 	if got := protectedPathsNotice(state, root); got != "" {
 		t.Fatalf("disjoint protected-path notice = %q", got)
+	}
+	state.AddedPaths = []string{external}
+	if got := protectedPathsNotice(state, root); !strings.Contains(got, external) {
+		t.Fatalf("added-directory protected-path notice = %q", got)
 	}
 }
 
@@ -135,7 +150,9 @@ func TestMachineProtectedPathNeedsBuiltInLSAndExplainsBackend(t *testing.T) {
 		Scope: workspacetools.ScopeMachine, ProtectedPaths: []string{protected}, Backend: "landlock",
 		BackendRequired: true,
 	}
-	if notice := protectedPathsNotice(state, t.TempDir()); !strings.Contains(notice, "ancestor directories") {
+	// The notice names the directory which stops being listable, not the rule.
+	if notice := protectedPathsNotice(state, t.TempDir()); !strings.Contains(notice, filepath.Dir(protected)) ||
+		!strings.Contains(notice, "cannot list") {
 		t.Fatalf("machine notice = %q", notice)
 	}
 	state.Backend = ""
@@ -176,5 +193,5 @@ func TestMachineWithoutProtectedPathsIgnoresUnusedToolHomeOverlap(t *testing.T) 
 }
 
 func buildSecurityStateForTest(ctx context.Context, scope workspacetools.Scope, root, toolHome string, protectedPaths []string) securityState {
-	return buildProcessSecurityState(ctx, newSecurityState(scope, protectedPaths), root, toolHome)
+	return buildProcessSecurityState(ctx, newSecurityState(scope, nil, protectedPaths), root, toolHome)
 }

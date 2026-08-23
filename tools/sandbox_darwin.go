@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/levmv/skot/internal/canonicalpath"
 )
@@ -47,11 +48,15 @@ func seatbeltProfile(boundary Boundary) string {
 	if boundary.Scope == ScopeMachine {
 		profile = "(version 1)\n(allow default)\n"
 	} else {
+		writable := append([]string{boundary.Workspace, boundary.ToolHome}, boundary.AddedPaths...)
+		var clauses []string
+		for _, path := range writable {
+			clauses = append(clauses, fmt.Sprintf("  (subpath %q)", canonicalpath.Resolve(path)))
+		}
+		paths := strings.Join(clauses, "\n")
 		profile = fmt.Sprintf(fullSeatbeltProfile,
-			canonicalpath.Resolve(boundary.Workspace),
-			canonicalpath.Resolve(boundary.ToolHome),
-			canonicalpath.Resolve(boundary.Workspace),
-			canonicalpath.Resolve(boundary.ToolHome),
+			paths,
+			paths,
 		)
 	}
 	for _, path := range boundary.ProtectedPaths {
@@ -72,8 +77,7 @@ const fullSeatbeltProfile = `(version 1)
 
 (allow file-read*
   (literal "/")
-  (subpath %q)
-  (subpath %q)
+%s
   (subpath "/Applications")
   (subpath "/Library")
   (subpath "/System")
@@ -91,8 +95,7 @@ const fullSeatbeltProfile = `(version 1)
 (allow file-read-metadata)
 
 (allow file-write*
-  (subpath %q)
-  (subpath %q)
+%s
   (subpath "/dev/fd")
   (literal "/dev/null")
   (literal "/dev/ptmx")

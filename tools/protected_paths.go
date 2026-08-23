@@ -1,12 +1,7 @@
 package tools
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/levmv/skot/internal/canonicalpath"
 )
@@ -26,73 +21,16 @@ func NewProtectedPathPolicy(root string, values []string) (*ProtectedPathPolicy,
 	if err != nil {
 		return nil, err
 	}
-	var userHome string
-	resolveUserHome := func() (string, error) {
-		if userHome != "" {
-			return userHome, nil
-		}
-		userHome, err = os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve user home for protected paths: %w", err)
-		}
-		return userHome, nil
-	}
 	paths := make([]string, 0, len(values))
 	for index, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return nil, fmt.Errorf("protected path %d is empty", index+1)
+		resolved, err := ResolvePolicyPath(root, value)
+		if err != nil {
+			return nil, fmt.Errorf("protected path %d: %w", index+1, err)
 		}
-		switch {
-		case value == "~":
-			userHome, err = resolveUserHome()
-			if err != nil {
-				return nil, err
-			}
-			value = userHome
-		case strings.HasPrefix(value, "~"+string(filepath.Separator)) || strings.HasPrefix(value, "~/"):
-			userHome, err = resolveUserHome()
-			if err != nil {
-				return nil, err
-			}
-			value = filepath.Join(userHome, value[2:])
-		case strings.HasPrefix(value, "~"):
-			return nil, fmt.Errorf("protected path %q uses an unsupported home expansion", value)
-		case !filepath.IsAbs(value):
-			value = filepath.Join(root, value)
-		}
-		value = canonicalpath.Resolve(value)
-		if filepath.Dir(value) == value {
-			return nil, errors.New("the filesystem root cannot be a protected path")
-		}
-		paths = append(paths, value)
+		paths = append(paths, resolved)
 	}
-	paths = compactProtectedPaths(paths)
+	paths = compactPolicyPaths(paths)
 	return &ProtectedPathPolicy{paths: paths}, nil
-}
-
-func compactProtectedPaths(paths []string) []string {
-	sort.Slice(paths, func(i, j int) bool {
-		if len(paths[i]) != len(paths[j]) {
-			return len(paths[i]) < len(paths[j])
-		}
-		return paths[i] < paths[j]
-	})
-	compacted := make([]string, 0, len(paths))
-	for _, path := range paths {
-		covered := false
-		for _, parent := range compacted {
-			if canonicalpath.Contains(parent, path) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			compacted = append(compacted, path)
-		}
-	}
-	sort.Strings(compacted)
-	return compacted
 }
 
 // Paths returns the canonical effective list.

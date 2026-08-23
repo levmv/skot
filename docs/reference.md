@@ -51,6 +51,8 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |
 | `-tools-file path` | `SK_TOOLS_FILE` | Load custom program tool definitions. Default: `tools.json` in the Skot data directory. |
 | `-scope value` | `SK_SCOPE` | Select the filesystem reach of built-in file tools and model-owned processes: `workspace` or `machine`. Default: `workspace`. |
+| `-add-dir path` | — | Add a directory tree to `workspace` scope. Repeat the flag to add more than one. |
+| `-protect-path path` | — | Hide a path from model-owned tools for this run. Repeat the flag to protect more than one. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
 | `-journal path` | — | Use an explicit JSONL session journal. |
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
@@ -69,10 +71,10 @@ explicit input and the workspace preference.
 
 Headless runs never read interactive preferences. A fresh one-shot or
 `-save-session` run uses only explicit CLI/environment input and product
-defaults. Headless resume may restore the session-recorded model and effort,
-but not its tool set or filesystem scope. A new or empty `-journal` follows the
-fresh rule; an existing journal with a recorded selection follows the
-continuation rule.
+defaults. Headless resume may restore the session-recorded model and effort;
+tool-set and filesystem settings still come from the current invocation and
+configuration. A new or empty `-journal` follows the fresh rule; an existing
+journal with a recorded selection follows the continuation rule.
 
 ## Models and credentials
 
@@ -172,10 +174,11 @@ are rejected. A representative configuration is:
 | `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
 
 Interactive theme and the model selection history are shared across workspaces.
-Model, reasoning effort, tool set, and filesystem scope are remembered
-per canonical workspace path; symlink aliases share preferences, while separate
-clones and worktrees do not. Skot manages these preferences in
-`interactive.json`; headless runs do not read them.
+Workspace-specific model, reasoning effort, tool set, and filesystem settings
+(scope, added directories, and protected paths) are remembered per canonical
+workspace path. Symlink aliases share preferences, while separate clones and
+worktrees do not. Skot manages these preferences in `interactive.json`;
+headless runs do not read them.
 
 Use `/login` rather than editing `auth.json` directly.
 
@@ -212,7 +215,7 @@ recent session for that workspace.
 | `/login [provider]` | Store a provider or service key. |
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
-| `/scope [workspace|machine]` | Show or switch the filesystem scope for built-in file tools and model-owned processes. |
+| `/scope [workspace|machine]` | Show or change the filesystem scope, added directories, and protected paths. |
 | `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
@@ -360,7 +363,8 @@ may act without confirmation. Filesystem reach is bounded structurally:
 - a tool set decides which capabilities the model has;
 - one selected scope controls both built-in file tools and model-owned Bash or
   program processes;
-- `protected_paths` removes explicitly named trees from both kinds of tools.
+- added directories can extend `workspace` scope without selecting `machine`;
+- protected paths hide named trees under either scope.
 
 Built-in tools enforce these paths inside Skot. Model-owned processes receive
 an operating-system filesystem boundary whenever the selected policy needs
@@ -371,25 +375,24 @@ ordinary environment and filesystem permissions.
 
 ### Filesystem scopes
 
-- `workspace` (default) keeps built-in file operations inside the workspace and
-  gives model-owned processes the workspace, required runtime files, and a
-  disposable per-workspace tool home;
+- `workspace` (default) limits built-in file tools and model-owned processes to
+  the workspace and any added directories. Processes also receive required
+  runtime files and a disposable per-workspace tool home;
 - `machine` lets explicit built-in file paths and model-owned processes reach
   the surrounding filesystem, minus any explicit protected paths. Inside a
   container, “machine” means that container's filesystem boundary, not the host
   filesystem.
 
-In interactive mode, use `/scope` or Shift+Tab to change scope. The choice is
-remembered per workspace.
-
 Content exposed to model-owned tools may be included in requests to the selected
 model provider. `read-only` prevents writes and command execution; it is not a
 confidentiality boundary for readable data.
 
-An absolute path inside the workspace is valid in either scope.
-Relative paths always start at the workspace, so `../sibling` reaches outside
-it only in `machine`. Changing scope affects new file-tool calls and process
-launches; calls and processes already running are unchanged.
+An absolute path inside the workspace or an added directory is valid in
+`workspace` scope. Relative paths always start at the workspace, so
+`../sibling` needs `machine` scope unless that sibling was added explicitly.
+Changing the filesystem scope, added directories, or protected paths affects
+new file-tool calls and process launches; calls and processes already running
+are unchanged.
 
 `workspace` uses a minimal environment, sets `HOME` to the disposable tool
 home, and keeps `TMPDIR` inside it. `machine` preserves the ambient environment
@@ -405,11 +408,30 @@ required process boundary before use and stops rather than silently widening
 access if it is unavailable or ineffective. On Linux, installed boundaries
 require Landlock ABI V3; macOS uses Seatbelt.
 
+### Added directories
+
+Use repeatable `-add-dir` flags to make directories outside the workspace
+available under `workspace` scope:
+
+```sh
+sk -add-dir ../shared -add-dir /tmp/generated "update the project"
+```
+
+An added directory must already exist. Absolute paths are used directly, `~/`
+is relative to the user's real home, and other paths are relative to the
+workspace root. A protected path always wins where it overlaps an added
+directory.
+
+Directories passed with `-add-dir` last for one run. Directories added through
+`/scope` are remembered for that workspace.
+
 ### Protected paths
 
 `protected_paths` is empty by default. The Skot data directory is not protected
 automatically: add `~/.skot` explicitly if it should be hidden, just like any
-other sensitive directory.
+other sensitive directory. Values in `config.json` apply to every run using that
+data directory, repeatable `-protect-path` flags protect for one run, and paths
+protected through `/scope` are remembered for that workspace.
 
 ```json
 {
@@ -418,18 +440,16 @@ other sensitive directory.
 ```
 
 Absolute paths are used directly, `~/` is relative to the user's real home,
-and other paths are relative to the workspace root. Nested and duplicate paths
-are collapsed. The filesystem root is rejected, as is a protected path that
-contains the whole workspace. Protecting a child inside the workspace is valid.
+and other paths are relative to the workspace root.
 
-Protection applies independently of scope to `read`, `ls`, `grep`, `glob`,
-`edit`, `write`, model-owned Bash, and program tools. A configured executable
-or workdir cannot be inside a protected tree. Symlink aliases do not bypass the
-check. Protected entries are omitted by listing and search tools.
+Protection applies in either scope to built-in file tools, model-owned Bash,
+and program tools. A configured executable or workdir cannot be inside a
+protected tree. Symlink aliases do not bypass protection, and protected entries
+are omitted from listings and searches.
 
-Landlock is allow-list based. On Linux, protecting a child of a writable
-directory can prevent model-owned processes from listing that parent or
-creating new siblings there. Built-in file tools do not have this limitation.
+On Linux, if a protected path is inside an otherwise writable directory, Bash
+and program tools cannot list that directory or create entries directly in it.
+Built-in file tools do not have this limitation.
 
 ## Scripts and unattended runs
 

@@ -26,15 +26,15 @@ import (
 // product-specific and is not yet a compatibility promise.
 //
 // Callers must serialize Close, session replacement, and model or tool
-// reconfiguration with Run and with one another. SwitchScope is the exception:
-// it may overlap an active Run and affects only subsequently started tool calls
-// and processes.
+// reconfiguration with Run and with one another. Filesystem policy is the
+// exception: SwitchScope and the added and protected path mutations may overlap
+// an active Run and affect only subsequently started tool calls and processes.
 type Application struct {
 	config applicationConfig
 
-	mu      sync.RWMutex
-	scopeMu sync.Mutex
-	state   applicationState
+	mu           sync.RWMutex
+	filesystemMu sync.Mutex
+	state        applicationState
 }
 
 // applicationConfig is immutable after Open returns. In particular, session
@@ -51,28 +51,37 @@ type applicationConfig struct {
 	systemPrompt        string
 	root                string
 	home                string
-	protection          *workspacetools.ProtectedPathPolicy
-	baseURL             string
-	modelAPI            modelAPI
-	contextWindow       int
-	metadataLookup      modelContextLookup
-	retryBudget         time.Duration
-	streamIdleTimeout   time.Duration
-	maxToolIterations   int
-	awaitRequiredJobs   bool
-	masker              *secretMasker
+	// invocation and settings paths are the filesystem-policy layers a running
+	// session does not own: flags last for this run, config.json for every run
+	// using that data directory.
+	invocationAddedPaths     []string
+	invocationProtectedPaths []string
+	settingsProtectedPaths   []string
+	baseURL                  string
+	modelAPI                 modelAPI
+	contextWindow            int
+	metadataLookup           modelContextLookup
+	retryBudget              time.Duration
+	streamIdleTimeout        time.Duration
+	maxToolIterations        int
+	awaitRequiredJobs        bool
+	masker                   *secretMasker
 }
 
 // applicationState is protected by Application.mu. It contains exactly the
 // state that can change after Open, including resources cleared by Close.
 type applicationState struct {
-	session        *liveSession
-	processes      *workspacetools.ProcessManager
-	children       *childSupervisor
-	toolSet        string
-	theme          string
-	security       securityState
-	startupNotices []string
+	session                 *liveSession
+	processes               *workspacetools.ProcessManager
+	children                *childSupervisor
+	toolSet                 string
+	theme                   string
+	security                securityState
+	additions               *workspacetools.AddedDirectoryPolicy
+	protection              *workspacetools.ProtectedPathPolicy
+	workspaceAddedPaths     []string
+	workspaceProtectedPaths []string
+	startupNotices          []string
 }
 
 func (application *Application) Run(ctx context.Context, input string, emit agent.EmitFunc) (agent.RunResult, error) {
@@ -635,6 +644,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	processes := application.state.processes
 	children := application.state.children
 	security := application.state.security
+	protection := application.state.protection
 	toolSet := application.state.toolSet
 	currentSession := application.state.session
 	var currentRuntime *agent.Runtime
@@ -667,7 +677,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	if err != nil {
 		return err
 	}
-	projectInstructions, err := loadInstructions(root, application.config.protection)
+	projectInstructions, err := loadInstructions(root, protection)
 	if err != nil {
 		return fmt.Errorf("load project instructions: %w", err)
 	}
@@ -815,9 +825,9 @@ func (application *Application) ScopeSummary() string {
 	return summary
 }
 
-// ScopeNotice describes a current filesystem-boundary limitation that is
-// useful at startup or immediately after changing scope, but too noisy for
-// ScopeSummary.
+// ScopeNotice describes a current filesystem-boundary limitation immediately
+// after an interactive policy change. It is too noisy for ScopeSummary and for
+// repeated startup output.
 func (application *Application) ScopeNotice() string {
 	application.mu.RLock()
 	security := application.state.security
@@ -826,8 +836,8 @@ func (application *Application) ScopeNotice() string {
 }
 
 func (application *Application) SwitchScope(ctx context.Context, value string) error {
-	application.scopeMu.Lock()
-	defer application.scopeMu.Unlock()
+	application.filesystemMu.Lock()
+	defer application.filesystemMu.Unlock()
 
 	scope, err := workspacetools.NormalizeScope(value)
 	if err != nil {
@@ -840,9 +850,24 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 			return preferences.SetScopeSelection(string(scope))
 		})
 	}
+	additions := application.state.additions
+	protection := application.state.protection
+	application.mu.RUnlock()
+	if err := application.applyFilesystemPolicy(ctx, scope, additions, protection); err != nil {
+		return err
+	}
+	return application.persistInteractivePreference("filesystem scope", func(preferences *state.InteractiveStore) error {
+		return preferences.SetScopeSelection(string(scope))
+	})
+}
+
+// applyFilesystemPolicy switches the complete live policy as one transaction.
+// filesystemMu must be held by the caller so future path mutations share the
+// same ordering as scope changes.
+func (application *Application) applyFilesystemPolicy(ctx context.Context, scope workspacetools.Scope, additions *workspacetools.AddedDirectoryPolicy, protection *workspacetools.ProtectedPathPolicy) error {
+	application.mu.RLock()
 	processes := application.state.processes
 	currentSession := application.state.session
-	protectedPaths := append([]string(nil), application.state.security.ProtectedPaths...)
 	application.mu.RUnlock()
 	root := application.config.root
 	if processes == nil || currentSession == nil || currentSession.runtime == nil {
@@ -850,7 +875,7 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 	}
 	runtime := currentSession.runtime
 
-	security := newSecurityState(scope, protectedPaths)
+	security := newSecurityState(scope, additions.Paths(), protection.Paths())
 	// An interactive session may enable process tools later, so keep its process
 	// boundary validated even while the active tool set does not need one.
 	needsProcessBoundary := application.config.interactive != nil ||
@@ -861,21 +886,21 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 			var err error
 			toolHome, err = processes.ToolHome()
 			if err != nil {
-				return fmt.Errorf("cannot switch scope: %w", err)
+				return fmt.Errorf("cannot apply filesystem policy: %w", err)
 			}
 		}
 		security = buildProcessSecurityState(ctx, security, root, toolHome)
 	}
 	if err := validateSecurity(security); err != nil {
-		return fmt.Errorf("cannot switch scope: %w", err)
+		return fmt.Errorf("cannot apply filesystem policy: %w", err)
 	}
 
 	application.mu.Lock()
 	if application.state.processes != processes || application.state.session != currentSession {
 		application.mu.Unlock()
-		return fmt.Errorf("runtime changed while switching scope")
+		return fmt.Errorf("runtime changed while applying the filesystem policy")
 	}
-	if err := processes.SetScopeAfter(security.Scope, func() error {
+	if err := processes.SetFilesystemPolicyAfter(security.Scope, additions, protection, func() error {
 		previous := application.state.security.snapshot()
 		if err := runtime.SetScopeSnapshot(ctx, security.snapshot()); err != nil {
 			return err
@@ -891,8 +916,8 @@ func (application *Application) SwitchScope(ctx context.Context, value string) e
 		return err
 	}
 	application.state.security = security
+	application.state.additions = additions
+	application.state.protection = protection
 	application.mu.Unlock()
-	return application.persistInteractivePreference("filesystem scope", func(preferences *state.InteractiveStore) error {
-		return preferences.SetScopeSelection(string(scope))
-	})
+	return nil
 }

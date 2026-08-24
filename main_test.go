@@ -91,7 +91,7 @@ func TestVerboseEmitterReportsDurableStatusEvents(t *testing.T) {
 		{Kind: agent.EventBoundaryDelivered, Text: "background work completed", Sequence: 4},
 		{Kind: agent.EventContextCompacted, Text: "context compacted", Sequence: 5},
 		{Kind: agent.EventToolResultsPruned, Text: "pruned old tool results", Sequence: 6},
-		{Kind: agent.EventToolRejected, Call: &agent.ToolCall{Name: "read"}, Result: &agent.ToolResult{Content: "iteration limit", Error: true}, Sequence: 7},
+		{Kind: agent.EventToolRejected, Call: &agent.ToolCall{Name: "read"}, Result: &agent.ToolResult{Content: agent.TextContent("iteration limit"), Error: true}, Sequence: 7},
 		{Kind: agent.EventRunFinished, Status: agent.RunCompleted, ToolLimitReached: true, Sequence: 8},
 	} {
 		emit(event)

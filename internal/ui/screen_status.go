@@ -52,16 +52,21 @@ func (m screenModel) footerLine() string {
 	// model name read as part of the selection. Root goes last because it is
 	// the one part that gets truncated, which keeps the rest at a stable width.
 	contextStatus := compactContextStatus(m.sessionStatus.ContextReport)
+	imageStatus := ""
+	if m.sessionStatus.ImageDelivery == agent.ImageDeliveryRejected {
+		imageStatus = "images omitted"
+	}
 	beforeRoot := compactFooterParts(
 		model,
 		contextStatus,
 		toolSet,
 		scope,
+		imageStatus,
 	)
 	root := sanitizeTerminalText(strings.TrimSpace(m.config.Root))
 	root = truncateFooterRoot(root, beforeRoot, "", m.contentWidth())
 
-	parts := []string{model, contextStatus, toolSet, scope, root}
+	parts := []string{model, contextStatus, toolSet, scope, imageStatus, root}
 	rendered := make([]string, 0, len(parts))
 	for index, part := range parts {
 		part = sanitizeTerminalText(strings.TrimSpace(part))
@@ -72,6 +77,8 @@ func (m screenModel) footerLine() string {
 		if index == 1 && contextUsagePercent(m.sessionStatus.ContextReport) >= footerContextWarningPercent {
 			style = m.warningStyle
 		} else if index == 3 && scope != "" {
+			style = m.warningStyle
+		} else if index == 4 && imageStatus != "" {
 			style = m.warningStyle
 		}
 		rendered = append(rendered, style.Render(part))

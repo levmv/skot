@@ -76,7 +76,7 @@ func (reference ProviderReference) MatchesReplayContext(kind, backend, epoch str
 
 type ToolResult struct {
 	CallID  string   `json:"call_id"`
-	Content string   `json:"content"`
+	Content Content  `json:"content"`
 	Details []Detail `json:"details,omitempty"`
 	Error   bool     `json:"error,omitempty"`
 	Unknown bool     `json:"unknown,omitempty"`
@@ -96,7 +96,7 @@ type ToolSpec struct {
 }
 
 type ToolOutput struct {
-	Content string
+	Content Content
 	Details []Detail
 }
 
@@ -157,11 +157,14 @@ type ModelInfo struct {
 	// ProviderStateContract is an adapter-owned, human-readable identifier for
 	// the rules used to create and replay opaque provider state. A change must
 	// rotate the session epoch even when the backend and model stay the same.
-	ProviderStateContract  ProviderStateContract `json:"provider_state_contract,omitempty"`
-	ContextWindow          int                   `json:"context_window,omitempty"`
-	ContextWindowEstimated bool                  `json:"context_window_estimated,omitempty"`
-	MaxRequestBytes        int                   `json:"max_request_bytes,omitempty"`
-	MaxCompletionBytes     int                   `json:"max_completion_bytes,omitempty"`
+	ProviderStateContract ProviderStateContract `json:"provider_state_contract,omitempty"`
+	// ImageInputUnsupported is a reviewed route policy, not observed session
+	// evidence. False keeps delivery optimistic.
+	ImageInputUnsupported  bool `json:"image_input_unsupported,omitempty"`
+	ContextWindow          int  `json:"context_window,omitempty"`
+	ContextWindowEstimated bool `json:"context_window_estimated,omitempty"`
+	MaxRequestBytes        int  `json:"max_request_bytes,omitempty"`
+	MaxCompletionBytes     int  `json:"max_completion_bytes,omitempty"`
 	// Endpoint identifies the effective provider endpoint without credentials.
 	// It is journaled diagnostic metadata, not authorization configuration.
 	Endpoint string `json:"endpoint,omitempty"`
@@ -334,17 +337,18 @@ const auxiliaryRecordKindPrefix = "aux/"
 type ProviderStateContract string
 
 const (
-	RecordSessionStarted    RecordKind = "session_started"
-	RecordModelSelected     RecordKind = "model_selected"
-	RecordSessionConfigured RecordKind = "session_configured"
-	RecordRunStarted        RecordKind = "run_started"
-	RecordRunInputAdded     RecordKind = "run_input_added"
-	RecordModelResponse     RecordKind = "model_response"
-	RecordToolResult        RecordKind = "tool_result"
-	RecordBoundaryEvent     RecordKind = "boundary_event"
-	RecordRunFinished       RecordKind = "run_finished"
-	RecordContextCompacted  RecordKind = "context_compacted"
-	RecordToolResultsPruned RecordKind = "tool_results_pruned"
+	RecordSessionStarted        RecordKind = "session_started"
+	RecordModelSelected         RecordKind = "model_selected"
+	RecordSessionConfigured     RecordKind = "session_configured"
+	RecordRunStarted            RecordKind = "run_started"
+	RecordRunInputAdded         RecordKind = "run_input_added"
+	RecordModelResponse         RecordKind = "model_response"
+	RecordToolResult            RecordKind = "tool_result"
+	RecordBoundaryEvent         RecordKind = "boundary_event"
+	RecordRunFinished           RecordKind = "run_finished"
+	RecordContextCompacted      RecordKind = "context_compacted"
+	RecordToolResultsPruned     RecordKind = "tool_results_pruned"
+	RecordImageDeliveryObserved RecordKind = "image_delivery_observed"
 
 	// RecordModelAttemptFailed is observational: it preserves diagnostics for
 	// one failed provider call without affecting the replayed session state.
@@ -448,6 +452,7 @@ type ModelContextSnapshot struct {
 type RuntimePolicySnapshot struct {
 	ContextWindow          int  `json:"context_window,omitempty"`
 	ContextWindowEstimated bool `json:"context_window_estimated,omitempty"`
+	ImageInputUnsupported  bool `json:"image_input_unsupported,omitempty"`
 	// MaxModelAttempts is -1 when attempts are bounded only by RetryBudget.
 	MaxModelAttempts  int    `json:"max_model_attempts"`
 	RetryBudget       string `json:"retry_budget,omitempty"`
@@ -525,6 +530,22 @@ type ModelResponseRecord struct {
 type ToolResultRecord struct {
 	RunID  string     `json:"run_id"`
 	Result ToolResult `json:"result"`
+}
+
+type ImageDeliveryStatus string
+
+const (
+	ImageDeliveryUnknown  ImageDeliveryStatus = ""
+	ImageDeliveryAccepted ImageDeliveryStatus = "accepted"
+	ImageDeliveryRejected ImageDeliveryStatus = "rejected"
+)
+
+// ImageDeliveryObservedRecord is session evidence for one provider epoch. It
+// is deliberately narrower than a model capability declaration: accepted
+// means only that the route accepted a request containing canonical images.
+type ImageDeliveryObservedRecord struct {
+	ProviderEpoch string              `json:"provider_epoch"`
+	Status        ImageDeliveryStatus `json:"status"`
 }
 
 type BoundaryEventRecord struct {

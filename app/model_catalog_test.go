@@ -47,6 +47,7 @@ func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T)
 		t.Fatal(err)
 	}
 	if route.API != modelAPIChatCompletions || route.ContextWindow != 1_000_000 || route.ContextWindowEstimated ||
+		!route.ImageInputUnsupported ||
 		route.Compatibility != modelCompatibilitySupported || route.ChatTraits.ReasoningReplay != chatcompletions.ReasoningReplayToolTurns ||
 		route.ProviderStateContract == "" {
 		t.Fatalf("resolved route = %#v", route)
@@ -60,6 +61,7 @@ func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T)
 	}
 	if overridden.API != modelAPIResponses || overridden.BaseURL != "https://gateway.example/v1" ||
 		overridden.ContextWindow != unknownModelContextWindow || !overridden.ContextWindowEstimated ||
+		overridden.ImageInputUnsupported ||
 		overridden.Compatibility != modelCompatibilityUnverified || overridden.ChatTraits.PromptCacheKey ||
 		overridden.ProviderStateContract != "responses.manual_history.v1" {
 		t.Fatalf("overridden route = %#v", overridden)
@@ -72,8 +74,16 @@ func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T)
 		t.Fatal(err)
 	}
 	if explicitContext.API != modelAPIChatCompletions || explicitContext.ContextWindow != 64_000 || explicitContext.ContextWindowEstimated ||
+		explicitContext.ImageInputUnsupported ||
 		explicitContext.ChatTraits.ReasoningReplay != "" || explicitContext.ProviderStateContract != "" {
 		t.Fatalf("explicit context route = %#v", explicitContext)
+	}
+	optimistic, err := resolveModelRoute("deepseek/deepseek-v4-flash-vision-exp", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if optimistic.ImageInputUnsupported {
+		t.Fatalf("undeclared route lost optimistic image delivery: %#v", optimistic)
 	}
 	strictGateway, err := resolveModelRoute("openai/example-model", "", modelRouteOverrides{BaseURL: "https://gateway.example/v1"}, modelRouteEnrichment{})
 	if err != nil {

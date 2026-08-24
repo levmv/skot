@@ -62,7 +62,7 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 	}
 
 	started := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: "first"})
-	agentID := strings.Fields(started.Content)[1]
+	agentID := strings.Fields(started.Content.Text())[1]
 	childRequest := <-requests
 	for _, forbidden := range []string{"agent", "edit", "write", "bash", "job"} {
 		if containsChildTestName(childRequest.Tools, forbidden) {
@@ -76,7 +76,7 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 	}
 
 	checked := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{agentID}, Wait: "all"})
-	if !strings.Contains(checked.Content, "answer: first") || len(checked.Details) != 1 {
+	if !strings.Contains(checked.Content.Text(), "answer: first") || len(checked.Details) != 1 {
 		t.Fatalf("check output = %#v", checked)
 	}
 	if events := application.state.children.PendingEvents(parentID); len(events) != 1 || !strings.Contains(events[0].Content, "answer: first") {
@@ -108,16 +108,16 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 	}
 
 	replayed := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{agentID}})
-	if !strings.Contains(replayed.Content, "answer: first") {
-		t.Fatalf("replayed child = %q", replayed.Content)
+	if !strings.Contains(replayed.Content.Text(), "answer: first") {
+		t.Fatalf("replayed child = %q", replayed.Content.Text())
 	}
 	runChildTestTool(t, tool, parentID, childToolArgs{Action: "send", ID: agentID, Prompt: "second"})
 	if request := <-requests; request.Prompt != "second" {
 		t.Fatalf("follow-up prompt = %q", request.Prompt)
 	}
 	followedUp := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{agentID}, Wait: "all"})
-	if !strings.Contains(followedUp.Content, "answer: second") || !strings.Contains(followedUp.Content, "· 12 tokens") {
-		t.Fatalf("follow-up result = %q", followedUp.Content)
+	if !strings.Contains(followedUp.Content.Text(), "answer: second") || !strings.Contains(followedUp.Content.Text(), "· 12 tokens") {
+		t.Fatalf("follow-up result = %q", followedUp.Content.Text())
 	}
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestChildAgentSupervisorRunsInParallelAndAppliesBackpressure(t *testing.T) 
 	ids := make([]string, 0, maxActiveChildren)
 	for index := range maxActiveChildren {
 		output := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: fmt.Sprintf("parallel-%d", index)})
-		ids = append(ids, strings.Fields(output.Content)[1])
+		ids = append(ids, strings.Fields(output.Content.Text())[1])
 	}
 
 	deadline := time.NewTimer(5 * time.Second)
@@ -188,8 +188,8 @@ func TestChildAgentSupervisorRunsInParallelAndAppliesBackpressure(t *testing.T) 
 	close(release)
 	checked := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: ids, Wait: "all"})
 	for index := range maxActiveChildren {
-		if !strings.Contains(checked.Content, fmt.Sprintf("done: parallel-%d", index)) {
-			t.Fatalf("parallel results = %q", checked.Content)
+		if !strings.Contains(checked.Content.Text(), fmt.Sprintf("done: parallel-%d", index)) {
+			t.Fatalf("parallel results = %q", checked.Content.Text())
 		}
 	}
 }
@@ -220,7 +220,7 @@ func TestChildAgentModelOverrideRequiresAllowlist(t *testing.T) {
 		t.Fatalf("model authority error = %v", err)
 	}
 	started := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: "work", Model: "openai/allowed"})
-	id := strings.Fields(started.Content)[1]
+	id := strings.Fields(started.Content.Text())[1]
 	if request := <-requests; request.Model != "allowed" {
 		t.Fatalf("child API model = %q", request.Model)
 	}
@@ -255,7 +255,7 @@ func TestExistingChildKeepsItsModelAfterParentSwitch(t *testing.T) {
 	tool := childTestTool(t, application)
 	parentID := application.SessionID()
 	started := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: "before switch"})
-	childID := strings.Fields(started.Content)[1]
+	childID := strings.Fields(started.Content.Text())[1]
 	if request := <-requests; request.Model != "child-test" {
 		t.Fatalf("initial child model = %q", request.Model)
 	}
@@ -298,7 +298,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 	firstParentID := application.SessionID()
 	tool := childTestTool(t, application)
 	started := runChildTestTool(t, tool, firstParentID, childToolArgs{Action: "start", Prompt: "child work"})
-	childID := strings.Fields(started.Content)[1]
+	childID := strings.Fields(started.Content.Text())[1]
 	runChildTestTool(t, tool, firstParentID, childToolArgs{Action: "check", IDs: []string{childID}, Wait: "all"})
 
 	secondParentID, err := application.ClearSession(context.Background())
@@ -315,8 +315,8 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayed := runChildTestTool(t, tool, firstParentID, childToolArgs{Action: "check", IDs: []string{childID}})
-	if !strings.Contains(replayed.Content, "answer: child work") {
-		t.Fatalf("replayed child after parent resume = %q", replayed.Content)
+	if !strings.Contains(replayed.Content.Text(), "answer: child work") {
+		t.Fatalf("replayed child after parent resume = %q", replayed.Content.Text())
 	}
 	if _, ok := application.ToolStatus(childID); !ok {
 		t.Fatal("resumed child is absent from application tool status")
@@ -361,7 +361,7 @@ func TestResumePreservesUnavailableChildWithoutChangingItsModel(t *testing.T) {
 	parentID := application.SessionID()
 	tool := childTestTool(t, application)
 	started := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: "child work"})
-	childID := strings.Fields(started.Content)[1]
+	childID := strings.Fields(started.Content.Text())[1]
 	runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{childID}, Wait: "all"})
 
 	child := application.state.children.children[parentID][childID]
@@ -387,8 +387,8 @@ func TestResumePreservesUnavailableChildWithoutChangingItsModel(t *testing.T) {
 	defer func() { _ = resumed.Close() }()
 	tool = childTestTool(t, resumed)
 	replayed := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{childID}})
-	if !strings.Contains(replayed.Content, "answer: child work") {
-		t.Fatalf("restored child history = %q", replayed.Content)
+	if !strings.Contains(replayed.Content.Text(), "answer: child work") {
+		t.Fatalf("restored child history = %q", replayed.Content.Text())
 	}
 	raw, err := json.Marshal(childToolArgs{Action: "send", ID: childID, Prompt: "continue"})
 	if err != nil {
@@ -415,7 +415,9 @@ func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 		Backend: model, Journal: journal, SessionID: "session_0123456789abcdef0123456789abcdef",
 		Tools: []agent.Tool{{
 			Spec: agent.ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (agent.ToolOutput, error) { return agent.ToolOutput{Content: "ok"}, nil },
+			Run: func(context.Context, string) (agent.ToolOutput, error) {
+				return agent.ToolOutput{Content: agent.TextContent("ok")}, nil
+			},
 		}},
 	})
 	if err != nil {
@@ -551,7 +553,7 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 	parentID := application.SessionID()
 	tool := childTestTool(t, application)
 	started := runChildTestTool(t, tool, parentID, childToolArgs{Action: "start", Prompt: "cancel child"})
-	agentID := strings.Fields(started.Content)[1]
+	agentID := strings.Fields(started.Content.Text())[1]
 	select {
 	case <-childStarted:
 	case <-time.After(5 * time.Second):
@@ -568,17 +570,17 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 	t.Cleanup(func() { _ = application.Close() })
 	tool = childTestTool(t, application)
 	cancelled := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{agentID}})
-	if !strings.Contains(cancelled.Content, string(agent.RunCancelled)) {
-		t.Fatalf("cancelled child = %q", cancelled.Content)
+	if !strings.Contains(cancelled.Content.Text(), string(agent.RunCancelled)) {
+		t.Fatalf("cancelled child = %q", cancelled.Content.Text())
 	}
 	runChildTestTool(t, tool, parentID, childToolArgs{Action: "send", ID: agentID, Prompt: "continue child"})
 	continued := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{agentID}, Wait: "all"})
-	if !strings.Contains(continued.Content, "answer: continue child") {
-		t.Fatalf("continued child = %q", continued.Content)
+	if !strings.Contains(continued.Content.Text(), "answer: continue child") {
+		t.Fatalf("continued child = %q", continued.Content.Text())
 	}
 	stopped := runChildTestTool(t, tool, parentID, childToolArgs{Action: "stop", ID: agentID})
-	if !strings.Contains(stopped.Content, "stopped "+agentID) {
-		t.Fatalf("stop output = %q", stopped.Content)
+	if !strings.Contains(stopped.Content.Text(), "stopped "+agentID) {
+		t.Fatalf("stop output = %q", stopped.Content.Text())
 	}
 	if _, err := tool.Run(agent.WithToolSessionID(context.Background(), parentID), fmt.Sprintf(`{"action":"send","id":%q,"prompt":"too late"}`, agentID)); err == nil || !strings.Contains(err.Error(), "is stopped") {
 		t.Fatalf("send after stop error = %v", err)
@@ -592,8 +594,8 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 	}
 	tool = childTestTool(t, application)
 	stoppedAfterResume := runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{agentID}})
-	if !strings.Contains(stoppedAfterResume.Content, agentID+" stopped") {
-		t.Fatalf("stopped child after resume = %q", stoppedAfterResume.Content)
+	if !strings.Contains(stoppedAfterResume.Content.Text(), agentID+" stopped") {
+		t.Fatalf("stopped child after resume = %q", stoppedAfterResume.Content.Text())
 	}
 	if _, err := tool.Run(agent.WithToolSessionID(context.Background(), parentID), fmt.Sprintf(`{"action":"send","id":%q,"prompt":"still too late"}`, agentID)); err == nil || !strings.Contains(err.Error(), "is stopped") {
 		t.Fatalf("send after resumed stop error = %v", err)

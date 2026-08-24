@@ -407,7 +407,8 @@ func modelInfoForRoute(route resolvedModelRoute) (agent.ModelInfo, error) {
 	return agent.ModelInfo{
 		BackendID: backendID, Provider: route.Provider, Model: route.Model,
 		ReasoningEffort: route.ReasoningEffort, ProviderStateContract: route.ProviderStateContract,
-		ContextWindow: route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
+		ImageInputUnsupported: route.ImageInputUnsupported,
+		ContextWindow:         route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
 		MaxRequestBytes: productlimits.MaxModelRequestBytes, MaxCompletionBytes: productlimits.MaxModelCompletionBytes,
 		Endpoint: modelhttp.PublicEndpoint(route.BaseURL),
 	}, nil

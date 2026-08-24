@@ -130,7 +130,7 @@ func TestRuntimeJournalsAndReplaysProviderDataAcrossToolTurn(t *testing.T) {
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})
 	if _, err := runtime.Run(context.Background(), "inspect", nil); err != nil {

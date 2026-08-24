@@ -124,17 +124,17 @@ func TestBashReportsExitAndUsesIsolatedEnvironment(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("SK_TEST_SECRET", "must-not-leak")
 	result := runProcessResult(t, manager.bash, bashArgs{Command: "printf 'hello\\n'; printf 'stderr\\n' >&2; env; exit 3"})
-	if !strings.Contains(result.Content, "status: failed") || !strings.Contains(result.Content, "exit_code: 3") || !strings.Contains(result.Content, "hello") || !strings.Contains(result.Content, "stderr") {
-		t.Fatalf("bash result = %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "status: failed") || !strings.Contains(result.Content.Text(), "exit_code: 3") || !strings.Contains(result.Content.Text(), "hello") || !strings.Contains(result.Content.Text(), "stderr") {
+		t.Fatalf("bash result = %q", result.Content.Text())
 	}
-	if strings.Contains(result.Content, "SK_TEST_SECRET") || strings.Contains(result.Content, "must-not-leak") {
-		t.Fatalf("bash leaked parent environment: %q", result.Content)
+	if strings.Contains(result.Content.Text(), "SK_TEST_SECRET") || strings.Contains(result.Content.Text(), "must-not-leak") {
+		t.Fatalf("bash leaked parent environment: %q", result.Content.Text())
 	}
-	if !strings.Contains(result.Content, "HOME="+manager.toolHome) {
-		t.Fatalf("bash HOME is not isolated: %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "HOME="+manager.toolHome) {
+		t.Fatalf("bash HOME is not isolated: %q", result.Content.Text())
 	}
-	if !strings.Contains(result.Content, "TMPDIR="+WorkspaceToolTemp(manager.toolHome)) {
-		t.Fatalf("bash TMPDIR is not isolated: %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "TMPDIR="+WorkspaceToolTemp(manager.toolHome)) {
+		t.Fatalf("bash TMPDIR is not isolated: %q", result.Content.Text())
 	}
 }
 
@@ -202,11 +202,11 @@ func TestBashScopeMachineHidesSupervisorEnvironmentFromModel(t *testing.T) {
 	t.Setenv("TEST_PROVIDER_KEY", "hidden-secret")
 	manager.HideModelEnvironment("TEST_PROVIDER_KEY")
 	result := runProcessResult(t, manager.bash, bashArgs{Command: `printf 'HOME=%s\nORDINARY=%s\nSK=%s\nKEY=%s\n' "$HOME" "$ORDINARY_AMBIENT" "$SK_TEST_AMBIENT" "$TEST_PROVIDER_KEY"`})
-	if !strings.Contains(result.Content, "HOME="+home) || !strings.Contains(result.Content, "ORDINARY=visible-to-model") {
-		t.Fatalf("bash lost ordinary ambient environment: %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "HOME="+home) || !strings.Contains(result.Content.Text(), "ORDINARY=visible-to-model") {
+		t.Fatalf("bash lost ordinary ambient environment: %q", result.Content.Text())
 	}
-	if strings.Contains(result.Content, "hidden-setting") || strings.Contains(result.Content, "hidden-secret") {
-		t.Fatalf("bash leaked supervisor environment: %q", result.Content)
+	if strings.Contains(result.Content.Text(), "hidden-setting") || strings.Contains(result.Content.Text(), "hidden-secret") {
+		t.Fatalf("bash leaked supervisor environment: %q", result.Content.Text())
 	}
 }
 
@@ -222,8 +222,8 @@ func TestMachineScopeDoesNotSpecialCaseStateHome(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	result := runProcessResult(t, manager.bash, bashArgs{Command: "cat " + shellQuoteForProcessTest(secret)})
-	if !strings.Contains(result.Content, "visible state") {
-		t.Fatalf("machine scope did not expose state home: %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "visible state") {
+		t.Fatalf("machine scope did not expose state home: %q", result.Content.Text())
 	}
 }
 
@@ -245,8 +245,8 @@ func TestProcessManagerRunShellInheritsAmbientEnvironment(t *testing.T) {
 	if meta.Status != ProcessCompleted || meta.ExitCode == nil || *meta.ExitCode != 0 || meta.JobID != "" || !meta.UserInitiated {
 		t.Fatalf("process result = %#v", meta)
 	}
-	if !strings.Contains(result.Content, "ambient-shell") {
-		t.Fatalf("shell result = %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "ambient-shell") {
+		t.Fatalf("shell result = %q", result.Content.Text())
 	}
 }
 
@@ -263,10 +263,10 @@ func TestModelProcessesDoNotShareSupervisorSession(t *testing.T) {
 	command := "export SKOT_TEST_PROCESS_IDENTITY=1; exec " + shellQuoteForProcessTest(executable) + " -test.run=^TestProcessIdentityHelper$"
 
 	direct := runProcessResult(t, manager.bash, bashArgs{Command: command})
-	assertIsolatedProcessSession(t, direct.Content, parentSID)
+	assertIsolatedProcessSession(t, direct.Content.Text(), parentSID)
 
 	started := runProcessResult(t, manager.bash, bashArgs{Command: command, Background: true})
-	job := manager.get(jobIDFromText(t, started.Content))
+	job := manager.get(jobIDFromText(t, started.Content.Text()))
 	select {
 	case <-job.done:
 	case <-time.After(5 * time.Second):
@@ -279,7 +279,7 @@ func TestModelProcessesDoNotShareSupervisorSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, userSID := processIdentityForTest(t, user.Content)
+	_, _, userSID := processIdentityForTest(t, user.Content.Text())
 	if userSID != parentSID {
 		t.Fatalf("user shell session = %d, want supervisor session %d", userSID, parentSID)
 	}
@@ -355,8 +355,8 @@ func TestBashReturnsStructuredFailureStatus(t *testing.T) {
 	if meta.Status != ProcessFailed || meta.ExitCode == nil || *meta.ExitCode != 7 || meta.JobID != "" || meta.UserInitiated {
 		t.Fatalf("process result = %#v", meta)
 	}
-	if strings.Contains(result.Content, "job_id:") || len(manager.jobs) != 0 {
-		t.Fatalf("foreground command was retained: %q / %#v", result.Content, manager.jobs)
+	if strings.Contains(result.Content.Text(), "job_id:") || len(manager.jobs) != 0 {
+		t.Fatalf("foreground command was retained: %q / %#v", result.Content.Text(), manager.jobs)
 	}
 	if meta.OutputBytes == 0 || !strings.Contains(meta.FailureTail, "last") {
 		t.Fatalf("process output metadata = %#v", meta)
@@ -371,10 +371,10 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 		t.Fatalf("timeout took %s", elapsed)
 	}
 	if meta := processResultForTest(t, result); meta.Status != ProcessTimedOut || meta.ManagedProcesses < 2 {
-		t.Fatalf("timeout result = %#v / %q", meta, result.Content)
+		t.Fatalf("timeout result = %#v / %q", meta, result.Content.Text())
 	}
-	if !strings.Contains(result.Content, "managed_processes:") {
-		t.Fatalf("timeout report = %q", result.Content)
+	if !strings.Contains(result.Content.Text(), "managed_processes:") {
+		t.Fatalf("timeout report = %q", result.Content.Text())
 	}
 }
 
@@ -382,7 +382,7 @@ func TestBackgroundJobCanBeReadAndStopped(t *testing.T) {
 	manager := processManagerForTest(t)
 	for attempt := 0; attempt < 20; attempt++ {
 		started := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30 & child=$!; printf ready; wait \"$child\"", Background: true})
-		id := jobIDFromText(t, started.Content)
+		id := jobIDFromText(t, started.Content.Text())
 		job := manager.get(id)
 		deadline := time.Now().Add(3 * time.Second)
 		for {
@@ -396,12 +396,12 @@ func TestBackgroundJobCanBeReadAndStopped(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		output := runProcessResult(t, manager.job, jobArgs{Action: "output", JobID: id})
-		if !strings.Contains(output.Content, "status: running") || !strings.Contains(output.Content, "ready") {
-			t.Fatalf("job output = %q", output.Content)
+		if !strings.Contains(output.Content.Text(), "status: running") || !strings.Contains(output.Content.Text(), "ready") {
+			t.Fatalf("job output = %q", output.Content.Text())
 		}
 		stopped := runProcessResult(t, manager.job, jobArgs{Action: "stop", JobID: id})
 		if meta := processResultForTest(t, stopped); meta.Status != ProcessKilled || meta.ManagedProcesses < 2 {
-			t.Fatalf("stopped result = %#v / %q", meta, stopped.Content)
+			t.Fatalf("stopped result = %#v / %q", meta, stopped.Content.Text())
 		}
 	}
 }
@@ -409,14 +409,14 @@ func TestBackgroundJobCanBeReadAndStopped(t *testing.T) {
 func TestJobListReportsManagedJobsInStartOrder(t *testing.T) {
 	manager := processManagerForTest(t)
 	empty := runProcessResult(t, manager.job, jobArgs{Action: "list"})
-	if empty.Content != "no managed jobs\n" || len(empty.Details) != 0 {
+	if empty.Content.Text() != "no managed jobs\n" || len(empty.Details) != 0 {
 		t.Fatalf("empty list = %#v", empty)
 	}
 
 	running := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30 # long-running marker", Background: true})
-	runningID := jobIDFromText(t, running.Content)
+	runningID := jobIDFromText(t, running.Content.Text())
 	finished := runProcessResult(t, manager.bash, bashArgs{Command: "printf done # finished marker", Background: true})
-	finishedID := jobIDFromText(t, finished.Content)
+	finishedID := jobIDFromText(t, finished.Content.Text())
 	select {
 	case <-manager.get(finishedID).done:
 	case <-time.After(3 * time.Second):
@@ -424,14 +424,14 @@ func TestJobListReportsManagedJobsInStartOrder(t *testing.T) {
 	}
 
 	listed := runProcessResult(t, manager.job, jobArgs{Action: "list"})
-	if !strings.Contains(listed.Content, runningID+" running") || !strings.Contains(listed.Content, "long-running marker") {
-		t.Fatalf("running job absent from list: %q", listed.Content)
+	if !strings.Contains(listed.Content.Text(), runningID+" running") || !strings.Contains(listed.Content.Text(), "long-running marker") {
+		t.Fatalf("running job absent from list: %q", listed.Content.Text())
 	}
-	if !strings.Contains(listed.Content, finishedID+" completed") || !strings.Contains(listed.Content, "exit_code=0") || !strings.Contains(listed.Content, "finished marker") {
-		t.Fatalf("finished job absent from list: %q", listed.Content)
+	if !strings.Contains(listed.Content.Text(), finishedID+" completed") || !strings.Contains(listed.Content.Text(), "exit_code=0") || !strings.Contains(listed.Content.Text(), "finished marker") {
+		t.Fatalf("finished job absent from list: %q", listed.Content.Text())
 	}
-	if strings.Index(listed.Content, runningID) > strings.Index(listed.Content, finishedID) {
-		t.Fatalf("jobs are not in start order: %q", listed.Content)
+	if strings.Index(listed.Content.Text(), runningID) > strings.Index(listed.Content.Text(), finishedID) {
+		t.Fatalf("jobs are not in start order: %q", listed.Content.Text())
 	}
 }
 
@@ -449,32 +449,32 @@ func TestJobListReturnsRegistryAttachFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "attach session jobs") || !strings.Contains(err.Error(), "job home must be a directory") {
 		t.Fatalf("job list attach error = %v", err)
 	}
-	if output.Content != "" {
-		t.Fatalf("job list returned content with attach failure: %q", output.Content)
+	if output.Content.Text() != "" {
+		t.Fatalf("job list returned content with attach failure: %q", output.Content.Text())
 	}
 }
 
 func TestJobWaitReturnsCompletionOrCurrentStateAtTimeout(t *testing.T) {
 	manager := processManagerForTest(t)
 	short := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 0.05; printf finally", Background: true})
-	shortID := jobIDFromText(t, short.Content)
+	shortID := jobIDFromText(t, short.Content.Text())
 	completed := runProcessResult(t, manager.job, jobArgs{Action: "wait", JobID: shortID, TimeoutSeconds: 2})
 	if meta := processResultForTest(t, completed); meta.Status != ProcessCompleted {
-		t.Fatalf("completed wait = %#v / %q", meta, completed.Content)
+		t.Fatalf("completed wait = %#v / %q", meta, completed.Content.Text())
 	}
-	if !strings.Contains(completed.Content, "finally") {
-		t.Fatalf("completed output = %q", completed.Content)
+	if !strings.Contains(completed.Content.Text(), "finally") {
+		t.Fatalf("completed output = %q", completed.Content.Text())
 	}
 
 	long := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	longID := jobIDFromText(t, long.Content)
+	longID := jobIDFromText(t, long.Content.Text())
 	started := time.Now()
 	waited := runProcessResult(t, manager.job, jobArgs{Action: "wait", JobID: longID, TimeoutSeconds: 1})
 	if elapsed := time.Since(started); elapsed < 900*time.Millisecond || elapsed > 3*time.Second {
 		t.Fatalf("bounded wait took %s", elapsed)
 	}
 	if meta := processResultForTest(t, waited); meta.Status != ProcessRunning {
-		t.Fatalf("timed wait = %#v / %q", meta, waited.Content)
+		t.Fatalf("timed wait = %#v / %q", meta, waited.Content.Text())
 	}
 
 	raw, err := json.Marshal(jobArgs{Action: "wait", JobID: longID, TimeoutSeconds: 3601})
@@ -490,7 +490,7 @@ func TestCompletionEventsRepeatUntilDeliveredAndStayWithTheirSession(t *testing.
 	manager := processManagerForTest(t)
 	sessionContext := agent.WithToolSessionID(context.Background(), "session-a")
 	started := runProcessResultContext(t, sessionContext, manager.bash, bashArgs{Command: "printf complete", Background: true})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	select {
 	case <-manager.get(id).done:
 	case <-time.After(3 * time.Second):
@@ -500,8 +500,8 @@ func TestCompletionEventsRepeatUntilDeliveredAndStayWithTheirSession(t *testing.
 		t.Fatalf("completion crossed sessions: %#v", events)
 	}
 	otherSession := agent.WithToolSessionID(context.Background(), "session-b")
-	if list := runProcessResultContext(t, otherSession, manager.job, jobArgs{Action: "list"}); list.Content != "no managed jobs\n" {
-		t.Fatalf("job list crossed sessions: %q", list.Content)
+	if list := runProcessResultContext(t, otherSession, manager.job, jobArgs{Action: "list"}); list.Content.Text() != "no managed jobs\n" {
+		t.Fatalf("job list crossed sessions: %q", list.Content.Text())
 	}
 	raw, err := json.Marshal(jobArgs{Action: "output", JobID: id})
 	if err != nil {
@@ -524,11 +524,11 @@ func TestCompletionEventsRepeatUntilDeliveredAndStayWithTheirSession(t *testing.
 	}
 
 	started = runProcessResultContext(t, sessionContext, manager.bash, bashArgs{Command: "printf inspected", Background: true})
-	inspectedID := jobIDFromText(t, started.Content)
+	inspectedID := jobIDFromText(t, started.Content.Text())
 	<-manager.get(inspectedID).done
 	output := runProcessResultContext(t, sessionContext, manager.job, jobArgs{Action: "output", JobID: inspectedID})
-	if !strings.Contains(output.Content, "inspected") {
-		t.Fatalf("job output = %q", output.Content)
+	if !strings.Contains(output.Content.Text(), "inspected") {
+		t.Fatalf("job output = %q", output.Content.Text())
 	}
 	if events := manager.PendingCompletionEvents("session-a"); len(events) != 1 || events[0].JobID != inspectedID {
 		t.Fatalf("unjournaled inspection consumed completion: %#v", events)
@@ -546,7 +546,7 @@ func TestSupervisedCompletionAndDeliverySurviveManagerRestart(t *testing.T) {
 
 	first := newProcessManagerForTest(t, root, home)
 	started := runProcessResultContext(t, ctx, first.bash, bashArgs{Command: "printf durable", Background: true})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	job := first.get(id)
 	if job == nil || !job.supervised || job.detached {
 		t.Fatalf("background job = %#v", job)
@@ -572,8 +572,8 @@ func TestSupervisedCompletionAndDeliverySurviveManagerRestart(t *testing.T) {
 		t.Fatalf("restored completion events = %#v", events)
 	}
 	output := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "output", JobID: id})
-	if !strings.Contains(output.Content, "durable") {
-		t.Fatalf("restored output = %q", output.Content)
+	if !strings.Contains(output.Content.Text(), "durable") {
+		t.Fatalf("restored output = %q", output.Content.Text())
 	}
 	second.MarkCompletionDelivered(id)
 	if err := second.Close(); err != nil {
@@ -605,7 +605,7 @@ func TestCleanCloseStopsNonDetachedWorkerAndKeepsTerminalState(t *testing.T) {
 	ctx := agent.WithToolSessionID(context.Background(), "session-close")
 	first := newProcessManagerForTest(t, root, home)
 	started := runProcessResultContext(t, ctx, first.bash, bashArgs{Command: "sleep 30 & printf ready; wait", Background: true})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	job := first.get(id)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -644,7 +644,7 @@ func TestSupervisedWorkerCanBeAdoptedAfterAbruptManagerLoss(t *testing.T) {
 	started := runProcessResultContext(t, ctx, first.bash, bashArgs{
 		Command: "while [ ! -f release ]; do sleep 0.05; done; printf recovered", Background: true,
 	})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	firstJob := first.get(id)
 
 	// Model the part of a crash relevant to the registry: the manager stops
@@ -676,8 +676,8 @@ func TestSupervisedWorkerCanBeAdoptedAfterAbruptManagerLoss(t *testing.T) {
 		t.Fatal("original worker observer did not finish")
 	}
 	output := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "output", JobID: id})
-	if !strings.Contains(output.Content, "recovered") {
-		t.Fatalf("adopted output = %q", output.Content)
+	if !strings.Contains(output.Content.Text(), "recovered") {
+		t.Fatalf("adopted output = %q", output.Content.Text())
 	}
 }
 
@@ -1012,7 +1012,7 @@ func TestStoppedWorkerStaysLiveAndConsumesQueuedStopAfterContinue(t *testing.T) 
 		Command:    workerPayloadPIDCommand(pidFile),
 		Background: true,
 	})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	workerPID, payloadPID := waitForWorkerPayloadPIDs(t, pidFile)
 	finished := false
 	t.Cleanup(func() {
@@ -1070,7 +1070,7 @@ func TestPayloadDoesNotInheritWorkerLifecycleFIFO(t *testing.T) {
 		Command:    workerPayloadPIDCommand(pidFile),
 		Background: true,
 	})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	job := manager.get(id)
 	workerPID, payloadPID := waitForWorkerPayloadPIDs(t, pidFile)
 	defer func() {
@@ -1291,15 +1291,15 @@ func TestBashCapsLogAndMarksTruncatedPreview(t *testing.T) {
 	manager.logLimit = 64
 	result := runProcessResult(t, manager.bash, bashArgs{Command: "head -c 1024 /dev/zero | tr '\\0' x"})
 	meta := processResultForTest(t, result)
-	if meta.OutputBytes != 64 || meta.DiscardedBytes < 900 || !strings.Contains(result.Content, "truncated: true") {
-		t.Fatalf("meta=%#v result=%q", meta, result.Content)
+	if meta.OutputBytes != 64 || meta.DiscardedBytes < 900 || !strings.Contains(result.Content.Text(), "truncated: true") {
+		t.Fatalf("meta=%#v result=%q", meta, result.Content.Text())
 	}
 
 	manager.logLimit = defaultCommandLogLimit
 	result = runProcessResult(t, manager.bash, bashArgs{Command: "head -c 40000 /dev/zero | tr '\\0' x"})
 	meta = processResultForTest(t, result)
-	if meta.DiscardedBytes != 0 || meta.OutputBytes != 40000 || !strings.Contains(result.Content, "truncated: true") {
-		t.Fatalf("preview meta=%#v result bytes=%d", meta, len(result.Content))
+	if meta.DiscardedBytes != 0 || meta.OutputBytes != 40000 || !strings.Contains(result.Content.Text(), "truncated: true") {
+		t.Fatalf("preview meta=%#v result bytes=%d", meta, len(result.Content.Text()))
 	}
 }
 
@@ -1309,7 +1309,7 @@ func TestSupervisedJobKeepsOnlyABoundedDurableTail(t *testing.T) {
 	started := runProcessResult(t, manager.bash, bashArgs{
 		Command: "head -c 1024 /dev/zero | tr '\\0' x", Background: true,
 	})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	job := manager.get(id)
 	select {
 	case <-job.done:
@@ -1318,8 +1318,8 @@ func TestSupervisedJobKeepsOnlyABoundedDurableTail(t *testing.T) {
 	}
 	result := runProcessResult(t, manager.job, jobArgs{Action: "output", JobID: id})
 	meta := processResultForTest(t, result)
-	if meta.OutputBytes != 64 || meta.DiscardedBytes < 900 || !strings.Contains(result.Content, "truncated: true") {
-		t.Fatalf("durable meta=%#v result=%q", meta, result.Content)
+	if meta.OutputBytes != 64 || meta.DiscardedBytes < 900 || !strings.Contains(result.Content.Text(), "truncated: true") {
+		t.Fatalf("durable meta=%#v result=%q", meta, result.Content.Text())
 	}
 	info, err := os.Stat(filepath.Join(job.jobDir, jobStdoutFile))
 	if err != nil {
@@ -1439,7 +1439,7 @@ func TestSupervisedOutputStorageFailureDoesNotChangePayloadResult(t *testing.T) 
 		"; printf written > " + shellQuoteForProcessTest(writtenMarker) +
 		"; while [ ! -f " + shellQuoteForProcessTest(releaseMarker) + " ]; do sleep 0.01; done"
 	started := runProcessResult(t, manager.bash, bashArgs{Command: command, Background: true})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	job := manager.get(id)
 	waitForPathForProcessTest(t, startedMarker)
 
@@ -1474,10 +1474,10 @@ func TestSupervisedOutputStorageFailureDoesNotChangePayloadResult(t *testing.T) 
 	result := runProcessResult(t, manager.job, jobArgs{Action: "output", JobID: id})
 	meta := processResultForTest(t, result)
 	if meta.Status != ProcessCompleted || meta.ExitCode == nil || *meta.ExitCode != 0 {
-		t.Fatalf("payload result changed by output storage failure: %#v / %q", meta, result.Content)
+		t.Fatalf("payload result changed by output storage failure: %#v / %q", meta, result.Content.Text())
 	}
-	if !strings.Contains(meta.OutputError, "replace durable output") || !strings.Contains(result.Content, "output_error:") {
-		t.Fatalf("output degradation was not reported: %#v / %q", meta, result.Content)
+	if !strings.Contains(meta.OutputError, "replace durable output") || !strings.Contains(result.Content.Text(), "output_error:") {
+		t.Fatalf("output degradation was not reported: %#v / %q", meta, result.Content.Text())
 	}
 	if meta.OutputBytes != 0 || meta.DiscardedBytes < 4096 {
 		t.Fatalf("degraded output accounting = %#v", meta)
@@ -1487,7 +1487,7 @@ func TestSupervisedOutputStorageFailureDoesNotChangePayloadResult(t *testing.T) 
 func TestProcessManagerCloseKillsBackgroundJobs(t *testing.T) {
 	manager := processManagerForTest(t)
 	started := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1506,8 +1506,8 @@ func TestProcessManagerCloseSessionStopsAndForgetsOnlyThatSessionsJobs(t *testin
 	sessionB := agent.WithToolSessionID(context.Background(), "session-b")
 	startedA := runProcessResultContext(t, sessionA, manager.bash, bashArgs{Command: "sleep 30", Background: true})
 	startedB := runProcessResultContext(t, sessionB, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	idA := jobIDFromText(t, startedA.Content)
-	idB := jobIDFromText(t, startedB.Content)
+	idA := jobIDFromText(t, startedA.Content.Text())
+	idB := jobIDFromText(t, startedB.Content.Text())
 	jobA := manager.get(idA)
 
 	if err := manager.CloseSession("session-a"); err != nil {
@@ -1530,7 +1530,7 @@ func TestProcessManagerCloseSessionStopsAndForgetsOnlyThatSessionsJobs(t *testin
 func TestRunningProcessesRetainScopeFromLaunch(t *testing.T) {
 	manager := processManagerForTest(t)
 	started := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	id := jobIDFromText(t, started.Content)
+	id := jobIDFromText(t, started.Content.Text())
 	if meta := processResultForTest(t, started); meta.Scope != ScopeMachine {
 		t.Fatalf("launch sandbox = %q", meta.Scope)
 	}
@@ -1591,7 +1591,7 @@ func TestAwaitRequiredJobsJoinsOnlyYieldedForegroundWork(t *testing.T) {
 	if pending, err := manager.AwaitRequiredJobs(context.Background(), "session-test"); err != nil || pending {
 		t.Fatalf("explicit background was join-required: pending=%v err=%v", pending, err)
 	}
-	explicitID := jobIDFromText(t, explicit.Content)
+	explicitID := jobIDFromText(t, explicit.Content.Text())
 	if job := manager.get(explicitID); job == nil || !job.supervised {
 		t.Fatalf("explicit background did not use durable supervision: %#v", job)
 	}
@@ -1600,7 +1600,7 @@ func TestAwaitRequiredJobsJoinsOnlyYieldedForegroundWork(t *testing.T) {
 
 	manager.bashYield = 10 * time.Millisecond
 	yielded := runProcessResultContext(t, ctx, manager.bash, bashArgs{Command: "sleep 0.1; printf done"})
-	id := jobIDFromText(t, yielded.Content)
+	id := jobIDFromText(t, yielded.Content.Text())
 	if job := manager.get(id); job == nil || job.supervised {
 		t.Fatalf("automatic foreground yield changed to durable supervision: %#v", job)
 	}
@@ -1644,8 +1644,8 @@ func TestBashWorkspaceScopeAcceptsAbsoluteWorkdirInsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.Content, canonicalpath.Resolve(root)) {
-		t.Fatalf("absolute in-workspace workdir output = %q", output.Content)
+	if !strings.Contains(output.Content.Text(), canonicalpath.Resolve(root)) {
+		t.Fatalf("absolute in-workspace workdir output = %q", output.Content.Text())
 	}
 }
 
@@ -1661,8 +1661,8 @@ func TestBashMachineScopeAcceptsExplicitExternalWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.Content, canonicalpath.Resolve(outside)) {
-		t.Fatalf("external-workdir output = %q", output.Content)
+	if !strings.Contains(output.Content.Text(), canonicalpath.Resolve(outside)) {
+		t.Fatalf("external-workdir output = %q", output.Content.Text())
 	}
 }
 

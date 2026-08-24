@@ -16,7 +16,7 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 		Journal: journal,
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
 			called = command
-			return ToolOutput{Content: "status: completed\n\nhello\n", Details: []Detail{{
+			return ToolOutput{Content: TextContent("status: completed\n\nhello\n"), Details: []Detail{{
 				Kind: "process_result", Data: json.RawMessage(`{"status":"completed"}`),
 			}}}, nil
 		},
@@ -53,12 +53,12 @@ func TestPrivateShellDoesNotTouchJournal(t *testing.T) {
 		Backend: &scriptedModel{},
 		Journal: journal,
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
-			return ToolOutput{Content: command}, nil
+			return ToolOutput{Content: TextContent(command)}, nil
 		},
 	})
 
 	result, err := runtime.RunPrivateShell(context.Background(), "private command")
-	if err != nil || result.Content != "private command" {
+	if err != nil || result.Content.Text() != "private command" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	if records := journal.snapshot(); len(records) != 0 {
@@ -73,11 +73,11 @@ func TestShellRedactsKnownSecretFromResultAndDurableJournal(t *testing.T) {
 		Backend: &scriptedModel{}, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		UserShell: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: "value=" + secret}, nil
+			return ToolOutput{Content: TextContent("value=" + secret)}, nil
 		},
 	})
 	result, err := runtime.RunShell(context.Background(), "printf "+secret)
-	if err != nil || strings.Contains(result.Content, secret) {
+	if err != nil || strings.Contains(result.Content.Text(), secret) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	raw, err := json.Marshal(journal.snapshot())

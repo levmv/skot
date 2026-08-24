@@ -61,7 +61,7 @@ func TestBuiltInAndProcessPoliciesAgreeOnUserPathReach(t *testing.T) {
 		t.Helper()
 		result := runProcessResult(t, manager.bash, bashArgs{Command: "cat " + shellQuoteForProcessTest(path)})
 		if metadata := processResultForTest(t, result); metadata.Status != wantStatus {
-			t.Fatalf("process read %s = %#v / %q", path, metadata, result.Content)
+			t.Fatalf("process read %s = %#v / %q", path, metadata, result.Content.Text())
 		}
 	}
 

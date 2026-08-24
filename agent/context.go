@@ -37,6 +37,7 @@ type ContextReport struct {
 type SessionStatus struct {
 	ContextReport ContextReport
 	Usage         ModelUsage
+	ImageDelivery ImageDeliveryStatus
 }
 
 func (runtime *Runtime) SessionStatus() SessionStatus {
@@ -55,7 +56,26 @@ func (runtime *Runtime) calculateSessionStatus(state State) SessionStatus {
 	return SessionStatus{
 		ContextReport: runtime.contextReport(state, runtime.QueuedInputs()...),
 		Usage:         state.Usage,
+		ImageDelivery: runtime.visibleImageDelivery(state),
 	}
+}
+
+func (runtime *Runtime) visibleImageDelivery(state State) ImageDeliveryStatus {
+	firstSequence := state.firstVerbatimSequence()
+	for _, block := range state.Blocks {
+		if firstSequence != 0 && block.StartSequence < firstSequence {
+			continue
+		}
+		for _, entry := range block.Entries {
+			if state.ToolPruning != nil && entry.Sequence <= state.ToolPruning.ThroughSequence {
+				continue
+			}
+			if entry.Item.ToolResult != nil && entry.Item.ToolResult.Content.HasImage() {
+				return runtime.effectiveImageDelivery(state.ImageDelivery.Status)
+			}
+		}
+	}
+	return ImageDeliveryUnknown
 }
 
 func (runtime *Runtime) storeSessionStatus(sequence uint64, status SessionStatus) {
@@ -166,7 +186,7 @@ func (runtime *Runtime) projectedItemsForRequest(state State, items []Item, pend
 	projected := runtime.projectModelItems(items, ProviderContext{
 		Backend: runtime.modelInfo.BackendID,
 		Epoch:   state.Selection.Epoch,
-	})
+	}, state.ImageDelivery.Status)
 	// Projection may remove reasoning only, so pending users remain the suffix.
 	boundary := max(0, len(projected)-pending)
 	return projected, boundary
@@ -186,7 +206,25 @@ func estimateItemsTokens(items []Item) int {
 			}
 		case ItemToolResult:
 			if item.ToolResult != nil {
-				tokens += estimateTextTokens(item.ToolResult.Content) + estimateTextTokens(item.ToolResult.CallID) + perToolResultTokens
+				tokens += estimateContentTokens(item.ToolResult.Content) + estimateTextTokens(item.ToolResult.CallID) + perToolResultTokens
+			}
+		}
+	}
+	return tokens
+}
+
+func estimateContentTokens(content Content) int {
+	tokens := 0
+	for _, part := range content {
+		switch part.Kind {
+		case ContentPartText:
+			tokens += estimateTextTokens(part.Text)
+		case ContentPartImage:
+			if part.Image != nil {
+				// Normalization bounds dimensions before content reaches this
+				// layer. The 28x28 grid is a stable provider-neutral geometry
+				// heuristic; exact visual-token accounting differs by route.
+				tokens += ((part.Image.Width + 27) / 28) * ((part.Image.Height + 27) / 28)
 			}
 		}
 	}

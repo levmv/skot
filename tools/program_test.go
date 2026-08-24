@@ -94,12 +94,12 @@ func TestProgramToolGetsObjectOnStdinKeepsStderrSeparateAndAppliesEnvironmentOve
 	}
 	canonicalWorkdir := filepath.Join(canonicalpath.Resolve(root), "nested")
 	for _, want := range []string{`stdin={"query":"book"}`, "ambient=", "overlay=configured", "pwd=" + canonicalWorkdir, "stderr:\ndiagnostic", "status: failed", "exit_code: 4"} {
-		if !strings.Contains(output.Content, want) {
-			t.Fatalf("output = %q, want %q", output.Content, want)
+		if !strings.Contains(output.Content.Text(), want) {
+			t.Fatalf("output = %q, want %q", output.Content.Text(), want)
 		}
 	}
-	if strings.Contains(output.Content, "ambient=ambient") {
-		t.Fatalf("program inherited hidden Skot environment: %q", output.Content)
+	if strings.Contains(output.Content.Text(), "ambient=ambient") {
+		t.Fatalf("program inherited hidden Skot environment: %q", output.Content.Text())
 	}
 	result := processResultForTest(t, output)
 	if result.Status != ProcessFailed || result.ExitCode == nil || *result.ExitCode != 4 || result.JobID != "" || result.OutputBytes == 0 {
@@ -121,8 +121,8 @@ func TestProgramForegroundReturnsMoreThanTheBashPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(output.Content) < 40000 || strings.Contains(output.Content, "truncated: true") {
-		t.Fatalf("configured program result bytes=%d, content was unexpectedly truncated", len(output.Content))
+	if len(output.Content.Text()) < 40000 || strings.Contains(output.Content.Text(), "truncated: true") {
+		t.Fatalf("configured program result bytes=%d, content was unexpectedly truncated", len(output.Content.Text()))
 	}
 }
 
@@ -141,7 +141,7 @@ func TestProgramBackgroundAutoStripsItsSyntheticArgumentAndUsesJobTool(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := jobIDFromText(t, output.Content)
+	id := jobIDFromText(t, output.Content.Text())
 	if pending, err := manager.AwaitRequiredJobs(context.Background(), "session-program"); err != nil || pending {
 		t.Fatalf("explicit background unexpectedly requires joining: pending=%t err=%v", pending, err)
 	}
@@ -185,7 +185,7 @@ func TestProgramYieldPreservesForegroundJoinObligation(t *testing.T) {
 	if elapsed := time.Since(started); elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
 		t.Fatalf("yielded after %s", elapsed)
 	}
-	id := jobIDFromText(t, output.Content)
+	id := jobIDFromText(t, output.Content.Text())
 	if pending, err := manager.AwaitRequiredJobs(context.Background(), "session-yield"); err != nil || !pending {
 		t.Fatalf("yielded foreground was not joined: pending=%t err=%v", pending, err)
 	}
@@ -224,9 +224,9 @@ func TestDetachedProgramSurvivesManagerCloseAndCanBeReattached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := jobIDFromText(t, output.Content)
-	if !strings.Contains(output.Content, "detached: true") {
-		t.Fatalf("detached start output = %q", output.Content)
+	id := jobIDFromText(t, output.Content.Text())
+	if !strings.Contains(output.Content.Text(), "detached: true") {
+		t.Fatalf("detached start output = %q", output.Content.Text())
 	}
 	if job := first.get(id); job == nil || !job.supervised || !job.detached {
 		t.Fatalf("detached job = %#v", job)
@@ -249,8 +249,8 @@ func TestDetachedProgramSurvivesManagerCloseAndCanBeReattached(t *testing.T) {
 	if status, ok := second.Status(id); !ok || status.Status != ProcessRunning || !status.Detached {
 		t.Fatalf("reattached job = %#v, %t", status, ok)
 	}
-	if listed := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "list"}); !strings.Contains(listed.Content, id+" running") || !strings.Contains(listed.Content, " detached ") {
-		t.Fatalf("detached job list = %q", listed.Content)
+	if listed := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "list"}); !strings.Contains(listed.Content.Text(), id+" running") || !strings.Contains(listed.Content.Text(), " detached ") {
+		t.Fatalf("detached job list = %q", listed.Content.Text())
 	}
 	if err := os.WriteFile(gate, []byte("release"), 0o600); err != nil {
 		t.Fatal(err)
@@ -265,8 +265,8 @@ func TestDetachedProgramSurvivesManagerCloseAndCanBeReattached(t *testing.T) {
 	if meta := processResultForTest(t, finished); meta.Status != ProcessCompleted || !meta.Detached {
 		t.Fatalf("detached result = %#v", meta)
 	}
-	if !strings.Contains(finished.Content, "survived") {
-		t.Fatalf("detached output = %q", finished.Content)
+	if !strings.Contains(finished.Content.Text(), "survived") {
+		t.Fatalf("detached output = %q", finished.Content.Text())
 	}
 	if err := second.Close(); err != nil {
 		t.Fatal(err)

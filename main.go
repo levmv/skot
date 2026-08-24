@@ -393,10 +393,10 @@ func verboseEmitter(enabled bool, output io.Writer) agent.EmitFunc {
 			fmt.Fprintf(output, "sk: tool %s\n", event.Call.Name)
 		case agent.EventToolFinished:
 			if event.Result.Error {
-				fmt.Fprintf(output, "sk: tool %s failed: %s\n", event.Call.Name, event.Result.Content)
+				fmt.Fprintf(output, "sk: tool %s failed: %s\n", event.Call.Name, event.Result.Content.Text())
 			}
 		case agent.EventToolRejected:
-			fmt.Fprintf(output, "sk: tool %s rejected: %s\n", event.Call.Name, event.Result.Content)
+			fmt.Fprintf(output, "sk: tool %s rejected: %s\n", event.Call.Name, event.Result.Content.Text())
 		case agent.EventStatus, agent.EventBoundaryDelivered, agent.EventContextCompacted, agent.EventToolResultsPruned:
 			fmt.Fprintf(output, "sk: %s\n", event.Text)
 		case agent.EventRunFinished:

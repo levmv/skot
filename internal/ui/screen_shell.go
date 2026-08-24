@@ -52,15 +52,15 @@ func (transcript *transcriptState) finishShell(result agent.ToolResult, runErr e
 		tool.done = true
 		tool.elapsed = max(time.Duration(0), finishedAt.Sub(tool.startedAt))
 		tool.failed = runErr != nil && !errors.Is(runErr, context.Canceled)
-		tool.output = processOutputFromContent(result.Content)
+		tool.output = processOutputFromContent(result.Content.Text())
 		for _, detail := range result.Details {
 			if process, ok := agent.ProcessResultFromDetail(detail); ok {
 				tool.process = &process
 				tool.failed = process.Status != agent.ProcessCompleted
 			}
 		}
-		if tool.process == nil && strings.TrimSpace(result.Content) != "" {
-			tool.output = sanitizeTerminalText(result.Content)
+		if tool.process == nil && strings.TrimSpace(result.Content.Text()) != "" {
+			tool.output = sanitizeTerminalText(result.Content.Text())
 		}
 		if runErr != nil && tool.process == nil {
 			block.text += ": " + compactSingleLine(runErr.Error(), 180)

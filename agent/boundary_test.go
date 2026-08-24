@@ -34,7 +34,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		Spec: ToolSpec{Name: "start_work", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			completionAvailable = true
-			return ToolOutput{Content: "job started"}, nil
+			return ToolOutput{Content: TextContent("job started")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{
@@ -264,7 +264,9 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 	}}
 	tool := Tool{
 		Spec: ToolSpec{Name: "durable_tool", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "complete"}, nil },
+		Run: func(context.Context, string) (ToolOutput, error) {
+			return ToolOutput{Content: TextContent("complete")}, nil
+		},
 	}
 	firstModel := &scriptedModel{steps: []modelStep{
 		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {

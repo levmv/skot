@@ -30,6 +30,7 @@ func (runtime *Runtime) effectiveConfigSnapshotWithProgramToolsLocked(modelInfo 
 		RuntimePolicy: RuntimePolicySnapshot{
 			ContextWindow:          modelInfo.ContextWindow,
 			ContextWindowEstimated: modelInfo.ContextWindowEstimated,
+			ImageInputUnsupported:  modelInfo.ImageInputUnsupported,
 			MaxModelAttempts:       runtime.requestPolicy.MaxAttempts,
 			RetryBudget:            durationSnapshot(runtime.requestPolicy.RetryBudget),
 			RetryBaseDelay:         durationSnapshot(runtime.requestPolicy.BaseDelay),

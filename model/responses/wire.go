@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,7 +102,13 @@ type functionCallItem struct {
 type functionCallOutputItem struct {
 	Type   string `json:"type"`
 	CallID string `json:"call_id"`
-	Output string `json:"output"`
+	Output any    `json:"output"`
+}
+
+type functionCallOutputPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type functionCallIdentity struct {
@@ -286,7 +293,7 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 				callID = item.ToolResult.CallID
 			}
 			raw, err := marshalInputItem(functionCallOutputItem{
-				Type: "function_call_output", CallID: callID, Output: item.ToolResult.Content,
+				Type: "function_call_output", CallID: callID, Output: responsesToolResultContent(item.ToolResult.Content),
 			})
 			if err != nil {
 				return responseRequest{}, err
@@ -318,6 +325,29 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 		}
 	}
 	return wireRequest, nil
+}
+
+func responsesToolResultContent(content agent.Content) any {
+	if !content.HasImage() {
+		return content.Text()
+	}
+	parts := make([]functionCallOutputPart, 0, len(content))
+	for _, part := range content {
+		switch part.Kind {
+		case agent.ContentPartText:
+			if part.Text != "" {
+				parts = append(parts, functionCallOutputPart{Type: "input_text", Text: part.Text})
+			}
+		case agent.ContentPartImage:
+			if part.Image != nil {
+				parts = append(parts, functionCallOutputPart{
+					Type:     "input_image",
+					ImageURL: "data:" + part.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(part.Image.Data),
+				})
+			}
+		}
+	}
+	return parts
 }
 
 func marshalInputItem(value any) (json.RawMessage, error) {

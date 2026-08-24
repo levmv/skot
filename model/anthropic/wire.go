@@ -33,9 +33,21 @@ type contentBlock struct {
 	Name         string          `json:"name,omitempty"`
 	Input        json.RawMessage `json:"input,omitempty"`
 	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Content      *string         `json:"content,omitempty"`
+	Content      any             `json:"content,omitempty"`
 	IsError      bool            `json:"is_error,omitempty"`
 	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+}
+
+type toolResultContentBlock struct {
+	Type   string       `json:"type"`
+	Text   string       `json:"text,omitempty"`
+	Source *imageSource `json:"source,omitempty"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
 }
 
 type cacheControl struct {
@@ -242,7 +254,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 				providerID = item.ToolResult.CallID
 			}
 			messages = appendMessage(messages, "user", contentBlock{
-				Type: "tool_result", ToolUseID: providerID, Content: stringPointer(item.ToolResult.Content), IsError: item.ToolResult.Error,
+				Type: "tool_result", ToolUseID: providerID, Content: anthropicToolResultContent(item.ToolResult.Content), IsError: item.ToolResult.Error,
 			})
 			index++
 		default:
@@ -250,6 +262,28 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 		}
 	}
 	return messages, nil
+}
+
+func anthropicToolResultContent(content agent.Content) any {
+	if !content.HasImage() {
+		return content.Text()
+	}
+	blocks := make([]toolResultContentBlock, 0, len(content))
+	for _, part := range content {
+		switch part.Kind {
+		case agent.ContentPartText:
+			if part.Text != "" {
+				blocks = append(blocks, toolResultContentBlock{Type: "text", Text: part.Text})
+			}
+		case agent.ContentPartImage:
+			if part.Image != nil {
+				blocks = append(blocks, toolResultContentBlock{Type: "image", Source: &imageSource{
+					Type: "base64", MediaType: part.Image.MediaType, Data: part.Image.Data,
+				}})
+			}
+		}
+	}
+	return blocks
 }
 
 func appendMessage(messages []message, role string, block contentBlock) []message {

@@ -103,7 +103,7 @@ func (runtime *Runtime) executeParallelToolCalls(ctx context.Context, live *stat
 				if next.cancelled {
 					next.result = ToolResult{
 						CallID:  calls[remaining].ID,
-						Content: "tool execution cancelled after a fatal failure in the same parallel group",
+						Content: TextContent("tool execution cancelled after a fatal failure in the same parallel group"),
 						Error:   true,
 					}
 				}

@@ -71,6 +71,19 @@ func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 	}
 }
 
+func TestImageReadShowsDimensionsWithoutPayload(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.addToolCall(agent.ToolCall{ID: "image", Name: "read", RawArguments: `{"path":"shot.png"}`})
+	model.finishTool(agent.ToolResult{CallID: "image", Content: agent.ImageToolContent("metadata", agent.ImageContent{
+		MediaType: "image/png", Data: []byte("payload-must-stay-hidden"), Width: 1200, Height: 800,
+	})})
+
+	text := model.transcript.blocks[len(model.transcript.blocks)-1].text
+	if !strings.Contains(text, "[image/png 1200×800]") || strings.Contains(text, "payload-must-stay-hidden") {
+		t.Fatalf("image tool display = %q", text)
+	}
+}
+
 func TestReadGroupTimesOnlyTheToolWorkAcrossSeparateCalls(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.addToolCallAt(agent.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"agent/runtime.go"}`}, time.Now())
@@ -111,7 +124,7 @@ func TestCompactToolTextSanitizesTerminalControls(t *testing.T) {
 func TestRejectedToolCallIsShownWithoutRemainingPending(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	call := agent.ToolCall{ID: "rejected", Name: "read", RawArguments: `{"path":"large.txt"}`}
-	result := agent.ToolResult{CallID: call.ID, Content: "tool iteration limit reached", Error: true}
+	result := agent.ToolResult{CallID: call.ID, Content: agent.TextContent("tool iteration limit reached"), Error: true}
 	model.applyAgentEvent(agent.Event{Kind: agent.EventToolRejected, Call: &call, Result: &result})
 
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]

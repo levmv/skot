@@ -1,6 +1,8 @@
 package chatcompletions
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,10 +103,44 @@ type streamOptions struct {
 
 type chatMessage struct {
 	Role             string         `json:"role"`
-	Content          string         `json:"content"`
+	Content          chatContent    `json:"content"`
 	ReasoningContent string         `json:"reasoning_content,omitempty"`
 	ToolCalls        []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
+}
+
+type chatContent struct {
+	Text  string
+	Parts []chatContentPart
+}
+
+type chatContentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *chatImageURL `json:"image_url,omitempty"`
+}
+
+type chatImageURL struct {
+	URL string `json:"url"`
+}
+
+func textChatContent(text string) chatContent { return chatContent{Text: text} }
+
+func (content chatContent) MarshalJSON() ([]byte, error) {
+	if content.Parts == nil {
+		return json.Marshal(content.Text)
+	}
+	return json.Marshal(content.Parts)
+}
+
+func (content *chatContent) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) != 0 && data[0] == '"' {
+		content.Parts = nil
+		return json.Unmarshal(data, &content.Text)
+	}
+	content.Text = ""
+	return json.Unmarshal(data, &content.Parts)
 }
 
 type chatTool struct {
@@ -262,21 +298,21 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, e
 func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage, error) {
 	messages := make([]chatMessage, 0, len(request.Items)+1)
 	if request.Instructions != "" {
-		messages = append(messages, chatMessage{Role: "system", Content: request.Instructions})
+		messages = append(messages, chatMessage{Role: "system", Content: textChatContent(request.Instructions)})
 	}
 	if request.Summary != "" {
-		messages = append(messages, chatMessage{Role: "system", Content: agent.ConversationSummaryPrefix + request.Summary})
+		messages = append(messages, chatMessage{Role: "system", Content: textChatContent(agent.ConversationSummaryPrefix + request.Summary)})
 	}
 	callIDs := make(map[string]string)
 	for index := 0; index < len(request.Items); {
 		item := request.Items[index]
 		switch item.Kind {
 		case agent.ItemUserText:
-			messages = append(messages, chatMessage{Role: "user", Content: item.Text})
+			messages = append(messages, chatMessage{Role: "user", Content: textChatContent(item.Text)})
 			index++
 
 		case agent.ItemBoundaryText:
-			messages = append(messages, chatMessage{Role: "system", Content: item.Text})
+			messages = append(messages, chatMessage{Role: "system", Content: textChatContent(item.Text)})
 			index++
 
 		case agent.ItemAssistantText, agent.ItemReasoning, agent.ItemToolCall:
@@ -289,7 +325,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 				part := request.Items[index]
 				switch part.Kind {
 				case agent.ItemAssistantText:
-					message.Content += part.Text
+					message.Content.Text += part.Text
 				case agent.ItemReasoning:
 					if backend.matchesProviderContext(part.ProviderContext, request.ProviderEpoch) {
 						message.ReasoningContent += part.Text
@@ -320,25 +356,47 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 			messages = append(messages, message)
 
 		case agent.ItemToolResult:
-			if item.ToolResult == nil || item.ToolResult.CallID == "" {
-				return nil, fmt.Errorf("tool result item %d is invalid", index)
+			var imageParts []chatContentPart
+			for index < len(request.Items) && request.Items[index].Kind == agent.ItemToolResult {
+				result := request.Items[index].ToolResult
+				if result == nil || result.CallID == "" {
+					return nil, fmt.Errorf("tool result item %d is invalid", index)
+				}
+				providerID := callIDs[result.CallID]
+				if providerID == "" {
+					providerID = result.CallID
+				}
+				text := result.Content.Text()
+				if text == "" && result.Content.HasImage() {
+					text = "Tool returned image content."
+				}
+				messages = append(messages, chatMessage{
+					Role: "tool", Content: textChatContent(text), ToolCallID: providerID,
+				})
+				for _, part := range result.Content {
+					if part.Kind != agent.ContentPartImage || part.Image == nil {
+						continue
+					}
+					imageParts = append(imageParts,
+						chatContentPart{Type: "text", Text: "Image returned by tool call " + result.CallID + ":"},
+						chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: imageDataURL(*part.Image)}},
+					)
+				}
+				index++
 			}
-			providerID := callIDs[item.ToolResult.CallID]
-			if providerID == "" {
-				providerID = item.ToolResult.CallID
+			if len(imageParts) != 0 {
+				messages = append(messages, chatMessage{Role: "user", Content: chatContent{Parts: imageParts}})
 			}
-			messages = append(messages, chatMessage{
-				Role:       "tool",
-				Content:    item.ToolResult.Content,
-				ToolCallID: providerID,
-			})
-			index++
 
 		default:
 			return nil, fmt.Errorf("unsupported model item kind %q", item.Kind)
 		}
 	}
 	return messages, nil
+}
+
+func imageDataURL(image agent.ImageContent) string {
+	return "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
 // finishReasons is closed: unknown values are rejected. Gateway aliases

@@ -227,7 +227,7 @@ func openCodeGoReplayRequest() agent.ModelRequest {
 				ProviderContext: &agent.ProviderContext{Backend: "chat_completions.opencode-go", Epoch: "epoch_1"},
 			},
 			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
 			{Kind: agent.ItemUserText, Text: "second"},
 		},
 	}

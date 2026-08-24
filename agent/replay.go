@@ -41,6 +41,7 @@ type State struct {
 	CompactionCount  int
 	ToolPruning      *ToolResultsPrunedRecord
 	ToolPruningCount int
+	ImageDelivery    ImageDeliveryObservedRecord
 	Usage            ModelUsage
 	ActiveRuns       []string
 	PendingTools     []PendingTool
@@ -183,7 +184,7 @@ func Reconcile(ctx context.Context, journal Journal) (State, []Record, error) {
 		pending := reducer.state.PendingTools[0]
 		result := ToolResult{
 			CallID:  pending.Call.ID,
-			Content: fmt.Sprintf("tool %s outcome is unknown after an interrupted session; the call was not replayed", pending.Call.Name),
+			Content: TextContent(fmt.Sprintf("tool %s outcome is unknown after an interrupted session; the call was not replayed", pending.Call.Name)),
 			Error:   true,
 			Unknown: true,
 		}

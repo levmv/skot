@@ -1,9 +1,17 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"image"
+	"image/color"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -74,6 +82,188 @@ func TestReadAndLSReturnBoundedStructuredText(t *testing.T) {
 	if !strings.Contains(list, "dir\tdocs/") || !strings.Contains(list, "symlink\tcurrent -> docs") ||
 		!strings.Contains(list, "file\t\"two words.txt\"") {
 		t.Fatalf("ls result = %q", list)
+	}
+}
+
+func TestReadReturnsNormalizedPNGAndJPEGContent(t *testing.T) {
+	for _, test := range []struct {
+		name, extension, mediaType, decodedFormat string
+		encode                                    func(*os.File, image.Image) error
+	}{
+		{name: "PNG", extension: "png", mediaType: "image/png", decodedFormat: "png", encode: func(file *os.File, source image.Image) error {
+			return png.Encode(file, source)
+		}},
+		{name: "JPEG", extension: "data", mediaType: "image/jpeg", decodedFormat: "jpeg", encode: func(file *os.File, source image.Image) error {
+			return jpeg.Encode(file, source, nil)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "screens", "wide."+test.extension)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.encode(file, image.NewNRGBA(image.Rect(0, 0, 2400, 12))); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			workspaceTools, _, err := NewWorkspaceTools(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := runTool(workspaceTools, "read", fmt.Sprintf(`{"path":"screens/wide.%s","offset":99,"limit":1}`, test.extension))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !output.Content.HasImage() || len(output.Content) != 2 || strings.TrimSpace(output.Content.Text()) == "" {
+				t.Fatalf("read image content = %#v", output.Content)
+			}
+			imagePart := output.Content[1].Image
+			if imagePart == nil || imagePart.MediaType != test.mediaType || imagePart.Width != 2000 || imagePart.Height != 10 || len(imagePart.Data) == 0 {
+				t.Fatalf("normalized image = %#v", imagePart)
+			}
+			decoded, format, err := image.Decode(bytes.NewReader(imagePart.Data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if format != test.decodedFormat || decoded.Bounds().Dx() != 2000 || decoded.Bounds().Dy() != 10 {
+				t.Fatalf("decode normalized image: format=%q bounds=%v", format, decoded.Bounds())
+			}
+		})
+	}
+}
+
+func TestReadPreservesSuitableJPEGBytes(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "small.jpeg")
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, image.NewNRGBA(image.Rect(0, 0, 32, 16)), &jpeg.Options{Quality: 92}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceTools, _, err := NewWorkspaceTools(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := runTool(workspaceTools, "read", `{"path":"small.jpeg"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Content) != 2 || output.Content[1].Image == nil || !bytes.Equal(output.Content[1].Image.Data, encoded.Bytes()) {
+		t.Fatalf("suitable JPEG was needlessly re-encoded: %#v", output.Content)
+	}
+}
+
+func TestReadUsesFirstGIFFrame(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "animated.gif")
+	palette := color.Palette{color.Transparent, color.RGBA{R: 255, A: 255}, color.RGBA{B: 255, A: 255}}
+	first := image.NewPaletted(image.Rect(0, 0, 4, 2), palette)
+	second := image.NewPaletted(image.Rect(0, 0, 4, 2), palette)
+	for index := range first.Pix {
+		first.Pix[index] = 1
+		second.Pix[index] = 2
+	}
+	var encoded bytes.Buffer
+	if err := gif.EncodeAll(&encoded, &gif.GIF{Image: []*image.Paletted{first, second}, Delay: []int{0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceTools, _, err := NewWorkspaceTools(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := runTool(workspaceTools, "read", `{"path":"animated.gif"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imagePart := output.Content[1].Image
+	if imagePart == nil || imagePart.MediaType != "image/png" {
+		t.Fatalf("GIF content = %#v", output.Content)
+	}
+	decoded, format, err := image.Decode(bytes.NewReader(imagePart.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	red, _, blue, _ := decoded.At(0, 0).RGBA()
+	if format != "png" || red <= blue {
+		t.Fatalf("GIF first frame was not preserved: format=%q rgba=%d,_,%d,_", format, red, blue)
+	}
+}
+
+func TestReadConvertsWebPToJPEG(t *testing.T) {
+	const fixture = "UklGRrIBAABXRUJQVlA4TKUBAAAvSsAYAA8w//M///MfeJAkbXvaSG7m8Q3GfYSBJekwQztm/IcZlgwnmWImn2BK7aFmBtnVir6q//8VOkFE/xm4baTIu8c48ArEo6+B3zFKYln3pqClSCKX0begFTAXFOLXHSyF8cCNcZEG4OywuA4KVVfJCiArU7GAgJI8+lJP/OKMT/fBAjevg1cYB7YVkFuWga2lyPi5I0HFy5YTpWIHg0RZpkniRVW9odHAKOwosWuOGdxIyn2OvaCDvhg/we6TwadPBPbqBV58MsLmMJ8yZnOWk8SRz4N+QoyPL+MnamzMvcE1rHNEr91F9GKZPVUcS9w7PhhH36suB9qPeYb/oLk6cuTiJ0wOK3m5h1cKjW6EVZCYMK7dxcKCBdgP9HkKr9gkAO2P8GKZGWVdIAatQa+1IDpt6qyorVwdy01xdW8Jkfk6xjEXmVQQ+HQdFr6OKhIN34dXWq0+0qr6EJSCeeVLH9+gvGTLyqM65PQ44ihzlTXxQKjKbAvshXgir7Lil9w4L2bvMycmjQcqXaMCO6BlY28i+FOLzbfI1vEqxAhotocAAA=="
+	data, err := base64.StdEncoding.DecodeString(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "image.webp"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceTools, _, err := NewWorkspaceTools(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := runTool(workspaceTools, "read", `{"path":"image.webp"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imagePart := output.Content[1].Image
+	if imagePart == nil || imagePart.MediaType != "image/jpeg" {
+		t.Fatalf("WebP content = %#v", output.Content)
+	}
+	if _, format, err := image.Decode(bytes.NewReader(imagePart.Data)); err != nil || format != "jpeg" {
+		t.Fatalf("decode converted WebP: format=%q error=%v", format, err)
+	}
+}
+
+func TestJPEGNormalizationCompositesTransparencyOnWhite(t *testing.T) {
+	source := image.NewNRGBA(image.Rect(0, 0, 64, 16))
+	for y := range 16 {
+		for x := 32; x < 64; x++ {
+			source.Set(x, y, color.Black)
+		}
+	}
+	data, _, _, err := normalizeImage(context.Background(), source, "jpeg", 64, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	whiteR, whiteG, whiteB, _ := decoded.At(4, 8).RGBA()
+	blackR, blackG, blackB, _ := decoded.At(60, 8).RGBA()
+	if whiteR < 0xe000 || whiteG < 0xe000 || whiteB < 0xe000 || blackR > 0x2000 || blackG > 0x2000 || blackB > 0x2000 {
+		t.Fatalf("JPEG matte colors = white(%x,%x,%x) black(%x,%x,%x)", whiteR, whiteG, whiteB, blackR, blackG, blackB)
+	}
+}
+
+func TestReadRejectsCorruptImage(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "broken.png")
+	if err := os.WriteFile(path, append([]byte("\x89PNG\r\n\x1a\n"), []byte("broken")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceTools(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTool(tools, "read", `{"path":"broken.png"}`); err == nil {
+		t.Fatalf("corrupt image error = %v", err)
 	}
 }
 
@@ -455,8 +645,8 @@ func TestEditAndWriteUseHashesAndAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^operation: edited\nsha256: [0-9a-f]{64}\n$`).MatchString(editOutput.Content) {
-		t.Fatalf("edit result = %q", editOutput.Content)
+	if !regexp.MustCompile(`^operation: edited\nsha256: [0-9a-f]{64}\n$`).MatchString(editOutput.Content.Text()) {
+		t.Fatalf("edit result = %q", editOutput.Content.Text())
 	}
 	if len(editOutput.Details) != 1 {
 		t.Fatalf("edit details = %#v", editOutput.Details)
@@ -472,8 +662,8 @@ func TestEditAndWriteUseHashesAndAtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^operation: created\nsha256: [0-9a-f]{64}\n$`).MatchString(writeOutput.Content) {
-		t.Fatalf("write result = %q", writeOutput.Content)
+	if !regexp.MustCompile(`^operation: created\nsha256: [0-9a-f]{64}\n$`).MatchString(writeOutput.Content.Text()) {
+		t.Fatalf("write result = %q", writeOutput.Content.Text())
 	}
 	if len(writeOutput.Details) != 1 {
 		t.Fatalf("write details = %#v", writeOutput.Details)
@@ -513,7 +703,7 @@ func mustRunTool(t *testing.T, tools []agent.Tool, name, arguments string) strin
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
-	return result.Content
+	return result.Content.Text()
 }
 
 func mustWriteFile(t *testing.T, path, content string) {

@@ -177,6 +177,7 @@ func (fake *fakeAgent) ModelChoices() []ModelChoice {
 }
 
 func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort, api string) error {
+	changed := fake.model != model || fake.reasoningEffort != effort || fake.modelAPI != api
 	err := fake.modelErr
 	if app.IsModelAPIRequired(err) {
 		// The refusal stands until the caller supplies the protocol, exactly as
@@ -192,6 +193,9 @@ func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort, api string)
 	fake.model = model
 	fake.modelAPI = api
 	fake.reasoningEffort = effort
+	if changed {
+		fake.state.ImageDelivery = agent.ImageDeliveryObservedRecord{}
+	}
 	return err
 }
 
@@ -270,7 +274,11 @@ func (fake *fakeAgent) SwitchTheme(theme string) error {
 }
 
 func (fake *fakeAgent) SessionStatus() agent.SessionStatus {
-	return agent.SessionStatus{ContextReport: fake.contextReport, Usage: fake.state.Usage}
+	return agent.SessionStatus{
+		ContextReport: fake.contextReport,
+		Usage:         fake.state.Usage,
+		ImageDelivery: fake.state.ImageDelivery.Status,
+	}
 }
 
 func (fake *fakeAgent) Compact(context.Context) (agent.ContextCompactedRecord, error) {

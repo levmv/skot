@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -257,13 +258,18 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 			if process, ok := agent.ProcessResultFromDetail(detail); ok {
 				recognizedDetail = true
 				tool.process = &process
-				tool.output = processOutputFromContent(result.Content)
+				tool.output = processOutputFromContent(result.Content.Text())
 				tool.elapsed = time.Duration(process.DurationMillis) * time.Millisecond
 				tool.failed = process.Status != agent.ProcessCompleted && process.Status != agent.ProcessRunning
 			}
 		}
-		if failed && !recognizedDetail && strings.TrimSpace(result.Content) != "" {
-			block.text += ": " + compactSingleLine(sanitizeTerminalText(result.Content), 180)
+		if failed && !recognizedDetail && strings.TrimSpace(result.Content.Text()) != "" {
+			block.text += ": " + compactSingleLine(sanitizeTerminalText(result.Content.Text()), 180)
+		}
+		for _, part := range result.Content {
+			if part.Kind == agent.ContentPartImage && part.Image != nil {
+				block.text += fmt.Sprintf("  [%s %d×%d]", part.Image.MediaType, part.Image.Width, part.Image.Height)
+			}
 		}
 		return changedPaths
 	}

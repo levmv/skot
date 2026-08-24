@@ -119,7 +119,7 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 					Kind: backend.callReferenceKind(), Backend: "responses.openai", Epoch: "epoch_1", Data: identityRaw,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call_1", Content: "contents"}},
+			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call_1", Content: agent.TextContent("contents")}},
 		},
 		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 	})
@@ -170,6 +170,38 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	}
 	if len(request.Tools) != 1 || request.Tools[0].Type != "function" || request.Tools[0].Strict || string(request.Tools[0].Parameters) != `{"type":"object"}` {
 		t.Fatalf("tools = %#v", request.Tools)
+	}
+}
+
+func TestBuildRequestLowersImageFunctionOutput(t *testing.T) {
+	backend, err := New(Config{
+		Provider: "openai", Model: "gpt-test", BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
+		{Kind: agent.ItemUserText, Text: "inspect"},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"shot.jpg"}`}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.ImageToolContent("image metadata", agent.ImageContent{
+			MediaType: "image/jpeg", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
+		})}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output struct {
+		Type   string                   `json:"type"`
+		CallID string                   `json:"call_id"`
+		Output []functionCallOutputPart `json:"output"`
+	}
+	if err := json.Unmarshal(request.Input[len(request.Input)-1], &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.Type != "function_call_output" || output.CallID != "call_1" || len(output.Output) != 2 ||
+		output.Output[0].Type != "input_text" || output.Output[0].Text != "image metadata" ||
+		output.Output[1].Type != "input_image" || output.Output[1].ImageURL != "data:image/jpeg;base64,AQID" {
+		t.Fatalf("function output = %#v", output)
 	}
 }
 
@@ -292,7 +324,7 @@ func TestBuildRequestDropsMismatchedProviderState(t *testing.T) {
 				ID: "skot_call", Name: "read", RawArguments: `{}`,
 				ProviderReferences: []agent.ProviderReference{{Kind: backend.callReferenceKind(), Backend: "responses.test", Epoch: "epoch_old", Data: identityRaw}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call", Content: "done"}},
+			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call", Content: agent.TextContent("done")}},
 		},
 	})
 	if err != nil {

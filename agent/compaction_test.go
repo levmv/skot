@@ -65,6 +65,47 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 	}
 }
 
+func TestCompactionDoesNotProbeImagesAfterModelSwitch(t *testing.T) {
+	journal := &memoryJournal{}
+	tool := seedCompletedToolContentHistory(t, journal, ImageToolContent("old image metadata", ImageContent{
+		MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
+	}), "inspect an image")
+	runtime := newTestRuntime(t, Config{
+		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{}, nil
+		}),
+		Journal: journal,
+		Tools:   []Tool{tool},
+	})
+	nextBackend := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+		return ModelResponse{}, nil
+	})
+	if err := runtime.SwitchModel(context.Background(), ModelInfo{
+		BackendID: "next", Provider: "next", Model: "next", ContextWindow: 64 * 1024,
+	}, nextBackend); err != nil {
+		t.Fatal(err)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ImageDelivery.Status != ImageDeliveryUnknown || len(state.Blocks) < 2 {
+		t.Fatalf("switched state = %#v", state.ImageDelivery)
+	}
+	plan := compactionPlan{FirstVerbatimSequence: state.Blocks[1].StartSequence}
+	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, plan)
+	if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
+		t.Fatalf("unknown-route compaction request = %#v", request.Items)
+	}
+	ordinary, err := runtime.modelRequestForRun(state, runRequestSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !modelRequestHasImages(ordinary) {
+		t.Fatalf("ordinary request did not retain image probe: %#v", ordinary.Items)
+	}
+}
+
 func TestCompactionRetainsRecentTailByProjectedTokenBudget(t *testing.T) {
 	journal := &memoryJournal{}
 	const blocks = 14
@@ -666,7 +707,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	tool := Tool{
 		Spec: ToolSpec{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
-			return ToolOutput{Content: "echo result: " + arguments + strings.Repeat("x", 132*1024)}, nil
+			return ToolOutput{Content: TextContent("echo result: " + arguments + strings.Repeat("x", 132*1024))}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -699,7 +740,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	}
 	if reasoning == nil || reasoning.Text != "provider-private reasoning" || len(reasoning.ProviderData) != 1 ||
 		call == nil || call.ToolCall == nil || call.ToolCall.RawArguments != `{"text":"hello"}` || len(call.ToolCall.ProviderReferences) != 1 ||
-		result == nil || result.ToolResult == nil || !strings.Contains(result.ToolResult.Content, "echo result") {
+		result == nil || result.ToolResult == nil || !strings.Contains(result.ToolResult.Content.Text(), "echo result") {
 		t.Fatalf("cache-aligned tool block = %#v", request.Items)
 	}
 	invalid := ContextCompactedRecord{

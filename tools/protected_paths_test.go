@@ -55,8 +55,8 @@ func TestUserShellIgnoresModelProtectedPaths(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	userOutput, err := manager.RunShell(context.Background(), "cat private/secret.txt")
-	if err != nil || !strings.Contains(userOutput.Content, "secret") {
-		t.Fatalf("user shell output/error = %q / %v", userOutput.Content, err)
+	if err != nil || !strings.Contains(userOutput.Content.Text(), "secret") {
+		t.Fatalf("user shell output/error = %q / %v", userOutput.Content.Text(), err)
 	}
 }
 

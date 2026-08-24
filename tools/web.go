@@ -141,7 +141,7 @@ func (web *webTools) fetch(ctx context.Context, raw string) (agent.ToolOutput, e
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
-	return agent.ToolOutput{Content: content.String(), Details: []agent.Detail{detail}}, nil
+	return agent.ToolOutput{Content: agent.TextContent(content.String()), Details: []agent.Detail{detail}}, nil
 }
 
 func (web *webTools) newFetchBackends() ([]webFetchBackend, error) {
@@ -240,7 +240,7 @@ func (web *webTools) search(ctx context.Context, raw string) (agent.ToolOutput, 
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
-	return agent.ToolOutput{Content: content, Details: []agent.Detail{detail}}, nil
+	return agent.ToolOutput{Content: agent.TextContent(content), Details: []agent.Detail{detail}}, nil
 }
 
 func (web *webTools) searchProviders() ([]webSearchProvider, error) {

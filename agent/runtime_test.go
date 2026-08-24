@@ -149,7 +149,7 @@ func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
 		Run: func(context.Context, string) (ToolOutput, error) {
 			close(toolStarted)
 			<-releaseTool
-			return ToolOutput{Content: "ready"}, nil
+			return ToolOutput{Content: TextContent("ready")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{
@@ -208,7 +208,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 				t.Fatalf("final request items = %#v", request.Items)
 			}
 			for _, rejected := range request.Items[len(request.Items)-3 : len(request.Items)-1] {
-				if rejected.Kind != ItemToolResult || rejected.ToolResult == nil || !rejected.ToolResult.Error || !strings.Contains(rejected.ToolResult.Content, "after 2 iterations") {
+				if rejected.Kind != ItemToolResult || rejected.ToolResult == nil || !rejected.ToolResult.Error || !strings.Contains(rejected.ToolResult.Content.Text(), "after 2 iterations") {
 					t.Fatalf("rejected tool result = %#v", rejected)
 				}
 			}
@@ -226,7 +226,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				executed++
-				return ToolOutput{Content: "ok"}, nil
+				return ToolOutput{Content: TextContent("ok")}, nil
 			},
 		}},
 	})
@@ -315,7 +315,7 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})
 	result, err := runtime.Run(context.Background(), "current work", nil)
@@ -391,7 +391,7 @@ func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				executed++
-				return ToolOutput{Content: "ok"}, nil
+				return ToolOutput{Content: TextContent("ok")}, nil
 			},
 		}},
 	})
@@ -438,7 +438,7 @@ func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
 				Name: "inspect", Description: strings.Repeat("detailed tool documentation ", 1_200),
 				InputSchema: json.RawMessage(`{"type":"object"}`),
 			},
-			Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+			Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})
 	result, err := runtime.Run(context.Background(), "inspect the current state", nil)
@@ -646,6 +646,198 @@ func TestRuntimeDoesNotRetryInvalidModelRequest(t *testing.T) {
 	}
 }
 
+func TestRuntimePersistsRejectionAfterConclusiveImageControl(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		},
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if !modelRequestHasImages(request) {
+				t.Fatalf("image probe omitted image: %#v", request.Items)
+			}
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("images are not accepted")), StatusCode: 400, Kind: ProviderErrorRequest,
+			}
+		},
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
+				t.Fatalf("image-free control = %#v", request.Items)
+			}
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "continued without image"}}, StopReason: "stop"}, nil
+		},
+	}}
+	runtime := newTestRuntime(t, Config{
+		Model:   ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024},
+		Backend: model, Journal: journal, Tools: []Tool{imageResultTool()},
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
+	})
+	result, err := runtime.Run(context.Background(), "inspect", nil)
+	if err != nil || result.Answer != "continued without image" || model.next != 3 {
+		t.Fatalf("result/error/requests = %#v / %v / %d", result, err, model.next)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ImageDelivery.Status != ImageDeliveryRejected || state.ImageDelivery.ProviderEpoch != state.Selection.Epoch || countRecordKind(journal.snapshot(), RecordImageDeliveryObserved) != 1 {
+		t.Fatalf("image delivery state = %#v", state.ImageDelivery)
+	}
+
+	resumedModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
+			t.Fatalf("resumed request = %#v", request.Items)
+		}
+		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "resumed"}}, StopReason: "stop"}, nil
+	}}}
+	resumed := newTestRuntime(t, Config{
+		Model:   ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024},
+		Backend: resumedModel, Journal: journal, Tools: []Tool{imageResultTool()},
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
+	})
+	if result, err := resumed.Run(context.Background(), "continue", nil); err != nil || result.Answer != "resumed" {
+		t.Fatalf("resumed result/error = %#v / %v", result, err)
+	}
+}
+
+func TestRuntimeOmitsImagesForReviewedUnsupportedRouteWithoutObservation(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		},
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
+				t.Fatalf("unsupported route request = %#v", request.Items)
+			}
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "continued without image"}}, StopReason: "stop"}, nil
+		},
+	}}
+	runtime := newTestRuntime(t, Config{
+		Model: ModelInfo{
+			BackendID: "test", Provider: "test", Model: "text-only", ContextWindow: 64 * 1024,
+			ImageInputUnsupported: true,
+		},
+		Backend: model, Journal: journal, Tools: []Tool{imageResultTool()},
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
+	})
+	if status := runtime.SessionStatus().ImageDelivery; status != ImageDeliveryUnknown {
+		t.Fatalf("unused image policy is visible as %q", status)
+	}
+	result, err := runtime.Run(context.Background(), "inspect", nil)
+	if err != nil || result.Answer != "continued without image" || model.next != 2 {
+		t.Fatalf("result/error/requests = %#v / %v / %d", result, err, model.next)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ImageDelivery.Status != ImageDeliveryUnknown || countRecordKind(journal.snapshot(), RecordImageDeliveryObserved) != 0 {
+		t.Fatalf("catalog policy became session evidence: %#v", state.ImageDelivery)
+	}
+	if state.Configured == nil || !state.Configured.RuntimePolicy.ImageInputUnsupported {
+		t.Fatalf("effective configuration = %#v", state.Configured)
+	}
+	if status := runtime.SessionStatus().ImageDelivery; status != ImageDeliveryRejected {
+		t.Fatalf("effective image delivery = %q", status)
+	}
+}
+
+func TestRuntimeDoesNotProbeAmbiguousImageErrorWithEstimatedContext(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		},
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if !modelRequestHasImages(request) {
+				t.Fatalf("image request omitted image: %#v", request.Items)
+			}
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("ambiguous invalid request")), StatusCode: 400, Kind: ProviderErrorRequest,
+			}
+		},
+	}}
+	runtime := newTestRuntime(t, Config{
+		Model: ModelInfo{
+			BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024, ContextWindowEstimated: true,
+		},
+		Backend: model, Journal: journal, Tools: []Tool{imageResultTool()},
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
+	})
+	result, err := runtime.Run(context.Background(), "inspect", nil)
+	if err == nil || result.Status != RunFailed || !strings.Contains(err.Error(), "ambiguous invalid request") {
+		t.Fatalf("result/error = %#v / %v", result, err)
+	}
+	state, replayErr := Replay(journal.snapshot())
+	if replayErr != nil {
+		t.Fatal(replayErr)
+	}
+	if model.next != 2 || state.ImageDelivery.Status != ImageDeliveryUnknown || countRecordKind(journal.snapshot(), RecordImageDeliveryObserved) != 0 {
+		t.Fatalf("requests/image delivery = %d / %#v", model.next, state.ImageDelivery)
+	}
+}
+
+func TestRuntimeAcceptedImageDoesNotTriggerLaterErrorProbe(t *testing.T) {
+	journal := &memoryJournal{}
+	model := &scriptedModel{steps: []modelStep{
+		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		},
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if !modelRequestHasImages(request) {
+				t.Fatal("successful image request contained no image")
+			}
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "saw it"}}, StopReason: "stop"}, nil
+		},
+		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			if !modelRequestHasImages(request) {
+				t.Fatal("accepted image was unexpectedly removed")
+			}
+			return ModelResponse{}, &ProviderError{
+				Cause: MarkProviderFailure(errors.New("unrelated invalid setting")), StatusCode: 400, Kind: ProviderErrorRequest,
+			}
+		},
+	}}
+	runtime := newTestRuntime(t, Config{
+		Backend: model, Journal: journal, Tools: []Tool{imageResultTool()},
+		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
+	})
+	if result, err := runtime.Run(context.Background(), "inspect", nil); err != nil || result.Answer != "saw it" {
+		t.Fatalf("first run = %#v / %v", result, err)
+	}
+	if _, err := runtime.Run(context.Background(), "do something else", nil); err == nil || !strings.Contains(err.Error(), "unrelated invalid setting") {
+		t.Fatalf("second run error = %v", err)
+	}
+	if model.next != 3 {
+		t.Fatalf("model requests = %d, fallback ran after accepted image", model.next)
+	}
+	state, err := Replay(journal.snapshot())
+	if err != nil || state.ImageDelivery.Status != ImageDeliveryAccepted {
+		t.Fatalf("image delivery state = %#v, error = %v", state.ImageDelivery, err)
+	}
+}
+
+func imageResultTool() Tool {
+	return Tool{
+		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(context.Context, string) (ToolOutput, error) {
+			return ToolOutput{Content: ImageToolContent("image metadata", ImageContent{
+				MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
+			})}, nil
+		},
+	}
+}
+
+func requestContainsImageOmission(request ModelRequest) bool {
+	for _, item := range request.Items {
+		if item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "[image omitted") {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRuntimeRetriesWithinFreshLogicalRequestBudget(t *testing.T) {
 	attempts := 0
 	var idleTimeout time.Duration
@@ -754,7 +946,9 @@ func TestRuntimeStartsNewRetryBudgetAfterSuccessfulToolCallResponse(t *testing.T
 		Backend: model, Journal: &memoryJournal{},
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "read"}, nil },
+			Run: func(context.Context, string) (ToolOutput, error) {
+				return ToolOutput{Content: TextContent("read")}, nil
+			},
 		}},
 		RequestPolicy: ModelRequestPolicy{
 			MaxAttempts: -1, RetryBudget: 80 * time.Millisecond,
@@ -855,7 +1049,7 @@ func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
 				if item.ToolCall != nil && strings.Contains(item.ToolCall.RawArguments, secret) {
 					t.Fatalf("secret reached replayed tool call: %#v", item)
 				}
-				if item.ToolResult != nil && strings.Contains(item.ToolResult.Content, secret) {
+				if item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), secret) {
 					t.Fatalf("secret reached tool result: %#v", item)
 				}
 			}
@@ -869,7 +1063,7 @@ func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
 			Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 				toolArguments = arguments
-				return ToolOutput{Content: "output " + secret, Details: []Detail{{
+				return ToolOutput{Content: TextContent("output " + secret), Details: []Detail{{
 					Kind: "test", Data: json.RawMessage(`{"failure_tail":"` + secret + `"}`),
 				}}}, nil
 			},
@@ -884,7 +1078,7 @@ func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
 		t.Fatalf("result/tool arguments = %#v / %q", result, toolArguments)
 	}
 	for _, event := range events {
-		if strings.Contains(event.Text, secret) || event.Result != nil && strings.Contains(event.Result.Content, secret) {
+		if strings.Contains(event.Text, secret) || event.Result != nil && strings.Contains(event.Result.Content.Text(), secret) {
 			t.Fatalf("secret reached event: %#v", event)
 		}
 	}
@@ -905,7 +1099,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 		},
 		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			last := request.Items[len(request.Items)-1]
-			if last.ToolResult == nil || !last.ToolResult.Error || len(last.ToolResult.Details) != 0 || !strings.Contains(last.ToolResult.Content, "tool details exceed size limit") {
+			if last.ToolResult == nil || !last.ToolResult.Error || len(last.ToolResult.Details) != 0 || !strings.Contains(last.ToolResult.Content.Text(), "tool details exceed size limit") {
 				t.Fatalf("tool result after oversized redaction = %#v", last)
 			}
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "handled"}}}, nil
@@ -921,7 +1115,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
-				return ToolOutput{Content: "done", Details: []Detail{{Kind: "inspection", Data: detailData}}}, nil
+				return ToolOutput{Content: TextContent("done"), Details: []Detail{{Kind: "inspection", Data: detailData}}}, nil
 			},
 		}},
 	})
@@ -1028,7 +1222,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 			if records[len(records)-1].Kind != RecordModelResponse {
 				t.Fatalf("last record before tool execution = %q", records[len(records)-1].Kind)
 			}
-			return ToolOutput{Content: arguments, Details: []Detail{{
+			return ToolOutput{Content: TextContent(arguments), Details: []Detail{{
 				Kind: "test_detail",
 				Data: json.RawMessage(`{"value":1}`),
 			}}}, nil

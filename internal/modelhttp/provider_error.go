@@ -160,6 +160,9 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 	if isRequestTooLargeSignal(code) || isRequestTooLargeSignal(errorType) {
 		return agent.ProviderErrorRequestTooLarge
 	}
+	if code == "invalid_request_error" || errorType == "invalid_request_error" {
+		return agent.ProviderErrorRequest
+	}
 	// DeepSeek's stable quota signal wins over HTTP 429, which otherwise means
 	// a temporary rate limit. Do not add message fragments here: prose is not a
 	// routing contract.

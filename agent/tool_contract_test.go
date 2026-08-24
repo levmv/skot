@@ -27,7 +27,7 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 				Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
 				Run: func(_ context.Context, raw string) (ToolOutput, error) {
 					executedWith = raw
-					return ToolOutput{Content: "ok"}, nil
+					return ToolOutput{Content: TextContent("ok")}, nil
 				},
 			}},
 		})

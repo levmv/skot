@@ -124,9 +124,9 @@ func (runtime *Runtime) executeUserShell(ctx context.Context, callID, command st
 		err = errors.Join(err, fmt.Errorf("invalid shell output: %w", detailErr))
 		details = nil
 	}
-	result := ToolResult{CallID: callID, Content: runtime.sanitize(output.Content), Details: details, Error: err != nil}
-	if err != nil && strings.TrimSpace(result.Content) == "" {
-		result.Content = runtime.sanitize(err.Error())
+	result := ToolResult{CallID: callID, Content: runtime.sanitizeContent(output.Content), Details: details, Error: err != nil}
+	if err != nil && strings.TrimSpace(result.Content.Text()) == "" {
+		result.Content = TextContent(runtime.sanitize(err.Error()))
 	}
 	return result, sanitizeError(err, runtime.sanitize)
 }

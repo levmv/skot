@@ -155,6 +155,7 @@ func restoredModelInfo(state agent.State, modelURI string) (agent.ModelInfo, boo
 		ReasoningEffort: selection.ReasoningEffort, ProviderStateContract: selection.ProviderStateContract,
 	}
 	if state.Configured != nil {
+		info.ImageInputUnsupported = state.Configured.RuntimePolicy.ImageInputUnsupported
 		info.ContextWindow = state.Configured.RuntimePolicy.ContextWindow
 		info.ContextWindowEstimated = state.Configured.RuntimePolicy.ContextWindowEstimated
 		info.MaxRequestBytes = state.Configured.RuntimePolicy.MaxRequestBytes

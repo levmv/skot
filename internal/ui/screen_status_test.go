@@ -126,6 +126,24 @@ func TestFooterShowsLiveMachineScopeBeforeRoot(t *testing.T) {
 	}
 }
 
+func TestFooterShowsCurrentImageOmissionStatus(t *testing.T) {
+	t.Setenv("SK_COLOR", "never")
+	fake := &fakeAgent{model: "openai/gpt", theme: ThemeLight}
+	fake.state.ImageDelivery = agent.ImageDeliveryObservedRecord{Status: agent.ImageDeliveryRejected}
+	model, err := newScreenModel(context.Background(), fake, Config{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := model.footerLine(); got != "openai/gpt · images omitted" {
+		t.Fatalf("rejected image footer = %q", got)
+	}
+	fake.state.ImageDelivery = agent.ImageDeliveryObservedRecord{}
+	model.refreshSessionStatus()
+	if got := model.footerLine(); got != "openai/gpt" {
+		t.Fatalf("unknown image footer = %q", got)
+	}
+}
+
 func TestFooterHighlightsMachineScope(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("SK_COLOR", "always")

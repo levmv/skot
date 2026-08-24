@@ -94,26 +94,80 @@ func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, r
 	return nil
 }
 
-func pruneToolResult(content string, headBytes, tailBytes int) string {
-	if headBytes <= 0 || tailBytes <= 0 || len(content) <= headBytes+tailBytes {
+func pruneToolResult(content Content, headBytes, tailBytes int) Content {
+	text := content.Text()
+	headEnd, tailStart, omissionMarker, textPruned := toolResultTextPruning(text, headBytes, tailBytes)
+	if !textPruned && !content.HasImage() {
 		return content
 	}
-	headEnd := min(headBytes, len(content))
+	projected := make(Content, 0, len(content)+1)
+	// Treat text parts as one pruning budget, then map the retained head and
+	// tail back onto their original positions so image markers remain ordered.
+	textOffset := 0
+	omissionWritten := false
+	for _, part := range content {
+		switch part.Kind {
+		case ContentPartText:
+			if !textPruned {
+				projected = append(projected, part)
+				continue
+			}
+			partStart := textOffset
+			partEnd := partStart + len(part.Text)
+			if partStart < headEnd {
+				keep := min(partEnd, headEnd) - partStart
+				projected = appendTextContentPart(projected, part.Text[:keep])
+			}
+			omittedStart := max(partStart, headEnd)
+			omittedEnd := min(partEnd, tailStart)
+			if omittedStart < omittedEnd && !omissionWritten {
+				projected = appendTextContentPart(projected, omissionMarker)
+				omissionWritten = true
+			}
+			if partEnd > tailStart {
+				keep := max(partStart, tailStart) - partStart
+				projected = appendTextContentPart(projected, part.Text[keep:])
+			}
+			textOffset = partEnd
+		case ContentPartImage:
+			if part.Image == nil {
+				continue
+			}
+			projected = append(projected, ContentPart{Kind: ContentPartText, Text: fmt.Sprintf(
+				"\n[image pruned: %s, %dx%d; full image remains in session journal]\n",
+				part.Image.MediaType, part.Image.Width, part.Image.Height,
+			)})
+		}
+	}
+	return projected
+}
+
+func toolResultTextPruning(content string, headBytes, tailBytes int) (headEnd, tailStart int, marker string, ok bool) {
+	if headBytes <= 0 || tailBytes <= 0 || len(content) <= headBytes+tailBytes {
+		return 0, 0, "", false
+	}
+	headEnd = min(headBytes, len(content))
 	for headEnd > 0 && !utf8.ValidString(content[:headEnd]) {
 		headEnd--
 	}
-	tailStart := max(headEnd, len(content)-tailBytes)
+	tailStart = max(headEnd, len(content)-tailBytes)
 	for tailStart < len(content) && !utf8.RuneStart(content[tailStart]) {
 		tailStart++
 	}
 	omitted := tailStart - headEnd
 	if omitted <= 0 {
+		return 0, 0, "", false
+	}
+	marker = fmt.Sprintf("\n[… %d bytes omitted from old tool result; full output remains in session journal …]\n", omitted)
+	if headEnd+len(marker)+len(content)-tailStart >= len(content) {
+		return 0, 0, "", false
+	}
+	return headEnd, tailStart, marker, true
+}
+
+func appendTextContentPart(content Content, text string) Content {
+	if text == "" {
 		return content
 	}
-	marker := fmt.Sprintf("\n[… %d bytes omitted from old tool result; full output remains in session journal …]\n", omitted)
-	pruned := content[:headEnd] + marker + content[tailStart:]
-	if len(pruned) >= len(content) {
-		return content
-	}
-	return pruned
+	return append(content, ContentPart{Kind: ContentPartText, Text: text})
 }

@@ -240,6 +240,9 @@ Built-in file tools use the current filesystem scope, bound their reads and
 searches, and write atomically. See [Filesystem access](#filesystem-access)
 for path and scope rules.
 
+`read` handles UTF-8 text and images. `offset` and `limit` apply only to text.
+Images are reduced to at most 2000 pixels on the longer side before delivery.
+
 | Tool set | Tools |
 | --- | --- |
 | `default` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job` |

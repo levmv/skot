@@ -30,8 +30,8 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 					results = append(results, item.ToolResult)
 				}
 			}
-			if len(results) != 2 || results[0].Content != "first" || results[0].Error ||
-				results[1].Content != "second failed" || !results[1].Error {
+			if len(results) != 2 || results[0].Content.Text() != "first" || results[0].Error ||
+				results[1].Content.Text() != "second failed" || !results[1].Error {
 				t.Fatalf("model tool results = %#v", results)
 			}
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
@@ -53,7 +53,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 			if name == "second" {
 				return ToolOutput{}, errors.New("second failed")
 			}
-			return ToolOutput{Content: name}, nil
+			return ToolOutput{Content: TextContent(name)}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -97,7 +97,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 		}
 		committed = append(committed, payload.Result)
 	}
-	if len(committed) != 2 || committed[0].Content != "first" || committed[1].Content != "second failed" {
+	if len(committed) != 2 || committed[0].Content.Text() != "first" || committed[1].Content.Text() != "second failed" {
 		t.Fatalf("committed results = %#v", committed)
 	}
 }
@@ -129,7 +129,7 @@ func TestFatalToolFailureIsJournaledBeforeRunFails(t *testing.T) {
 			if decodeErr != nil {
 				t.Fatal(decodeErr)
 			}
-			if !payload.Result.Error || !strings.Contains(payload.Result.Content, "executable disappeared") {
+			if !payload.Result.Error || !strings.Contains(payload.Result.Content.Text(), "executable disappeared") {
 				t.Fatalf("tool result = %#v", payload.Result)
 			}
 			resultSequence = record.Sequence
@@ -211,7 +211,7 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 				return ToolOutput{}, err
 			}
 			started <- "read:" + args.Value
-			return ToolOutput{Content: raw}, nil
+			return ToolOutput{Content: TextContent(raw)}, nil
 		},
 	}
 	write := Tool{
@@ -219,7 +219,7 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 		Run: func(context.Context, string) (ToolOutput, error) {
 			started <- "write"
 			<-releaseWrite
-			return ToolOutput{Content: "written"}, nil
+			return ToolOutput{Content: TextContent("written")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{read, write}})
@@ -276,7 +276,7 @@ func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
 			started <- struct{}{}
 			<-release
 			active.Add(-1)
-			return ToolOutput{Content: "read"}, nil
+			return ToolOutput{Content: TextContent("read")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{tool}})

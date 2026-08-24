@@ -54,7 +54,7 @@ func (workspace *workspace) tools() []agent.Tool {
 	tools := []agent.Tool{
 		workspace.tool(
 			"read",
-			"Read a UTF-8 text file with stable line numbers. Use offset and limit to continue large files.",
+			"Read a UTF-8 text file with stable line numbers, or a complete image. Offset and limit apply only to text.",
 			`{"type":"object","properties":{"path":{"type":"string","description":"File path. Relative paths start at the workspace; outside paths require machine scope or an added directory."},"offset":{"type":"integer","minimum":1,"description":"One-based first line to return. Defaults to 1."},"limit":{"type":"integer","minimum":1,"maximum":2000,"default":200,"description":"Maximum lines to return."}},"required":["path"],"additionalProperties":false}`,
 			parallelSafe,
 			workspace.read,

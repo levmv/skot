@@ -20,7 +20,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 			var result string
 			for _, item := range request.Items {
 				if item.Kind == ItemToolResult && item.ToolResult != nil {
-					result = item.ToolResult.Content
+					result = item.ToolResult.Content.Text()
 					break
 				}
 			}
@@ -52,7 +52,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	var rawResult string
 	for _, item := range state.Items {
 		if item.Kind == ItemToolResult && item.ToolResult != nil {
-			rawResult = item.ToolResult.Content
+			rawResult = item.ToolResult.Content.Text()
 			break
 		}
 	}
@@ -62,7 +62,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	var projectedResult string
 	for _, item := range state.VerbatimItems() {
 		if item.Kind == ItemToolResult && item.ToolResult != nil {
-			projectedResult = item.ToolResult.Content
+			projectedResult = item.ToolResult.Content.Text()
 			break
 		}
 	}
@@ -95,7 +95,7 @@ func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				attempts++
 				for _, item := range request.Items {
-					if item.Kind == ItemToolResult && item.ToolResult != nil && item.ToolResult.Content == largeResult {
+					if item.Kind == ItemToolResult && item.ToolResult != nil && item.ToolResult.Content.Text() == largeResult {
 						return ModelResponse{}, &ProviderError{
 							Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
 						}
@@ -107,7 +107,7 @@ func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
 			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 				attempts++
 				for _, item := range request.Items {
-					if item.Kind == ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content, "bytes omitted from old tool result") {
+					if item.Kind == ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "bytes omitted from old tool result") {
 						return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
 					}
 				}
@@ -170,6 +170,10 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 }
 
 func seedCompletedToolResultHistory(t *testing.T, journal *memoryJournal, content, firstInput string) Tool {
+	return seedCompletedToolContentHistory(t, journal, TextContent(content), firstInput)
+}
+
+func seedCompletedToolContentHistory(t *testing.T, journal *memoryJournal, content Content, firstInput string) Tool {
 	t.Helper()
 	tool := Tool{
 		Spec: ToolSpec{Name: "large_output", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -194,17 +198,66 @@ func seedCompletedToolResultHistory(t *testing.T, journal *memoryJournal, conten
 	return tool
 }
 
+func TestImagePruningChangesOnlyTheModelProjection(t *testing.T) {
+	journal := &memoryJournal{}
+	beforeText := "BEGIN" + strings.Repeat("a", 100)
+	afterText := strings.Repeat("b", 100) + "END"
+	seedCompletedToolContentHistory(t, journal, Content{
+		{Kind: ContentPartText, Text: beforeText},
+		{Kind: ContentPartImage, Image: &ImageContent{MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5}},
+		{Kind: ContentPartText, Text: afterText},
+	}, "inspect an image")
+	state, err := Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustAppend(t, journal, RecordToolResultsPruned, ToolResultsPrunedRecord{
+		ThroughSequence: state.Blocks[0].EndSequence,
+		HeadBytes:       10,
+		TailBytes:       10,
+	})
+	state, err = Replay(journal.snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stored, projected Content
+	for _, item := range state.Items {
+		if item.Kind == ItemToolResult && item.ToolResult != nil {
+			stored = item.ToolResult.Content
+			break
+		}
+	}
+	for _, item := range state.VerbatimItems() {
+		if item.Kind == ItemToolResult && item.ToolResult != nil {
+			projected = item.ToolResult.Content
+			break
+		}
+	}
+	if !stored.HasImage() {
+		t.Fatalf("journal image was pruned: %#v", stored)
+	}
+	projectedText := projected.Text()
+	before := strings.Index(projectedText, "BEGIN")
+	omitted := strings.Index(projectedText, "bytes omitted")
+	imageMarker := strings.Index(projectedText, "image pruned")
+	after := strings.Index(projectedText, "END")
+	if projected.HasImage() || before < 0 || omitted <= before || imageMarker <= omitted || after <= imageMarker {
+		t.Fatalf("image pruning projection = %#v", projected)
+	}
+}
+
 func TestPruneToolResultKeepsUTF8HeadAndTail(t *testing.T) {
 	content := "начало-" + strings.Repeat("界", 200) + "-конец"
-	pruned := pruneToolResult(content, 11, 10)
+	pruned := pruneToolResult(TextContent(content), 11, 10).Text()
 	if !strings.HasPrefix(pruned, "начал") || !strings.HasSuffix(pruned, "конец") || !strings.Contains(pruned, "bytes omitted") || !utf8.ValidString(pruned) {
 		t.Fatalf("pruned content = %q", pruned)
 	}
-	if expanded := pruneToolResult(strings.Repeat("x", 101), 50, 50); len(expanded) != 101 {
+	if expanded := pruneToolResult(TextContent(strings.Repeat("x", 101)), 50, 50).Text(); len(expanded) != 101 {
 		t.Fatalf("small result expanded to %d bytes", len(expanded))
 	}
 	moderate := "HEAD" + strings.Repeat("x", 6*1024) + "TAIL"
-	moderatePruned := pruneToolResult(moderate, defaultPrunedToolHeadBytes, defaultPrunedToolTailBytes)
+	moderatePruned := pruneToolResult(TextContent(moderate), defaultPrunedToolHeadBytes, defaultPrunedToolTailBytes).Text()
 	if len(moderatePruned) >= len(moderate) || !strings.HasPrefix(moderatePruned, "HEAD") || !strings.HasSuffix(moderatePruned, "TAIL") {
 		t.Fatalf("moderate result was not usefully pruned: %d -> %d bytes", len(moderate), len(moderatePruned))
 	}

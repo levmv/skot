@@ -29,7 +29,9 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 	})
 	tool := Tool{
 		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "contents"}, nil },
+		Run: func(context.Context, string) (ToolOutput, error) {
+			return ToolOutput{Content: TextContent("contents")}, nil
+		},
 	}
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -143,7 +145,7 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: "ok"}, nil },
+			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})
 	done := make(chan error, 1)

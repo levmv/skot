@@ -61,8 +61,8 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 		t.Fatal("request does not ask for streaming usage")
 	}
 	if got := received.Messages; !reflect.DeepEqual(got, []chatMessage{
-		{Role: "system", Content: "be brief"},
-		{Role: "user", Content: "hi"},
+		{Role: "system", Content: textChatContent("be brief")},
+		{Role: "user", Content: textChatContent("hi")},
 	}) {
 		t.Fatalf("messages = %#v", got)
 	}
@@ -216,7 +216,7 @@ func TestBuildRequestMapsProductCallIDBackToProviderID(t *testing.T) {
 					Data:    providerID,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: "contents"}},
+			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("contents")}},
 		},
 		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 	})
@@ -241,6 +241,33 @@ func TestBuildRequestMapsProductCallIDBackToProviderID(t *testing.T) {
 	}
 }
 
+func TestBuildRequestGroupsImageToolResultsAfterAllToolMessages(t *testing.T) {
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
+		{Kind: agent.ItemUserText, Text: "inspect both"},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"one.png"}`}},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_2", Name: "read", RawArguments: `{"path":"two.jpg"}`}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.ImageToolContent("first", agent.ImageContent{
+			MediaType: "image/png", Data: []byte{1}, Width: 10, Height: 5,
+		})}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_2", Content: agent.ImageToolContent("second", agent.ImageContent{
+			MediaType: "image/jpeg", Data: []byte{2}, Width: 8, Height: 4,
+		})}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Messages) != 5 || request.Messages[2].Role != "tool" || request.Messages[2].Content.Text != "first" ||
+		request.Messages[3].Role != "tool" || request.Messages[3].Content.Text != "second" || request.Messages[4].Role != "user" {
+		t.Fatalf("messages = %#v", request.Messages)
+	}
+	parts := request.Messages[4].Content.Parts
+	if len(parts) != 4 || parts[0].Type != "text" || parts[1].ImageURL == nil || parts[1].ImageURL.URL != "data:image/png;base64,AQ==" ||
+		parts[2].Type != "text" || parts[3].ImageURL == nil || parts[3].ImageURL.URL != "data:image/jpeg;base64,Ag==" {
+		t.Fatalf("synthetic image message = %#v", parts)
+	}
+}
+
 func TestBuildRequestMapsBoundaryEventToSystemMessage(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
@@ -251,8 +278,8 @@ func TestBuildRequestMapsBoundaryEventToSystemMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := request.Messages; !reflect.DeepEqual(got, []chatMessage{
-		{Role: "user", Content: "continue"},
-		{Role: "system", Content: "Background job job-1 completed."},
+		{Role: "user", Content: textChatContent("continue")},
+		{Role: "system", Content: textChatContent("Background job job-1 completed.")},
 	}) {
 		t.Fatalf("messages = %#v", got)
 	}
@@ -297,7 +324,7 @@ func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
 		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
 			ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`,
 		}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
 		{Kind: agent.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain reasoning"},
 		{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
 		{Kind: agent.ItemUserText, Text: "second"},
@@ -461,8 +488,8 @@ func TestBuildRequestPlacesSummaryBeforeVerbatimMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(request.Messages) != 3 || request.Messages[0].Content != "instructions" ||
-		request.Messages[1].Content != "Conversation summary:\nolder work summary" || request.Messages[2].Content != "recent question" {
+	if len(request.Messages) != 3 || request.Messages[0].Content.Text != "instructions" ||
+		request.Messages[1].Content.Text != "Conversation summary:\nolder work summary" || request.Messages[2].Content.Text != "recent question" {
 		t.Fatalf("messages = %#v", request.Messages)
 	}
 }
@@ -481,7 +508,7 @@ func TestBuildRequestDropsMismatchedProviderMetadata(t *testing.T) {
 					Kind: "chat_completions.test.call_id", Backend: "chat_completions.test", Epoch: "epoch_old", Data: providerID,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: "done"}},
+			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("done")}},
 		},
 	})
 	if err != nil {
@@ -690,7 +717,7 @@ func projectionTestHistory() []agent.Item {
 		{Kind: agent.ItemUserText, Text: "first"},
 		{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool thinking"},
 		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{}`}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
 		{Kind: agent.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain thinking"},
 		{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
 		{Kind: agent.ItemUserText, Text: "second"},

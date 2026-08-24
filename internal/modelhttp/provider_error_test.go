@@ -102,6 +102,22 @@ func TestStructuredContextLimitSignalsClassifyOversizedRequests(t *testing.T) {
 	}
 }
 
+func TestStatuslessInvalidRequestSignalIsNonRetryable(t *testing.T) {
+	for _, details := range []ProviderErrorDetails{
+		{Code: "INVALID_REQUEST_ERROR"},
+		{Type: "invalid_request_error"},
+	} {
+		details.Provider = "compatible"
+		details.Model = "model"
+		details.Message = "opaque provider detail"
+		err := NewProviderError(details)
+		var providerErr *agent.ProviderError
+		if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRequest || providerErr.Retryable {
+			t.Fatalf("error/metadata = %v / %#v", err, providerErr)
+		}
+	}
+}
+
 func TestAnthropicGenericBadRequestDoesNotGuessContextOverflow(t *testing.T) {
 	err := NewProviderError(ProviderErrorDetails{
 		Provider: "anthropic", StatusCode: http.StatusBadRequest,

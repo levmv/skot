@@ -26,16 +26,19 @@ const (
 // modelSpec is one reviewed local declaration. Nil/zero optional fields inherit
 // the provider route defaults; it is deliberately not an exhaustive registry.
 type modelSpec struct {
-	URI              string
-	Name             string
-	API              modelAPI
-	APIModel         string
-	ContextWindow    int
-	MaxOutputTokens  int
-	ReasoningEfforts []string
-	ChatTraits       *chatcompletions.RouteTraits
-	ResponsesTraits  *responsemodel.RouteTraits
-	Compatibility    modelCompatibility
+	URI             string
+	Name            string
+	API             modelAPI
+	APIModel        string
+	ContextWindow   int
+	MaxOutputTokens int
+	// ImageInputUnsupported is a reviewed negative route fact. Its zero value
+	// deliberately leaves image delivery optimistic for new and unknown models.
+	ImageInputUnsupported bool
+	ReasoningEfforts      []string
+	ChatTraits            *chatcompletions.RouteTraits
+	ResponsesTraits       *responsemodel.RouteTraits
+	Compatibility         modelCompatibility
 }
 
 type modelRouteOverrides struct {
@@ -107,6 +110,7 @@ type resolvedModelRoute struct {
 	Header                 http.Header
 	Credentialless         bool
 	CustomEndpoint         bool
+	ImageInputUnsupported  bool
 	ContextWindow          int
 	ContextWindowEstimated bool
 	MaxOutputTokens        int
@@ -124,7 +128,8 @@ var modelCatalog = []modelSpec{
 	// enabled requests pair it with reasoning_effort. Low/medium collapse to high.
 	{
 		URI: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{"", "off", "high", "max"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "off", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
@@ -133,7 +138,8 @@ var modelCatalog = []modelSpec{
 	},
 	{
 		URI: "deepseek/deepseek-v4-pro", Name: "DeepSeek V4 Pro", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{"", "off", "high", "max"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "off", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
@@ -160,7 +166,8 @@ var modelCatalog = []modelSpec{
 	},
 	{
 		URI: "opencode-go/deepseek-v4-flash", Name: "OpenCode Go · DeepSeek V4 Flash", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{"", "low", "high", "max"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
@@ -169,7 +176,8 @@ var modelCatalog = []modelSpec{
 	},
 	{
 		URI: "opencode-go/deepseek-v4-pro", Name: "OpenCode Go · DeepSeek V4 Pro", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{"", "high", "max"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
@@ -187,7 +195,8 @@ var modelCatalog = []modelSpec{
 	},
 	{
 		URI: "opencode-go/glm-5.2", Name: "OpenCode Go · GLM-5.2", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{"", "high", "max"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
@@ -208,7 +217,8 @@ var modelCatalog = []modelSpec{
 	},
 	{
 		URI: "opencode-go/glm-5.3", Name: "OpenCode Go · GLM-5.3", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{"", "low", "high", "max"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
@@ -219,7 +229,8 @@ var modelCatalog = []modelSpec{
 	// a reasoning replay contract for this endpoint.
 	{
 		URI: "opencode-go/glm-5.1", Name: "OpenCode Go · GLM-5.1", ContextWindow: 202_752,
-		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
 		Compatibility: modelCompatibilitySupported,
 	},
 	{
@@ -364,6 +375,7 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		traits.ReasoningReplay = ""
 		responsesTraits = responsemodel.RouteTraits{}
 	}
+	imageInputUnsupported := declaration.ImageInputUnsupported && !customEndpoint
 	maxOutputTokens := 0
 	if api == modelAPIAnthropicMessages && !customEndpoint && declaration.API == modelAPIAnthropicMessages {
 		maxOutputTokens = declaration.MaxOutputTokens
@@ -406,7 +418,8 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	return resolvedModelRoute{
 		URI: provider + "/" + model, Provider: provider, Model: model, APIModel: apiModel, API: api,
 		BaseURL: baseURL, Header: header, Credentialless: providerDescription.credentialless,
-		CustomEndpoint: customEndpoint, ContextWindow: contextWindow, ContextWindowEstimated: contextEstimated,
+		CustomEndpoint: customEndpoint, ImageInputUnsupported: imageInputUnsupported,
+		ContextWindow: contextWindow, ContextWindowEstimated: contextEstimated,
 		MaxOutputTokens: maxOutputTokens, PromptCache: promptCache,
 		ReasoningEffort: reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,

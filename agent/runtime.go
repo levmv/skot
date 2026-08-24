@@ -593,7 +593,7 @@ func (runtime *Runtime) settleCancelledToolCalls(ctx context.Context, live *stat
 		}
 		result := ToolResult{
 			CallID:  pending.Call.ID,
-			Content: fmt.Sprintf("tool %s outcome is unknown because its run was cancelled; the call was not replayed", pending.Call.Name),
+			Content: TextContent(fmt.Sprintf("tool %s outcome is unknown because its run was cancelled; the call was not replayed", pending.Call.Name)),
 			Error:   true,
 			Unknown: true,
 		}
@@ -607,7 +607,7 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 	for _, call := range calls {
 		result := ToolResult{
 			CallID:  call.ID,
-			Content: runtime.sanitize(fmt.Sprintf("tool %s error: tool iteration limit reached after %d iterations", call.Name, iterations)),
+			Content: TextContent(runtime.sanitize(fmt.Sprintf("tool %s error: tool iteration limit reached after %d iterations", call.Name, iterations))),
 			Error:   true,
 		}
 		if err := runtime.commitRejectedToolResult(context.WithoutCancel(ctx), live, emit, runID, call, result); err != nil {
@@ -793,20 +793,85 @@ func (runtime *Runtime) completeRunRequest(
 		if err != nil {
 			return ModelResponse{}, err
 		}
+		probeImages := live.state.ImageDelivery.Status == ImageDeliveryUnknown && modelRequestHasImages(request)
 		response, err := runtime.completeRequest(ctx, runID, request, emit)
-		if err == nil || ctx.Err() != nil || !errors.Is(err, ErrModelRequestTooLarge) {
-			return response, err
+		if err == nil {
+			if probeImages {
+				if observeErr := runtime.observeImageDelivery(ctx, live, ImageDeliveryAccepted); observeErr != nil {
+					return ModelResponse{}, observeErr
+				}
+			}
+			return response, nil
 		}
+		if ctx.Err() == nil && errors.Is(err, ErrModelRequestTooLarge) {
+			var shrinkErr error
+			report, shrinkErr = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
+			if shrinkErr != nil {
+				return ModelResponse{}, errors.Join(
+					err,
+					fmt.Errorf("automatic context reduction after oversized model request failed: %w", shrinkErr),
+				)
+			}
+			continue
+		}
+		if probeImages && runtime.imageFreeControlAllowed(err, report) && ctx.Err() == nil {
+			emitEvent(emit, Event{Kind: EventStatus, RunID: runID, Text: "retrying without image content"})
+			fallback := requestWithoutImages(request)
+			fallbackResponse, fallbackErr := runtime.completeRequest(ctx, runID, fallback, emit)
+			if fallbackErr == nil {
+				if observeErr := runtime.observeImageDelivery(ctx, live, ImageDeliveryRejected); observeErr != nil {
+					return ModelResponse{}, observeErr
+				}
+				return fallbackResponse, nil
+			}
+			// The control changed only image delivery. If it also failed, it did
+			// not explain the original request rejection; preserve that error and
+			// leave the epoch unknown.
+			return ModelResponse{}, err
+		}
+		return response, err
+	}
+}
 
-		var shrinkErr error
-		report, shrinkErr = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
-		if shrinkErr != nil {
-			return ModelResponse{}, errors.Join(
-				err,
-				fmt.Errorf("automatic context reduction after oversized model request failed: %w", shrinkErr),
-			)
+func modelRequestHasImages(request ModelRequest) bool {
+	for _, item := range request.Items {
+		if item.ToolResult != nil && item.ToolResult.Content.HasImage() {
+			return true
 		}
 	}
+	return false
+}
+
+func (runtime *Runtime) imageFreeControlAllowed(err error, report ContextReport) bool {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != ProviderErrorRequest || providerErr.Retryable {
+		return false
+	}
+	// A successful smaller control is not evidence about image delivery when
+	// the original request may simply have exceeded an uncertain context
+	// window. The ordinary input limit already holds back a context reserve.
+	return !runtime.modelInfo.ContextWindowEstimated && report.Window > 0 && report.InputLimit > 0 && report.TotalInputTokens <= report.InputLimit
+}
+
+func requestWithoutImages(request ModelRequest) ModelRequest {
+	request.Items = cloneModelItemsForProjection(request.Items)
+	request.Items = omitImagesFromModelItems(request.Items)
+	return request
+}
+
+func (runtime *Runtime) observeImageDelivery(ctx context.Context, live *stateReducer, status ImageDeliveryStatus) error {
+	if live.state.ImageDelivery.Status == status {
+		return nil
+	}
+	if live.state.ImageDelivery.Status != ImageDeliveryUnknown {
+		return fmt.Errorf("image delivery already observed as %q for provider epoch %q", live.state.ImageDelivery.Status, live.state.Selection.Epoch)
+	}
+	payload := ImageDeliveryObservedRecord{ProviderEpoch: live.state.Selection.Epoch, Status: status}
+	_, err := appendRecordAndApply(context.WithoutCancel(ctx), runtime.journal, live, RecordImageDeliveryObserved, payload)
+	if err != nil {
+		return fmt.Errorf("record image delivery observation: %w", err)
+	}
+	return nil
 }
 
 func (runtime *Runtime) completeRequest(ctx context.Context, runID string, request ModelRequest, emit EmitFunc) (ModelResponse, error) {
@@ -1004,7 +1069,7 @@ func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (Mo
 		Items: runtime.projectModelItems(items, ProviderContext{
 			Backend: state.Selection.Backend,
 			Epoch:   state.Selection.Epoch,
-		}),
+		}, state.ImageDelivery.Status),
 	}
 	if !spec.omitTools {
 		request.Tools = cloneToolSpecs(state.Configured.ModelContext.Tools)
@@ -1012,17 +1077,29 @@ func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (Mo
 	return request, nil
 }
 
-// projectModelItems applies runtime ownership filtering before the adapter's
-// replay policy. Requests and context estimates share this projection.
-func (runtime *Runtime) projectModelItems(items []Item, providerContext ProviderContext) []Item {
+// projectModelItems applies runtime ownership filtering, the adapter's replay
+// policy, and route-level image delivery. Requests and context estimates share
+// this complete projection.
+func (runtime *Runtime) projectModelItems(items []Item, providerContext ProviderContext, imageStatus ImageDeliveryStatus) []Item {
 	items = projectOwnedModelItems(items, providerContext)
-	if runtime.backend == nil {
+	if runtime.backend != nil {
+		items = runtime.backend.ProjectModelItems(items)
+	} else {
 		// Without the adapter's replay policy we retain extra reasoning items.
 		// That can only overestimate context use, and this Runtime cannot send a
 		// request until an executable backend is attached.
-		return items
 	}
-	return runtime.backend.ProjectModelItems(items)
+	return projectImagesForDelivery(items, runtime.effectiveImageDelivery(imageStatus))
+}
+
+// effectiveImageDelivery combines current-build route policy with durable
+// evidence. A catalog hint affects projection but never impersonates an
+// observation in the session journal.
+func (runtime *Runtime) effectiveImageDelivery(observed ImageDeliveryStatus) ImageDeliveryStatus {
+	if runtime.modelInfo.ImageInputUnsupported {
+		return ImageDeliveryRejected
+	}
+	return observed
 }
 
 func (runtime *Runtime) requireBackend() error {
@@ -1062,6 +1139,25 @@ func projectOwnedModelItems(items []Item, providerContext ProviderContext) []Ite
 		projected = append(projected, item)
 	}
 	return projected
+}
+
+func projectImagesForDelivery(items []Item, status ImageDeliveryStatus) []Item {
+	if status != ImageDeliveryRejected {
+		return items
+	}
+	return omitImagesFromModelItems(items)
+}
+
+func omitImagesFromModelItems(items []Item) []Item {
+	for index := range items {
+		if items[index].ToolResult == nil || !items[index].ToolResult.Content.HasImage() {
+			continue
+		}
+		items[index].ToolResult.Content = items[index].ToolResult.Content.WithoutImages(func(image ImageContent) string {
+			return fmt.Sprintf("\n[image omitted from model request; %s, %dx%d]\n", image.MediaType, image.Width, image.Height)
+		})
+	}
+	return items
 }
 
 func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReducer) error {
@@ -1128,7 +1224,7 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 		if len(names) != 0 {
 			message += "; available tools: " + strings.Join(names, ", ")
 		}
-		return ToolResult{CallID: call.ID, Content: runtime.sanitize(message), Error: true}, false, nil
+		return ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Error: true}, false, nil
 	}
 	output, err := tool.Run(WithToolSessionID(ctx, sessionID), call.RawArguments)
 	if ctx.Err() != nil {
@@ -1139,20 +1235,25 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 		err = errors.Join(err, fmt.Errorf("invalid tool output: %w", detailErr))
 		details = nil
 	}
+	content, contentErr := normalizeContent(output.Content)
+	if contentErr != nil {
+		err = errors.Join(err, fmt.Errorf("invalid tool output: %w", contentErr))
+		content = nil
+	}
 	if err != nil {
-		content := strings.TrimSpace(output.Content)
-		if content == "" {
-			content = err.Error()
+		message := strings.TrimSpace(content.Text())
+		if message == "" {
+			message = err.Error()
 		} else {
-			content += "\nerror: " + err.Error()
+			message += "\nerror: " + err.Error()
 		}
-		result := ToolResult{CallID: call.ID, Content: runtime.sanitize(content), Details: details, Error: true}
+		result := ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Details: details, Error: true}
 		if errors.Is(err, ErrToolFatal) {
 			return result, false, err
 		}
 		return result, false, nil
 	}
-	return ToolResult{CallID: call.ID, Content: runtime.sanitize(output.Content), Details: details}, false, nil
+	return ToolResult{CallID: call.ID, Content: runtime.sanitizeContent(content), Details: details}, false, nil
 }
 
 func (runtime *Runtime) finish(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error) (RunResult, error) {
@@ -1230,8 +1331,18 @@ func (runtime *Runtime) sanitizeItems(items []Item) []Item {
 			sanitized[index].ToolCall.RawArguments = runtime.sanitize(sanitized[index].ToolCall.RawArguments)
 		}
 		if sanitized[index].ToolResult != nil {
-			sanitized[index].ToolResult.Content = runtime.sanitize(sanitized[index].ToolResult.Content)
+			sanitized[index].ToolResult.Content = runtime.sanitizeContent(sanitized[index].ToolResult.Content)
 			sanitized[index].ToolResult.Details = runtime.sanitizeDetails(sanitized[index].ToolResult.Details)
+		}
+	}
+	return sanitized
+}
+
+func (runtime *Runtime) sanitizeContent(content Content) Content {
+	sanitized := content.Clone()
+	for index := range sanitized {
+		if sanitized[index].Kind == ContentPartText {
+			sanitized[index].Text = runtime.sanitize(sanitized[index].Text)
 		}
 	}
 	return sanitized
@@ -1455,10 +1566,19 @@ func cloneItemForProjection(item Item, includeDetails bool) Item {
 		item.ToolResult = cloneToolResult(item.ToolResult)
 	} else if item.ToolResult != nil {
 		result := *item.ToolResult
+		result.Content = cloneContentForProjection(item.ToolResult.Content)
 		result.Details = nil
 		item.ToolResult = &result
 	}
 	return item
+}
+
+func cloneModelItemsForProjection(items []Item) []Item {
+	cloned := make([]Item, len(items))
+	for index, item := range items {
+		cloned[index] = cloneItemForProjection(item, false)
+	}
+	return cloned
 }
 
 func cloneToolCallPointer(call *ToolCall) *ToolCall {
@@ -1482,6 +1602,7 @@ func cloneToolResult(result *ToolResult) *ToolResult {
 		return nil
 	}
 	cloned := *result
+	cloned.Content = result.Content.Clone()
 	cloned.Details = cloneDetails(result.Details)
 	return &cloned
 }

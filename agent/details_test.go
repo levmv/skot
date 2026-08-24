@@ -81,7 +81,7 @@ func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 			{Item: Item{
 				Kind: ItemToolResult,
 				ToolResult: &ToolResult{
-					CallID: "call", Content: "result",
+					CallID: "call", Content: TextContent("result"),
 					Details: []Detail{{Kind: "inspection", Data: json.RawMessage(`{"value":1}`)}},
 				},
 			}},
@@ -91,8 +91,8 @@ func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 	if len(items) != 1 || items[0].ToolResult == nil || len(items[0].ToolResult.Details) != 0 {
 		t.Fatalf("model items = %#v", items)
 	}
-	items[0].ToolResult.Content = "mutated"
-	if state.Blocks[0].Entries[0].Item.ToolResult.Content != "result" {
+	items[0].ToolResult.Content = TextContent("mutated")
+	if state.Blocks[0].Entries[0].Item.ToolResult.Content.Text() != "result" {
 		t.Fatal("model projection aliases replay state")
 	}
 	productItems := state.VerbatimItems()

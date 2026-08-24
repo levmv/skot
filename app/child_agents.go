@@ -1121,12 +1121,12 @@ func childToolOutput(prefix string, snapshot childSnapshot) (agent.ToolOutput, e
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
-	return agent.ToolOutput{Content: content, Details: []agent.Detail{detail}}, nil
+	return agent.ToolOutput{Content: agent.TextContent(content), Details: []agent.Detail{detail}}, nil
 }
 
 func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
 	if len(snapshots) == 0 {
-		return agent.ToolOutput{Content: "no child agents"}, nil
+		return agent.ToolOutput{Content: agent.TextContent("no child agents")}, nil
 	}
 	var output strings.Builder
 	var details []agent.Detail
@@ -1163,7 +1163,7 @@ func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
 		}
 		details = append(details, detail)
 	}
-	return agent.ToolOutput{Content: output.String(), Details: details}, nil
+	return agent.ToolOutput{Content: agent.TextContent(output.String()), Details: details}, nil
 }
 
 func childResultText(status agent.RunStatus, answer, runError string) string {

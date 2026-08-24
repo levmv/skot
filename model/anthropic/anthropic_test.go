@@ -169,7 +169,7 @@ func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {
 					Kind: "anthropic_messages.test.tool_use_id", Backend: "anthropic_messages.test", Epoch: "epoch_1", Data: providerID,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: "failed", Error: true}},
+			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("failed"), Error: true}},
 			{Kind: agent.ItemBoundaryText, Text: "Background job completed."},
 			{Kind: agent.ItemUserText, Text: "continue"},
 		},
@@ -190,9 +190,29 @@ func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {
 	}
 	user := request.Messages[2]
 	if user.Role != "user" || len(user.Content) != 3 || user.Content[0].Type != "tool_result" ||
-		user.Content[0].ToolUseID != "toolu_provider_7" || user.Content[0].Content == nil || *user.Content[0].Content != "failed" || !user.Content[0].IsError ||
+		user.Content[0].ToolUseID != "toolu_provider_7" || user.Content[0].Content != "failed" || !user.Content[0].IsError ||
 		user.Content[1].Text != "Background job completed." || user.Content[2].Text != "continue" {
 		t.Fatalf("user message = %#v", user)
+	}
+}
+
+func TestBuildRequestLowersImageToolResult(t *testing.T) {
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
+		{Kind: agent.ItemUserText, Text: "inspect"},
+		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"shot.png"}`}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.ImageToolContent("image metadata", agent.ImageContent{
+			MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
+		})}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := request.Messages[len(request.Messages)-1].Content[0]
+	parts, ok := result.Content.([]toolResultContentBlock)
+	if result.Type != "tool_result" || !ok || len(parts) != 2 || parts[0].Type != "text" || parts[0].Text != "image metadata" ||
+		parts[1].Type != "image" || parts[1].Source == nil || parts[1].Source.MediaType != "image/png" || string(parts[1].Source.Data) != string([]byte{1, 2, 3}) {
+		t.Fatalf("tool result = %#v", result)
 	}
 }
 
@@ -623,7 +643,7 @@ func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
 		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
 			ID: "call_1", Name: "read_file", RawArguments: `{"path":"README.md"}`,
 		}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: "contents"}},
+		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
 	}
 
 	plain, err := plainRequest(newTestBackend(t, "http://example.invalid/v1"), items)

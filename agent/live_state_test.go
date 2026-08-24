@@ -37,7 +37,7 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 	tool := Tool{
 		Spec: ToolSpec{Name: "echo", Description: "echo input", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
-			return ToolOutput{Content: arguments}, nil
+			return ToolOutput{Content: TextContent(arguments)}, nil
 		},
 	}
 	boundaryCommitted := false

@@ -120,7 +120,18 @@ func (runtime *Runtime) compactionRequest(state State, spec runRequestSpec, plan
 	prefix := state
 	prefix.Blocks = prefix.Blocks[:targetEnd]
 	prompt := compactionPrompt(state.Configured.ModelContext.CompactionInstructions, plan.RuntimeFacts)
-	return runtime.modelRequestForRun(prefix, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
+	request, err := runtime.modelRequestForRun(prefix, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
+	if err != nil {
+		return ModelRequest{}, err
+	}
+	if runtime.effectiveImageDelivery(prefix.ImageDelivery.Status) == ImageDeliveryUnknown {
+		// Compaction is maintenance, not a route capability probe. After a model
+		// switch its prefix contains only old completed work, so preserve image
+		// metadata and ordering without making the internal request the first
+		// image-bearing call on the new route.
+		request.Items = omitImagesFromModelItems(request.Items)
+	}
+	return request, nil
 }
 
 // Automatic compaction is an internal model call. Its attempt and retry events

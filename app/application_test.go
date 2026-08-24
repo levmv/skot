@@ -823,8 +823,8 @@ func TestOpenSharesScopeSwitchWithBuiltInFileTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output, err := read.Run(context.Background(), string(arguments)); err != nil || !strings.Contains(output.Content, "external") {
-		t.Fatalf("machine read = %q, %v", output.Content, err)
+	if output, err := read.Run(context.Background(), string(arguments)); err != nil || !strings.Contains(output.Content.Text(), "external") {
+		t.Fatalf("machine read = %q, %v", output.Content.Text(), err)
 	}
 	if _, err := childRead.Run(context.Background(), string(arguments)); err != nil {
 		t.Fatalf("child machine read: %v", err)

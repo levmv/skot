@@ -43,8 +43,8 @@ func TestSandboxedProgramDisappearingAfterPreflightIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	output, err := resolved[0].Tool.Run(context.Background(), `{}`)
-	if !errors.Is(err, agent.ErrToolFatal) || !strings.Contains(output.Content, "status: failed") {
-		t.Fatalf("output/error = %q / %v", output.Content, err)
+	if !errors.Is(err, agent.ErrToolFatal) || !strings.Contains(output.Content.Text(), "status: failed") {
+		t.Fatalf("output/error = %q / %v", output.Content.Text(), err)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestResolvedBareProgramRunsThroughSandboxChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.Content, `{"inside":true}`) {
-		t.Fatalf("program output = %q", output.Content)
+	if !strings.Contains(output.Content.Text(), `{"inside":true}`) {
+		t.Fatalf("program output = %q", output.Content.Text())
 	}
 }
 
@@ -224,8 +224,8 @@ func TestMachineProtectedPathsSurviveSupervisedLaunch(t *testing.T) {
 	metadata := processResultForTest(t, started)
 	result := runProcessResult(t, manager.job, jobArgs{Action: "wait", JobID: metadata.JobID, TimeoutSeconds: 10})
 	finished := processResultForTest(t, result)
-	if finished.Status != ProcessCompleted || !strings.Contains(result.Content, "masked") {
-		t.Fatalf("supervised masked result = %#v / %q", finished, result.Content)
+	if finished.Status != ProcessCompleted || !strings.Contains(result.Content.Text(), "masked") {
+		t.Fatalf("supervised masked result = %#v / %q", finished, result.Content.Text())
 	}
 	if raw, err := os.ReadFile(secret); err != nil || string(raw) != "journal\n" {
 		t.Fatalf("private state = %q, %v", raw, err)
@@ -294,7 +294,7 @@ func TestWorkspaceSandboxCarvesProtectedWorkspacePaths(t *testing.T) {
 	result := runProcessResult(t, manager.bash, bashArgs{Command: command})
 	metadata := processResultForTest(t, result)
 	if metadata.Status != ProcessCompleted {
-		t.Fatalf("workspace protected result = %#v / %q", metadata, result.Content)
+		t.Fatalf("workspace protected result = %#v / %q", metadata, result.Content.Text())
 	}
 	if raw, err := os.ReadFile(secret); err != nil || string(raw) != "secret\n" {
 		t.Fatalf("protected file = %q, %v", raw, err)
@@ -337,7 +337,7 @@ func TestMachineScopeHidesMultipleProtectedPaths(t *testing.T) {
 	result := runProcessResult(t, manager.bash, bashArgs{Command: command})
 	metadata := processResultForTest(t, result)
 	if metadata.Status != ProcessCompleted {
-		t.Fatalf("masked protected result = %#v / %q", metadata, result.Content)
+		t.Fatalf("masked protected result = %#v / %q", metadata, result.Content.Text())
 	}
 }
 
@@ -368,7 +368,7 @@ func TestStateHomeInsideWorkspaceHasNoSpecialStatus(t *testing.T) {
 			result := runProcessResult(t, manager.bash, bashArgs{Command: command})
 			metadata := processResultForTest(t, result)
 			if metadata.Status != ProcessCompleted {
-				t.Fatalf("nested state result = %#v / %q", metadata, result.Content)
+				t.Fatalf("nested state result = %#v / %q", metadata, result.Content.Text())
 			}
 			if raw, err := os.ReadFile(secret); err != nil || string(raw) != "secret\n" {
 				t.Fatalf("private state = %q, %v", raw, err)

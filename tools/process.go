@@ -462,7 +462,7 @@ func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolO
 		if err != nil {
 			return agent.ToolOutput{}, err
 		}
-		return agent.ToolOutput{Content: content}, nil
+		return agent.ToolOutput{Content: agent.TextContent(content)}, nil
 	}
 	if action != "output" && action != "wait" && action != "stop" {
 		return agent.ToolOutput{}, errors.New("action must be one of: list, output, wait, stop")
@@ -1089,7 +1089,7 @@ func (manager *ProcessManager) result(job *processJob, options jobResultOptions)
 		return agent.ToolOutput{}, fmt.Errorf("encode process result: %w", err)
 	}
 	return agent.ToolOutput{
-		Content: manager.formatJob(job, options.output, options.includeOutput, options.managed, options.truncated),
+		Content: agent.TextContent(manager.formatJob(job, options.output, options.includeOutput, options.managed, options.truncated)),
 		Details: []agent.Detail{detail},
 	}, nil
 }

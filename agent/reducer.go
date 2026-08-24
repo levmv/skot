@@ -79,6 +79,8 @@ func (reducer *stateReducer) applyRecord(record Record) error {
 		return reducer.applyContextCompacted(record)
 	case RecordToolResultsPruned:
 		return reducer.applyToolResultsPruned(record)
+	case RecordImageDeliveryObserved:
+		return reducer.applyImageDeliveryObserved(record)
 	default:
 		if isAuxiliaryRecordKind(record.Kind) {
 			// Auxiliary records are semantic leaves: ignoring one may change only
@@ -128,6 +130,7 @@ func (reducer *stateReducer) applyModelSelected(record Record) error {
 		return fmt.Errorf("model selection reused epoch %q at sequence %d", payload.Epoch, record.Sequence)
 	}
 	state.Selection = payload
+	state.ImageDelivery = ImageDeliveryObservedRecord{}
 	// Effective configuration describes the selection which preceded it in the
 	// journal. A process may stop after recording a new selection but before its
 	// configuration, so retaining the old snapshot here would attribute the
@@ -231,6 +234,10 @@ func (reducer *stateReducer) applyToolResult(record Record) error {
 	payload, err := decodeRecord[ToolResultRecord](record)
 	if err != nil {
 		return err
+	}
+	payload.Result.Content, err = normalizeContent(payload.Result.Content)
+	if err != nil {
+		return fmt.Errorf("invalid tool result at sequence %d: %w", record.Sequence, err)
 	}
 	payload.Result.Details, err = normalizeDetails(payload.Result.Details)
 	if err != nil {
@@ -352,6 +359,25 @@ func (reducer *stateReducer) applyToolResultsPruned(record Record) error {
 	}
 	state.ToolPruning = &payload
 	state.ToolPruningCount++
+	return nil
+}
+
+func (reducer *stateReducer) applyImageDeliveryObserved(record Record) error {
+	payload, err := decodeRecord[ImageDeliveryObservedRecord](record)
+	if err != nil {
+		return err
+	}
+	state := &reducer.state
+	if payload.ProviderEpoch == "" || payload.ProviderEpoch != state.Selection.Epoch {
+		return fmt.Errorf("image delivery observation does not belong to active provider epoch at sequence %d", record.Sequence)
+	}
+	if payload.Status != ImageDeliveryAccepted && payload.Status != ImageDeliveryRejected {
+		return fmt.Errorf("invalid image delivery status %q at sequence %d", payload.Status, record.Sequence)
+	}
+	if state.ImageDelivery.Status != ImageDeliveryUnknown {
+		return fmt.Errorf("duplicate image delivery observation for provider epoch %q at sequence %d", payload.ProviderEpoch, record.Sequence)
+	}
+	state.ImageDelivery = payload
 	return nil
 }
 

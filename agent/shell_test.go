@@ -2,7 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
 			called = command
 			return ToolOutput{Content: TextContent("status: completed\n\nhello\n"), Details: []Detail{{
-				Kind: "process_result", Data: json.RawMessage(`{"status":"completed"}`),
+				Kind: "process_result", Data: jsontext.Value(`{"status":"completed"}`),
 			}}}, nil
 		},
 	})

@@ -20,7 +20,8 @@ race:
 	$(GO) test -race ./...
 
 format-check:
-	@unformatted="$$(gofmt -l $$(git ls-files '*.go'))"; \
+	@set -eu; \
+	unformatted="$$($(GO) run cmd/gofmt -l $$(git ls-files '*.go'))"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "The following Go files are not formatted:"; \
 		echo "$$unformatted"; \
@@ -31,7 +32,7 @@ mod-check:
 	$(GO) mod tidy -diff
 
 staticcheck:
-	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 
 check: test vet format-check mod-check staticcheck race
 

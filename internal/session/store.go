@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -95,7 +95,7 @@ func (store *Store) Append(ctx context.Context, pending agent.PendingRecord) (ag
 	if pending.Kind == "" {
 		return agent.Record{}, errors.New("record kind is required")
 	}
-	if !json.Valid(pending.Data) {
+	if !pending.Data.IsValid() {
 		return agent.Record{}, errors.New("record data is not valid JSON")
 	}
 
@@ -103,9 +103,9 @@ func (store *Store) Append(ctx context.Context, pending agent.PendingRecord) (ag
 		Sequence: uint64(len(store.records) + 1),
 		Time:     time.Now().UTC(),
 		Kind:     pending.Kind,
-		Data:     append(json.RawMessage(nil), pending.Data...),
+		Data:     pending.Data.Clone(),
 	}
-	encoded, err := json.Marshal(record)
+	encoded, err := json.Marshal(record, json.Deterministic(true))
 	if err != nil {
 		return agent.Record{}, fmt.Errorf("encode journal record: %w", err)
 	}
@@ -259,8 +259,8 @@ func repairIncompleteTail(file *os.File) (bool, error) {
 		if _, err := file.ReadAt(block, start); err != nil {
 			return false, fmt.Errorf("scan incomplete journal tail: %w", err)
 		}
-		if index := bytes.LastIndexByte(block, '\n'); index >= 0 {
-			truncateAt = start + int64(index) + 1
+		if before, _, found := bytes.CutLast(block, []byte{'\n'}); found {
+			truncateAt = start + int64(len(before)) + 1
 			break
 		}
 		end = start
@@ -276,10 +276,7 @@ func readRecords(file *os.File, maxRecordBytes int) ([]agent.Record, error) {
 		return nil, fmt.Errorf("seek journal: %w", err)
 	}
 	scanner := bufio.NewScanner(file)
-	initialBufferBytes := initialJournalBufferBytes
-	if maxRecordBytes+1 < initialBufferBytes {
-		initialBufferBytes = maxRecordBytes + 1
-	}
+	initialBufferBytes := min(maxRecordBytes+1, initialJournalBufferBytes)
 	scanner.Buffer(make([]byte, initialBufferBytes), maxRecordBytes+1)
 	var records []agent.Record
 	for scanner.Scan() {
@@ -295,7 +292,7 @@ func readRecords(file *os.File, maxRecordBytes int) ([]agent.Record, error) {
 		if record.Sequence != want {
 			return nil, fmt.Errorf("journal sequence at line %d is %d, want %d", len(records)+1, record.Sequence, want)
 		}
-		if record.Time.IsZero() || record.Kind == "" || !json.Valid(record.Data) {
+		if record.Time.IsZero() || record.Kind == "" || len(record.Data) == 0 {
 			return nil, fmt.Errorf("invalid journal record at line %d", len(records)+1)
 		}
 		records = append(records, cloneRecord(record))
@@ -310,6 +307,6 @@ func readRecords(file *os.File, maxRecordBytes int) ([]agent.Record, error) {
 }
 
 func cloneRecord(record agent.Record) agent.Record {
-	record.Data = append(json.RawMessage(nil), record.Data...)
+	record.Data = record.Data.Clone()
 	return record
 }

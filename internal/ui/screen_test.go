@@ -3,7 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -348,7 +348,7 @@ func TestHelpKeepsItsColumnsOnANarrowTerminal(t *testing.T) {
 	model.resize(60, 40)
 	// Help is a two column layout, and the transcript wraps a long line back to
 	// the left margin, which would break the columns rather than shorten them.
-	for _, line := range strings.Split(tuiCommandHelp, "\n") {
+	for line := range strings.SplitSeq(tuiCommandHelp, "\n") {
 		if len(line) > model.contentWidth() {
 			t.Fatalf("help line of %d columns does not fit %d: %q", len(line), model.contentWidth(), line)
 		}
@@ -982,7 +982,7 @@ func TestTranscriptTracksDirtyRenderedSuffix(t *testing.T) {
 func TestSessionHistorySeedsTranscriptAndInputHistory(t *testing.T) {
 	fake := &fakeAgent{state: agent.State{Items: []agent.Item{
 		{Kind: agent.ItemUserText, Text: "hello"},
-		{Kind: agent.ItemReasoning, Text: "private summary", ProviderData: []agent.ProviderData{{Kind: "responses.reasoning_item", Data: json.RawMessage(`{"encrypted_content":"opaque-secret"}`)}}},
+		{Kind: agent.ItemReasoning, Text: "private summary", ProviderData: []agent.ProviderData{{Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"opaque-secret"}`)}}},
 		{Kind: agent.ItemBoundaryText, Text: "Background job job-1 completed."},
 		{Kind: agent.ItemAssistantText, Text: "hi"},
 	}}}

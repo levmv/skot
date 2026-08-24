@@ -40,7 +40,7 @@ func (m screenModel) renderFullProcessOutput(output string, indent int) []string
 		return nil
 	}
 	var lines []string
-	for _, outputLine := range strings.Split(output, "\n") {
+	for outputLine := range strings.SplitSeq(output, "\n") {
 		lines = append(lines, m.renderProcessOutputLine(outputLine, indent, true)...)
 	}
 	return lines

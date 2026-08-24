@@ -10,6 +10,7 @@ package ignore
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -271,7 +272,7 @@ func (s *RuleSet) relativeParts(pathParts []string) ([]string, bool) {
 }
 
 func (s *RuleSet) decideDirect(pathParts []string, isDir bool) Decision {
-	for index := len(s.rules) - 1; index >= 0; index-- {
+	for index := range slices.Backward(s.rules) {
 		candidate := &s.rules[index]
 		if !candidate.matchesDirect(pathParts, isDir) {
 			continue

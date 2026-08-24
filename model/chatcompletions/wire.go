@@ -3,7 +3,8 @@ package chatcompletions
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -82,11 +83,11 @@ type chatRequest struct {
 	Messages        []chatMessage    `json:"messages"`
 	Tools           []chatTool       `json:"tools,omitempty"`
 	Stream          bool             `json:"stream"`
-	StreamOptions   *streamOptions   `json:"stream_options,omitempty"`
+	StreamOptions   *streamOptions   `json:"stream_options,omitzero"`
 	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"`
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
-	Reasoning       *reasoningConfig `json:"reasoning,omitempty"`
-	Thinking        *thinkingControl `json:"thinking,omitempty"`
+	Reasoning       *reasoningConfig `json:"reasoning,omitzero"`
+	Thinking        *thinkingControl `json:"thinking,omitzero"`
 }
 
 type reasoningConfig struct {
@@ -117,7 +118,7 @@ type chatContent struct {
 type chatContentPart struct {
 	Type     string        `json:"type"`
 	Text     string        `json:"text,omitempty"`
-	ImageURL *chatImageURL `json:"image_url,omitempty"`
+	ImageURL *chatImageURL `json:"image_url,omitzero"`
 }
 
 type chatImageURL struct {
@@ -128,9 +129,9 @@ func textChatContent(text string) chatContent { return chatContent{Text: text} }
 
 func (content chatContent) MarshalJSON() ([]byte, error) {
 	if content.Parts == nil {
-		return json.Marshal(content.Text)
+		return json.Marshal(content.Text, json.Deterministic(true))
 	}
-	return json.Marshal(content.Parts)
+	return json.Marshal(content.Parts, json.Deterministic(true))
 }
 
 func (content *chatContent) UnmarshalJSON(data []byte) error {
@@ -149,13 +150,13 @@ type chatTool struct {
 }
 
 type chatToolDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  jsontext.Value `json:"parameters"`
 }
 
 type wireToolCall struct {
-	Index    *int             `json:"index,omitempty"`
+	Index    *int             `json:"index,omitzero"`
 	ID       string           `json:"id,omitempty"`
 	Type     string           `json:"type,omitempty"`
 	Function wireFunctionCall `json:"function"`
@@ -168,17 +169,17 @@ type wireFunctionCall struct {
 
 type streamChunk struct {
 	Choices []streamChoice `json:"choices"`
-	Usage   *wireUsage     `json:"usage,omitempty"`
-	Error   *apiError      `json:"error,omitempty"`
+	Usage   *wireUsage     `json:"usage,omitzero"`
+	Error   *apiError      `json:"error,omitzero"`
 }
 
 type wireUsage struct {
 	PromptTokens            int                     `json:"prompt_tokens"`
 	CompletionTokens        int                     `json:"completion_tokens"`
 	TotalTokens             int                     `json:"total_tokens"`
-	PromptCacheHitTokens    *int                    `json:"prompt_cache_hit_tokens,omitempty"`
-	PromptTokensDetails     *promptTokenDetails     `json:"prompt_tokens_details,omitempty"`
-	CompletionTokensDetails *completionTokenDetails `json:"completion_tokens_details,omitempty"`
+	PromptCacheHitTokens    *int                    `json:"prompt_cache_hit_tokens,omitzero"`
+	PromptTokensDetails     *promptTokenDetails     `json:"prompt_tokens_details,omitzero"`
+	CompletionTokensDetails *completionTokenDetails `json:"completion_tokens_details,omitzero"`
 }
 
 type promptTokenDetails struct {

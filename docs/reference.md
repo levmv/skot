@@ -154,8 +154,7 @@ may be removed when no Skot invocation or surviving job/process for that
 workspace is still running; Skot does not currently garbage-collect it
 automatically.
 
-`config.json` is parsed strictly: unknown fields and multiple top-level values
-are rejected. A representative configuration is:
+A representative configuration is:
 
 ```json
 {

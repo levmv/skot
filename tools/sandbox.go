@@ -3,6 +3,7 @@ package tools
 import (
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,9 +176,7 @@ func mergeToolEnv(base []string, extra map[string]string) []string {
 			values[name] = value
 		}
 	}
-	for name, value := range extra {
-		values[name] = value
-	}
+	maps.Copy(values, extra)
 	names := make([]string, 0, len(values))
 	for name := range values {
 		names = append(names, name)

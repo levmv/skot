@@ -1,14 +1,13 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,7 +36,7 @@ const (
 	maxChildResultBytes = 32 << 10
 )
 
-var childAgentSchema = json.RawMessage(`{
+var childAgentSchema = jsontext.Value(`{
   "type": "object",
   "properties": {
     "action": {"type": "string", "enum": ["start", "send", "check", "stop"]},
@@ -68,7 +67,7 @@ type childMetadata struct {
 	Model           string    `json:"model"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
-	Stopped         bool      `json:"stopped,omitempty"`
+	Stopped         bool      `json:"stopped,omitzero"`
 }
 
 type childRun struct {
@@ -106,11 +105,11 @@ type childSnapshot struct {
 	RunStatus       agent.RunStatus  `json:"run_status,omitempty"`
 	Answer          string           `json:"-"`
 	Error           string           `json:"-"`
-	ToolLimit       bool             `json:"tool_limit_reached,omitempty"`
-	Usage           agent.ModelUsage `json:"usage,omitempty"`
+	ToolLimit       bool             `json:"tool_limit_reached,omitzero"`
+	Usage           agent.ModelUsage `json:"usage"`
 	StartedAt       time.Time        `json:"started_at,omitzero"`
 	FinishedAt      time.Time        `json:"finished_at,omitzero"`
-	ResultDelivered bool             `json:"result_delivered,omitempty"`
+	ResultDelivered bool             `json:"result_delivered,omitzero"`
 }
 
 // childSupervisor owns nested read-only sessions. It deliberately shares the
@@ -1310,7 +1309,7 @@ func cancelAndDiscardNewChild(child *childAgent) error {
 }
 
 func writeChildMetadata(dir string, metadata childMetadata) error {
-	raw, err := json.MarshalIndent(metadata, "", "  ")
+	raw, err := json.Marshal(metadata, json.Deterministic(true), jsontext.WithIndentPrefix(""), jsontext.WithIndent("  "))
 	if err != nil {
 		return fmt.Errorf("encode child agent metadata: %w", err)
 	}
@@ -1351,13 +1350,8 @@ func readChildMetadata(path string) (childMetadata, error) {
 		return childMetadata{}, fmt.Errorf("read metadata: %w", err)
 	}
 	var metadata childMetadata
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&metadata); err != nil {
+	if err := json.Unmarshal(raw, &metadata, json.RejectUnknownMembers(true)); err != nil {
 		return childMetadata{}, fmt.Errorf("decode metadata: %w", err)
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return childMetadata{}, errors.New("decode metadata: multiple JSON values")
 	}
 	return metadata, nil
 }

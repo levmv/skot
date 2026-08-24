@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"strings"
 	"testing"
 )
@@ -24,7 +24,7 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 		runtime := newTestRuntime(t, Config{
 			Backend: model, Journal: journal,
 			Tools: []Tool{{
-				Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 				Run: func(_ context.Context, raw string) (ToolOutput, error) {
 					executedWith = raw
 					return ToolOutput{Content: TextContent("ok")}, nil
@@ -40,7 +40,7 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 			if record.Kind != RecordModelResponse {
 				continue
 			}
-			response, err := decodeRecord[ModelResponseRecord](record)
+			response, err := record.decode[ModelResponseRecord]()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -69,7 +69,7 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 		runtime := newTestRuntime(t, Config{
 			Backend: model, Journal: journal,
 			Tools: []Tool{{
-				Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 				Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 			}},
 		})

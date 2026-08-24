@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -34,14 +33,14 @@ func normalizeProviderData(entries []ProviderData) ([]ProviderData, error) {
 			return nil, fmt.Errorf("provider data kind %q is duplicated", kind)
 		}
 		seen[kind] = struct{}{}
-		if len(entry.Data) == 0 || !json.Valid(entry.Data) {
+		if len(entry.Data) == 0 || !entry.Data.IsValid() {
 			return nil, fmt.Errorf("provider data %d (%s) is not valid JSON", index, kind)
 		}
 		total += len(kind) + len(entry.Data)
 		if total > maxProviderDataBytes {
 			return nil, errors.New("provider data exceeds size limit")
 		}
-		normalized[index] = ProviderData{Kind: kind, Data: append(json.RawMessage(nil), entry.Data...)}
+		normalized[index] = ProviderData{Kind: kind, Data: entry.Data.Clone()}
 	}
 	return normalized, nil
 }
@@ -65,7 +64,7 @@ func cloneProviderData(entries []ProviderData) []ProviderData {
 	}
 	cloned := make([]ProviderData, len(entries))
 	for index, entry := range entries {
-		cloned[index] = ProviderData{Kind: entry.Kind, Data: append(json.RawMessage(nil), entry.Data...)}
+		cloned[index] = ProviderData{Kind: entry.Kind, Data: entry.Data.Clone()}
 	}
 	return cloned
 }

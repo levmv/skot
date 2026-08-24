@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"strings"
 	"sync"
@@ -28,7 +28,7 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "steered answer"}}, StopReason: "stop"}, nil
 	})
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{Content: TextContent("contents")}, nil
 		},
@@ -144,7 +144,7 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})

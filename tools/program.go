@@ -3,10 +3,10 @@ package tools
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -48,18 +48,18 @@ type ProgramTool struct {
 	Name         string            `json:"name"`
 	Description  string            `json:"description"`
 	Command      []string          `json:"command"`
-	Parameters   json.RawMessage   `json:"parameters"`
-	Timeout      int               `json:"timeout,omitempty"`
+	Parameters   jsontext.Value    `json:"parameters"`
+	Timeout      int               `json:"timeout,omitzero"`
 	Workdir      string            `json:"workdir,omitempty"`
-	ParallelSafe bool              `json:"parallel_safe,omitempty"`
+	ParallelSafe bool              `json:"parallel_safe,omitzero"`
 	Background   BackgroundMode    `json:"background,omitempty"`
-	Yield        int               `json:"yield,omitempty"`
-	Detach       bool              `json:"detach,omitempty"`
+	Yield        int               `json:"yield,omitzero"`
+	Detach       bool              `json:"detach,omitzero"`
 	Env          map[string]string `json:"env,omitempty"`
 
 	// inputSchema is populated by normalize and includes any synthetic arguments
 	// which are model-visible but absent from the user's declaration.
-	inputSchema json.RawMessage
+	inputSchema jsontext.Value
 }
 
 // ProgramToolConfig is the top-level tools.json document.
@@ -96,14 +96,9 @@ func LoadProgramTools(path string) (ProgramToolConfig, error) {
 	if err != nil {
 		return ProgramToolConfig{}, fmt.Errorf("read tool config %s: %w", path, err)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
 	var config ProgramToolConfig
-	if err := decoder.Decode(&config); err != nil {
+	if err := json.Unmarshal(raw, &config, json.RejectUnknownMembers(true)); err != nil {
 		return ProgramToolConfig{}, fmt.Errorf("parse tool config %s: %w", path, err)
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return ProgramToolConfig{}, fmt.Errorf("parse tool config %s: multiple JSON values", path)
 	}
 	seen := make(map[string]struct{}, len(config.Tools))
 	for index := range config.Tools {
@@ -191,20 +186,16 @@ func (tool *ProgramTool) normalize() error {
 	return nil
 }
 
-func normalizeProgramSchemas(raw json.RawMessage, addBackground bool) (json.RawMessage, json.RawMessage, error) {
+func normalizeProgramSchemas(raw jsontext.Value, addBackground bool) (jsontext.Value, jsontext.Value, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		raw = json.RawMessage(`{"type":"object"}`)
+		raw = jsontext.Value(`{"type":"object"}`)
 	}
-	var schema map[string]json.RawMessage
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if err := decoder.Decode(&schema); err != nil {
+	var schema map[string]jsontext.Value
+	if err := json.Unmarshal(raw, &schema); err != nil {
 		return nil, nil, fmt.Errorf("parameters must be a JSON Schema object: %w", err)
 	}
 	if schema == nil {
 		return nil, nil, errors.New("parameters must be a JSON Schema object")
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, nil, errors.New("parameters contains multiple JSON values")
 	}
 	if kind, exists := schema["type"]; exists {
 		var name string
@@ -212,9 +203,9 @@ func normalizeProgramSchemas(raw json.RawMessage, addBackground bool) (json.RawM
 			return nil, nil, errors.New("parameters must have type object")
 		}
 	} else {
-		schema["type"] = json.RawMessage(`"object"`)
+		schema["type"] = jsontext.Value(`"object"`)
 	}
-	parameters, err := json.Marshal(schema)
+	parameters, err := json.Marshal(schema, json.Deterministic(true))
 	if err != nil {
 		return nil, nil, fmt.Errorf("normalize parameters: %w", err)
 	}
@@ -222,7 +213,7 @@ func normalizeProgramSchemas(raw json.RawMessage, addBackground bool) (json.RawM
 		return parameters, slices.Clone(parameters), nil
 	}
 
-	var properties map[string]json.RawMessage
+	var properties map[string]jsontext.Value
 	if rawProperties := schema["properties"]; len(rawProperties) != 0 {
 		if err := json.Unmarshal(rawProperties, &properties); err != nil {
 			return nil, nil, fmt.Errorf("decode parameters: %w", err)
@@ -232,14 +223,14 @@ func normalizeProgramSchemas(raw json.RawMessage, addBackground bool) (json.RawM
 		return nil, nil, errors.New("background auto adds a background parameter and parameters already declares one")
 	}
 	if properties == nil {
-		properties = make(map[string]json.RawMessage)
+		properties = make(map[string]jsontext.Value)
 	}
-	properties[programBackgroundArg] = json.RawMessage(`{"type":"boolean","description":"Return a job id immediately and keep the tool running through a durable worker. Use it only when this reply does not need the result."}`)
-	schema["properties"], err = json.Marshal(properties)
+	properties[programBackgroundArg] = jsontext.Value(`{"type":"boolean","description":"Return a job id immediately and keep the tool running through a durable worker. Use it only when this reply does not need the result."}`)
+	schema["properties"], err = json.Marshal(properties, json.Deterministic(true))
 	if err != nil {
 		return nil, nil, fmt.Errorf("normalize parameter properties: %w", err)
 	}
-	inputSchema, err := json.Marshal(schema)
+	inputSchema, err := json.Marshal(schema, json.Deterministic(true))
 	if err != nil {
 		return nil, nil, fmt.Errorf("normalize model-visible parameters: %w", err)
 	}
@@ -390,7 +381,7 @@ func validateProgramArguments(raw string) ([]byte, error) {
 }
 
 func takeProgramBackground(raw []byte) ([]byte, bool, error) {
-	var fields map[string]json.RawMessage
+	var fields map[string]jsontext.Value
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, false, fmt.Errorf("invalid tool arguments: %w", err)
 	}
@@ -403,13 +394,11 @@ func takeProgramBackground(raw []byte) ([]byte, bool, error) {
 		return nil, false, errors.New("invalid tool arguments: background must be true or false")
 	}
 	delete(fields, programBackgroundArg)
-	var trimmed bytes.Buffer
-	encoder := json.NewEncoder(&trimmed)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(fields); err != nil {
+	trimmed, err := json.Marshal(fields, json.Deterministic(true))
+	if err != nil {
 		return nil, false, err
 	}
-	return bytes.TrimSuffix(trimmed.Bytes(), []byte{'\n'}), background, nil
+	return trimmed, background, nil
 }
 
 func (manager *ProcessManager) programRunner(declaration ProgramTool, program string) func(context.Context, string) (agent.ToolOutput, error) {

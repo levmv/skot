@@ -26,8 +26,8 @@ func (err *webPolicyError) Error() string { return err.message }
 func newWebPolicyError(message string) error { return &webPolicyError{message: message} }
 
 func isWebPolicyError(err error) bool {
-	var target *webPolicyError
-	return errors.As(err, &target)
+	_, ok := errors.AsType[*webPolicyError](err)
+	return ok
 }
 
 type httpFetchBackend struct {

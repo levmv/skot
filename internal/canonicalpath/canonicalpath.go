@@ -5,6 +5,7 @@ package canonicalpath
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -21,8 +22,8 @@ func Resolve(path string) string {
 	for {
 		resolved, err := filepath.EvalSymlinks(current)
 		if err == nil {
-			for index := len(missing) - 1; index >= 0; index-- {
-				resolved = filepath.Join(resolved, missing[index])
+			for _, m := range slices.Backward(missing) {
+				resolved = filepath.Join(resolved, m)
 			}
 			return filepath.Clean(resolved)
 		}

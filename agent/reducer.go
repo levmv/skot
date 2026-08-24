@@ -96,7 +96,7 @@ func isAuxiliaryRecordKind(kind RecordKind) bool {
 }
 
 func (reducer *stateReducer) applySessionStarted(record Record) error {
-	payload, err := decodeRecord[SessionStartedRecord](record)
+	payload, err := record.decode[SessionStartedRecord]()
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func (reducer *stateReducer) applySessionStarted(record Record) error {
 }
 
 func (reducer *stateReducer) applyModelSelected(record Record) error {
-	payload, err := decodeRecord[ModelSelectedRecord](record)
+	payload, err := record.decode[ModelSelectedRecord]()
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (reducer *stateReducer) applyModelSelected(record Record) error {
 }
 
 func (reducer *stateReducer) applySessionConfigured(record Record) error {
-	payload, err := decodeRecord[EffectiveConfigSnapshot](record)
+	payload, err := record.decode[EffectiveConfigSnapshot]()
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (reducer *stateReducer) applySessionConfigured(record Record) error {
 }
 
 func (reducer *stateReducer) applyRunStarted(record Record) error {
-	payload, err := decodeRecord[RunStartedRecord](record)
+	payload, err := record.decode[RunStartedRecord]()
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func (reducer *stateReducer) applyRunStarted(record Record) error {
 }
 
 func (reducer *stateReducer) applyRunInputAdded(record Record) error {
-	payload, err := decodeRecord[RunInputAddedRecord](record)
+	payload, err := record.decode[RunInputAddedRecord]()
 	if err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func (reducer *stateReducer) applyRunInputAdded(record Record) error {
 }
 
 func (reducer *stateReducer) applyModelResponse(record Record) error {
-	payload, err := decodeRecord[ModelResponseRecord](record)
+	payload, err := record.decode[ModelResponseRecord]()
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (reducer *stateReducer) applyModelResponse(record Record) error {
 }
 
 func (reducer *stateReducer) applyToolResult(record Record) error {
-	payload, err := decodeRecord[ToolResultRecord](record)
+	payload, err := record.decode[ToolResultRecord]()
 	if err != nil {
 		return err
 	}
@@ -264,7 +264,7 @@ func (reducer *stateReducer) applyToolResult(record Record) error {
 }
 
 func (reducer *stateReducer) applyBoundaryEvent(record Record) error {
-	payload, err := decodeRecord[BoundaryEventRecord](record)
+	payload, err := record.decode[BoundaryEventRecord]()
 	if err != nil {
 		return err
 	}
@@ -292,7 +292,7 @@ func (reducer *stateReducer) applyBoundaryEvent(record Record) error {
 }
 
 func (reducer *stateReducer) applyRunFinished(record Record) error {
-	payload, err := decodeRecord[RunFinishedRecord](record)
+	payload, err := record.decode[RunFinishedRecord]()
 	if err != nil {
 		return err
 	}
@@ -333,7 +333,7 @@ func (reducer *stateReducer) applyRunFinished(record Record) error {
 }
 
 func (reducer *stateReducer) applyContextCompacted(record Record) error {
-	payload, err := decodeRecord[ContextCompactedRecord](record)
+	payload, err := record.decode[ContextCompactedRecord]()
 	if err != nil {
 		return err
 	}
@@ -349,7 +349,7 @@ func (reducer *stateReducer) applyContextCompacted(record Record) error {
 }
 
 func (reducer *stateReducer) applyToolResultsPruned(record Record) error {
-	payload, err := decodeRecord[ToolResultsPrunedRecord](record)
+	payload, err := record.decode[ToolResultsPrunedRecord]()
 	if err != nil {
 		return err
 	}
@@ -363,7 +363,7 @@ func (reducer *stateReducer) applyToolResultsPruned(record Record) error {
 }
 
 func (reducer *stateReducer) applyImageDeliveryObserved(record Record) error {
-	payload, err := decodeRecord[ImageDeliveryObservedRecord](record)
+	payload, err := record.decode[ImageDeliveryObservedRecord]()
 	if err != nil {
 		return err
 	}

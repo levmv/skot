@@ -1,6 +1,7 @@
 package filesearch
 
 import (
+	"slices"
 	"strings"
 
 	ignore "github.com/levmv/skot/internal/filesearch/internal/ignore"
@@ -105,8 +106,7 @@ func (m *ruleMatcher) mayMatchDescendant(path string) bool {
 }
 
 func (m *ruleMatcher) directDecisionParts(pathParts []string, isDir bool) (bool, bool) {
-	for index := len(m.sets) - 1; index >= 0; index-- {
-		candidate := m.sets[index]
+	for _, candidate := range slices.Backward(m.sets) {
 		if len(pathParts) <= candidate.scopeDepth {
 			continue
 		}

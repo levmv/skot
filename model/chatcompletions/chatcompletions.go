@@ -5,7 +5,7 @@ package chatcompletions
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -232,7 +232,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			}
 			toolCall := agent.ToolCall{Name: call.Function.Name, RawArguments: arguments}
 			if call.ID != "" {
-				data, _ := json.Marshal(call.ID)
+				data, _ := json.Marshal(call.ID, json.Deterministic(true))
 				toolCall.ProviderReferences = []agent.ProviderReference{{
 					Kind: backend.callIDReferenceKind(),
 					Data: data,

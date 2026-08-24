@@ -89,8 +89,8 @@ func (failure *ModelAPIRequiredError) Error() string {
 // IsModelAPIRequired reports a selection which only needs a protocol to become
 // usable, so a frontend can offer that choice instead of the error.
 func IsModelAPIRequired(err error) bool {
-	var failure *ModelAPIRequiredError
-	return errors.As(err, &failure)
+	_, ok := errors.AsType[*ModelAPIRequiredError](err)
+	return ok
 }
 
 type modelRouteEnrichment struct {

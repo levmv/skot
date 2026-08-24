@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -17,10 +18,8 @@ func changedFilePath(change fileChangeMeta) (string, bool) {
 }
 
 func appendUniquePath(paths []string, candidate string) []string {
-	for _, existing := range paths {
-		if existing == candidate {
-			return paths
-		}
+	if slices.Contains(paths, candidate) {
+		return paths
 	}
 	return append(paths, candidate)
 }

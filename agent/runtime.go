@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	mathrand "math/rand/v2"
@@ -529,8 +529,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 		}
 		committed, err := runtime.acceptAndCommitResponse(ctx, live, runID, response, responseCommitOptions{})
 		if err != nil {
-			var acceptanceErr *responseAcceptanceError
-			if errors.As(err, &acceptanceErr) {
+			if _, ok := errors.AsType[*responseAcceptanceError](err); ok {
 				return runtime.finish(ctx, live, emit, runID, "", RunFailed, err)
 			}
 			return RunResult{RunID: runID}, err
@@ -642,8 +641,7 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 		errorContext:   "finalize after tool iteration limit",
 	})
 	if err != nil {
-		var acceptanceErr *responseAcceptanceError
-		if errors.As(err, &acceptanceErr) {
+		if _, ok := errors.AsType[*responseAcceptanceError](err); ok {
 			return runtime.finishToolLimited(ctx, live, emit, runID, "", RunFailed, err)
 		}
 		return RunResult{RunID: runID, ToolLimitReached: true}, err
@@ -843,8 +841,8 @@ func modelRequestHasImages(request ModelRequest) bool {
 }
 
 func (runtime *Runtime) imageFreeControlAllowed(err error, report ContextReport) bool {
-	var providerErr *ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != ProviderErrorRequest || providerErr.Retryable {
+	providerErr, ok := errors.AsType[*ProviderError](err)
+	if !ok || providerErr.Kind != ProviderErrorRequest || providerErr.Retryable {
 		return false
 	}
 	// A successful smaller control is not evidence about image delivery when
@@ -963,8 +961,7 @@ func (runtime *Runtime) recordModelAttemptFailure(
 		Backend: backend, Provider: provider, Model: model, ProviderEpoch: providerEpoch,
 		Error: errorText, ErrorTruncated: errorTruncated,
 	}
-	var providerErr *ProviderError
-	if errors.As(cause, &providerErr) {
+	if providerErr, ok := errors.AsType[*ProviderError](cause); ok {
 		kind, _ := boundedModelAttemptText(runtime.sanitize(string(providerErr.Kind)), maxModelAttemptFieldBytes)
 		code, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Code), maxModelAttemptFieldBytes)
 		errorType, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Type), maxModelAttemptFieldBytes)
@@ -999,8 +996,7 @@ func (runtime *Runtime) attemptAllowed(attempt int) bool {
 }
 
 func (runtime *Runtime) retryable(err error) bool {
-	var providerErr *ProviderError
-	if errors.As(err, &providerErr) {
+	if providerErr, ok := errors.AsType[*ProviderError](err); ok {
 		return providerErr.Retryable
 	}
 	// Unclassified backend errors use the generic retryable default.
@@ -1028,8 +1024,7 @@ func (runtime *Runtime) retryDelay(err error, attempt int) time.Duration {
 			delay += extra
 		}
 	}
-	var providerErr *ProviderError
-	if errors.As(err, &providerErr) && providerErr.RetryAfter > delay {
+	if providerErr, ok := errors.AsType[*ProviderError](err); ok && providerErr.RetryAfter > delay {
 		return providerErr.RetryAfter
 	}
 	return delay
@@ -1354,12 +1349,12 @@ func (runtime *Runtime) sanitizeDetails(details []Detail) []Detail {
 		sanitized[index] = Detail{Kind: detail.Kind}
 		var value any
 		if err := json.Unmarshal(detail.Data, &value); err != nil {
-			sanitized[index].Data = append(json.RawMessage(nil), detail.Data...)
+			sanitized[index].Data = detail.Data.Clone()
 			continue
 		}
-		data, err := json.Marshal(sanitizeJSONStrings(value, runtime.sanitize))
+		data, err := json.Marshal(sanitizeJSONStrings(value, runtime.sanitize), json.Deterministic(true))
 		if err != nil {
-			sanitized[index].Data = append(json.RawMessage(nil), detail.Data...)
+			sanitized[index].Data = detail.Data.Clone()
 			continue
 		}
 		sanitized[index].Data = data
@@ -1448,7 +1443,7 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 				return ModelResponse{}, fmt.Errorf("tool call %q: %w", strings.TrimSpace(item.ToolCall.Name), err)
 			}
 			for _, reference := range item.ToolCall.ProviderReferences {
-				if strings.TrimSpace(reference.Kind) == "" || !json.Valid(reference.Data) {
+				if strings.TrimSpace(reference.Kind) == "" || !reference.Data.IsValid() {
 					return ModelResponse{}, errors.New("tool call provider reference is invalid")
 				}
 			}

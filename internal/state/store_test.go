@@ -106,7 +106,7 @@ func TestStoreRejectsUnknownConfigFields(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Open(home); err == nil || !strings.Contains(err.Error(), `unknown field "`+field+`"`) {
+			if _, err := Open(home); err == nil || !strings.Contains(err.Error(), `unknown object member name "`+field+`"`) {
 				t.Fatalf("error = %v", err)
 			}
 		})

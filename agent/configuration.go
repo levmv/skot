@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
@@ -102,8 +102,8 @@ func (runtime *Runtime) recordCurrentEffectiveConfigurationAndApply(ctx context.
 func equalEffectiveConfigSnapshots(left, right EffectiveConfigSnapshot) bool {
 	// Compare the journal encoding so formatting-only differences in RawMessage
 	// tool schemas do not create new session configuration records.
-	leftJSON, leftErr := json.Marshal(left)
-	rightJSON, rightErr := json.Marshal(right)
+	leftJSON, leftErr := json.Marshal(left, json.Deterministic(true))
+	rightJSON, rightErr := json.Marshal(right, json.Deterministic(true))
 	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
@@ -227,7 +227,7 @@ func cloneEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) EffectiveCon
 }
 
 func cloneToolSpec(spec ToolSpec) ToolSpec {
-	spec.InputSchema = append(json.RawMessage(nil), spec.InputSchema...)
+	spec.InputSchema = spec.InputSchema.Clone()
 	return spec
 }
 

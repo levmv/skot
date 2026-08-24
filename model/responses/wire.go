@@ -2,7 +2,8 @@ package responses
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -58,13 +59,13 @@ func (RouteTraits) ProviderStateContract() agent.ProviderStateContract {
 }
 
 type responseRequest struct {
-	Model        string            `json:"model"`
-	Instructions string            `json:"instructions,omitempty"`
-	Input        []json.RawMessage `json:"input"`
-	Tools        []responseTool    `json:"tools,omitempty"`
-	Reasoning    *reasoningConfig  `json:"reasoning,omitempty"`
-	Store        bool              `json:"store"`
-	Stream       bool              `json:"stream"`
+	Model        string           `json:"model"`
+	Instructions string           `json:"instructions,omitempty"`
+	Input        []jsontext.Value `json:"input"`
+	Tools        []responseTool   `json:"tools,omitempty"`
+	Reasoning    *reasoningConfig `json:"reasoning,omitzero"`
+	Store        bool             `json:"store"`
+	Stream       bool             `json:"stream"`
 }
 
 type reasoningConfig struct {
@@ -73,10 +74,10 @@ type reasoningConfig struct {
 }
 
 type responseTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  jsontext.Value `json:"parameters"`
 	// Responses otherwise attempts strict mode and may silently resolve an
 	// incompatible schema differently. Skot's existing tools are explicitly
 	// non-strict until a route baseline says otherwise.
@@ -160,10 +161,10 @@ type responseReasoningInput struct {
 type wireResponse struct {
 	ID                string            `json:"id"`
 	Status            string            `json:"status"`
-	Output            []json.RawMessage `json:"output"`
-	Usage             *responseUsage    `json:"usage,omitempty"`
-	Error             *apiError         `json:"error,omitempty"`
-	IncompleteDetails *incompleteDetail `json:"incomplete_details,omitempty"`
+	Output            []jsontext.Value  `json:"output"`
+	Usage             *responseUsage    `json:"usage,omitzero"`
+	Error             *apiError         `json:"error,omitzero"`
+	IncompleteDetails *incompleteDetail `json:"incomplete_details,omitzero"`
 }
 
 type incompleteDetail struct {
@@ -172,9 +173,9 @@ type incompleteDetail struct {
 
 type responseUsage struct {
 	InputTokens        int                 `json:"input_tokens"`
-	InputTokenDetails  *inputTokenDetails  `json:"input_tokens_details,omitempty"`
+	InputTokenDetails  *inputTokenDetails  `json:"input_tokens_details,omitzero"`
 	OutputTokens       int                 `json:"output_tokens"`
-	OutputTokenDetails *outputTokenDetails `json:"output_tokens_details,omitempty"`
+	OutputTokenDetails *outputTokenDetails `json:"output_tokens_details,omitzero"`
 	TotalTokens        int                 `json:"total_tokens"`
 }
 
@@ -205,8 +206,8 @@ func (usage responseUsage) modelUsage() agent.ModelUsage {
 type streamEvent struct {
 	Type     string        `json:"type"`
 	Delta    string        `json:"delta,omitempty"`
-	Response *wireResponse `json:"response,omitempty"`
-	Error    *apiError     `json:"error,omitempty"`
+	Response *wireResponse `json:"response,omitzero"`
+	Error    *apiError     `json:"error,omitzero"`
 	Code     string        `json:"code,omitempty"`
 	Message  string        `json:"message,omitempty"`
 }
@@ -214,7 +215,7 @@ type streamEvent struct {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request agent.ModelRequest) (responseRequest, error) {
-	input := make([]json.RawMessage, 0, len(request.Items)+1)
+	input := make([]jsontext.Value, 0, len(request.Items)+1)
 	if request.Summary != "" {
 		message, err := marshalInputItem(inputMessage{Role: "developer", Content: agent.ConversationSummaryPrefix + request.Summary})
 		if err != nil {
@@ -350,15 +351,15 @@ func responsesToolResultContent(content agent.Content) any {
 	return parts
 }
 
-func marshalInputItem(value any) (json.RawMessage, error) {
-	data, err := json.Marshal(value)
+func marshalInputItem(value any) (jsontext.Value, error) {
+	data, err := json.Marshal(value, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("encode Responses input item: %w", err)
 	}
 	return data, nil
 }
 
-func (backend *Backend) reasoningInput(item agent.Item, epoch string) (json.RawMessage, bool, error) {
+func (backend *Backend) reasoningInput(item agent.Item, epoch string) (jsontext.Value, bool, error) {
 	if !backend.matchesProviderContext(item.ProviderContext, epoch) {
 		return nil, false, nil
 	}
@@ -438,7 +439,7 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 			}
 			state, err := json.Marshal(responseReasoningState{
 				ID: output.ID, EncryptedContent: output.EncryptedContent,
-			})
+			}, json.Deterministic(true))
 			if err != nil {
 				return agent.ModelResponse{}, fmt.Errorf("encode %s reasoning state: %w", backend.provider, err)
 			}
@@ -468,7 +469,7 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 			if strings.TrimSpace(output.CallID) == "" || strings.TrimSpace(output.Name) == "" {
 				return agent.ModelResponse{}, fmt.Errorf("%s response function call item %d is incomplete", backend.provider, index)
 			}
-			identity, err := json.Marshal(functionCallIdentity{ID: output.ID, CallID: output.CallID, Status: output.Status})
+			identity, err := json.Marshal(functionCallIdentity{ID: output.ID, CallID: output.CallID, Status: output.Status}, json.Deterministic(true))
 			if err != nil {
 				return agent.ModelResponse{}, fmt.Errorf("encode %s function call identity: %w", backend.provider, err)
 			}

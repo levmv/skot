@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -38,7 +40,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(_ context.Context, raw string) (ToolOutput, error) {
 			var args struct {
 				Value string `json:"value"`
@@ -91,7 +93,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 		if record.Kind != RecordToolResult {
 			continue
 		}
-		payload, err := decodeRecord[ToolResultRecord](record)
+		payload, err := record.decode[ToolResultRecord]()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +112,7 @@ func TestFatalToolFailureIsJournaledBeforeRunFails(t *testing.T) {
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "configured", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "configured", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{}, fmt.Errorf("%w: executable disappeared", ErrToolFatal)
 		},
@@ -125,7 +127,7 @@ func TestFatalToolFailureIsJournaledBeforeRunFails(t *testing.T) {
 	for _, record := range records {
 		switch record.Kind {
 		case RecordToolResult:
-			payload, decodeErr := decodeRecord[ToolResultRecord](record)
+			payload, decodeErr := record.decode[ToolResultRecord]()
 			if decodeErr != nil {
 				t.Fatal(decodeErr)
 			}
@@ -134,7 +136,7 @@ func TestFatalToolFailureIsJournaledBeforeRunFails(t *testing.T) {
 			}
 			resultSequence = record.Sequence
 		case RecordRunFinished:
-			payload, decodeErr := decodeRecord[RunFinishedRecord](record)
+			payload, decodeErr := record.decode[RunFinishedRecord]()
 			if decodeErr != nil {
 				t.Fatal(decodeErr)
 			}
@@ -160,13 +162,13 @@ func TestFatalParallelToolFailureSettlesSiblingCalls(t *testing.T) {
 		},
 	}}
 	configured := Tool{
-		Spec: ToolSpec{Name: "configured", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "configured", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{}, fmt.Errorf("%w: executable disappeared", ErrToolFatal)
 		},
 	}
 	slow := Tool{
-		Spec: ToolSpec{Name: "slow", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "slow", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
 			<-ctx.Done()
 			return ToolOutput{}, ctx.Err()
@@ -187,6 +189,10 @@ func TestFatalParallelToolFailureSettlesSiblingCalls(t *testing.T) {
 }
 
 func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
+	synctest.Test(t, testRuntimeKeepsUnsafeToolCallsAsSerialBarriers)
+}
+
+func testRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 	started := make(chan string, 3)
 	releaseWrite := make(chan struct{})
 	model := &scriptedModel{steps: []modelStep{
@@ -202,7 +208,7 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 		},
 	}}
 	read := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(_ context.Context, raw string) (ToolOutput, error) {
 			var args struct {
 				Value string `json:"value"`
@@ -215,7 +221,7 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 		},
 	}
 	write := Tool{
-		Spec: ToolSpec{Name: "write", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "write", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			started <- "write"
 			<-releaseWrite
@@ -234,10 +240,11 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 	if got := waitToolTestString(t, started); got != "write" {
 		t.Fatalf("barrier call = %q", got)
 	}
+	synctest.Wait()
 	select {
 	case got := <-started:
 		t.Fatalf("call %q crossed the unsafe barrier", got)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(releaseWrite)
 	if got := waitToolTestString(t, started); got != "read:after" {
@@ -250,6 +257,10 @@ func TestRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 }
 
 func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
+	synctest.Test(t, testRuntimeBoundsParallelSafeFanout)
+}
+
+func testRuntimeBoundsParallelSafeFanout(t *testing.T) {
 	const callCount = maxParallelToolCalls + 5
 	started := make(chan struct{}, callCount)
 	release := make(chan struct{})
@@ -268,7 +279,7 @@ func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			current := active.Add(1)
 			for previous := peak.Load(); current > previous && !peak.CompareAndSwap(previous, current); previous = peak.Load() {
@@ -288,10 +299,11 @@ func TestRuntimeBoundsParallelSafeFanout(t *testing.T) {
 	for range maxParallelToolCalls {
 		waitToolTestSignal(t, started)
 	}
+	synctest.Wait()
 	select {
 	case <-started:
 		t.Fatalf("more than %d tool calls became active", maxParallelToolCalls)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(release)
 	outcome := waitToolTestRun(t, done)
@@ -313,7 +325,7 @@ func TestRuntimeCancelsAllActiveParallelSafeCalls(t *testing.T) {
 		}}, nil
 	}}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`), ParallelSafe: true},
+		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
 			started <- struct{}{}
 			<-ctx.Done()
@@ -348,7 +360,7 @@ func TestRuntimeCancelsAllActiveParallelSafeCalls(t *testing.T) {
 	}
 	seen := make(map[string]bool)
 	for _, record := range records[len(records)-3 : len(records)-1] {
-		payload, err := decodeRecord[ToolResultRecord](record)
+		payload, err := record.decode[ToolResultRecord]()
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -2,7 +2,7 @@ package agent
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,7 +26,7 @@ const (
 type ContentPart struct {
 	Kind  ContentPartKind `json:"type"`
 	Text  string          `json:"text,omitempty"`
-	Image *ImageContent   `json:"image,omitempty"`
+	Image *ImageContent   `json:"image,omitzero"`
 }
 
 // ImageContent contains request-ready bytes. The filesystem path and any
@@ -143,10 +143,10 @@ func (content Content) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	if !normalized.HasImage() {
-		return json.Marshal(normalized.Text())
+		return json.Marshal(normalized.Text(), json.Deterministic(true))
 	}
 	type plain Content
-	return json.Marshal(plain(normalized))
+	return json.Marshal(plain(normalized), json.Deterministic(true))
 }
 
 func (content *Content) UnmarshalJSON(data []byte) error {

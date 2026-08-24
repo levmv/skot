@@ -26,8 +26,8 @@ func (backend routeDiagnosticBackend) Complete(ctx context.Context, request agen
 }
 
 func providerFailureHasIndependentExplanation(err error) bool {
-	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) {
+	providerErr, ok := errors.AsType[*agent.ProviderError](err)
+	if !ok {
 		return false
 	}
 	switch providerErr.Kind {

@@ -2,7 +2,7 @@ package session
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"sync"
@@ -42,16 +42,16 @@ func (store *MemoryStore) Append(ctx context.Context, pending agent.PendingRecor
 	if pending.Kind == "" {
 		return agent.Record{}, errors.New("record kind is required")
 	}
-	if !json.Valid(pending.Data) {
+	if !pending.Data.IsValid() {
 		return agent.Record{}, errors.New("record data is not valid JSON")
 	}
 	record := agent.Record{
 		Sequence: uint64(len(store.records) + 1),
 		Time:     time.Now().UTC(),
 		Kind:     pending.Kind,
-		Data:     append(json.RawMessage(nil), pending.Data...),
+		Data:     pending.Data.Clone(),
 	}
-	encoded, err := json.Marshal(record)
+	encoded, err := json.Marshal(record, json.Deterministic(true))
 	if err != nil {
 		return agent.Record{}, fmt.Errorf("encode journal record: %w", err)
 	}

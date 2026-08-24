@@ -94,10 +94,7 @@ func relativeSessionTime(now, updated time.Time) string {
 	if updated.IsZero() {
 		return "unknown time"
 	}
-	elapsed := now.Sub(updated)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(now.Sub(updated), 0)
 	switch {
 	case elapsed < time.Minute:
 		return "just now"

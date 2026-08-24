@@ -2,7 +2,8 @@ package session
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,14 +21,14 @@ func TestStorePersistsAndReopensRecords(t *testing.T) {
 	}
 	first, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunStarted,
-		Data: json.RawMessage(`{"run_id":"run_1"}`),
+		Data: jsontext.Value(`{"run_id":"run_1"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunFinished,
-		Data: json.RawMessage(`{"run_id":"run_1","status":"completed"}`),
+		Data: jsontext.Value(`{"run_id":"run_1","status":"completed"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestStoreReadsRecordLargerThanInitialScannerBuffer(t *testing.T) {
 	text := strings.Repeat("x", initialJournalBufferBytes*2)
 	if _, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunInputAdded,
-		Data: json.RawMessage(`{"run_id":"run","text":"` + text + `"}`),
+		Data: jsontext.Value(`{"run_id":"run","text":"` + text + `"}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +120,7 @@ func TestStoreRepairsOnlyIncompleteFinalRecord(t *testing.T) {
 	}
 	if _, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunStarted,
-		Data: json.RawMessage(`{"run_id":"run_1"}`),
+		Data: jsontext.Value(`{"run_id":"run_1"}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestStoreRepairsOnlyIncompleteFinalRecord(t *testing.T) {
 	}
 	next, err := repaired.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunFinished,
-		Data: json.RawMessage(`{"run_id":"run_1","status":"interrupted"}`),
+		Data: jsontext.Value(`{"run_id":"run_1","status":"interrupted"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +173,7 @@ func TestStoreRepairsOnlyIncompleteFinalRecord(t *testing.T) {
 		t.Fatalf("journal after repair = %q", raw)
 	}
 	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
-	if len(lines) != 2 || !json.Valid([]byte(lines[0])) || !json.Valid([]byte(lines[1])) {
+	if len(lines) != 2 || !jsontext.Value(lines[0]).IsValid() || !jsontext.Value(lines[1]).IsValid() {
 		t.Fatalf("journal records after repair = %#v", lines)
 	}
 }
@@ -244,14 +245,14 @@ func TestStoreAppliesSameRecordLimitOnAppendAndRead(t *testing.T) {
 	store.maxRecordBytes = 96
 	if _, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunInputAdded,
-		Data: json.RawMessage(`{"run_id":"run","text":"` + strings.Repeat("x", 128) + `"}`),
+		Data: jsontext.Value(`{"run_id":"run","text":"` + strings.Repeat("x", 128) + `"}`),
 	}); err == nil || !strings.Contains(err.Error(), "journal record") {
 		t.Fatalf("oversized append error = %v", err)
 	}
 	store.maxRecordBytes = 1024
 	record, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunStarted,
-		Data: json.RawMessage(`{"run_id":"run"}`),
+		Data: jsontext.Value(`{"run_id":"run"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +291,7 @@ func TestClosePruningEmptyRemovesOnlyEmptyManagedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := nonempty.Append(context.Background(), agent.PendingRecord{Kind: agent.RecordSessionStarted, Data: json.RawMessage(`{"schema_version":1,"session_id":"kept"}`)}); err != nil {
+	if _, err := nonempty.Append(context.Background(), agent.PendingRecord{Kind: agent.RecordSessionStarted, Data: jsontext.Value(`{"schema_version":1,"session_id":"kept"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := nonempty.ClosePruningEmpty(); err != nil {
@@ -311,8 +312,8 @@ func TestHasUserTurnTracksLiveAndReopenedJournal(t *testing.T) {
 		t.Fatal("empty journal has a user turn")
 	}
 	for _, pending := range []agent.PendingRecord{
-		{Kind: agent.RecordSessionStarted, Data: json.RawMessage(`{"schema_version":1,"session_id":"session"}`)},
-		{Kind: agent.RecordRunStarted, Data: json.RawMessage(`{"run_id":"run"}`)},
+		{Kind: agent.RecordSessionStarted, Data: jsontext.Value(`{"schema_version":1,"session_id":"session"}`)},
+		{Kind: agent.RecordRunStarted, Data: jsontext.Value(`{"run_id":"run"}`)},
 	} {
 		if _, err := store.Append(context.Background(), pending); err != nil {
 			t.Fatal(err)
@@ -323,7 +324,7 @@ func TestHasUserTurnTracksLiveAndReopenedJournal(t *testing.T) {
 	}
 	if _, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunInputAdded,
-		Data: json.RawMessage(`{"run_id":"run","text":"hello"}`),
+		Data: jsontext.Value(`{"run_id":"run","text":"hello"}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +353,7 @@ func TestCloseDiscardingRemovesNonemptyProvisionalSession(t *testing.T) {
 	}
 	if _, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordSessionStarted,
-		Data: json.RawMessage(`{"schema_version":1,"session_id":"provisional"}`),
+		Data: jsontext.Value(`{"schema_version":1,"session_id":"provisional"}`),
 	}); err != nil {
 		t.Fatal(err)
 	}

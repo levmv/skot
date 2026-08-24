@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"strings"
 	"time"
@@ -22,15 +22,15 @@ const (
 type Item struct {
 	Kind            ItemKind         `json:"kind"`
 	ResponseID      string           `json:"response_id,omitempty"`
-	ProviderContext *ProviderContext `json:"provider_context,omitempty"`
+	ProviderContext *ProviderContext `json:"provider_context,omitzero"`
 	// ProviderData carries bounded adapter-owned state whose opaque fields must
 	// survive replay verbatim. Visible text remains in Text so it follows the
 	// normal sanitization path. Ownership is inherited from ProviderContext; the
 	// entries deliberately do not duplicate backend or epoch fields.
 	ProviderData []ProviderData `json:"provider_data,omitempty"`
 	Text         string         `json:"text,omitempty"`
-	ToolCall     *ToolCall      `json:"tool_call,omitempty"`
-	ToolResult   *ToolResult    `json:"tool_result,omitempty"`
+	ToolCall     *ToolCall      `json:"tool_call,omitzero"`
+	ToolResult   *ToolResult    `json:"tool_result,omitzero"`
 }
 
 type ProviderContext struct {
@@ -39,8 +39,8 @@ type ProviderContext struct {
 }
 
 type ProviderData struct {
-	Kind string          `json:"kind"`
-	Data json.RawMessage `json:"data"`
+	Kind string         `json:"kind"`
+	Data jsontext.Value `json:"data"`
 }
 
 type ToolCall struct {
@@ -55,10 +55,10 @@ type ToolCall struct {
 // calls. Kind identifies the adapter payload; Backend and Epoch bind it to a
 // provider selection. Empty Backend and Epoch identify a legacy reference.
 type ProviderReference struct {
-	Kind    string          `json:"kind"`
-	Backend string          `json:"backend"`
-	Epoch   string          `json:"epoch"`
-	Data    json.RawMessage `json:"data"`
+	Kind    string         `json:"kind"`
+	Backend string         `json:"backend"`
+	Epoch   string         `json:"epoch"`
+	Data    jsontext.Value `json:"data"`
 }
 
 // MatchesReplayContext reports whether a reference of kind belongs to the
@@ -78,21 +78,21 @@ type ToolResult struct {
 	CallID  string   `json:"call_id"`
 	Content Content  `json:"content"`
 	Details []Detail `json:"details,omitempty"`
-	Error   bool     `json:"error,omitempty"`
-	Unknown bool     `json:"unknown,omitempty"`
+	Error   bool     `json:"error,omitzero"`
+	Unknown bool     `json:"unknown,omitzero"`
 }
 
 type Detail struct {
-	Kind string          `json:"kind"`
-	Data json.RawMessage `json:"data"`
+	Kind string         `json:"kind"`
+	Data jsontext.Value `json:"data"`
 }
 
 type ToolSpec struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	// InputSchema must be a JSON Schema with top-level type object.
-	InputSchema  json.RawMessage `json:"input_schema"`
-	ParallelSafe bool            `json:"parallel_safe,omitempty"`
+	InputSchema  jsontext.Value `json:"input_schema"`
+	ParallelSafe bool           `json:"parallel_safe,omitzero"`
 }
 
 type ToolOutput struct {
@@ -160,11 +160,11 @@ type ModelInfo struct {
 	ProviderStateContract ProviderStateContract `json:"provider_state_contract,omitempty"`
 	// ImageInputUnsupported is a reviewed route policy, not observed session
 	// evidence. False keeps delivery optimistic.
-	ImageInputUnsupported  bool `json:"image_input_unsupported,omitempty"`
-	ContextWindow          int  `json:"context_window,omitempty"`
-	ContextWindowEstimated bool `json:"context_window_estimated,omitempty"`
-	MaxRequestBytes        int  `json:"max_request_bytes,omitempty"`
-	MaxCompletionBytes     int  `json:"max_completion_bytes,omitempty"`
+	ImageInputUnsupported  bool `json:"image_input_unsupported,omitzero"`
+	ContextWindow          int  `json:"context_window,omitzero"`
+	ContextWindowEstimated bool `json:"context_window_estimated,omitzero"`
+	MaxRequestBytes        int  `json:"max_request_bytes,omitzero"`
+	MaxCompletionBytes     int  `json:"max_completion_bytes,omitzero"`
 	// Endpoint identifies the effective provider endpoint without credentials.
 	// It is journaled diagnostic metadata, not authorization configuration.
 	Endpoint string `json:"endpoint,omitempty"`
@@ -179,17 +179,17 @@ type ModelResponse struct {
 const StopReasonOutputLimit = "output_limit"
 
 type ModelUsage struct {
-	InputTokens int `json:"input_tokens,omitempty"`
+	InputTokens int `json:"input_tokens,omitzero"`
 	// CachedInputTokens is the cached subset of InputTokens, not additional
 	// input.
-	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
-	OutputTokens      int `json:"output_tokens,omitempty"`
+	CachedInputTokens int `json:"cached_input_tokens,omitzero"`
+	OutputTokens      int `json:"output_tokens,omitzero"`
 	// ReasoningTokens is the reported reasoning subset of OutputTokens, not an
 	// additional token count.
-	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	ReasoningTokens int `json:"reasoning_tokens,omitzero"`
 	// TotalTokens counts InputTokens plus OutputTokens. Adapters must preserve
 	// that invariant when mapping provider usage.
-	TotalTokens int `json:"total_tokens,omitempty"`
+	TotalTokens int `json:"total_tokens,omitzero"`
 }
 
 func (usage ModelUsage) Add(other ModelUsage) ModelUsage {
@@ -356,15 +356,15 @@ const (
 )
 
 type Record struct {
-	Sequence uint64          `json:"sequence"`
-	Time     time.Time       `json:"time"`
-	Kind     RecordKind      `json:"kind"`
-	Data     json.RawMessage `json:"data"`
+	Sequence uint64         `json:"sequence"`
+	Time     time.Time      `json:"time"`
+	Kind     RecordKind     `json:"kind"`
+	Data     jsontext.Value `json:"data"`
 }
 
 type PendingRecord struct {
 	Kind RecordKind
-	Data json.RawMessage
+	Data jsontext.Value
 }
 
 type ModelRequestPurpose string
@@ -387,12 +387,12 @@ type ModelAttemptFailedRecord struct {
 	Model          string                     `json:"model"`
 	ProviderEpoch  string                     `json:"provider_epoch,omitempty"`
 	Error          string                     `json:"error"`
-	ErrorTruncated bool                       `json:"error_truncated,omitempty"`
-	ProviderError  *ModelAttemptProviderError `json:"provider_error,omitempty"`
+	ErrorTruncated bool                       `json:"error_truncated,omitzero"`
+	ProviderError  *ModelAttemptProviderError `json:"provider_error,omitzero"`
 }
 
 type ModelAttemptProviderError struct {
-	StatusCode int               `json:"status_code,omitempty"`
+	StatusCode int               `json:"status_code,omitzero"`
 	Kind       ProviderErrorKind `json:"kind,omitempty"`
 	Code       string            `json:"code,omitempty"`
 	Type       string            `json:"type,omitempty"`
@@ -450,9 +450,9 @@ type ModelContextSnapshot struct {
 }
 
 type RuntimePolicySnapshot struct {
-	ContextWindow          int  `json:"context_window,omitempty"`
-	ContextWindowEstimated bool `json:"context_window_estimated,omitempty"`
-	ImageInputUnsupported  bool `json:"image_input_unsupported,omitempty"`
+	ContextWindow          int  `json:"context_window,omitzero"`
+	ContextWindowEstimated bool `json:"context_window_estimated,omitzero"`
+	ImageInputUnsupported  bool `json:"image_input_unsupported,omitzero"`
 	// MaxModelAttempts is -1 when attempts are bounded only by RetryBudget.
 	MaxModelAttempts  int    `json:"max_model_attempts"`
 	RetryBudget       string `json:"retry_budget,omitempty"`
@@ -461,8 +461,8 @@ type RuntimePolicySnapshot struct {
 	StreamIdleTimeout string `json:"stream_idle_timeout,omitempty"`
 	// MaxToolIterations is -1 when the emergency fuse is disabled.
 	MaxToolIterations  int `json:"max_tool_iterations"`
-	MaxRequestBytes    int `json:"max_request_bytes,omitempty"`
-	MaxCompletionBytes int `json:"max_completion_bytes,omitempty"`
+	MaxRequestBytes    int `json:"max_request_bytes,omitzero"`
+	MaxCompletionBytes int `json:"max_completion_bytes,omitzero"`
 	// AwaitRequiredJobs preserves foreground semantics for commands that only
 	// became managed jobs because they exceeded the synchronous yield.
 	AwaitRequiredJobs bool `json:"await_required_jobs"`
@@ -481,7 +481,7 @@ type ExecutionEnvironmentSnapshot struct {
 type BuildSnapshot struct {
 	Version  string `json:"version,omitempty"`
 	Revision string `json:"revision,omitempty"`
-	Modified *bool  `json:"modified,omitempty"`
+	Modified *bool  `json:"modified,omitzero"`
 }
 
 // ProgramToolSnapshot records how an executable-backed tool was resolved for
@@ -493,10 +493,10 @@ type ProgramToolSnapshot struct {
 	Command          []string `json:"command"`
 	Workdir          string   `json:"workdir,omitempty"`
 	Timeout          string   `json:"timeout"`
-	ParallelSafe     bool     `json:"parallel_safe,omitempty"`
+	ParallelSafe     bool     `json:"parallel_safe,omitzero"`
 	Background       string   `json:"background"`
 	Yield            string   `json:"yield,omitempty"`
-	Detach           bool     `json:"detach,omitempty"`
+	Detach           bool     `json:"detach,omitzero"`
 	EnvironmentNames []string `json:"environment_names,omitempty"`
 }
 
@@ -523,7 +523,7 @@ type ModelResponseRecord struct {
 	Model      string     `json:"model"`
 	Epoch      string     `json:"epoch"`
 	Items      []Item     `json:"items"`
-	Usage      ModelUsage `json:"usage,omitempty"`
+	Usage      ModelUsage `json:"usage"`
 	StopReason string     `json:"stop_reason,omitempty"`
 }
 
@@ -559,7 +559,7 @@ type RunFinishedRecord struct {
 	RunID            string    `json:"run_id"`
 	Status           RunStatus `json:"status"`
 	Error            string    `json:"error,omitempty"`
-	ToolLimitReached bool      `json:"tool_limit_reached,omitempty"`
+	ToolLimitReached bool      `json:"tool_limit_reached,omitzero"`
 	// Nil means the lifecycle was not observed (for example reconciliation
 	// after a crash); an empty non-nil slice authoritatively means none were
 	// left running.
@@ -570,7 +570,7 @@ type ContextCompactedRecord struct {
 	CoveredThroughSequence uint64     `json:"covered_through_sequence"`
 	FirstVerbatimSequence  uint64     `json:"first_verbatim_sequence"`
 	Summary                string     `json:"summary"`
-	Usage                  ModelUsage `json:"usage,omitempty"`
+	Usage                  ModelUsage `json:"usage"`
 }
 
 // ToolResultsPrunedRecord is a journaled model-context policy. Full tool output

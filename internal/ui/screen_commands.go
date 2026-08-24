@@ -933,10 +933,8 @@ func (picker *pickerState) reconcileSelection() {
 		picker.index = -1
 		return
 	}
-	for _, index := range visible {
-		if index == picker.index {
-			return
-		}
+	if slices.Contains(visible, picker.index) {
+		return
 	}
 	picker.index = visible[0]
 }

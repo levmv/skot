@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -300,7 +300,7 @@ func requireSuccessfulResponse(response *http.Response) error {
 }
 
 func checksumForAsset(data []byte, asset string) (string, error) {
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 || strings.TrimPrefix(fields[1], "*") != asset {
 			continue

@@ -2,7 +2,7 @@ package state
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"os/exec"
@@ -216,7 +216,7 @@ func TestLegacyRecentModelsKeyIsIgnoredAndDroppedOnTheNextWrite(t *testing.T) {
 
 func TestModelHistoryLeadsWithTheSelectionAndStaysUniqueAndBounded(t *testing.T) {
 	history := []modelHistoryDocument{{Model: "OPENAI/Old", ReasoningEffort: "high"}, {Model: "deepseek/one"}}
-	for index := 0; index < 30; index++ {
+	for index := range 30 {
 		history = append(history, modelHistoryDocument{Model: fmt.Sprintf("provider/model-%02d", index)})
 	}
 	updated := pushModelHistory(history, modelHistoryDocument{Model: "openai/old", ReasoningEffort: "default"})
@@ -475,7 +475,7 @@ func TestInteractiveStoreRejectsUnknownFieldsAndSymlinks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(home, "interactive.json"), []byte(`{"version":1,"unknown":true}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := OpenInteractive(home, root); err == nil || !strings.Contains(err.Error(), `unknown field "unknown"`) {
+		if _, err := OpenInteractive(home, root); err == nil || !strings.Contains(err.Error(), `unknown object member name "unknown"`) {
 			t.Fatalf("error = %v", err)
 		}
 	})

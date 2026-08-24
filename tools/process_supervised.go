@@ -2,7 +2,7 @@ package tools
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -255,7 +255,7 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		Dir:      process.Dir,
 		Stdin:    stdin,
 	}
-	payload, err := json.Marshal(launch)
+	payload, err := json.Marshal(launch, json.Deterministic(true))
 	if err != nil {
 		_ = closeControl()
 		return cleanup(fmt.Errorf("encode worker launch: %w", err))

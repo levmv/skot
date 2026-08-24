@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -548,8 +549,8 @@ func ensureWritableParent(parent string, validate func(string) error) (string, e
 			return "", err
 		}
 	}
-	for index := len(missing) - 1; index >= 0; index-- {
-		next := filepath.Join(realParent, missing[index])
+	for _, m := range slices.Backward(missing) {
+		next := filepath.Join(realParent, m)
 		if validate != nil {
 			if err := validate(next); err != nil {
 				return "", err

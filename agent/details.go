@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,7 +31,7 @@ type FileChange struct {
 	Deletions  int            `json:"deletions"`
 	Hunks      []FileDiffHunk `json:"hunks,omitempty"`
 	TotalHunks int            `json:"total_hunks"`
-	Truncated  bool           `json:"truncated,omitempty"`
+	Truncated  bool           `json:"truncated,omitzero"`
 }
 
 type FileDiffHunk struct {
@@ -44,26 +44,26 @@ type FileDiffHunk struct {
 
 type FileDiffLine struct {
 	Kind      string `json:"kind"`
-	OldLine   int    `json:"old_line,omitempty"`
-	NewLine   int    `json:"new_line,omitempty"`
+	OldLine   int    `json:"old_line,omitzero"`
+	NewLine   int    `json:"new_line,omitzero"`
 	Text      string `json:"text"`
-	NoNewline bool   `json:"no_newline,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
+	NoNewline bool   `json:"no_newline,omitzero"`
+	Truncated bool   `json:"truncated,omitzero"`
 }
 
 type ProcessResult struct {
 	JobID            string `json:"job_id,omitempty"`
 	Status           string `json:"status"`
 	Scope            string `json:"scope,omitempty"`
-	ExitCode         *int   `json:"exit_code,omitempty"`
+	ExitCode         *int   `json:"exit_code,omitzero"`
 	DurationMillis   int64  `json:"duration_ms"`
 	OutputBytes      int64  `json:"output_bytes"`
-	DiscardedBytes   int64  `json:"discarded_bytes,omitempty"`
+	DiscardedBytes   int64  `json:"discarded_bytes,omitzero"`
 	OutputError      string `json:"output_error,omitempty"`
 	FailureTail      string `json:"failure_tail,omitempty"`
-	ManagedProcesses int    `json:"managed_processes,omitempty"`
-	UserInitiated    bool   `json:"user_initiated,omitempty"`
-	Detached         bool   `json:"detached,omitempty"`
+	ManagedProcesses int    `json:"managed_processes,omitzero"`
+	UserInitiated    bool   `json:"user_initiated,omitzero"`
+	Detached         bool   `json:"detached,omitzero"`
 }
 
 // NewDetail encodes one durable, kind-discriminated tool-result payload.
@@ -72,7 +72,7 @@ func NewDetail(kind string, value any) (Detail, error) {
 	if kind == "" {
 		return Detail{}, errors.New("detail kind is required")
 	}
-	data, err := json.Marshal(value)
+	data, err := json.Marshal(value, json.Deterministic(true))
 	if err != nil {
 		return Detail{}, fmt.Errorf("encode %s detail: %w", kind, err)
 	}
@@ -114,14 +114,14 @@ func normalizeDetails(details []Detail) ([]Detail, error) {
 		if detail.Kind == "" {
 			return nil, fmt.Errorf("detail %d has no kind", index)
 		}
-		if len(detail.Data) == 0 || !json.Valid(detail.Data) {
+		if len(detail.Data) == 0 || !detail.Data.IsValid() {
 			return nil, fmt.Errorf("detail %d (%s) is not valid JSON", index, detail.Kind)
 		}
 		total += len(detail.Kind) + len(detail.Data)
 		if total > maxToolDetailsBytes {
 			return nil, errors.New("tool details exceed size limit")
 		}
-		normalized[index] = Detail{Kind: detail.Kind, Data: append(json.RawMessage(nil), detail.Data...)}
+		normalized[index] = Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
 	}
 	return normalized, nil
 }
@@ -132,7 +132,7 @@ func cloneDetails(details []Detail) []Detail {
 	}
 	cloned := make([]Detail, len(details))
 	for index, detail := range details {
-		cloned[index] = Detail{Kind: detail.Kind, Data: append(json.RawMessage(nil), detail.Data...)}
+		cloned[index] = Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
 	}
 	return cloned
 }

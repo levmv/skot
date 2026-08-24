@@ -1,11 +1,10 @@
 package state
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,12 +27,12 @@ type configDocument struct {
 	AgentModels    []string            `json:"agent_models,omitempty"`
 	ProtectedPaths []string            `json:"protected_paths,omitempty"`
 
-	LegacyModel           json.RawMessage `json:"model,omitempty"`
-	LegacyReasoningEffort json.RawMessage `json:"reasoning_effort,omitempty"`
-	LegacyRecentModels    json.RawMessage `json:"recent_models,omitempty"`
-	LegacyToolSet         json.RawMessage `json:"tool_set,omitempty"`
-	LegacyScope           json.RawMessage `json:"scope,omitempty"`
-	LegacyTheme           json.RawMessage `json:"theme,omitempty"`
+	LegacyModel           jsontext.Value `json:"model,omitzero"`
+	LegacyReasoningEffort jsontext.Value `json:"reasoning_effort,omitzero"`
+	LegacyRecentModels    jsontext.Value `json:"recent_models,omitzero"`
+	LegacyToolSet         jsontext.Value `json:"tool_set,omitzero"`
+	LegacyScope           jsontext.Value `json:"scope,omitzero"`
+	LegacyTheme           jsontext.Value `json:"theme,omitzero"`
 }
 
 func (document configDocument) settings() Settings {
@@ -46,7 +45,7 @@ func (document configDocument) settings() Settings {
 func (document configDocument) legacyInteractiveKeys() []string {
 	fields := []struct {
 		name string
-		raw  json.RawMessage
+		raw  jsontext.Value
 	}{
 		{name: "model", raw: document.LegacyModel},
 		{name: "reasoning_effort", raw: document.LegacyReasoningEffort},
@@ -82,9 +81,9 @@ func NormalizeTheme(value string) (string, error) {
 }
 
 type CredentialProfile struct {
-	Provider string          `json:"provider"`
-	Kind     string          `json:"kind"`
-	Payload  json.RawMessage `json:"payload"`
+	Provider string         `json:"provider"`
+	Kind     string         `json:"kind"`
+	Payload  jsontext.Value `json:"payload"`
 }
 
 type credentialData struct {
@@ -175,7 +174,7 @@ func (store *Store) SetAPIKey(provider, token string) error {
 	if provider == "" || token == "" {
 		return errors.New("provider and API key are required")
 	}
-	payload, err := json.Marshal(apiKeyPayload{Token: token})
+	payload, err := json.Marshal(apiKeyPayload{Token: token}, json.Deterministic(true))
 	if err != nil {
 		return fmt.Errorf("encode API key profile: %w", err)
 	}
@@ -221,13 +220,8 @@ func (store *Store) loadConfig() (configDocument, error) {
 	if err != nil {
 		return configDocument{}, fmt.Errorf("read config: %w", err)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
+	if err := json.Unmarshal(raw, &document, json.RejectUnknownMembers(true)); err != nil {
 		return configDocument{}, fmt.Errorf("decode config: %w", err)
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return configDocument{}, errors.New("decode config: multiple JSON values")
 	}
 	return document, nil
 }
@@ -261,7 +255,7 @@ func (store *Store) saveJSON(path, label string, value any) error {
 }
 
 func saveJSONAtomic(dir, path, label string, value any) error {
-	raw, err := json.MarshalIndent(value, "", "  ")
+	raw, err := json.Marshal(value, json.Deterministic(true), jsontext.WithIndentPrefix(""), jsontext.WithIndent("  "))
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", label, err)
 	}

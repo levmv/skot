@@ -2,12 +2,12 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 )
 
 func appendRecord(ctx context.Context, journal Journal, kind RecordKind, payload any) (Record, error) {
-	data, err := json.Marshal(payload)
+	data, err := json.Marshal(payload, json.Deterministic(true))
 	if err != nil {
 		return Record{}, fmt.Errorf("encode %s record: %w", kind, err)
 	}
@@ -29,7 +29,7 @@ func appendRecordAndApply(ctx context.Context, journal Journal, reducer *stateRe
 	return record, nil
 }
 
-func decodeRecord[T any](record Record) (T, error) {
+func (record Record) decode[T any]() (T, error) {
 	var payload T
 	if err := json.Unmarshal(record.Data, &payload); err != nil {
 		return payload, fmt.Errorf("decode %s record at sequence %d: %w", record.Kind, record.Sequence, err)

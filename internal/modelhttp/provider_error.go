@@ -1,7 +1,9 @@
 package modelhttp
 
 import (
-	"encoding/json"
+	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,10 +33,10 @@ type ProviderErrorDetails struct {
 type ProviderErrorEnvelope struct {
 	Message string `json:"message"`
 	Type    string `json:"type,omitempty"`
-	Code    any    `json:"code,omitempty"`
+	Code    any    `json:"code,omitzero"`
 	// Compatible gateways use unrelated metadata shapes, so keep the value raw.
 	// ErrorType recognizes OpenRouter's string metadata.error_type when present.
-	Metadata json.RawMessage `json:"metadata,omitempty"`
+	Metadata jsontext.Value `json:"metadata,omitzero"`
 }
 
 func (envelope *ProviderErrorEnvelope) messageText() string {
@@ -51,7 +53,7 @@ func (envelope *ProviderErrorEnvelope) errorType() string {
 	var metadata struct {
 		ErrorType string `json:"error_type,omitempty"`
 	}
-	if json.Unmarshal(envelope.Metadata, &metadata) == nil && strings.TrimSpace(metadata.ErrorType) != "" {
+	if jsonv2.Unmarshal(envelope.Metadata, &metadata) == nil && strings.TrimSpace(metadata.ErrorType) != "" {
 		return strings.TrimSpace(metadata.ErrorType)
 	}
 	return strings.TrimSpace(envelope.Type)
@@ -88,7 +90,7 @@ func DecodeProviderError(provider, model, label string, response *http.Response)
 		Error *ProviderErrorEnvelope `json:"error"`
 	}
 	message, code, errorType := "", "", ""
-	structured := json.Unmarshal(body, &envelope) == nil && envelope.Error != nil
+	structured := jsonv2.Unmarshal(body, &envelope) == nil && envelope.Error != nil
 	if structured {
 		message = envelope.Error.messageText()
 		code = ErrorCode(envelope.Error.Code)
@@ -240,7 +242,7 @@ func ErrorCode(value any) string {
 	switch value := value.(type) {
 	case string:
 		return strings.TrimSpace(value)
-	case json.Number:
+	case jsonv1.Number:
 		return value.String()
 	case float64:
 		return strconv.FormatFloat(value, 'f', -1, 64)

@@ -131,6 +131,6 @@ func (failure *PreferenceNotPersistedError) Error() string {
 func (failure *PreferenceNotPersistedError) Unwrap() error { return failure.Err }
 
 func IsPreferenceNotPersisted(err error) bool {
-	var failure *PreferenceNotPersistedError
-	return errors.As(err, &failure)
+	_, ok := errors.AsType[*PreferenceNotPersistedError](err)
+	return ok
 }

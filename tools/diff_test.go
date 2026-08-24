@@ -41,7 +41,7 @@ func TestBuildFileChangeMetaDetectsMissingFinalNewline(t *testing.T) {
 func TestMyersLineDiffReconstructsBothInputs(t *testing.T) {
 	random := rand.New(rand.NewSource(42))
 	values := []string{"a\n", "b\n", "c\n", "d", "e\n"}
-	for iteration := 0; iteration < 200; iteration++ {
+	for iteration := range 200 {
 		old := make([]diffSourceLine, random.Intn(18))
 		updated := make([]diffSourceLine, random.Intn(18))
 		for index := range old {

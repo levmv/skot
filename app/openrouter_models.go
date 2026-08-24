@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +47,7 @@ func fetchOpenRouterContextWindow(ctx context.Context, client *http.Client, base
 			ContextLength int `json:"context_length"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
+	if err := json.UnmarshalRead(io.LimitReader(response.Body, 1<<20), &payload); err != nil {
 		return 0, fmt.Errorf("decode OpenRouter model metadata: %w", err)
 	}
 	if payload.Data.ContextLength <= 0 {

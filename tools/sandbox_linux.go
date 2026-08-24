@@ -3,7 +3,7 @@
 package tools
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -15,8 +15,9 @@ import (
 	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
-	"github.com/levmv/skot/internal/canonicalpath"
 	"golang.org/x/sys/unix"
+
+	"github.com/levmv/skot/internal/canonicalpath"
 )
 
 const sandboxChildArg = "__sk_sandbox_process"
@@ -58,11 +59,11 @@ func sandboxedProgramCommand(program string, argv []string, workdir string, boun
 	if !boundary.NeedsBackend() {
 		return ambientProgramCommand(program, argv, workdir, environment), nil
 	}
-	encodedArgv, err := json.Marshal(argv)
+	encodedArgv, err := json.Marshal(argv, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("encode boundary argv: %w", err)
 	}
-	encodedSandbox, err := json.Marshal(boundary)
+	encodedSandbox, err := json.Marshal(boundary, json.Deterministic(true))
 	if err != nil {
 		return nil, fmt.Errorf("encode boundary configuration: %w", err)
 	}

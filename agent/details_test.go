@@ -1,13 +1,14 @@
 package agent
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strings"
 	"testing"
 )
 
 func TestNormalizeDetailsClonesValidatedJSON(t *testing.T) {
-	data := json.RawMessage(`{"path":"file.go"}`)
+	data := jsontext.Value(`{"path":"file.go"}`)
 	details, err := normalizeDetails([]Detail{{Kind: " file_change ", Data: data}})
 	if err != nil {
 		t.Fatal(err)
@@ -19,10 +20,10 @@ func TestNormalizeDetailsClonesValidatedJSON(t *testing.T) {
 }
 
 func TestNormalizeDetailsRejectsInvalidAndOversizedData(t *testing.T) {
-	if _, err := normalizeDetails([]Detail{{Kind: "broken", Data: json.RawMessage(`{`)}}); err == nil {
+	if _, err := normalizeDetails([]Detail{{Kind: "broken", Data: jsontext.Value(`{`)}}); err == nil {
 		t.Fatal("invalid JSON was accepted")
 	}
-	oversized := json.RawMessage(`"` + strings.Repeat("x", maxToolDetailsBytes) + `"`)
+	oversized := jsontext.Value(`"` + strings.Repeat("x", maxToolDetailsBytes) + `"`)
 	if _, err := normalizeDetails([]Detail{{Kind: "large", Data: oversized}}); err == nil {
 		t.Fatal("oversized detail was accepted")
 	}
@@ -67,7 +68,7 @@ func TestReplayRejectsInvalidJournaledDetail(t *testing.T) {
 			Items: []Item{{Kind: ItemToolCall, ResponseID: "response", ToolCall: &ToolCall{ID: "call", Name: "tool", RawArguments: `{}`}}},
 		}),
 		recordForTest(t, 6, RecordToolResult, ToolResultRecord{RunID: "run", Result: ToolResult{
-			CallID: "call", Details: []Detail{{Kind: " ", Data: json.RawMessage(`{}`)}},
+			CallID: "call", Details: []Detail{{Kind: " ", Data: jsontext.Value(`{}`)}},
 		}}),
 	}
 	if _, err := Replay(records); err == nil || !strings.Contains(err.Error(), "invalid tool result") {
@@ -82,7 +83,7 @@ func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 				Kind: ItemToolResult,
 				ToolResult: &ToolResult{
 					CallID: "call", Content: TextContent("result"),
-					Details: []Detail{{Kind: "inspection", Data: json.RawMessage(`{"value":1}`)}},
+					Details: []Detail{{Kind: "inspection", Data: jsontext.Value(`{"value":1}`)}},
 				},
 			}},
 		}},

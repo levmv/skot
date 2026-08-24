@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/levmv/skot/agent"
@@ -107,6 +108,10 @@ func TestEventStreamFraming(t *testing.T) {
 // model reasons. They must hold the idle deadline open without reaching the
 // adapter as an event.
 func TestEventStreamCommentsExtendIdleDeadline(t *testing.T) {
+	synctest.Test(t, testEventStreamCommentsExtendIdleDeadline)
+}
+
+func testEventStreamCommentsExtendIdleDeadline(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	pulses := 6
@@ -114,7 +119,7 @@ func TestEventStreamCommentsExtendIdleDeadline(t *testing.T) {
 	go func() {
 		defer writer.Close()
 		for range pulses {
-			time.Sleep(interval)
+			synctest.Sleep(interval)
 			if _, err := io.WriteString(writer, ": OPENROUTER PROCESSING\n\n"); err != nil {
 				return
 			}
@@ -134,6 +139,10 @@ func TestEventStreamCommentsExtendIdleDeadline(t *testing.T) {
 }
 
 func TestEventStreamReportsIdleTimeout(t *testing.T) {
+	synctest.Test(t, testEventStreamReportsIdleTimeout)
+}
+
+func testEventStreamReportsIdleTimeout(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer writer.Close()
 	defer reader.Close()

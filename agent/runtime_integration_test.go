@@ -2,7 +2,7 @@ package agent_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"sync"
 	"testing"
 	"time"
@@ -75,7 +75,7 @@ func (journal *memoryJournal) Append(ctx context.Context, pending agent.PendingR
 		Sequence: uint64(len(journal.records) + 1),
 		Time:     time.Now().UTC(),
 		Kind:     pending.Kind,
-		Data:     append(json.RawMessage(nil), pending.Data...),
+		Data:     append(jsontext.Value(nil), pending.Data...),
 	}
 	journal.records = append(journal.records, record)
 	return record, nil
@@ -93,7 +93,7 @@ func (journal *memoryJournal) snapshot() []agent.Record {
 	defer journal.mu.Unlock()
 	records := make([]agent.Record, len(journal.records))
 	for index, record := range journal.records {
-		record.Data = append(json.RawMessage(nil), record.Data...)
+		record.Data = append(jsontext.Value(nil), record.Data...)
 		records[index] = record
 	}
 	return records

@@ -1,11 +1,10 @@
 package state
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -69,18 +68,18 @@ func (settings InteractiveSettings) LastModel() ModelPreference {
 
 type interactiveDocument struct {
 	Version    int                          `json:"version"`
-	UI         interactiveUIDocument        `json:"ui,omitempty"`
+	UI         interactiveUIDocument        `json:"ui"`
 	Workspaces map[string]workspaceDocument `json:"workspaces,omitempty"`
 }
 
 type interactiveUIDocument struct {
-	Theme        *string                `json:"theme,omitempty"`
+	Theme        *string                `json:"theme,omitzero"`
 	ModelHistory []modelHistoryDocument `json:"model_history,omitempty"`
 
 	// LegacyRecentModels accepts the pre-history key so an existing document
 	// does not turn a strict decode into a startup failure. Its entries are
 	// never exposed through Settings and are dropped on the next write.
-	LegacyRecentModels json.RawMessage `json:"recent_models,omitempty"`
+	LegacyRecentModels jsontext.Value `json:"recent_models,omitzero"`
 }
 
 // modelHistoryDocument always carries the effort the selection was made with;
@@ -96,11 +95,11 @@ type modelHistoryDocument struct {
 // Mutating a different field can therefore rewrite the document atomically
 // without silently healing or deleting the invalid value.
 type workspaceDocument struct {
-	Model           *string  `json:"model,omitempty"`
-	ReasoningEffort *string  `json:"reasoning_effort,omitempty"`
-	ModelAPI        *string  `json:"model_api,omitempty"`
-	ToolSet         *string  `json:"tool_set,omitempty"`
-	Scope           *string  `json:"scope,omitempty"`
+	Model           *string  `json:"model,omitzero"`
+	ReasoningEffort *string  `json:"reasoning_effort,omitzero"`
+	ModelAPI        *string  `json:"model_api,omitzero"`
+	ToolSet         *string  `json:"tool_set,omitzero"`
+	Scope           *string  `json:"scope,omitzero"`
 	AddedPaths      []string `json:"added_paths,omitempty"`
 	ProtectedPaths  []string `json:"protected_paths,omitempty"`
 }
@@ -179,11 +178,11 @@ func (store *InteractiveStore) SetModelSelection(model, reasoningEffort, api str
 			storedAPI && slices.Equal(history, document.UI.ModelHistory) {
 			return false
 		}
-		workspace.Model = stringPointer(model)
-		workspace.ReasoningEffort = stringPointer(encodedEffort)
+		workspace.Model = new(model)
+		workspace.ReasoningEffort = new(encodedEffort)
 		workspace.ModelAPI = nil
 		if api != "" {
-			workspace.ModelAPI = stringPointer(api)
+			workspace.ModelAPI = new(api)
 		}
 		document.Workspaces[store.workspace] = workspace
 		document.UI.ModelHistory = history
@@ -201,7 +200,7 @@ func (store *InteractiveStore) SetToolSetSelection(toolSet string) error {
 		if storedStringEquals(workspace.ToolSet, toolSet) {
 			return false
 		}
-		workspace.ToolSet = stringPointer(toolSet)
+		workspace.ToolSet = new(toolSet)
 		document.Workspaces[store.workspace] = workspace
 		return true
 	})
@@ -217,7 +216,7 @@ func (store *InteractiveStore) SetScopeSelection(scope string) error {
 		if storedStringEquals(workspace.Scope, scope) {
 			return false
 		}
-		workspace.Scope = stringPointer(scope)
+		workspace.Scope = new(scope)
 		document.Workspaces[store.workspace] = workspace
 		return true
 	})
@@ -257,7 +256,7 @@ func (store *InteractiveStore) SetThemeSelection(value string) error {
 		if storedStringEquals(document.UI.Theme, theme) {
 			return false
 		}
-		document.UI.Theme = stringPointer(theme)
+		document.UI.Theme = new(theme)
 		return true
 	})
 }
@@ -297,13 +296,8 @@ func (store *InteractiveStore) loadDocument() (interactiveDocument, error) {
 	if err != nil {
 		return interactiveDocument{}, fmt.Errorf("read interactive state: %w", err)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&document); err != nil {
+	if err := json.Unmarshal(raw, &document, json.RejectUnknownMembers(true)); err != nil {
 		return interactiveDocument{}, fmt.Errorf("decode interactive state: %w", err)
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return interactiveDocument{}, errors.New("decode interactive state: multiple JSON values")
 	}
 	if document.Version != interactiveVersion {
 		return interactiveDocument{}, fmt.Errorf("unsupported interactive state version %d (want %d)", document.Version, interactiveVersion)
@@ -378,9 +372,9 @@ func decodeReasoningEffort(value string) *string {
 	case "":
 		return nil
 	case "default":
-		return stringPointer("")
+		return new("")
 	default:
-		return stringPointer(value)
+		return new(value)
 	}
 }
 
@@ -480,5 +474,3 @@ func pushModelHistory(history []modelHistoryDocument, selection modelHistoryDocu
 func normalizeModelURI(model string) string {
 	return strings.ToLower(strings.TrimSpace(model))
 }
-
-func stringPointer(value string) *string { return &value }

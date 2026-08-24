@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"image"
@@ -683,7 +683,7 @@ func TestToolArgumentsRejectUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runTool(tools, "ls", `{"surprise":true}`); err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if _, err := runTool(tools, "ls", `{"surprise":true}`); err == nil || !strings.Contains(err.Error(), `unknown object member name "surprise"`) {
 		t.Fatalf("error = %v", err)
 	}
 }

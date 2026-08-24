@@ -2,7 +2,7 @@ package session
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"testing"
 
 	"github.com/levmv/skot/agent"
@@ -18,7 +18,7 @@ func TestMemoryStoreImplementsJournalLifecycleWithoutFiles(t *testing.T) {
 	}
 	record, err := store.Append(context.Background(), agent.PendingRecord{
 		Kind: agent.RecordRunInputAdded,
-		Data: json.RawMessage(`{"run_id":"run","text":"secret"}`),
+		Data: jsontext.Value(`{"run_id":"run","text":"secret"}`),
 	})
 	if err != nil {
 		t.Fatal(err)

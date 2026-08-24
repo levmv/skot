@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +31,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "start_work", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "start_work", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			completionAvailable = true
 			return ToolOutput{Content: TextContent("job started")}, nil
@@ -90,7 +90,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded,
 		RecordModelResponse, RecordToolResult, RecordBoundaryEvent, RecordModelResponse, RecordRunFinished,
 	)
-	payload, err := decodeRecord[BoundaryEventRecord](records[7])
+	payload, err := records[7].decode[BoundaryEventRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 		toolCommits++
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "durable_tool", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "durable_tool", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{Content: TextContent("complete")}, nil
 		},
@@ -314,7 +314,7 @@ func TestRunFinishedRecordsDetachedJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := journal.snapshot()
-	finished, err := decodeRecord[RunFinishedRecord](records[len(records)-1])
+	finished, err := records[len(records)-1].decode[RunFinishedRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}

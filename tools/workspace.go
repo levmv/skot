@@ -2,7 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"os"
@@ -142,7 +142,7 @@ func (workspace *workspace) tool(name, description, schema string, parallelSafe 
 		Spec: agent.ToolSpec{
 			Name:         name,
 			Description:  description,
-			InputSchema:  json.RawMessage(schema),
+			InputSchema:  jsontext.Value(schema),
 			ParallelSafe: parallelSafe,
 		},
 		Run: run,

@@ -1,6 +1,9 @@
 {
 	"name": "skot",
 	"image": "mcr.microsoft.com/devcontainers/go:1.26-bookworm",
+	"containerEnv": {
+		"GOTOOLCHAIN": "auto"
+	},
 	"runArgs": [
 		"--network=host",
 		"--tz=local"

@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -63,7 +63,7 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 	}
 	arguments, err := json.Marshal(struct {
 		Command string `json:"command"`
-	}{Command: runtime.sanitize(command)})
+	}{Command: runtime.sanitize(command)}, json.Deterministic(true))
 	if err != nil {
 		return ToolResult{}, fmt.Errorf("encode shell command: %w", err)
 	}

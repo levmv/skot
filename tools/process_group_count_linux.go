@@ -32,11 +32,11 @@ func processGroupMemberCount(command *exec.Cmd) int {
 		if err != nil {
 			continue
 		}
-		closing := strings.LastIndexByte(string(stat), ')')
-		if closing < 0 {
+		_, fieldsText, found := strings.CutLast(string(stat), ")")
+		if !found {
 			continue
 		}
-		fields := strings.Fields(string(stat[closing+1:]))
+		fields := strings.Fields(fieldsText)
 		if len(fields) < 3 || fields[0] == "Z" || fields[0] == "X" {
 			continue
 		}

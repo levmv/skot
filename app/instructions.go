@@ -96,7 +96,7 @@ func instructionCandidates(root string) ([]string, error) {
 		return candidates, nil
 	}
 	directory := ""
-	for _, part := range strings.Split(filepath.Clean(relative), string(filepath.Separator)) {
+	for part := range strings.SplitSeq(filepath.Clean(relative), string(filepath.Separator)) {
 		if part == "" || part == "." {
 			continue
 		}

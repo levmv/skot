@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -225,7 +226,7 @@ func (m *screenModel) finishTool(result agent.ToolResult) {
 
 func (transcript *transcriptState) finishTool(result agent.ToolResult) []string {
 	var changedPaths []string
-	for index := len(transcript.blocks) - 1; index >= 0; index-- {
+	for index := range slices.Backward(transcript.blocks) {
 		block := &transcript.blocks[index]
 		if block.kind != screenBlockTool || block.tool == nil {
 			continue
@@ -488,7 +489,7 @@ func (m screenModel) wrappedMarkedWithContinuation(marker, continuation, text st
 	width := m.contentWidth()
 	var lines []string
 	marked := false
-	for _, sourceLine := range strings.Split(text, "\n") {
+	for sourceLine := range strings.SplitSeq(text, "\n") {
 		for _, line := range wrapDisplayLine(sourceLine, width) {
 			lineMarker := continuation
 			if !marked {

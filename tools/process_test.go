@@ -3,7 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"os/exec"
@@ -28,16 +28,14 @@ func TestSessionJobsSnapshotsStartTimeWhileSorting(t *testing.T) {
 	manager := &ProcessManager{jobs: map[string]*processJob{first.id: first, second.id: second}}
 
 	var wait sync.WaitGroup
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
-		for index := 0; index < 1_000; index++ {
+	wait.Go(func() {
+		for index := range 1_000 {
 			first.mu.Lock()
 			first.startedAt = now.Add(time.Duration(index%2) * 2 * time.Second)
 			first.mu.Unlock()
 		}
-	}()
-	for index := 0; index < 1_000; index++ {
+	})
+	for range 1_000 {
 		jobs := manager.sessionJobs("session")
 		if len(jobs) != 2 {
 			t.Fatalf("sessionJobs() returned %d jobs", len(jobs))
@@ -380,7 +378,7 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 
 func TestBackgroundJobCanBeReadAndStopped(t *testing.T) {
 	manager := processManagerForTest(t)
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		started := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30 & child=$!; printf ready; wait \"$child\"", Background: true})
 		id := jobIDFromText(t, started.Content.Text())
 		job := manager.get(id)
@@ -1340,7 +1338,7 @@ func TestDurableTailCompactionPublishesWholeSnapshots(t *testing.T) {
 	invalid := make(chan []byte, 1)
 	go func() {
 		defer close(done)
-		for index := 0; index < 2_000; index++ {
+		for range 2_000 {
 			data, _ := readDurableTail(path, 64)
 			if len(data) != 0 && !bytes.Equal(data, bytes.Repeat([]byte{'x'}, len(data))) {
 				invalid <- data
@@ -1348,7 +1346,7 @@ func TestDurableTailCompactionPublishesWholeSnapshots(t *testing.T) {
 			}
 		}
 	}()
-	for index := 0; index < 500; index++ {
+	for range 500 {
 		if _, err := writer.Write(bytes.Repeat([]byte{'x'}, 17)); err != nil {
 			t.Fatal(err)
 		}
@@ -1623,8 +1621,7 @@ func TestBashWorkspaceScopeRejectsWorkdirOutsideWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: "escape"})
-	if _, err := manager.bash(context.Background(), string(raw)); err == nil {
+	if _, err := manager.bash(context.Background(), jsonArgs(t, bashArgs{Command: "pwd", Workdir: "escape"})); err == nil {
 		t.Fatal("bash accepted an escaping workdir")
 	}
 }
@@ -1639,8 +1636,7 @@ func TestBashWorkspaceScopeAcceptsAbsoluteWorkdirInsideWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: root})
-	output, err := manager.bash(context.Background(), string(raw))
+	output, err := manager.bash(context.Background(), jsonArgs(t, bashArgs{Command: "pwd", Workdir: root}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1656,8 +1652,7 @@ func TestBashMachineScopeAcceptsExplicitExternalWorkdir(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: outside})
-	output, err := manager.bash(context.Background(), string(raw))
+	output, err := manager.bash(context.Background(), jsonArgs(t, bashArgs{Command: "pwd", Workdir: outside}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1713,8 +1708,7 @@ func TestProcessLaunchRetainsPolicyCapturedUnderManagerGate(t *testing.T) {
 	if state := started.job.snapshot(); state.scope != ScopeMachine || state.status != ProcessCompleted {
 		t.Fatalf("launched job = %#v", state)
 	}
-	raw, _ := json.Marshal(bashArgs{Command: "pwd", Workdir: outside})
-	if _, err := manager.bash(context.Background(), string(raw)); err == nil || !strings.Contains(err.Error(), "scope") {
+	if _, err := manager.bash(context.Background(), jsonArgs(t, bashArgs{Command: "pwd", Workdir: outside})); err == nil || !strings.Contains(err.Error(), "scope") {
 		t.Fatalf("later launch did not use workspace scope: %v", err)
 	}
 }

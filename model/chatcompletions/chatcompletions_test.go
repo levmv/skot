@@ -2,7 +2,8 @@ package chatcompletions
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -12,14 +13,25 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/levmv/skot/agent"
 )
 
 func TestCompleteStreamsTextAndReasoning(t *testing.T) {
-	var received chatRequest
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	var received struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		Stream        bool `json:"stream"`
+		StreamOptions *struct {
+			IncludeUsage bool `json:"include_usage"`
+		} `json:"stream_options"`
+	}
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/chat/completions" {
 			t.Errorf("path = %q", request.URL.Path)
 		}
@@ -29,7 +41,7 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 		if request.Header.Get("X-Test") != "yes" {
 			t.Errorf("X-Test = %q", request.Header.Get("X-Test"))
 		}
-		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+		if err := json.UnmarshalRead(request.Body, &received); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -40,9 +52,8 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17,\"prompt_tokens_details\":{\"cached_tokens\":4},\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\r\n\r\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\r\n\r\n")
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL+"/v1")
+	backend := newTestServerBackend(t, server, "/v1")
 	var events []agent.ModelStreamEvent
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Instructions: "be brief",
@@ -60,11 +71,9 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 	if received.StreamOptions == nil || !received.StreamOptions.IncludeUsage {
 		t.Fatal("request does not ask for streaming usage")
 	}
-	if got := received.Messages; !reflect.DeepEqual(got, []chatMessage{
-		{Role: "system", Content: textChatContent("be brief")},
-		{Role: "user", Content: textChatContent("hi")},
-	}) {
-		t.Fatalf("messages = %#v", got)
+	if len(received.Messages) != 2 || received.Messages[0].Role != "system" || received.Messages[0].Content != "be brief" ||
+		received.Messages[1].Role != "user" || received.Messages[1].Content != "hi" {
+		t.Fatalf("messages = %#v", received.Messages)
 	}
 	if response.StopReason != "stop" {
 		t.Fatalf("stop reason = %q", response.StopReason)
@@ -114,16 +123,15 @@ func TestStreamDeltaDecodesEitherReasoningField(t *testing.T) {
 }
 
 func TestCompleteAccumulatesToolCallDeltas(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"provider_call_1\",\"type\":\"function\",\"function\":{\"name\":\"render\",\"arguments\":\"{\\\"mark\"}}]},\"finish_reason\":null}]}\n\n")
 		// Some compatible providers omit index on later deltas.
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"up\\\":\\\"<p>&</p>\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "read it"}},
 	}, nil)
@@ -149,13 +157,12 @@ func TestCompleteAccumulatesToolCallDeltas(t *testing.T) {
 func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 	first := `{"choices":[{"index":0,"delta":{"content":"kept","tool_calls":[{"index":0,"id":"provider_call","type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":null}]}`
 	second := `{"choices":[{"index":0,"delta":{"content":"dropped"},"finish_reason":"stop"}]}`
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(writer, "data: %s\n\ndata: %s\n\ndata: [DONE]\n\n", first, second)
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	backend.maxCompletionBytes = len(first)
 	var events []agent.ModelStreamEvent
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
@@ -179,12 +186,11 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 
 func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		requests.Add(1)
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	backend.maxRequestBytes = 64
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
@@ -199,7 +205,7 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 
 func TestBuildRequestMapsProductCallIDBackToProviderID(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	providerID, _ := json.Marshal("provider_call_7")
+	providerID := jsontext.Value(`"provider_call_7"`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_1",
 		Items: []agent.Item{
@@ -218,7 +224,7 @@ func TestBuildRequestMapsProductCallIDBackToProviderID(t *testing.T) {
 			}},
 			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("contents")}},
 		},
-		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +338,7 @@ func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_deepseek",
 		Items:         items,
-		Tools:         []agent.ToolSpec{{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Tools:         []agent.ToolSpec{{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +502,7 @@ func TestBuildRequestPlacesSummaryBeforeVerbatimMessages(t *testing.T) {
 
 func TestBuildRequestDropsMismatchedProviderMetadata(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	providerID, _ := json.Marshal("provider_call_old")
+	providerID := jsontext.Value(`"provider_call_old"`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_new",
 		Items: []agent.Item{
@@ -520,14 +526,13 @@ func TestBuildRequestDropsMismatchedProviderMetadata(t *testing.T) {
 }
 
 func TestCompleteReturnsProviderHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Retry-After", "7")
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(writer, `{"error":{"message":"slow down","type":"rate_limit"}}`)
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 	}, nil)
@@ -545,15 +550,15 @@ func TestCompleteReturnsProviderHTTPError(t *testing.T) {
 }
 
 func TestCompleteClassifiesDeepSeekQuotaCodeBeforeHTTP429(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(writer, `{"error":{"message":"billing detail","type":"rate_limit_error","code":"insufficient_quota"}}`)
 	}))
-	defer server.Close()
+	client := server.Client()
 
 	backend, err := New(Config{
 		Provider: "deepseek", Model: "deepseek-v4-flash", BaseURL: server.URL,
-		Authorizer: BearerToken("secret"),
+		HTTPClient: client, Authorizer: BearerToken("secret"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -569,13 +574,12 @@ func TestCompleteClassifiesDeepSeekQuotaCodeBeforeHTTP429(t *testing.T) {
 }
 
 func TestCompleteClassifiesPaymentRequiredAsNonRetryableProviderFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusPaymentRequired)
 		_, _ = io.WriteString(writer, `{"error":{"message":"more credits required"}}`)
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
 	var providerErr *agent.ProviderError
 	if !errors.Is(err, agent.ErrProviderFailure) || errors.Is(err, agent.ErrInvalidRequest) ||
@@ -585,13 +589,12 @@ func TestCompleteClassifiesPaymentRequiredAsNonRetryableProviderFailure(t *testi
 }
 
 func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"error\":{\"message\":\"opaque detail\",\"type\":\"invalid_request_error\",\"code\":400,\"metadata\":{\"error_type\":\"request_too_large\"}}}\n\n")
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 	}, nil)
@@ -604,15 +607,14 @@ func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
 }
 
 func TestCompleteTimesOutIdleStream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
 		writer.(http.Flusher).Flush()
 		<-request.Context().Done()
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 20 * time.Millisecond,
 	}, nil)
@@ -625,8 +627,12 @@ func TestCompleteTimesOutIdleStream(t *testing.T) {
 // only. They are stream activity, so the idle deadline must not fire while
 // they arrive.
 func TestCompleteKeepsStreamAliveThroughComments(t *testing.T) {
+	synctest.Test(t, testCompleteKeepsStreamAliveThroughComments)
+}
+
+func testCompleteKeepsStreamAliveThroughComments(t *testing.T) {
 	interval := 10 * time.Millisecond
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
 		flusher := writer.(http.Flusher)
@@ -644,9 +650,8 @@ func TestCompleteKeepsStreamAliveThroughComments(t *testing.T) {
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 		flusher.Flush()
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 3 * interval,
 	}, nil)
@@ -659,13 +664,12 @@ func TestCompleteKeepsStreamAliveThroughComments(t *testing.T) {
 }
 
 func TestCompleteClassifiesBadRequestAsNonRetryableProviderFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(writer, `{"error":{"message":"invalid messages"}}`)
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 	}, nil)
@@ -676,6 +680,10 @@ func TestCompleteClassifiesBadRequestAsNonRetryableProviderFailure(t *testing.T)
 }
 
 func newTestBackend(t *testing.T, baseURL string) *Backend {
+	return newTestBackendWithClient(t, baseURL, nil)
+}
+
+func newTestBackendWithClient(t *testing.T, baseURL string, client *http.Client) *Backend {
 	t.Helper()
 	header := make(http.Header)
 	header.Set("X-Test", "yes")
@@ -683,6 +691,7 @@ func newTestBackend(t *testing.T, baseURL string) *Backend {
 		Provider:   "test",
 		Model:      "test-model",
 		BaseURL:    baseURL,
+		HTTPClient: client,
 		Authorizer: BearerToken("secret"),
 		Header:     header,
 		Traits: RouteTraits{
@@ -694,6 +703,12 @@ func newTestBackend(t *testing.T, baseURL string) *Backend {
 		t.Fatal(err)
 	}
 	return backend
+}
+
+func newTestServerBackend(t *testing.T, server *httptest.Server, path string) *Backend {
+	t.Helper()
+	client := server.Client()
+	return newTestBackendWithClient(t, server.URL+path, client)
 }
 
 func projectionTestBackend(t *testing.T, policy ReasoningReplayPolicy) *Backend {
@@ -780,14 +795,13 @@ func TestProviderStateContractVersionsEachReplayPolicy(t *testing.T) {
 // An uninterpretable completion reason must not pass for a finished answer. A
 // retry would only fetch the same uninterpretable value.
 func TestCompleteRejectsUnknownFinishReason(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"guardrail_intervened\"}]}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 	}, nil)
@@ -801,14 +815,13 @@ func TestCompleteRejectsUnknownFinishReason(t *testing.T) {
 }
 
 func TestCompleteNormalizesDoneOnlyTerminalToStop(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 	}, nil)
@@ -852,14 +865,13 @@ func TestNormalizedFinishReasonsHaveExpectedCompletionClassification(t *testing.
 func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {
 	for _, reason := range []string{"content_filter", "insufficient_system_resource", "length"} {
 		t.Run(reason, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				fmt.Fprintf(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":%q}]}\n\n", reason)
 				_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 			}))
-			defer server.Close()
 
-			backend := newTestBackend(t, server.URL)
+			backend := newTestServerBackend(t, server, "")
 			response, err := backend.Complete(context.Background(), agent.ModelRequest{
 				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 			}, nil)
@@ -877,14 +889,13 @@ func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {
 }
 
 func TestCompleteRejectsEmptyFinishedResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	if _, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 	}, nil); err == nil || !strings.Contains(err.Error(), "no output items") {

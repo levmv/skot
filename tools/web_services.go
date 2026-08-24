@@ -3,7 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +43,7 @@ func (backend *firecrawlFetchBackend) Fetch(ctx context.Context, request webFetc
 	}{
 		URL: request.URL, Formats: []string{"markdown"}, OnlyMainContent: true,
 		Proxy: "basic", Timeout: 45_000,
-	})
+	}, json.Deterministic(true))
 	if err != nil {
 		return webFetchResult{}, err
 	}
@@ -120,7 +120,7 @@ func (backend *exaFetchBackend) Fetch(ctx context.Context, request webFetchReque
 			MaxCharacters int `json:"maxCharacters"`
 		}{MaxCharacters: exaFetchMaxCharacters},
 		MaxAgeHours: 24, LivecrawlTimeout: 12_000,
-	})
+	}, json.Deterministic(true))
 	if err != nil {
 		return webFetchResult{}, err
 	}
@@ -189,7 +189,7 @@ func (provider *tavilySearchProvider) Search(ctx context.Context, request webSea
 		Query       string `json:"query"`
 		SearchDepth string `json:"search_depth"`
 		MaxResults  int    `json:"max_results"`
-	}{request.Query, "basic", request.Limit})
+	}{request.Query, "basic", request.Limit}, json.Deterministic(true))
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +242,7 @@ func (provider *exaSearchProvider) Search(ctx context.Context, request webSearch
 	body, err := json.Marshal(struct {
 		Query      string `json:"query"`
 		NumResults int    `json:"numResults"`
-	}{request.Query, request.Limit})
+	}{request.Query, request.Limit}, json.Deterministic(true))
 	if err != nil {
 		return nil, err
 	}

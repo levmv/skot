@@ -3,7 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -152,7 +153,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wire map[string]json.RawMessage
+	var wire map[string]jsontext.Value
 	if err := json.Unmarshal(stdout.Bytes(), &wire); err != nil {
 		t.Fatalf("decode JSON wire object: %v; output=%q", err, stdout.String())
 	}
@@ -172,7 +173,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if err := json.Unmarshal(wire["version"], &wireVersion); err != nil || wireVersion != 1 {
 		t.Fatalf("JSON wire version = %s, %v", wire["version"], err)
 	}
-	var usageWire map[string]json.RawMessage
+	var usageWire map[string]jsontext.Value
 	if err := json.Unmarshal(wire["usage"], &usageWire); err != nil {
 		t.Fatalf("decode JSON usage wire object: %v", err)
 	}
@@ -186,13 +187,9 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 		}
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	var result jsonResult
-	if err := decoder.Decode(&result); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("decode JSON result: %v; output=%q", err, stdout.String())
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		t.Fatalf("JSON output contains more than one value: %v", err)
 	}
 	if result.Reply != "done" || result.Status != agent.RunCompleted ||
 		result.RunID == "" || result.SessionID == "" || result.Error != "" || result.DurationMillis < 0 ||
@@ -223,7 +220,7 @@ func TestRunJSONOmitsEphemeralSessionAndReportsIncompleteRun(t *testing.T) {
 		t.Fatalf("run error = %v", runErr)
 	}
 	var result jsonResult
-	if err := json.NewDecoder(&stdout).Decode(&result); err != nil {
+	if err := json.UnmarshalRead(&stdout, &result); err != nil {
 		t.Fatalf("decode JSON result: %v; output=%q", err, stdout.String())
 	}
 	if result.Reply != "partial" || result.Status != agent.RunIncomplete || result.RunID == "" ||
@@ -250,7 +247,7 @@ func TestRunOneShotAndResumeJournal(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -366,12 +363,12 @@ func TestRunRejectsUnknownModelAPI(t *testing.T) {
 }
 
 func TestRunUsesAnthropicAdapterWithoutAProactiveCompatibilityWarning(t *testing.T) {
-	var received map[string]json.RawMessage
+	var received map[string]jsontext.Value
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/messages" {
 			t.Errorf("path = %q", request.URL.Path)
 		}
-		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+		if err := json.UnmarshalRead(request.Body, &received); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -400,12 +397,12 @@ func TestRunUsesAnthropicAdapterWithoutAProactiveCompatibilityWarning(t *testing
 }
 
 func TestRunUsesResponsesAdapterWithoutAProactiveCompatibilityWarning(t *testing.T) {
-	var received map[string]json.RawMessage
+	var received map[string]jsontext.Value
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/responses" {
 			t.Errorf("path = %q", request.URL.Path)
 		}
-		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+		if err := json.UnmarshalRead(request.Body, &received); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -438,7 +435,7 @@ func TestRunReadsToolsFileFromEnvironmentBeforeModelRequest(t *testing.T) {
 	err := run(context.Background(), []string{
 		"-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unknown field "unexpected"`) {
+	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unknown object member name "unexpected"`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -478,7 +475,7 @@ func TestRunSavesAndResumesWorkspaceSession(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -664,7 +661,7 @@ func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
 	var parentRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 			return
 		}
@@ -839,7 +836,7 @@ func TestRunUsesOllamaOpenAICompatibilityWithoutCredential(t *testing.T) {
 	var requestBody chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		authorization = request.Header.Get("Authorization")
-		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+		if err := json.UnmarshalRead(request.Body, &requestBody); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -864,7 +861,7 @@ func TestRunReadsSystemPromptFileFromFlagAndEnvironment(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -905,7 +902,7 @@ func TestRunReadsSystemPromptFileFromFlagAndEnvironment(t *testing.T) {
 func TestRunAddsApplicableAgentsInstructions(t *testing.T) {
 	var request chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
-		if err := json.NewDecoder(incoming.Body).Decode(&request); err != nil {
+		if err := json.UnmarshalRead(incoming.Body, &request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -957,7 +954,7 @@ func TestRunOneShotExposesBackgroundBash(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -1031,7 +1028,7 @@ func TestRunHintsFlagTerminatorForCommandWordPrompts(t *testing.T) {
 func TestRunFlagTerminatorTreatsResumeAsPrompt(t *testing.T) {
 	var request chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, raw *http.Request) {
-		if err := json.NewDecoder(raw.Body).Decode(&request); err != nil {
+		if err := json.UnmarshalRead(raw.Body, &request); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -1062,7 +1059,7 @@ func TestRunExecutesProviderToolCallWithProductOwnedIdentity(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -1164,7 +1161,7 @@ func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -1239,7 +1236,7 @@ func TestRunExecutesModelBashAndPersistsProcessDetail(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -1316,7 +1313,7 @@ func TestRunDeliversBackgroundCompletionThroughJournal(t *testing.T) {
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -1423,7 +1420,7 @@ func TestRunHeadlessIgnoresInteractivePreferencesAndHonorsExplicitInputs(t *test
 	var requests []chatRequestForTest
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		requests = append(requests, body)
@@ -1521,7 +1518,7 @@ type chatRequestForTest struct {
 	Model           string               `json:"model"`
 	ReasoningEffort string               `json:"reasoning_effort"`
 	Messages        []chatMessageForTest `json:"messages"`
-	Tools           []json.RawMessage    `json:"tools"`
+	Tools           []jsontext.Value     `json:"tools"`
 }
 
 type chatMessageForTest struct {
@@ -1537,14 +1534,14 @@ type chatMessageForTest struct {
 	} `json:"tool_calls"`
 }
 
-func toolSchemaHasProperty(t *testing.T, tools []json.RawMessage, toolName, property string) bool {
+func toolSchemaHasProperty(t *testing.T, tools []jsontext.Value, toolName, property string) bool {
 	t.Helper()
 	for _, raw := range tools {
 		var declaration struct {
 			Function struct {
 				Name       string `json:"name"`
 				Parameters struct {
-					Properties map[string]json.RawMessage `json:"properties"`
+					Properties map[string]jsontext.Value `json:"properties"`
 				} `json:"parameters"`
 			} `json:"function"`
 		}

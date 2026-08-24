@@ -1,7 +1,8 @@
 package agent
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,7 +32,7 @@ func normalizeToolSpec(spec ToolSpec) (ToolSpec, error) {
 	if spec.Name == "" {
 		return ToolSpec{}, errors.New("tool name is required")
 	}
-	var schema map[string]json.RawMessage
+	var schema map[string]jsontext.Value
 	if err := json.Unmarshal(spec.InputSchema, &schema); err != nil || schema == nil {
 		return ToolSpec{}, fmt.Errorf("tool %q input schema must be a JSON Schema object", spec.Name)
 	}
@@ -39,7 +40,7 @@ func normalizeToolSpec(spec ToolSpec) (ToolSpec, error) {
 	if err := json.Unmarshal(schema["type"], &schemaType); err != nil || schemaType != "object" {
 		return ToolSpec{}, fmt.Errorf("tool %q input schema must have type object", spec.Name)
 	}
-	spec.InputSchema = append(json.RawMessage(nil), spec.InputSchema...)
+	spec.InputSchema = spec.InputSchema.Clone()
 	return spec, nil
 }
 
@@ -50,20 +51,18 @@ func NormalizeToolArguments(raw string) (string, error) {
 	if raw == "" {
 		raw = "{}"
 	}
-	var object map[string]json.RawMessage
+	var object map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(raw), &object); err != nil {
 		return "", fmt.Errorf("invalid tool arguments: %w", err)
 	}
 	if object == nil {
 		return "", errors.New("invalid tool arguments: expected one JSON object")
 	}
-	var normalized strings.Builder
-	encoder := json.NewEncoder(&normalized)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(object); err != nil {
+	normalized, err := json.Marshal(object, json.Deterministic(true))
+	if err != nil {
 		return "", fmt.Errorf("normalize tool arguments: %w", err)
 	}
-	return strings.TrimSuffix(normalized.String(), "\n"), nil
+	return string(normalized), nil
 }
 
 // DecodeToolArguments decodes a tool argument object into target and rejects
@@ -73,9 +72,7 @@ func DecodeToolArguments(raw string, target any) error {
 	if err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(strings.NewReader(normalized))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
+	if err := json.Unmarshal([]byte(normalized), target, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("invalid tool arguments: %w", err)
 	}
 	return nil

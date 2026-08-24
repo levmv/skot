@@ -3,7 +3,8 @@ package responses
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -19,11 +20,16 @@ import (
 )
 
 func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
-	reasoningRaw := json.RawMessage(`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking "}],"encrypted_content":"ciphertext"}`)
-	messageRaw := json.RawMessage(`{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello"}]}`)
-	var received responseRequest
-	var receivedRaw map[string]json.RawMessage
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	reasoningRaw := jsontext.Value(`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking "}],"encrypted_content":"ciphertext"}`)
+	messageRaw := jsontext.Value(`{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello"}]}`)
+	var received struct {
+		Model        string           `json:"model"`
+		Instructions string           `json:"instructions"`
+		Input        []jsontext.Value `json:"input"`
+		Store        *bool            `json:"store"`
+		Stream       bool             `json:"stream"`
+	}
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/responses" {
 			t.Errorf("path = %q", request.URL.Path)
 		}
@@ -37,25 +43,24 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 		if err := json.Unmarshal(body, &received); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if err := json.Unmarshal(body, &receivedRaw); err != nil {
-			t.Errorf("decode raw request: %v", err)
-		}
 		writer.Header().Set("Content-Type", "text/event-stream")
-		writeSSEEvent(t, writer, streamEvent{Type: "response.reasoning_summary_text.delta", Delta: "checking "})
-		writeSSEEvent(t, writer, streamEvent{Type: "response.output_text.delta", Delta: "hel"})
-		writeSSEEvent(t, writer, streamEvent{Type: "response.output_text.delta", Delta: "lo"})
-		writeSSEEvent(t, writer, streamEvent{Type: "response.completed", Response: &wireResponse{
-			ID: "resp_1", Status: "completed", Output: []json.RawMessage{reasoningRaw, messageRaw},
-			Usage: &responseUsage{
-				InputTokens: 12, InputTokenDetails: &inputTokenDetails{CachedTokens: 4},
-				OutputTokens: 5, OutputTokenDetails: &outputTokenDetails{ReasoningTokens: 3},
-				TotalTokens: 17,
+		writeSSEEvent(t, writer, map[string]any{"type": "response.reasoning_summary_text.delta", "delta": "checking "})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_text.delta", "delta": "hel"})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_text.delta", "delta": "lo"})
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": "resp_1", "status": "completed", "output": []jsontext.Value{reasoningRaw, messageRaw},
+				"usage": map[string]any{
+					"input_tokens": 12, "input_tokens_details": map[string]any{"cached_tokens": 4},
+					"output_tokens": 5, "output_tokens_details": map[string]any{"reasoning_tokens": 3},
+					"total_tokens": 17,
+				},
 			},
-		}})
+		})
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL+"/v1")
+	backend := newTestServerBackend(t, server, "/v1")
 	backend.header = make(http.Header)
 	backend.header.Set("X-Test", "yes")
 	var events []agent.ModelStreamEvent
@@ -65,13 +70,16 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if received.Model != "test-model" || !received.Stream || received.Store || string(receivedRaw["store"]) != "false" {
-		t.Fatalf("request = %#v, raw store = %s", received, receivedRaw["store"])
+	if received.Model != "test-model" || !received.Stream || received.Store == nil || *received.Store {
+		t.Fatalf("request = %#v", received)
 	}
 	if received.Instructions != "be brief" || len(received.Input) != 1 {
 		t.Fatalf("request input = %#v", received)
 	}
-	var user inputMessage
+	var user struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
 	if err := json.Unmarshal(received.Input[0], &user); err != nil || user.Role != "user" || user.Content != "hi" {
 		t.Fatalf("user input = %#v, %v", user, err)
 	}
@@ -105,8 +113,8 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reasoningState := json.RawMessage(`{"id":"rs_1","encrypted_content":"ciphertext"}`)
-	identityRaw, _ := json.Marshal(functionCallIdentity{ID: "fc_1", CallID: "provider_call_1", Status: "completed"})
+	reasoningState := jsontext.Value(`{"id":"rs_1","encrypted_content":"ciphertext"}`)
+	identityRaw := jsontext.Value(`{"id":"fc_1","call_id":"provider_call_1","status":"completed"}`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_1", Instructions: "instructions", Summary: "older summary",
 		Items: []agent.Item{
@@ -121,7 +129,7 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 			}},
 			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call_1", Content: agent.TextContent("contents")}},
 		},
-		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +218,7 @@ func TestBuildRequestIncludesRequiredEmptyReasoningSummary(t *testing.T) {
 	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{{
 		Kind: agent.ItemReasoning, ResponseID: "response_1",
 		ProviderData: []agent.ProviderData{{
-			Kind: reasoningItemDataKind, Data: json.RawMessage(`{"id":"rs_1","encrypted_content":"ciphertext"}`),
+			Kind: reasoningItemDataKind, Data: jsontext.Value(`{"id":"rs_1","encrypted_content":"ciphertext"}`),
 		}},
 	}}})
 	if err != nil {
@@ -219,7 +227,7 @@ func TestBuildRequestIncludesRequiredEmptyReasoningSummary(t *testing.T) {
 	if len(request.Input) != 1 {
 		t.Fatalf("input = %#v", request.Input)
 	}
-	var fields map[string]json.RawMessage
+	var fields map[string]jsontext.Value
 	if err := json.Unmarshal(request.Input[0], &fields); err != nil {
 		t.Fatal(err)
 	}
@@ -232,9 +240,9 @@ func TestParseResponseMapsFunctionCallsAndRefusals(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	response, err := backend.parseResponse(wireResponse{
 		Status: "completed",
-		Output: []json.RawMessage{
-			json.RawMessage(`{"id":"fc_1","type":"function_call","call_id":"provider_call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}","status":"completed"}`),
-			json.RawMessage(`{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"cannot comply"}]}`),
+		Output: []jsontext.Value{
+			jsontext.Value(`{"id":"fc_1","type":"function_call","call_id":"provider_call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}","status":"completed"}`),
+			jsontext.Value(`{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"cannot comply"}]}`),
 		},
 	})
 	if err != nil {
@@ -257,7 +265,7 @@ func TestParseResponseMapsIncompleteStatusAndUsage(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	response, err := backend.parseResponse(wireResponse{
 		Status: "incomplete", IncompleteDetails: &incompleteDetail{Reason: "max_output_tokens"},
-		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
+		Output: []jsontext.Value{jsontext.Value(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
 		Usage:  &responseUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
 	})
 	if err != nil {
@@ -290,12 +298,13 @@ func TestNormalizedIncompleteReasonsAreIncomplete(t *testing.T) {
 }
 
 func TestCompleteRejectsMismatchedTerminalEventStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
-		writeSSEEvent(t, writer, streamEvent{Type: "response.completed", Response: &wireResponse{Status: "incomplete"}})
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "response.completed", "response": map[string]any{"status": "incomplete"},
+		})
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	if err == nil || !strings.Contains(err.Error(), `terminal event "response.completed" carries status "incomplete"`) {
 		t.Fatalf("terminal mismatch error = %v", err)
@@ -306,7 +315,7 @@ func TestParseResponseRequiresEncryptedReasoningState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	_, err := backend.parseResponse(wireResponse{
 		Status: "completed",
-		Output: []json.RawMessage{json.RawMessage(`{"id":"rs_1","type":"reasoning","summary":[]}`)},
+		Output: []jsontext.Value{jsontext.Value(`{"id":"rs_1","type":"reasoning","summary":[]}`)},
 	})
 	if err == nil || !strings.Contains(err.Error(), "missing encrypted state") {
 		t.Fatalf("error = %v", err)
@@ -315,11 +324,11 @@ func TestParseResponseRequiresEncryptedReasoningState(t *testing.T) {
 
 func TestBuildRequestDropsMismatchedProviderState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	identityRaw, _ := json.Marshal(functionCallIdentity{ID: "fc_old", CallID: "provider_old"})
+	identityRaw := jsontext.Value(`{"id":"fc_old","call_id":"provider_old"}`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_new",
 		Items: []agent.Item{
-			{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: &agent.ProviderContext{Backend: "responses.test", Epoch: "epoch_old"}, ProviderData: []agent.ProviderData{{Kind: reasoningItemDataKind, Data: json.RawMessage(`{"id":"rs_old","encrypted_content":"old"}`)}}},
+			{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: &agent.ProviderContext{Backend: "responses.test", Epoch: "epoch_old"}, ProviderData: []agent.ProviderData{{Kind: reasoningItemDataKind, Data: jsontext.Value(`{"id":"rs_old","encrypted_content":"old"}`)}}},
 			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
 				ID: "skot_call", Name: "read", RawArguments: `{}`,
 				ProviderReferences: []agent.ProviderReference{{Kind: backend.callReferenceKind(), Backend: "responses.test", Epoch: "epoch_old", Data: identityRaw}},
@@ -349,12 +358,11 @@ func TestBuildRequestDropsMismatchedProviderState(t *testing.T) {
 func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 	first := `{"type":"response.output_text.delta","delta":"kept"}`
 	second := `{"type":"response.output_text.delta","delta":"dropped"}`
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(writer, "data: %s\n\ndata: %s\n\n", first, second)
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	backend.maxCompletionBytes = len(first)
 	var events []agent.ModelStreamEvent
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
@@ -373,9 +381,8 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 
 func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+	backend := newTestServerBackend(t, server, "")
 	backend.maxRequestBytes = 64
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
@@ -386,13 +393,12 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 }
 
 func TestCompleteReturnsStructuredProviderHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Retry-After", "7")
 		writer.WriteHeader(http.StatusTooManyRequests)
 		_, _ = io.WriteString(writer, `{"error":{"message":"slow down","type":"rate_limit"}}`)
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
 	var providerErr *agent.ProviderError
 	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
@@ -405,30 +411,31 @@ func TestCompleteReturnsStructuredProviderHTTPError(t *testing.T) {
 func TestCompleteReturnsStructuredStreamErrors(t *testing.T) {
 	for _, test := range []struct {
 		name     string
-		event    streamEvent
+		event    any
 		want     string
 		tooLarge bool
 	}{
 		{
 			name: "failed response", want: "model failed",
-			event: streamEvent{Type: "response.failed", Response: &wireResponse{Error: &apiError{Message: "model failed"}}},
+			event: map[string]any{
+				"type": "response.failed", "response": map[string]any{"error": map[string]any{"message": "model failed"}},
+			},
 		},
 		{
 			name: "error event", want: "bad request",
-			event: streamEvent{Type: "error", Code: "invalid_request", Message: "bad request"},
+			event: map[string]any{"type": "error", "code": "invalid_request", "message": "bad request"},
 		},
 		{
 			name: "context limit error event", want: "context rejected", tooLarge: true,
-			event: streamEvent{Type: "error", Code: "context_length_exceeded", Message: "context rejected"},
+			event: map[string]any{"type": "error", "code": "context_length_exceeded", "message": "context rejected"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				writeSSEEvent(t, writer, test.event)
 			}))
-			defer server.Close()
-			backend := newTestBackend(t, server.URL)
+			backend := newTestServerBackend(t, server, "")
 			_, err := backend.Complete(context.Background(), agent.ModelRequest{
 				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
 			}, nil)
@@ -441,7 +448,7 @@ func TestCompleteReturnsStructuredStreamErrors(t *testing.T) {
 }
 
 func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
 		if flusher, ok := writer.(http.Flusher); ok {
@@ -449,8 +456,7 @@ func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 		}
 		<-request.Context().Done()
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "wait"}}, StreamIdleTimeout: 20 * time.Millisecond,
 	}, nil)
@@ -461,12 +467,11 @@ func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 
 func TestCompleteHonorsContextCancellation(t *testing.T) {
 	started := make(chan struct{})
-	backend := newTestBackend(t, "http://example.invalid/v1")
-	backend.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	backend := newTestBackendWithClient(t, "http://example.invalid/v1", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		close(started)
 		<-request.Context().Done()
 		return nil, request.Context().Err()
-	})}
+	})})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -481,12 +486,11 @@ func TestCompleteHonorsContextCancellation(t *testing.T) {
 }
 
 func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
 	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "terminal event") {
 		t.Fatalf("error = %v", err)
@@ -508,15 +512,25 @@ func TestBuildRequestUsesCanonicalAPIModel(t *testing.T) {
 }
 
 func newTestBackend(t *testing.T, baseURL string) *Backend {
+	return newTestBackendWithClient(t, baseURL, nil)
+}
+
+func newTestBackendWithClient(t *testing.T, baseURL string, client *http.Client) *Backend {
 	t.Helper()
 	backend, err := New(Config{
 		Provider: "test", Model: "test-model", BaseURL: baseURL,
-		Authorizer: BearerToken("secret"), Traits: RouteTraits{ReasoningSummary: ReasoningSummaryAuto},
+		HTTPClient: client, Authorizer: BearerToken("secret"), Traits: RouteTraits{ReasoningSummary: ReasoningSummaryAuto},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return backend
+}
+
+func newTestServerBackend(t *testing.T, server *httptest.Server, path string) *Backend {
+	t.Helper()
+	client := server.Client()
+	return newTestBackendWithClient(t, server.URL+path, client)
 }
 
 func writeSSEEvent(t *testing.T, writer io.Writer, value any) {
@@ -540,7 +554,7 @@ func TestParseResponseKeepsIncompleteStatusWithoutDetails(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	response, err := backend.parseResponse(wireResponse{
 		Status: "incomplete",
-		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
+		Output: []jsontext.Value{jsontext.Value(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -554,7 +568,7 @@ func TestParseResponseRejectsUnknownIncompleteReason(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	_, err := backend.parseResponse(wireResponse{
 		Status: "incomplete", IncompleteDetails: &incompleteDetail{Reason: "guardrail_intervened"},
-		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
+		Output: []jsontext.Value{jsontext.Value(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
 	})
 	var providerErr *agent.ProviderError
 	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||

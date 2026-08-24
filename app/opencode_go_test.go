@@ -2,7 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +33,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		wantReplayReasoning string
 		checkReplay         bool
 		writeBody           func(io.Writer)
-		checkBody           func(*testing.T, map[string]json.RawMessage)
+		checkBody           func(*testing.T, map[string]jsontext.Value)
 	}{
 		{
 			name: "chat completions tool-turn replay", uri: "opencode-go/deepseek-v4-flash", effort: "high",
@@ -43,7 +44,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 			writeBody: func(writer io.Writer) {
 				fmt.Fprint(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			},
-			checkBody: func(t *testing.T, body map[string]json.RawMessage) {
+			checkBody: func(t *testing.T, body map[string]jsontext.Value) {
 				t.Helper()
 				if string(body["reasoning_effort"]) != `"high"` {
 					t.Errorf("reasoning_effort = %s", body["reasoning_effort"])
@@ -61,7 +62,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 			writeBody: func(writer io.Writer) {
 				fmt.Fprint(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			},
-			checkBody: func(t *testing.T, body map[string]json.RawMessage) {
+			checkBody: func(t *testing.T, body map[string]jsontext.Value) {
 				t.Helper()
 				if string(body["reasoning_effort"]) != `"max"` {
 					t.Errorf("reasoning_effort = %s", body["reasoning_effort"])
@@ -76,7 +77,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				fmt.Fprint(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
 				fmt.Fprint(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n")
 			},
-			checkBody: func(t *testing.T, body map[string]json.RawMessage) {
+			checkBody: func(t *testing.T, body map[string]jsontext.Value) {
 				t.Helper()
 				if string(body["store"]) != "false" || string(body["stream"]) != "true" {
 					t.Errorf("Responses flags = store:%s stream:%s", body["store"], body["stream"])
@@ -84,7 +85,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				if _, exists := body["include"]; exists {
 					t.Error("Responses request contains legacy encrypted-content include")
 				}
-				var reasoning map[string]json.RawMessage
+				var reasoning map[string]jsontext.Value
 				if err := json.Unmarshal(body["reasoning"], &reasoning); err != nil {
 					t.Errorf("decode reasoning config: %v", err)
 				}
@@ -110,7 +111,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				fmt.Fprint(writer, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
 				fmt.Fprint(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 			},
-			checkBody: func(t *testing.T, body map[string]json.RawMessage) {
+			checkBody: func(t *testing.T, body map[string]jsontext.Value) {
 				t.Helper()
 				if string(body["max_tokens"]) != "131072" || string(body["stream"]) != "true" || string(body["system"]) != `"be brief"` {
 					t.Errorf("Anthropic controls = max_tokens:%s stream:%s system:%s", body["max_tokens"], body["stream"], body["system"])
@@ -138,8 +139,8 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				} else if authorization := request.Header.Get("Authorization"); authorization != "Bearer subscription-secret" {
 					t.Errorf("authorization = %q", authorization)
 				}
-				var body map[string]json.RawMessage
-				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				var body map[string]jsontext.Value
+				if err := json.UnmarshalRead(request.Body, &body); err != nil {
 					t.Errorf("decode request: %v", err)
 				}
 				if string(body["model"]) != `"`+strings.TrimPrefix(test.uri, "opencode-go/")+`"` {

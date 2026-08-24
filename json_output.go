@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"io"
 
 	"github.com/levmv/skot/agent"
@@ -24,7 +24,7 @@ type jsonResult struct {
 	ModelAttempts    int              `json:"model_attempts"`
 	RunID            string           `json:"run_id,omitempty"`
 	SessionID        string           `json:"session_id,omitempty"`
-	ToolLimitReached bool             `json:"tool_limit_reached,omitempty"`
+	ToolLimitReached bool             `json:"tool_limit_reached,omitzero"`
 	DetachedJobs     []string         `json:"detached_jobs,omitempty"`
 	Error            string           `json:"error,omitempty"`
 }
@@ -56,7 +56,17 @@ func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsa
 	if runErr != nil {
 		result.Error = runErr.Error()
 	}
-	encoder := json.NewEncoder(output)
-	encoder.SetEscapeHTML(false)
-	return encoder.Encode(result)
+	encoded, err := json.Marshal(result, json.Deterministic(true))
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	written, err := output.Write(encoded)
+	if err != nil {
+		return err
+	}
+	if written != len(encoded) {
+		return io.ErrShortWrite
+	}
+	return nil
 }

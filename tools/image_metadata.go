@@ -61,7 +61,7 @@ func tiffOrientation(data []byte) (int, bool) {
 	if count > (uint64(len(data))-entries)/12 {
 		return 0, false
 	}
-	for index := uint64(0); index < count; index++ {
+	for index := range count {
 		entry := data[entries+index*12 : entries+(index+1)*12]
 		if order.Uint16(entry[:2]) != exifOrientationTag {
 			continue

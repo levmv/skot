@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -34,7 +34,7 @@ func Create(home string) (*Store, string, error) {
 		return nil, "", err
 	}
 	privatefs.TryRestrictPermissions(sessionsDir)
-	for attempt := 0; attempt < 8; attempt++ {
+	for range 8 {
 		id, err := newSessionID()
 		if err != nil {
 			return nil, "", err
@@ -186,7 +186,7 @@ func sessionTitle(value string) string {
 	const maxRunes = 72
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")
-	for _, line := range strings.Split(value, "\n") {
+	for line := range strings.SplitSeq(value, "\n") {
 		line = strings.Join(strings.FieldsFunc(line, unicode.IsSpace), " ")
 		if line == "" {
 			continue

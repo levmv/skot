@@ -1,13 +1,11 @@
 package tools
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,9 +44,9 @@ type jobMetadata struct {
 	Command        string    `json:"command"`
 	StartedAt      time.Time `json:"started_at"`
 	TimeoutMillis  int64     `json:"timeout_ms"`
-	SeparateStderr bool      `json:"separate_stderr,omitempty"`
+	SeparateStderr bool      `json:"separate_stderr,omitzero"`
 	Scope          Scope     `json:"scope,omitempty"`
-	Detach         bool      `json:"detach,omitempty"`
+	Detach         bool      `json:"detach,omitzero"`
 }
 
 // jobWorkerSpec is the ephemeral half of a supervised launch. It is sent to a
@@ -71,17 +69,17 @@ type jobTerminalResult struct {
 	JobID            string    `json:"job_id"`
 	Started          bool      `json:"started"`
 	Status           string    `json:"status"`
-	ExitCode         *int      `json:"exit_code,omitempty"`
+	ExitCode         *int      `json:"exit_code,omitzero"`
 	Error            string    `json:"error,omitempty"`
 	OutputError      string    `json:"output_error,omitempty"`
 	StopReason       string    `json:"stop_reason,omitempty"`
-	ManagedProcesses int       `json:"managed_processes,omitempty"`
+	ManagedProcesses int       `json:"managed_processes,omitzero"`
 	StartedAt        time.Time `json:"started_at"`
 	FinishedAt       time.Time `json:"finished_at"`
 	StdoutBytes      int64     `json:"stdout_bytes"`
-	StdoutDiscarded  int64     `json:"stdout_discarded,omitempty"`
-	StderrBytes      int64     `json:"stderr_bytes,omitempty"`
-	StderrDiscarded  int64     `json:"stderr_discarded,omitempty"`
+	StdoutDiscarded  int64     `json:"stdout_discarded,omitzero"`
+	StderrBytes      int64     `json:"stderr_bytes,omitzero"`
+	StderrDiscarded  int64     `json:"stderr_discarded,omitzero"`
 }
 
 func sessionJobHome(jobHome, sessionID string) string {
@@ -116,9 +114,12 @@ func writeJSONAtomic(path string, value any, mode os.FileMode) (returnErr error)
 	if err := temporary.Chmod(mode); err != nil {
 		return err
 	}
-	encoder := json.NewEncoder(temporary)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
+	encoded, err := json.Marshal(value, json.Deterministic(true))
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	if _, err := temporary.Write(encoded); err != nil {
 		return err
 	}
 	if err := temporary.Close(); err != nil {
@@ -136,18 +137,7 @@ func readJSONFile(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
+	return json.Unmarshal(data, target, json.RejectUnknownMembers(true))
 }
 
 func loadJobMetadata(jobDir string) (jobMetadata, error) {

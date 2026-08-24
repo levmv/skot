@@ -99,8 +99,7 @@ func buildProcessSecurityState(ctx context.Context, state securityState, root, t
 		state.Backend = backend
 		return state
 	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		switch exit.ExitCode() {
 		case 42:
 			return unavailableBoundary(state, "filesystem probe read protected state")

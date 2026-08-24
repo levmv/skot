@@ -2,7 +2,7 @@ package app_test
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -251,7 +251,7 @@ func compositionRequest(body io.Reader) (string, []string, error) {
 			} `json:"function"`
 		} `json:"tools"`
 	}
-	if err := json.NewDecoder(body).Decode(&request); err != nil {
+	if err := json.UnmarshalRead(body, &request); err != nil {
 		return "", nil, err
 	}
 	prompt := ""

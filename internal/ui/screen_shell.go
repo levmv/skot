@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (m *screenModel) finishShell(result agent.ToolResult, runErr error, finishe
 }
 
 func (transcript *transcriptState) finishShell(result agent.ToolResult, runErr error, finishedAt time.Time) {
-	for index := len(transcript.blocks) - 1; index >= 0; index-- {
+	for index := range slices.Backward(transcript.blocks) {
 		block := &transcript.blocks[index]
 		if block.kind != screenBlockTool || block.tool == nil || block.tool.shell == nil || block.tool.done {
 			continue

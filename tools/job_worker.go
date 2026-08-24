@@ -2,7 +2,7 @@ package tools
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -54,14 +54,9 @@ func runJobWorker(input io.Reader) error {
 	if len(data) > maxJobWorkerSpecBytes {
 		return errors.New("launch specification is too large")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var spec jobWorkerSpec
-	if err := decoder.Decode(&spec); err != nil {
+	if err := json.Unmarshal(data, &spec, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("decode launch specification: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return errors.New("launch specification contains multiple JSON values")
 	}
 	if err := validateWorkerSpec(spec); err != nil {
 		return err

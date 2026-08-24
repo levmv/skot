@@ -2,7 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -11,10 +12,10 @@ import (
 func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	journal := &memoryJournal{}
 	read := Tool{Spec: ToolSpec{
-		Name: "read", Description: "read files", InputSchema: json.RawMessage(`{"type":"object"}`),
+		Name: "read", Description: "read files", InputSchema: jsontext.Value(`{"type":"object"}`),
 	}, Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil }}
 	edit := Tool{Spec: ToolSpec{
-		Name: "edit", Description: "edit files", InputSchema: json.RawMessage(`{"type":"object"}`),
+		Name: "edit", Description: "edit files", InputSchema: jsontext.Value(`{"type":"object"}`),
 	}, Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil }}
 	var requests []ModelRequest
 	model := configurationModel{
@@ -54,7 +55,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 		t.Fatalf("initial configuration records = %d, want 1", got)
 	}
 	equivalentRead := read
-	equivalentRead.Spec.InputSchema = json.RawMessage(`{ "type": "object" }`)
+	equivalentRead.Spec.InputSchema = jsontext.Value(`{ "type": "object" }`)
 	if err := runtime.SetTools(context.Background(), []Tool{equivalentRead}, "read-only"); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +145,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 
 func TestRuntimeReplacesToolsAndProgramMetadataAtomically(t *testing.T) {
 	program := Tool{
-		Spec: ToolSpec{Name: "lookup", Description: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "lookup", Description: "lookup", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	}
 	runtime := newTestRuntime(t, Config{

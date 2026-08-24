@@ -2,13 +2,13 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"strings"
 	"testing"
 )
 
 func TestNormalizeProviderDataClonesValidatedJSON(t *testing.T) {
-	data := json.RawMessage(`{"id":"rs_1","encrypted_content":"opaque-secret"}`)
+	data := jsontext.Value(`{"id":"rs_1","encrypted_content":"opaque-secret"}`)
 	entries, err := normalizeProviderData([]ProviderData{{Kind: " responses.reasoning_item ", Data: data}})
 	if err != nil {
 		t.Fatal(err)
@@ -21,10 +21,10 @@ func TestNormalizeProviderDataClonesValidatedJSON(t *testing.T) {
 
 func TestNormalizeProviderDataRejectsInvalidDuplicateAndOversizedData(t *testing.T) {
 	for _, entries := range [][]ProviderData{
-		{{Kind: "", Data: json.RawMessage(`{}`)}},
-		{{Kind: "broken", Data: json.RawMessage(`{`)}},
-		{{Kind: "same", Data: json.RawMessage(`1`)}, {Kind: "same", Data: json.RawMessage(`2`)}},
-		{{Kind: "large", Data: json.RawMessage(`"` + strings.Repeat("x", maxProviderDataBytes) + `"`)}},
+		{{Kind: "", Data: jsontext.Value(`{}`)}},
+		{{Kind: "broken", Data: jsontext.Value(`{`)}},
+		{{Kind: "same", Data: jsontext.Value(`1`)}, {Kind: "same", Data: jsontext.Value(`2`)}},
+		{{Kind: "large", Data: jsontext.Value(`"` + strings.Repeat("x", maxProviderDataBytes) + `"`)}},
 	} {
 		if _, err := normalizeProviderData(entries); err == nil {
 			t.Fatalf("invalid provider data was accepted: %#v", entries)
@@ -36,7 +36,7 @@ func TestProviderDataIsClonedButNotSanitized(t *testing.T) {
 	runtime := &Runtime{sanitize: func(value string) string { return strings.ReplaceAll(value, "secret", "[redacted]") }}
 	original := []Item{{
 		Kind: ItemReasoning, Text: "visible secret",
-		ProviderData: []ProviderData{{Kind: "responses.reasoning_item", Data: json.RawMessage(`{"encrypted_content":"secret"}`)}},
+		ProviderData: []ProviderData{{Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"secret"}`)}},
 	}}
 	sanitized := runtime.sanitizeItems(original)
 	if sanitized[0].Text != "visible [redacted]" || string(sanitized[0].ProviderData[0].Data) != `{"encrypted_content":"secret"}` {
@@ -49,7 +49,7 @@ func TestProviderDataIsClonedButNotSanitized(t *testing.T) {
 }
 
 func TestAcceptedReasoningOwnsNormalizedProviderData(t *testing.T) {
-	data := json.RawMessage(`{"encrypted_content":"ciphertext"}`)
+	data := jsontext.Value(`{"encrypted_content":"ciphertext"}`)
 	accepted, err := acceptResponse(ModelResponse{Items: []Item{{
 		Kind: ItemReasoning, Text: "summary",
 		ProviderData: []ProviderData{{Kind: " responses.reasoning_item ", Data: data}},
@@ -75,7 +75,7 @@ func TestReplayRejectsInvalidReasoningProviderData(t *testing.T) {
 			RunID: "run", Backend: "responses.openai", Model: "model", Epoch: "epoch",
 			Items: []Item{{
 				Kind: ItemReasoning, ResponseID: "response", ProviderContext: &ProviderContext{Backend: "responses.openai", Epoch: "epoch"},
-				ProviderData: []ProviderData{{Kind: " responses.reasoning_item ", Data: json.RawMessage(`{}`)}},
+				ProviderData: []ProviderData{{Kind: " responses.reasoning_item ", Data: jsontext.Value(`{}`)}},
 			}},
 		}),
 	}
@@ -88,7 +88,7 @@ func TestOpaqueProviderDataDoesNotAffectTokenEstimate(t *testing.T) {
 	without := estimateItemsTokens([]Item{{Kind: ItemReasoning, Text: "summary"}})
 	with := estimateItemsTokens([]Item{{
 		Kind: ItemReasoning, Text: "summary",
-		ProviderData: []ProviderData{{Kind: "responses.reasoning_item", Data: json.RawMessage(`{"encrypted_content":"` + strings.Repeat("x", 4096) + `"}`)}},
+		ProviderData: []ProviderData{{Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"` + strings.Repeat("x", 4096) + `"}`)}},
 	}})
 	if with != without {
 		t.Fatalf("opaque bytes changed token estimate: %d != %d", with, without)
@@ -97,7 +97,7 @@ func TestOpaqueProviderDataDoesNotAffectTokenEstimate(t *testing.T) {
 
 func TestRuntimeJournalsAndReplaysProviderDataAcrossToolTurn(t *testing.T) {
 	journal := &memoryJournal{}
-	state := json.RawMessage(`{"id":"rs_1","encrypted_content":"ciphertext"}`)
+	state := jsontext.Value(`{"id":"rs_1","encrypted_content":"ciphertext"}`)
 	model := &scriptedModel{
 		info: ModelInfo{
 			BackendID: "responses.test", Provider: "test", Model: "model",
@@ -129,7 +129,7 @@ func TestRuntimeJournalsAndReplaysProviderDataAcrossToolTurn(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})

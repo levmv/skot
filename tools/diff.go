@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -90,7 +92,7 @@ func myersLineDiff(old, updated []diffSourceLine) ([]rawDiffOp, bool) {
 	frontier := map[int]int{1: 0}
 	trace := make([]map[int]int, 0, limit+1)
 	for distance := 0; distance <= limit; distance++ {
-		trace = append(trace, cloneDiffFrontier(frontier))
+		trace = append(trace, maps.Clone(frontier))
 		for diagonal := -distance; diagonal <= distance; diagonal += 2 {
 			var x int
 			if diagonal == -distance || diagonal != distance && frontier[diagonal-1] < frontier[diagonal+1] {
@@ -112,19 +114,10 @@ func myersLineDiff(old, updated []diffSourceLine) ([]rawDiffOp, bool) {
 	return nil, false
 }
 
-func cloneDiffFrontier(source map[int]int) map[int]int {
-	copy := make(map[int]int, len(source))
-	for key, value := range source {
-		copy[key] = value
-	}
-	return copy
-}
-
 func backtrackMyersDiff(trace []map[int]int, old, updated []diffSourceLine) []rawDiffOp {
 	x, y := len(old), len(updated)
 	reversed := make([]rawDiffOp, 0, x+y)
-	for distance := len(trace) - 1; distance >= 0; distance-- {
-		frontier := trace[distance]
+	for distance, frontier := range slices.Backward(trace) {
 		diagonal := x - y
 		previousDiagonal := diagonal - 1
 		if diagonal == -distance || diagonal != distance && frontier[diagonal-1] < frontier[diagonal+1] {

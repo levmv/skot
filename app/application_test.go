@@ -2,7 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -901,7 +902,7 @@ func TestOpenConfiguresAndOwnsCompleteToolCatalog(t *testing.T) {
 	borrowed[0].Spec.Name = "mutated-after-open"
 	borrowed[0].Spec.InputSchema[0] = '['
 	for _, tool := range application.config.tools {
-		if tool.Spec.Name == "mutated-after-open" || !json.Valid(tool.Spec.InputSchema) {
+		if tool.Spec.Name == "mutated-after-open" || !tool.Spec.InputSchema.IsValid() {
 			t.Fatalf("application catalog aliases callback storage: %#v", application.config.tools)
 		}
 	}
@@ -2081,7 +2082,7 @@ func (model toolSetCaptureModel) Complete(_ context.Context, request agent.Model
 
 func applicationTool(name string) agent.Tool {
 	return agent.Tool{
-		Spec: agent.ToolSpec{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: agent.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run:  func(context.Context, string) (agent.ToolOutput, error) { return agent.ToolOutput{}, nil },
 	}
 }
@@ -2104,7 +2105,7 @@ type applicationMemoryJournal struct {
 func (journal *applicationMemoryJournal) Append(_ context.Context, pending agent.PendingRecord) (agent.Record, error) {
 	record := agent.Record{
 		Sequence: uint64(len(journal.records) + 1), Time: time.Now().UTC(), Kind: pending.Kind,
-		Data: append(json.RawMessage(nil), pending.Data...),
+		Data: append(jsontext.Value(nil), pending.Data...),
 	}
 	journal.records = append(journal.records, record)
 	return record, nil

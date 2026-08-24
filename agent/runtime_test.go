@@ -2,7 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"strings"
 	"sync"
@@ -145,7 +146,7 @@ func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "wait", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "wait", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			close(toolStarted)
 			<-releaseTool
@@ -223,7 +224,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 2,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				executed++
 				return ToolOutput{Content: TextContent("ok")}, nil
@@ -258,7 +259,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 	if len(state.PendingTools) != 0 || len(state.Items) != 10 || state.Items[len(state.Items)-1].Kind != ItemAssistantText {
 		t.Fatalf("replayed state = %#v", state)
 	}
-	finished, err := decodeRecord[RunFinishedRecord](records[len(records)-1])
+	finished, err := records[len(records)-1].decode[RunFinishedRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +315,7 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
 	})
@@ -388,7 +389,7 @@ func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				executed++
 				return ToolOutput{Content: TextContent("ok")}, nil
@@ -436,7 +437,7 @@ func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
 		Tools: []Tool{{
 			Spec: ToolSpec{
 				Name: "inspect", Description: strings.Repeat("detailed tool documentation ", 1_200),
-				InputSchema: json.RawMessage(`{"type":"object"}`),
+				InputSchema: jsontext.Value(`{"type":"object"}`),
 			},
 			Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
 		}},
@@ -475,7 +476,7 @@ func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 		}},
 	})
@@ -484,7 +485,7 @@ func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
 	records := journal.snapshot()
-	finished, decodeErr := decodeRecord[RunFinishedRecord](records[len(records)-1])
+	finished, decodeErr := records[len(records)-1].decode[RunFinishedRecord]()
 	if decodeErr != nil {
 		t.Fatal(decodeErr)
 	}
@@ -544,7 +545,7 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "write", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "write", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				toolRan = true
 				return ToolOutput{}, nil
@@ -564,7 +565,7 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	}
 	records := journal.snapshot()
 	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordRunFinished)
-	response, err := decodeRecord[ModelResponseRecord](records[5])
+	response, err := records[5].decode[ModelResponseRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +607,7 @@ func TestRuntimePersistsEmptyRefusalAsIncomplete(t *testing.T) {
 		t.Fatalf("result/error = %#v / %v", result, err)
 	}
 	records := journal.snapshot()
-	response, err := decodeRecord[ModelResponseRecord](records[5])
+	response, err := records[5].decode[ModelResponseRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -820,7 +821,7 @@ func TestRuntimeAcceptedImageDoesNotTriggerLaterErrorProbe(t *testing.T) {
 
 func imageResultTool() Tool {
 	return Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{Content: ImageToolContent("image metadata", ImageContent{
 				MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
@@ -903,7 +904,7 @@ func TestRuntimeJournalsBoundedFailedAttemptDiagnostics(t *testing.T) {
 	var diagnostics []ModelAttemptFailedRecord
 	for _, record := range records {
 		if record.Kind == RecordModelAttemptFailed {
-			diagnostic, decodeErr := decodeRecord[ModelAttemptFailedRecord](record)
+			diagnostic, decodeErr := record.decode[ModelAttemptFailedRecord]()
 			if decodeErr != nil {
 				t.Fatal(decodeErr)
 			}
@@ -945,7 +946,7 @@ func TestRuntimeStartsNewRetryBudgetAfterSuccessfulToolCallResponse(t *testing.T
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				return ToolOutput{Content: TextContent("read")}, nil
 			},
@@ -1060,11 +1061,11 @@ func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
 		Backend: model, Journal: journal, Instructions: "instructions " + secret,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 				toolArguments = arguments
 				return ToolOutput{Content: TextContent("output " + secret), Details: []Detail{{
-					Kind: "test", Data: json.RawMessage(`{"failure_tail":"` + secret + `"}`),
+					Kind: "test", Data: jsontext.Value(`{"failure_tail":"` + secret + `"}`),
 				}}}, nil
 			},
 		}},
@@ -1113,7 +1114,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 		Backend: model, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, "~", "[REDACTED]") },
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				return ToolOutput{Content: TextContent("done"), Details: []Detail{{Kind: "inspection", Data: detailData}}}, nil
 			},
@@ -1129,7 +1130,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 }
 
 func TestNormalizeToolsReturnsCanonicalOwnedCatalog(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object"}`)
+	schema := jsontext.Value(`{"type":"object"}`)
 	input := []Tool{{
 		Spec: ToolSpec{Name: " read ", InputSchema: schema},
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
@@ -1148,7 +1149,7 @@ func TestNormalizeToolsReturnsCanonicalOwnedCatalog(t *testing.T) {
 	if normalized[0].Spec.Name != "read" || string(normalized[0].Spec.InputSchema) != `{"type":"object"}` {
 		t.Fatalf("normalized catalog aliases input: %#v", normalized)
 	}
-	input[0].Spec.InputSchema = json.RawMessage(`{"type":"string"}`)
+	input[0].Spec.InputSchema = jsontext.Value(`{"type":"string"}`)
 	if _, err := NormalizeTools(input); err == nil || !strings.Contains(err.Error(), "type object") {
 		t.Fatalf("scalar tool schema error = %v", err)
 	}
@@ -1195,7 +1196,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 					RawArguments: `{"text":"hi"}`,
 					ProviderReferences: []ProviderReference{{
 						Kind: "call_id",
-						Data: json.RawMessage(`"provider-call-id"`),
+						Data: jsontext.Value(`"provider-call-id"`),
 					}},
 				},
 			}}}, nil
@@ -1215,7 +1216,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 	}}
 	executed := 0
 	tool := Tool{
-		Spec: ToolSpec{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "echo", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 			executed++
 			records := journal.snapshot()
@@ -1224,7 +1225,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 			}
 			return ToolOutput{Content: TextContent(arguments), Details: []Detail{{
 				Kind: "test_detail",
-				Data: json.RawMessage(`{"value":1}`),
+				Data: jsontext.Value(`{"value":1}`),
 			}}}, nil
 		},
 	}
@@ -1239,7 +1240,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 	}
 	records := journal.snapshot()
 	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordModelResponse, RecordRunFinished)
-	response, err := decodeRecord[ModelResponseRecord](records[5])
+	response, err := records[5].decode[ModelResponseRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1250,7 +1251,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 	if len(call.ProviderReferences) != 1 || call.ProviderReferences[0].Backend != response.Backend || call.ProviderReferences[0].Epoch != response.Epoch {
 		t.Fatalf("provider references = %#v, response = %#v", call.ProviderReferences, response)
 	}
-	toolResult, err := decodeRecord[ToolResultRecord](records[6])
+	toolResult, err := records[6].decode[ToolResultRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1479,7 +1480,7 @@ func TestRuntimeCanReplaceToolsBetweenRuns(t *testing.T) {
 
 func testRuntimeTool(name string) Tool {
 	return Tool{
-		Spec: ToolSpec{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	}
 }
@@ -1497,8 +1498,8 @@ func TestProjectModelItemsKeepsOnlyCurrentProviderReferences(t *testing.T) {
 		Kind:       ItemToolCall,
 		ResponseID: "response_1",
 		ToolCall: &ToolCall{ID: "call_1", Name: "read", ProviderReferences: []ProviderReference{
-			{Kind: "call_id", Backend: "backend.a", Epoch: "epoch_a", Data: json.RawMessage(`"a"`)},
-			{Kind: "call_id", Backend: "backend.b", Epoch: "epoch_b", Data: json.RawMessage(`"b"`)},
+			{Kind: "call_id", Backend: "backend.a", Epoch: "epoch_a", Data: jsontext.Value(`"a"`)},
+			{Kind: "call_id", Backend: "backend.b", Epoch: "epoch_b", Data: jsontext.Value(`"b"`)},
 		}},
 	}}
 	projected := projectOwnedModelItems(cloneItems(items), ProviderContext{Backend: "backend.b", Epoch: "epoch_b"})
@@ -1536,7 +1537,7 @@ func TestRuntimeCancellationIsDurable(t *testing.T) {
 	}
 	records := journal.snapshot()
 	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordRunFinished)
-	finished, err := decodeRecord[RunFinishedRecord](records[len(records)-1])
+	finished, err := records[len(records)-1].decode[RunFinishedRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1597,7 +1598,7 @@ func TestRuntimeCancellationDuringDeliveryIsDurable(t *testing.T) {
 				t.Fatal("model was called after delivery cancellation")
 			}
 			records := journal.snapshot()
-			finished, decodeErr := decodeRecord[RunFinishedRecord](records[len(records)-1])
+			finished, decodeErr := records[len(records)-1].decode[RunFinishedRecord]()
 			if decodeErr != nil {
 				t.Fatal(decodeErr)
 			}
@@ -1615,7 +1616,7 @@ func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T)
 		return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{ID: "call-cancelled", Name: "wait", RawArguments: `{}`}}}}, nil
 	}}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "wait", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "wait", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
 			close(toolStarted)
 			<-ctx.Done()
@@ -1643,7 +1644,7 @@ func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T)
 		RecordRunStarted, RecordRunInputAdded, RecordModelResponse,
 		RecordToolResult, RecordRunFinished,
 	)
-	result, err := decodeRecord[ToolResultRecord](records[len(records)-2])
+	result, err := records[len(records)-2].decode[ToolResultRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1699,14 +1700,14 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordRunFinished)
-	result, err := decodeRecord[ToolResultRecord](records[5])
+	result, err := records[5].decode[ToolResultRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Result.Unknown || result.Result.CallID != call.ID {
 		t.Fatalf("reconciled result = %#v", result.Result)
 	}
-	finished, err := decodeRecord[RunFinishedRecord](records[6])
+	finished, err := records[6].decode[RunFinishedRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1831,7 +1832,7 @@ func (journal *memoryJournal) Append(ctx context.Context, pending PendingRecord)
 		Sequence: uint64(len(journal.records) + 1),
 		Time:     time.Now().UTC(),
 		Kind:     pending.Kind,
-		Data:     append(json.RawMessage(nil), pending.Data...),
+		Data:     append(jsontext.Value(nil), pending.Data...),
 	}
 	journal.records = append(journal.records, record)
 	return record, nil
@@ -1849,7 +1850,7 @@ func (journal *memoryJournal) snapshot() []Record {
 	defer journal.mu.Unlock()
 	records := make([]Record, len(journal.records))
 	for index, record := range journal.records {
-		record.Data = append(json.RawMessage(nil), record.Data...)
+		record.Data = append(jsontext.Value(nil), record.Data...)
 		records[index] = record
 	}
 	return records

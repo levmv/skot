@@ -2,7 +2,8 @@ package anthropic
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +19,24 @@ import (
 )
 
 func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
-	var received messagesRequest
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	var received struct {
+		Model     string `json:"model"`
+		MaxTokens int    `json:"max_tokens"`
+		System    string `json:"system"`
+		Messages  []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+		Tools []struct {
+			Name        string         `json:"name"`
+			InputSchema jsontext.Value `json:"input_schema"`
+		} `json:"tools"`
+		Stream bool `json:"stream"`
+	}
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/messages" {
 			t.Errorf("path = %q", request.URL.Path)
 		}
@@ -32,7 +49,7 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 		if value := request.Header.Get("X-Test"); value != "yes" {
 			t.Errorf("X-Test = %q", value)
 		}
-		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+		if err := json.UnmarshalRead(request.Body, &received); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -87,14 +104,13 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 		writeSSEEvent(t, writer, map[string]any{"type": "future_event", "value": true})
 		writeSSEEvent(t, writer, map[string]any{"type": "message_stop"})
 	}))
-	defer server.Close()
 
-	backend := newTestBackend(t, server.URL+"/v1")
+	backend := newTestServerBackend(t, server, "/v1")
 	var events []agent.ModelStreamEvent
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Instructions: "be brief", Summary: "prior turn",
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "read it"}},
-		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	}, func(event agent.ModelStreamEvent) { events = append(events, event) })
 	if err != nil {
 		t.Fatal(err)
@@ -103,10 +119,9 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 		if received.Model != "wire-model" || received.MaxTokens != 131_072 || !received.Stream || received.System != "be brief\n\nConversation summary:\nprior turn" {
 			t.Fatalf("request = %#v", received)
 		}
-		if got := received.Messages; !reflect.DeepEqual(got, []message{{
-			Role: "user", Content: []contentBlock{{Type: "text", Text: "read it"}},
-		}}) {
-			t.Fatalf("messages = %#v", got)
+		if len(received.Messages) != 1 || received.Messages[0].Role != "user" || len(received.Messages[0].Content) != 1 ||
+			received.Messages[0].Content[0].Type != "text" || received.Messages[0].Content[0].Text != "read it" {
+			t.Fatalf("messages = %#v", received.Messages)
 		}
 		if len(received.Tools) != 1 || received.Tools[0].Name != "read_file" || string(received.Tools[0].InputSchema) != `{"type":"object"}` {
 			t.Fatalf("tools = %#v", received.Tools)
@@ -151,8 +166,8 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 
 func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	providerID, _ := json.Marshal("toolu_provider_7")
-	thinkingState, _ := json.Marshal(thinkingBlockState{Type: "thinking", Thinking: "original thinking", Signature: "signed-thinking"})
+	providerID := jsontext.Value(`"toolu_provider_7"`)
+	thinkingState := jsontext.Value(`{"type":"thinking","thinking":"original thinking","signature":"signed-thinking"}`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		Instructions: "instructions", Summary: "summary", ProviderEpoch: "epoch_1",
 		Items: []agent.Item{
@@ -173,7 +188,7 @@ func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {
 			{Kind: agent.ItemBoundaryText, Text: "Background job completed."},
 			{Kind: agent.ItemUserText, Text: "continue"},
 		},
-		Tools: []agent.ToolSpec{{Name: "read_file", InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false}`)}},
+		Tools: []agent.ToolSpec{{Name: "read_file", InputSchema: jsontext.Value(`{"type":"object","additionalProperties":false}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +233,7 @@ func TestBuildRequestLowersImageToolResult(t *testing.T) {
 
 func TestBuildRequestPreservesEmptyThinkingAndToolResultFields(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	state, _ := json.Marshal(thinkingBlockState{Type: "thinking", Signature: "sig-abc"})
+	state := jsontext.Value(`{"type":"thinking","signature":"sig-abc"}`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_1",
 		Items: []agent.Item{
@@ -243,7 +258,7 @@ func TestBuildRequestPreservesEmptyThinkingAndToolResultFields(t *testing.T) {
 	}
 	var wire struct {
 		Messages []struct {
-			Content []map[string]json.RawMessage `json:"content"`
+			Content []map[string]jsontext.Value `json:"content"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(payload, &wire); err != nil {
@@ -259,7 +274,7 @@ func TestBuildRequestPreservesEmptyThinkingAndToolResultFields(t *testing.T) {
 
 func TestBuildRequestDropsMismatchedThinkingState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	state, _ := json.Marshal(thinkingBlockState{Type: "thinking", Signature: "signature"})
+	state := jsontext.Value(`{"type":"thinking","signature":"signature"}`)
 	request, err := backend.buildRequest(agent.ModelRequest{
 		ProviderEpoch: "epoch_1",
 		Items: []agent.Item{
@@ -282,7 +297,7 @@ func TestBuildRequestDropsMismatchedThinkingState(t *testing.T) {
 func TestRedactedThinkingRoundTripsAsProviderState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	items, err := backend.responseItems(map[int]*streamBlock{
-		0: {kind: "redacted_thinking", data: json.RawMessage(`"opaque-state"`), closed: true},
+		0: {kind: "redacted_thinking", data: jsontext.Value(`"opaque-state"`), closed: true},
 	}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +319,7 @@ func TestRedactedThinkingRoundTripsAsProviderState(t *testing.T) {
 
 func TestInvalidRedactedThinkingDataIsDroppedAndRejectedWhenSaved(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	for _, data := range []json.RawMessage{json.RawMessage(`null`), json.RawMessage(`{}`), json.RawMessage(`123`), json.RawMessage(`""`)} {
+	for _, data := range []jsontext.Value{jsontext.Value(`null`), jsontext.Value(`{}`), jsontext.Value(`123`), jsontext.Value(`""`)} {
 		t.Run(string(data), func(t *testing.T) {
 			items, err := backend.responseItems(map[int]*streamBlock{
 				0: {kind: "redacted_thinking", data: data, closed: true},
@@ -361,12 +376,11 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 		"type": "content_block_delta", "index": 0,
 		"delta": map[string]any{"type": "text_delta", "text": "dropped"},
 	})
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(writer, "data: %s\n\ndata: %s\n\ndata: %s\n\n", start, kept, dropped)
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	backend.maxCompletionBytes = len(start) + len(kept)
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "continue"}},
@@ -381,9 +395,8 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 
 func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+	backend := newTestServerBackend(t, server, "")
 	backend.maxRequestBytes = 64
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{
 		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
@@ -394,13 +407,12 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 }
 
 func TestCompleteDecodesStructuredHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Retry-After", "2")
 		writer.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(writer, `{"type":"error","error":{"type":"authentication_error","message":"bad key"}}`)
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	var providerErr *agent.ProviderError
 	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorAuthentication ||
@@ -411,14 +423,13 @@ func TestCompleteDecodesStructuredHTTPError(t *testing.T) {
 }
 
 func TestCompleteReturnsStreamError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writeSSEEvent(t, writer, map[string]any{
 			"type": "error", "error": map[string]any{"type": "overloaded_error", "message": "overloaded"},
 		})
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "overloaded") {
 		t.Fatalf("error = %v", err)
@@ -426,14 +437,13 @@ func TestCompleteReturnsStreamError(t *testing.T) {
 }
 
 func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writeSSEEvent(t, writer, map[string]any{
 			"type": "error", "error": map[string]any{"type": "request_too_large", "message": "opaque detail"},
 		})
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	var providerErr *agent.ProviderError
 	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
@@ -444,15 +454,14 @@ func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
 }
 
 func TestCompleteReturnsEmptyRefusalForRuntimeClassification(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writeSSEEvent(t, writer, map[string]any{
 			"type": "message_delta", "delta": map[string]any{"stop_reason": "refusal"},
 		})
 		writeSSEEvent(t, writer, map[string]any{"type": "message_stop"})
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	response, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +473,7 @@ func TestCompleteReturnsEmptyRefusalForRuntimeClassification(t *testing.T) {
 
 func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 	started := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
 		if flusher, ok := writer.(http.Flusher); ok {
@@ -473,8 +482,7 @@ func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 		close(started)
 		<-request.Context().Done()
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{StreamIdleTimeout: 10 * time.Millisecond}, nil)
 	if !errors.Is(err, agent.ErrModelStreamIdle) {
 		t.Fatalf("error = %v", err)
@@ -484,7 +492,7 @@ func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 
 func TestCompleteHonorsContextCancellation(t *testing.T) {
 	started := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
 		if flusher, ok := writer.(http.Flusher); ok {
@@ -493,8 +501,7 @@ func TestCompleteHonorsContextCancellation(t *testing.T) {
 		close(started)
 		<-request.Context().Done()
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -509,7 +516,7 @@ func TestCompleteHonorsContextCancellation(t *testing.T) {
 }
 
 func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writeSSEEvent(t, writer, map[string]any{
 			"type": "content_block_start", "index": 0,
@@ -520,8 +527,7 @@ func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
 			"delta": map[string]any{"type": "text_delta", "text": "partial"},
 		})
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "before message_stop") {
 		t.Fatalf("error = %v", err)
@@ -593,14 +599,13 @@ func TestCompleteRejectsMalformedStreamState(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.Header().Set("Content-Type", "text/event-stream")
 				for _, event := range test.events {
 					writeSSEEvent(t, writer, event)
 				}
 			}))
-			defer server.Close()
-			backend := newTestBackend(t, server.URL)
+			backend := newTestServerBackend(t, server, "")
 			_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 			if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want provider failure containing %q", err, test.want)
@@ -709,15 +714,25 @@ func TestNewRejectsNegativeMaxTokens(t *testing.T) {
 }
 
 func newTestBackend(t *testing.T, baseURL string) *Backend {
+	return newTestBackendWithClient(t, baseURL, nil)
+}
+
+func newTestBackendWithClient(t *testing.T, baseURL string, client *http.Client) *Backend {
 	t.Helper()
 	backend, err := New(Config{
 		Provider: "test", Model: "test-model", APIModel: "wire-model", MaxTokens: 131_072,
-		BaseURL: baseURL, Authorizer: APIKey("secret"), Header: http.Header{"X-Test": []string{"yes"}},
+		BaseURL: baseURL, HTTPClient: client, Authorizer: APIKey("secret"), Header: http.Header{"X-Test": []string{"yes"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return backend
+}
+
+func newTestServerBackend(t *testing.T, server *httptest.Server, path string) *Backend {
+	t.Helper()
+	client := server.Client()
+	return newTestBackendWithClient(t, server.URL+path, client)
 }
 
 func writeSSEEvent(t *testing.T, writer io.Writer, value any) {
@@ -740,15 +755,14 @@ func mustJSON(t *testing.T, value any) []byte {
 // Messages may add stop reasons under its versioning contract. An unknown one
 // cannot be read as a finished answer.
 func TestCompleteRejectsUnknownStopReason(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writeSSEEvent(t, writer, map[string]any{
 			"type": "message_delta", "delta": map[string]any{"stop_reason": "handed_off"},
 		})
 		writeSSEEvent(t, writer, map[string]any{"type": "message_stop"})
 	}))
-	defer server.Close()
-	backend := newTestBackend(t, server.URL)
+	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
 	var providerErr *agent.ProviderError
 	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||

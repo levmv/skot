@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"reflect"
 	"testing"
 )
@@ -35,7 +35,7 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 		},
 	}
 	tool := Tool{
-		Spec: ToolSpec{Name: "echo", Description: "echo input", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "echo", Description: "echo input", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 			return ToolOutput{Content: TextContent(arguments)}, nil
 		},

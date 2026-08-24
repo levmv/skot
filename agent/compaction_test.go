@@ -2,7 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -244,7 +245,7 @@ func TestCompactionPromptLeavesInstructionsLast(t *testing.T) {
 func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T) {
 	journal := &memoryJournal{}
 	tool := Tool{
-		Spec: ToolSpec{Name: "inspect", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{}, nil
 		},
@@ -585,7 +586,24 @@ func TestRuntimeStopsRequestTooLargeRecoveryWithoutCompactionBoundary(t *testing
 
 func encodedTestModelRequestBytes(t *testing.T, request ModelRequest) int {
 	t.Helper()
-	body, err := json.Marshal(request)
+	type encodableRequest struct {
+		SessionID         string
+		ProviderEpoch     string
+		Instructions      string
+		Summary           string
+		Items             []Item
+		Tools             []ToolSpec
+		StreamIdleTimeout int64
+	}
+	body, err := json.Marshal(encodableRequest{
+		SessionID:         request.SessionID,
+		ProviderEpoch:     request.ProviderEpoch,
+		Instructions:      request.Instructions,
+		Summary:           request.Summary,
+		Items:             request.Items,
+		Tools:             request.Tools,
+		StreamIdleTimeout: int64(request.StreamIdleTimeout),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,12 +706,12 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 
 func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	journal := &memoryJournal{}
-	providerID := json.RawMessage(`"provider_call"`)
+	providerID := jsontext.Value(`"provider_call"`)
 	model := &scriptedModel{steps: []modelStep{
 		func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{Items: []Item{
 				{Kind: ItemReasoning, Text: "provider-private reasoning", ProviderData: []ProviderData{{
-					Kind: "responses.reasoning_item", Data: json.RawMessage(`{"encrypted_content":"opaque-secret"}`),
+					Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"opaque-secret"}`),
 				}}},
 				{Kind: ItemToolCall, ToolCall: &ToolCall{
 					Name: "echo", RawArguments: `{"text":"hello"}`,
@@ -705,7 +723,7 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 		directModelResponse("recent answer"),
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "echo", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 			return ToolOutput{Content: TextContent("echo result: " + arguments + strings.Repeat("x", 132*1024))}, nil
 		},
@@ -828,7 +846,7 @@ func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
 		if record.Kind != RecordModelAttemptFailed {
 			continue
 		}
-		diagnostic, err := decodeRecord[ModelAttemptFailedRecord](record)
+		diagnostic, err := record.decode[ModelAttemptFailedRecord]()
 		if err != nil {
 			t.Fatal(err)
 		}

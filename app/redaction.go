@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
@@ -35,10 +36,8 @@ func (masker *secretMasker) Add(secret string) {
 	}
 	masker.mu.Lock()
 	defer masker.mu.Unlock()
-	for _, known := range masker.secrets {
-		if known == secret {
-			return
-		}
+	if slices.Contains(masker.secrets, secret) {
+		return
 	}
 	masker.secrets = append(masker.secrets, secret)
 }

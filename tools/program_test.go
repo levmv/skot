@@ -2,7 +2,8 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -21,11 +22,13 @@ func TestLoadProgramToolsTreatsMissingAsEmptyAndRejectsUnknownFields(t *testing.
 		t.Fatalf("missing config = %#v, %v", config, err)
 	}
 	path := writeProgramConfig(t, `{"tools":[{"name":"lookup","description":"look up","effect":"read","command":["true"]}]}`)
-	if _, err := LoadProgramTools(path); err == nil || !strings.Contains(err.Error(), "unknown field \"effect\"") {
+	if _, err := LoadProgramTools(path); err == nil || !strings.Contains(err.Error(), `unknown object member name "effect"`) {
 		t.Fatalf("unknown field was accepted: %v", err)
 	}
 	path = writeProgramConfig(t, `{"tools":[{"name":"lookup","description":"look up","command":["true"],"background":true}]}`)
-	if _, err := LoadProgramTools(path); err == nil || !strings.Contains(err.Error(), "cannot unmarshal bool") {
+	if _, err := LoadProgramTools(path); err == nil ||
+		!strings.Contains(err.Error(), "JSON boolean into Go tools.BackgroundMode") ||
+		!strings.Contains(err.Error(), "/tools/0/background") {
 		t.Fatalf("non-string background was accepted: %v", err)
 	}
 }
@@ -45,7 +48,7 @@ func TestLoadProgramToolsNormalizesSchemaModesAndResolvedDefaults(t *testing.T) 
 	if declaration.Description != "look up" || declaration.Background != BackgroundAuto || !declaration.ParallelSafe || !declaration.Detach {
 		t.Fatalf("declaration = %#v", declaration)
 	}
-	var schema map[string]json.RawMessage
+	var schema map[string]jsontext.Value
 	if err := json.Unmarshal(declaration.Parameters, &schema); err != nil || string(schema["type"]) != `"object"` {
 		t.Fatalf("schema = %s, %v", declaration.Parameters, err)
 	}
@@ -60,7 +63,7 @@ func TestLoadProgramToolsNormalizesSchemaModesAndResolvedDefaults(t *testing.T) 
 		t.Fatalf("resolved = %#v", resolved)
 	}
 	var visible struct {
-		Properties map[string]json.RawMessage `json:"properties"`
+		Properties map[string]jsontext.Value `json:"properties"`
 	}
 	if err := json.Unmarshal(resolved[0].Tool.Spec.InputSchema, &visible); err != nil || visible.Properties[programBackgroundArg] == nil {
 		t.Fatalf("visible schema = %s, %v", resolved[0].Tool.Spec.InputSchema, err)
@@ -160,8 +163,7 @@ func TestProgramBackgroundAutoStripsItsSyntheticArgumentAndUsesJobTool(t *testin
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	raw, _ := json.Marshal(jobArgs{Action: "stop", JobID: id})
-	if _, err := manager.job(ctx, string(raw)); err != nil {
+	if _, err := manager.job(ctx, jsonArgs(t, jobArgs{Action: "stop", JobID: id})); err != nil {
 		t.Fatal(err)
 	}
 }

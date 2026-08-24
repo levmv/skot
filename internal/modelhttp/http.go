@@ -3,8 +3,7 @@
 package modelhttp
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,16 +11,10 @@ import (
 	"time"
 )
 
-// MarshalRequestJSON encodes an API request without HTML-only escaping or the
-// trailing newline added by json.Encoder.Encode.
+// MarshalRequestJSON encodes an API request deterministically without
+// HTML-only escaping or a trailing newline.
 func MarshalRequestJSON(value any) ([]byte, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'}), nil
+	return json.Marshal(value, json.Deterministic(true))
 }
 
 // PublicEndpoint canonicalizes an adapter base URL and removes credentials and

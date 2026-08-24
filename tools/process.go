@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -182,14 +182,14 @@ type jobBuffer struct {
 type bashArgs struct {
 	Command        string `json:"command"`
 	Workdir        string `json:"workdir,omitempty"`
-	TimeoutSeconds int    `json:"timeout,omitempty"`
-	Background     bool   `json:"background,omitempty"`
+	TimeoutSeconds int    `json:"timeout,omitzero"`
+	Background     bool   `json:"background,omitzero"`
 }
 
 type jobArgs struct {
 	Action         string `json:"action"`
 	JobID          string `json:"job_id,omitempty"`
-	TimeoutSeconds int    `json:"timeout,omitempty"`
+	TimeoutSeconds int    `json:"timeout,omitzero"`
 }
 
 type jobResultOptions struct {
@@ -327,7 +327,7 @@ func (manager *ProcessManager) Tools() []agent.Tool {
 			Spec: agent.ToolSpec{
 				Name:         "bash",
 				Description:  "Run Bash with environment, starting directory, and filesystem access determined by the current scope, process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors.",
-				InputSchema:  json.RawMessage(bashSchema),
+				InputSchema:  jsontext.Value(bashSchema),
 				ParallelSafe: false,
 			},
 			Run: manager.bash,
@@ -336,7 +336,7 @@ func (manager *ProcessManager) Tools() []agent.Tool {
 			Spec: agent.ToolSpec{
 				Name:         "job",
 				Description:  "List, inspect, wait for, or stop managed Bash and configured program processes. Stop asks the supervisor to kill its payload and record the result.",
-				InputSchema:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","output","wait","stop"]},"job_id":{"type":"string","description":"Required except for list."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"For wait: seconds to block. Defaults to 60."}},"required":["action"],"additionalProperties":false}`),
+				InputSchema:  jsontext.Value(`{"type":"object","properties":{"action":{"type":"string","enum":["list","output","wait","stop"]},"job_id":{"type":"string","description":"Required except for list."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"For wait: seconds to block. Defaults to 60."}},"required":["action"],"additionalProperties":false}`),
 				ParallelSafe: false,
 			},
 			Run: manager.job,
@@ -1270,8 +1270,7 @@ func processExitCode(err error) *int {
 		zero := 0
 		return &zero
 	}
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
+	if exitError, ok := errors.AsType[*exec.ExitError](err); ok {
 		code := exitError.ExitCode()
 		return &code
 	}
@@ -1282,8 +1281,7 @@ func processErrorText(err error) string {
 	if err == nil {
 		return ""
 	}
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
+	if _, ok := errors.AsType[*exec.ExitError](err); ok {
 		return ""
 	}
 	return err.Error()

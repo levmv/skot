@@ -2,7 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -30,7 +31,7 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 			return
 		}
 		requests <- decoded
-		writeChildTestAnswer(writer, "answer: "+decoded.Prompt)
+		writeChildTestAnswer(t, writer, "answer: "+decoded.Prompt)
 	}))
 	t.Cleanup(server.Close)
 
@@ -154,7 +155,7 @@ func TestChildAgentSupervisorRunsInParallelAndAppliesBackpressure(t *testing.T) 
 				return
 			}
 		}
-		writeChildTestAnswer(writer, "done: "+decoded.Prompt)
+		writeChildTestAnswer(t, writer, "done: "+decoded.Prompt)
 	}))
 	t.Cleanup(server.Close)
 
@@ -203,7 +204,7 @@ func TestChildAgentModelOverrideRequiresAllowlist(t *testing.T) {
 			return
 		}
 		requests <- decoded
-		writeChildTestAnswer(writer, "done")
+		writeChildTestAnswer(t, writer, "done")
 	}))
 	t.Cleanup(server.Close)
 
@@ -243,7 +244,7 @@ func TestExistingChildKeepsItsModelAfterParentSwitch(t *testing.T) {
 			return
 		}
 		requests <- decoded
-		writeChildTestAnswer(writer, "done: "+decoded.Prompt)
+		writeChildTestAnswer(t, writer, "done: "+decoded.Prompt)
 	}))
 	t.Cleanup(server.Close)
 
@@ -283,7 +284,7 @@ func TestChildAgentFollowsParentSessionSwitches(t *testing.T) {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeChildTestAnswer(writer, "answer: "+decoded.Prompt)
+		writeChildTestAnswer(t, writer, "answer: "+decoded.Prompt)
 	}))
 	t.Cleanup(server.Close)
 
@@ -346,7 +347,7 @@ func TestResumePreservesUnavailableChildWithoutChangingItsModel(t *testing.T) {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeChildTestAnswer(writer, "answer: "+decoded.Prompt)
+		writeChildTestAnswer(t, writer, "answer: "+decoded.Prompt)
 	}))
 	t.Cleanup(server.Close)
 
@@ -414,14 +415,15 @@ func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 	runtime, err := newApplicationTestRuntime(agent.Config{
 		Backend: model, Journal: journal, SessionID: "session_0123456789abcdef0123456789abcdef",
 		Tools: []agent.Tool{{
-			Spec: agent.ToolSpec{Name: "read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: agent.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (agent.ToolOutput, error) {
 				return agent.ToolOutput{Content: agent.TextContent("ok")}, nil
 			},
 		}},
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Errorf("encode child answer: %v", err)
+		return
 	}
 	result, err := runtime.Run(context.Background(), "inspect", nil)
 	if err != nil || result.Answer != "" {
@@ -483,7 +485,7 @@ func TestOneShotParentIsRetainedWhenItStartsChildAgent(t *testing.T) {
 			case <-request.Context().Done():
 				return
 			}
-			writeChildTestAnswer(writer, "child done")
+			writeChildTestAnswer(t, writer, "child done")
 			return
 		}
 		mu.Lock()
@@ -491,10 +493,10 @@ func TestOneShotParentIsRetainedWhenItStartsChildAgent(t *testing.T) {
 		requestNumber := parentRequests
 		mu.Unlock()
 		if requestNumber == 1 {
-			writeChildTestToolCall(writer, `{"action":"start","prompt":"child work"}`)
+			writeChildTestToolCall(t, writer, `{"action":"start","prompt":"child work"}`)
 			return
 		}
-		writeChildTestAnswer(writer, "delegated")
+		writeChildTestAnswer(t, writer, "delegated")
 	}))
 	t.Cleanup(server.Close)
 
@@ -537,7 +539,7 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 			<-request.Context().Done()
 			return
 		}
-		writeChildTestAnswer(writer, "answer: "+decoded.Prompt)
+		writeChildTestAnswer(t, writer, "answer: "+decoded.Prompt)
 	}))
 	t.Cleanup(server.Close)
 
@@ -710,7 +712,7 @@ func decodeChildTestRequest(body io.Reader) (childTestRequest, error) {
 			} `json:"function"`
 		} `json:"tools"`
 	}
-	if err := json.NewDecoder(body).Decode(&request); err != nil {
+	if err := json.UnmarshalRead(body, &request); err != nil {
 		return childTestRequest{}, err
 	}
 	decoded := childTestRequest{Model: request.Model}
@@ -731,20 +733,26 @@ func decodeChildTestRequest(body io.Reader) (childTestRequest, error) {
 	return decoded, nil
 }
 
-func writeChildTestAnswer(writer http.ResponseWriter, answer string) {
-	payload, _ := json.Marshal(map[string]any{
+func writeChildTestAnswer(t *testing.T, writer http.ResponseWriter, answer string) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
 		"choices": []any{map[string]any{
 			"index": 0, "delta": map[string]string{"content": answer}, "finish_reason": "stop",
 		}},
 	})
+	if err != nil {
+		t.Errorf("encode child tool call: %v", err)
+		return
+	}
 	writer.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", payload)
 	_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n")
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 }
 
-func writeChildTestToolCall(writer http.ResponseWriter, arguments string) {
-	payload, _ := json.Marshal(map[string]any{
+func writeChildTestToolCall(t *testing.T, writer http.ResponseWriter, arguments string) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
 		"choices": []any{map[string]any{
 			"index": 0,
 			"delta": map[string]any{"tool_calls": []any{map[string]any{
@@ -754,6 +762,9 @@ func writeChildTestToolCall(writer http.ResponseWriter, arguments string) {
 			"finish_reason": "tool_calls",
 		}},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	writer.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", payload)
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
@@ -769,12 +780,7 @@ func childTestHasTool(tools []agent.Tool, name string) bool {
 }
 
 func containsChildTestName(values []string, name string) bool {
-	for _, value := range values {
-		if value == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, name)
 }
 
 func (model *childReplayModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }

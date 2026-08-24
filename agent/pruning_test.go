@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"strings"
 	"testing"
@@ -176,7 +176,7 @@ func seedCompletedToolResultHistory(t *testing.T, journal *memoryJournal, conten
 func seedCompletedToolContentHistory(t *testing.T, journal *memoryJournal, content Content, firstInput string) Tool {
 	t.Helper()
 	tool := Tool{
-		Spec: ToolSpec{Name: "large_output", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Spec: ToolSpec{Name: "large_output", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{Content: content}, nil
 		},

@@ -2,7 +2,7 @@ package toolpolicy
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"strings"
 	"testing"
 
@@ -163,7 +163,7 @@ func testCatalog(names ...string) []agent.Tool {
 	tools := make([]agent.Tool, 0, len(names))
 	for _, name := range names {
 		tools = append(tools, agent.Tool{
-			Spec: agent.ToolSpec{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Spec: agent.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (agent.ToolOutput, error) { return agent.ToolOutput{}, nil },
 		})
 	}

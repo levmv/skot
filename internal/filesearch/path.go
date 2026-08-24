@@ -122,7 +122,7 @@ func joinRelative(dir, name string) string {
 }
 
 func pathInsideGitMetadata(path string) bool {
-	for _, part := range strings.Split(path, "/") {
+	for part := range strings.SplitSeq(path, "/") {
 		if part == ".git" {
 			return true
 		}

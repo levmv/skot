@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -211,7 +212,7 @@ func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
 	if delta == "" {
 		return
 	}
-	for index := len(transcript.blocks) - 1; index >= 0; index-- {
+	for index := range slices.Backward(transcript.blocks) {
 		block := &transcript.blocks[index]
 		if block.kind == screenBlockAssistant && block.attemptID == attemptID {
 			transcript.markBlockDirty(index)
@@ -227,7 +228,7 @@ func (transcript *transcriptState) finishAssistant(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	for index := len(transcript.blocks) - 1; index >= 0; index-- {
+	for index := range slices.Backward(transcript.blocks) {
 		block := &transcript.blocks[index]
 		if block.kind == screenBlockAssistant && block.attemptID == transcript.currentAttempt {
 			if block.text != text {
@@ -246,8 +247,7 @@ func (transcript *transcriptState) finishAssistant(text string) {
 // providers routinely open a response with a whitespace-only delta, and
 // announcing the removal of a blank block explains nothing.
 func (transcript *transcriptState) discardAttempt(attemptID string) bool {
-	for index := len(transcript.blocks) - 1; index >= 0; index-- {
-		block := transcript.blocks[index]
+	for index, block := range slices.Backward(transcript.blocks) {
 		if block.kind != screenBlockAssistant || block.attemptID != attemptID {
 			continue
 		}

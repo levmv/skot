@@ -1,7 +1,8 @@
 package anthropic
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,24 +25,24 @@ type message struct {
 }
 
 type contentBlock struct {
-	Type         string          `json:"type"`
-	Text         string          `json:"text,omitempty"`
-	Thinking     *string         `json:"thinking,omitempty"`
-	Signature    string          `json:"signature,omitempty"`
-	Data         json.RawMessage `json:"data,omitempty"`
-	ID           string          `json:"id,omitempty"`
-	Name         string          `json:"name,omitempty"`
-	Input        json.RawMessage `json:"input,omitempty"`
-	ToolUseID    string          `json:"tool_use_id,omitempty"`
-	Content      any             `json:"content,omitempty"`
-	IsError      bool            `json:"is_error,omitempty"`
-	CacheControl *cacheControl   `json:"cache_control,omitempty"`
+	Type         string         `json:"type"`
+	Text         string         `json:"text,omitempty"`
+	Thinking     *string        `json:"thinking,omitzero"`
+	Signature    string         `json:"signature,omitempty"`
+	Data         jsontext.Value `json:"data,omitzero"`
+	ID           string         `json:"id,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Input        jsontext.Value `json:"input,omitzero"`
+	ToolUseID    string         `json:"tool_use_id,omitempty"`
+	Content      any            `json:"content,omitzero"`
+	IsError      bool           `json:"is_error,omitzero"`
+	CacheControl *cacheControl  `json:"cache_control,omitzero"`
 }
 
 type toolResultContentBlock struct {
 	Type   string       `json:"type"`
 	Text   string       `json:"text,omitempty"`
-	Source *imageSource `json:"source,omitempty"`
+	Source *imageSource `json:"source,omitzero"`
 }
 
 type imageSource struct {
@@ -55,35 +56,35 @@ type cacheControl struct {
 }
 
 type toolDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema jsontext.Value `json:"input_schema"`
 }
 
 type streamEvent struct {
 	Type         string             `json:"type"`
-	Index        int                `json:"index,omitempty"`
-	Message      *streamMessage     `json:"message,omitempty"`
-	ContentBlock streamContentBlock `json:"content_block,omitempty"`
-	Delta        streamDelta        `json:"delta,omitempty"`
-	Usage        wireUsage          `json:"usage,omitempty"`
-	Error        *apiError          `json:"error,omitempty"`
+	Index        int                `json:"index,omitzero"`
+	Message      *streamMessage     `json:"message,omitzero"`
+	ContentBlock streamContentBlock `json:"content_block"`
+	Delta        streamDelta        `json:"delta"`
+	Usage        wireUsage          `json:"usage"`
+	Error        *apiError          `json:"error,omitzero"`
 }
 
 type streamMessage struct {
-	StopReason *string   `json:"stop_reason,omitempty"`
-	Usage      wireUsage `json:"usage,omitempty"`
+	StopReason *string   `json:"stop_reason,omitzero"`
+	Usage      wireUsage `json:"usage"`
 }
 
 type streamContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	Thinking  string          `json:"thinking,omitempty"`
-	Signature string          `json:"signature,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	Thinking  string         `json:"thinking,omitempty"`
+	Signature string         `json:"signature,omitempty"`
+	Data      jsontext.Value `json:"data,omitzero"`
+	ID        string         `json:"id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Input     jsontext.Value `json:"input,omitzero"`
 }
 
 type streamDelta struct {
@@ -96,10 +97,10 @@ type streamDelta struct {
 }
 
 type wireUsage struct {
-	InputTokens              *int `json:"input_tokens,omitempty"`
-	OutputTokens             *int `json:"output_tokens,omitempty"`
-	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
+	InputTokens              *int `json:"input_tokens,omitzero"`
+	OutputTokens             *int `json:"output_tokens,omitzero"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitzero"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitzero"`
 }
 
 type usageAccumulator struct {
@@ -137,15 +138,15 @@ type streamBlock struct {
 	reasoning strings.Builder
 	signature strings.Builder
 	arguments strings.Builder
-	data      json.RawMessage
+	data      jsontext.Value
 	closed    bool
 }
 
 type thinkingBlockState struct {
-	Type      string          `json:"type"`
-	Thinking  string          `json:"thinking,omitempty"`
-	Signature string          `json:"signature,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
+	Type      string         `json:"type"`
+	Thinking  string         `json:"thinking,omitempty"`
+	Signature string         `json:"signature,omitempty"`
+	Data      jsontext.Value `json:"data,omitzero"`
 }
 
 func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesRequest, error) {
@@ -237,7 +238,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 					callIDs[part.ToolCall.ID] = providerID
 					blocks = append(blocks, contentBlock{
 						Type: "tool_use", ID: providerID, Name: strings.TrimSpace(part.ToolCall.Name),
-						Input: json.RawMessage(arguments),
+						Input: jsontext.Value(arguments),
 					})
 				default:
 					return nil, fmt.Errorf("response %q contains item kind %q", responseID, part.Kind)
@@ -331,12 +332,12 @@ func (backend *Backend) replayThinkingBlock(item agent.Item, epoch string) (cont
 			if strings.TrimSpace(state.Signature) == "" {
 				return contentBlock{}, false, errors.New("saved thinking block has no signature")
 			}
-			return contentBlock{Type: "thinking", Thinking: stringPointer(state.Thinking), Signature: state.Signature}, true, nil
+			return contentBlock{Type: "thinking", Thinking: new(state.Thinking), Signature: state.Signature}, true, nil
 		case "redacted_thinking":
 			if !validRedactedThinkingData(state.Data) {
 				return contentBlock{}, false, errors.New("saved redacted thinking block has no opaque data")
 			}
-			return contentBlock{Type: "redacted_thinking", Data: append(json.RawMessage(nil), state.Data...)}, true, nil
+			return contentBlock{Type: "redacted_thinking", Data: state.Data.Clone()}, true, nil
 		default:
 			return contentBlock{}, false, fmt.Errorf("saved thinking block has unsupported type %q", state.Type)
 		}
@@ -344,11 +345,7 @@ func (backend *Backend) replayThinkingBlock(item agent.Item, epoch string) (cont
 	return contentBlock{}, false, nil
 }
 
-func validRedactedThinkingData(data json.RawMessage) bool {
+func validRedactedThinkingData(data jsontext.Value) bool {
 	var opaque string
 	return json.Unmarshal(data, &opaque) == nil && opaque != ""
-}
-
-func stringPointer(value string) *string {
-	return &value
 }

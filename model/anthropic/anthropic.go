@@ -5,7 +5,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -209,7 +209,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			block.text.WriteString(event.ContentBlock.Text)
 			block.reasoning.WriteString(event.ContentBlock.Thinking)
 			block.signature.WriteString(event.ContentBlock.Signature)
-			block.data = append(json.RawMessage(nil), event.ContentBlock.Data...)
+			block.data = event.ContentBlock.Data.Clone()
 			if len(event.ContentBlock.Input) != 0 && string(event.ContentBlock.Input) != "{}" {
 				block.arguments.Write(event.ContentBlock.Input)
 			}
@@ -325,7 +325,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 				if !limited && block.signature.Len() != 0 {
 					state, err := json.Marshal(thinkingBlockState{
 						Type: "thinking", Thinking: block.reasoning.String(), Signature: block.signature.String(),
-					})
+					}, json.Deterministic(true))
 					if err != nil {
 						return nil, fmt.Errorf("encode %s thinking state: %w", backend.provider, err)
 					}
@@ -336,7 +336,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 		case "redacted_thinking":
 			// Ignore malformed incoming state for compatibility; saved state is validated before replay.
 			if !limited && validRedactedThinkingData(block.data) {
-				state, err := json.Marshal(thinkingBlockState{Type: "redacted_thinking", Data: block.data})
+				state, err := json.Marshal(thinkingBlockState{Type: "redacted_thinking", Data: block.data}, json.Deterministic(true))
 				if err != nil {
 					return nil, fmt.Errorf("encode %s redacted thinking state: %w", backend.provider, err)
 				}
@@ -356,7 +356,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 			if err != nil {
 				return nil, fmt.Errorf("%s returned invalid arguments for tool %q: %w", backend.provider, block.name, err)
 			}
-			providerID, _ := json.Marshal(block.id)
+			providerID, _ := json.Marshal(block.id, json.Deterministic(true))
 			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{
 				Name: block.name, RawArguments: arguments,
 				ProviderReferences: []agent.ProviderReference{{Kind: backend.callIDReferenceKind(), Data: providerID}},

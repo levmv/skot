@@ -101,7 +101,7 @@ func (r *inlineRenderer) RenderFrame(frame inlineFrame, width, height int) error
 		// Bubble Tea still decodes input under WithoutRenderer. These modes shape
 		// the key and paste reports it receives, and Stop must reset them together.
 		keyboardFlags := ansi.KittyDisambiguateEscapeCodes | ansi.KittyReportAlternateKeys
-		if err := r.write(ansi.SetModeBracketedPaste + ansi.SetModifyOtherKeys2 + ansi.KittyKeyboard(keyboardFlags, 1) + ansi.ResetModeTextCursorEnable); err != nil {
+		if err := r.write(ansi.SetModeBracketedPaste + ansi.SetModifyOtherKeys2 + ansi.KittyKeyboard(keyboardFlags, 1) + ansi.RequestKittyKeyboard + ansi.ResetModeTextCursorEnable); err != nil {
 			return err
 		}
 		r.started = true

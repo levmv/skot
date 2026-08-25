@@ -14,7 +14,7 @@ type countingBuffer struct {
 	writes int
 }
 
-func TestInlineRendererRequestsBaseLayoutKeys(t *testing.T) {
+func TestInlineRendererConfiguresAndQueriesKeyboard(t *testing.T) {
 	var output bytes.Buffer
 	renderer := newInlineRenderer(&output)
 	if err := renderer.RenderFrame(inlineFrame{dynamic: []string{"draft"}}, 80, 24); err != nil {
@@ -23,6 +23,17 @@ func TestInlineRendererRequestsBaseLayoutKeys(t *testing.T) {
 	flags := ansi.KittyDisambiguateEscapeCodes | ansi.KittyReportAlternateKeys
 	if !strings.Contains(output.String(), ansi.KittyKeyboard(flags, 1)) {
 		t.Fatalf("renderer startup sequence = %q", output.String())
+	}
+	if strings.Count(output.String(), ansi.RequestKittyKeyboard) != 1 {
+		t.Fatalf("renderer did not query keyboard enhancements once: %q", output.String())
+	}
+
+	output.Reset()
+	if err := renderer.RenderFrame(inlineFrame{dynamic: []string{"next"}}, 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), ansi.RequestKittyKeyboard) {
+		t.Fatalf("renderer repeated keyboard query on an ordinary frame: %q", output.String())
 	}
 }
 

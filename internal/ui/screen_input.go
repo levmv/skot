@@ -10,15 +10,14 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	if m.picker.active() {
 		return m.handlePickerKey(msg)
 	}
+	action := m.keymap.actionFor(msg)
 	if m.loginProvider != "" {
-		return m.handleLoginKey(msg)
+		return m.handleLoginKey(msg, action)
 	}
 	key := msg.Key()
-	keyString := msg.String()
 	hasCtrl := key.Mod&tea.ModCtrl != 0
-	baseKey := keyLayoutBase(msg)
 	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() {
-		if isInterruptKey(msg) || isEscapeKey(msg) {
+		if action == actionInterrupt || action == actionCancel {
 			if maintenance.cancel != nil {
 				maintenance.cancel()
 			}
@@ -27,30 +26,30 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	}
 
 	switch {
-	case isInterruptKey(msg):
+	case action == actionInterrupt:
 		if m.operation.isTurn() {
 			m.cancelTurn(false)
 			return m, nil
 		}
 		m.quitting = true
 		return m, tea.Quit
-	case isShiftTab(msg):
+	case action == actionCycleScope:
 		command := m.startScopeSwitch(nextScope(m.agent.CurrentScope()))
 		m.refreshTranscript()
 		return m, command
-	case keyIsCtrl(msg, 'd'):
+	case action == actionDeleteOrExit:
 		if !m.operation.isTurn() && strings.TrimSpace(m.composer.value()) == "" {
 			m.quitting = true
 			return m, tea.Quit
 		}
 		return m.updateInput(msg)
-	case isNewlineShortcut(msg):
+	case action == actionInsertNewline:
 		m.composer.insertString("\n")
 		m.syncCommandSuggestions()
 		return m, nil
-	case isEnterKey(msg):
+	case action == actionConfirm:
 		return m.submitInput()
-	case isAltUp(msg):
+	case action == actionRestoreQueuedInput:
 		if m.operation.isTurn() && m.composer.value() == "" {
 			if input, ok := m.agent.PopQueued(); ok {
 				m.composer.setValue(input)
@@ -60,7 +59,7 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case isEscapeKey(msg):
+	case action == actionCancel:
 		if m.pathPrompt != notFilesystemPath {
 			m.closePathPrompt()
 			return m, nil
@@ -69,13 +68,13 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 			m.cancelTurn(true)
 		}
 		return m, nil
-	case m.composer.historyAtEnd() && m.commandSuggestionsVisible() && ((!hasCtrl && isUpKey(msg)) || keyIsCtrl(msg, 'p')):
+	case m.composer.historyAtEnd() && m.commandSuggestionsVisible() && ((!hasCtrl && isUpKey(msg)) || action == actionHistoryPrevious):
 		m.moveCommandSuggestion(-1)
 		return m, nil
-	case m.composer.historyAtEnd() && m.commandSuggestionsVisible() && ((!hasCtrl && isDownKey(msg)) || keyIsCtrl(msg, 'n')):
+	case m.composer.historyAtEnd() && m.commandSuggestionsVisible() && ((!hasCtrl && isDownKey(msg)) || action == actionHistoryNext):
 		m.moveCommandSuggestion(1)
 		return m, nil
-	case m.commandSuggestionsVisible() && (key.Code == tea.KeyTab || keyString == "tab"):
+	case m.commandSuggestionsVisible() && action == actionAcceptSuggestion:
 		m.composer.setValue(m.currentCommandSuggestion())
 		m.composer.cursorEnd()
 		m.syncCommandSuggestions()
@@ -92,14 +91,16 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		}
 		m.historyNext()
 		return m, nil
-	case keyIsCtrl(msg, 'p'):
+	case action == actionHistoryPrevious:
 		m.historyPrevious()
 		return m, nil
-	case keyIsCtrl(msg, 'n'):
+	case action == actionHistoryNext:
 		m.historyNext()
 		return m, nil
-	case hasCtrl && strings.ContainsRune("ukwaebf", baseKey):
-		return m.updateInput(editorCtrlKey(baseKey))
+	default:
+		if code, ok := editorControlCode(msg); ok {
+			return m.updateInput(editorCtrlKey(code))
+		}
 	}
 	return m.updateInput(msg)
 }
@@ -115,9 +116,9 @@ func (m screenModel) updateInput(msg tea.Msg) (screenModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m screenModel) handleLoginKey(message tea.KeyPressMsg) (screenModel, tea.Cmd) {
-	switch {
-	case isEscapeKey(message):
+func (m screenModel) handleLoginKey(message tea.KeyPressMsg, action actionID) (screenModel, tea.Cmd) {
+	switch action {
+	case actionCancel:
 		returnPicker := m.loginReturn
 		m.cancelLogin()
 		if returnPicker.active() {
@@ -127,12 +128,12 @@ func (m screenModel) handleLoginKey(message tea.KeyPressMsg) (screenModel, tea.C
 		m.addBlock(screenBlockSystem, "login cancelled")
 		m.refreshTranscript()
 		return m, nil
-	case isInterruptKey(message):
+	case actionInterrupt:
 		m.cancelLogin()
 		m.addBlock(screenBlockSystem, "login cancelled")
 		m.refreshTranscript()
 		return m, nil
-	case isEnterKey(message):
+	case actionConfirm:
 		return m.submitInput()
 	default:
 		return m.updateInput(message)

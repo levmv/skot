@@ -348,7 +348,7 @@ func TestHelpKeepsItsColumnsOnANarrowTerminal(t *testing.T) {
 	model.resize(60, 40)
 	// Help is a two column layout, and the transcript wraps a long line back to
 	// the left margin, which would break the columns rather than shorten them.
-	for line := range strings.SplitSeq(tuiCommandHelp, "\n") {
+	for line := range strings.SplitSeq(tuiCommandHelp(model.keymap), "\n") {
 		if len(line) > model.contentWidth() {
 			t.Fatalf("help line of %d columns does not fit %d: %q", len(line), model.contentWidth(), line)
 		}

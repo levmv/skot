@@ -231,6 +231,8 @@ type screenModel struct {
 	secret     textinput.Model
 	picker     pickerState
 	transcript transcriptState
+	keymap     keyMap
+	keyboard   terminalKeyboardState
 
 	modelChoices   []ModelChoice
 	providers      []ProviderStatus
@@ -366,6 +368,7 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 		config:       config,
 		composer:     composer,
 		secret:       secret,
+		keymap:       newDefaultKeyMap(),
 		renderer:     newInlineRenderer(out),
 		theme:        requestedTheme,
 		themePending: requestedTheme == ThemeAuto,
@@ -435,6 +438,9 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.KeyboardEnhancementsMsg:
+		m.keyboard.record(msg)
+		return m, nil
 	case tea.BackgroundColorMsg:
 		if !m.themePending {
 			return m, nil

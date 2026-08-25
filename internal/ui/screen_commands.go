@@ -26,28 +26,44 @@ var tuiCommands []tuiCommand
 // tuiCommandHelp deliberately omits the command list: typing "/" already shows
 // it as a vertical menu with descriptions, and that menu also completes the
 // command. Help covers what the menu cannot — keys, shell escapes, and what
-// input does while a turn is running.
-const tuiCommandHelp = `Keys
-  enter                    send
-  shift/alt+enter, ctrl+j  insert a newline
-  tab                      accept the suggestion
-  shift+tab                cycle filesystem scope
-  up/down, ctrl+p/ctrl+n   walk input history
-  ctrl+a/e/b/f             start, end, back, forward
-  ctrl+u/k/w               erase to start, to end, word
-  esc                      cancel the running turn
-  ctrl+c                   cancel the turn, else exit
-  ctrl+d                   exit when the input is empty
+// input does while a turn is running. Shortcut labels come from the same map
+// which dispatches them.
+func tuiCommandHelp(keymap keyMap) string {
+	return fmt.Sprintf(`Keys
+  %-24s send
+  %-24s insert a newline
+  %-24s accept the suggestion
+  %-24s cycle filesystem scope
+  %-24s walk input history
+  %-24s start, end, back, forward
+  %-24s erase to start, to end, word
+  %-24s cancel the running turn
+  %-24s cancel the turn, else exit
+  %-24s exit when the input is empty
 
 Shell
   ! command                keeps the result in context
   !! command               private, keeps nothing
 
 While Skot is working
-  enter                    queue for the next turn
-  alt+up                   take the last one back
+  %-24s queue for the next turn
+  %-24s take the last one back
 
-Type / for commands.`
+Type / for commands.`,
+		keymap.helpFor(actionConfirm),
+		keymap.helpFor(actionInsertNewline),
+		keymap.helpFor(actionAcceptSuggestion),
+		keymap.helpFor(actionCycleScope),
+		"up/down, "+keymap.helpFor(actionHistoryPrevious)+"/"+keymap.helpFor(actionHistoryNext),
+		"ctrl+a/e/b/f",
+		"ctrl+u/k/w",
+		keymap.helpFor(actionCancel),
+		keymap.helpFor(actionInterrupt),
+		keymap.helpFor(actionDeleteOrExit),
+		keymap.helpFor(actionConfirm),
+		keymap.helpFor(actionRestoreQueuedInput),
+	)
+}
 
 func init() {
 	// Assigning the function-valued table here avoids a package initialization
@@ -274,7 +290,7 @@ func (m *screenModel) acceptCommand(input string) {
 
 func runHelpCommand(m *screenModel, _ string, _ []string) tea.Cmd {
 	m.composer.reset()
-	m.addBlock(screenBlockSystem, tuiCommandHelp)
+	m.addBlock(screenBlockSystem, tuiCommandHelp(m.keymap))
 	return nil
 }
 
@@ -975,10 +991,11 @@ func (picker pickerState) numberedRows() int {
 
 func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	key := message.Key()
+	action := m.keymap.actionFor(message)
 	digit := pickerDigit(message)
 	navigation := pickerNavigationFor(m.picker.kind)
 	switch {
-	case isEscapeKey(message) || isInterruptKey(message):
+	case action == actionCancel || action == actionInterrupt:
 		kind, pending := m.picker.kind, m.picker.pendingModel
 		m.closePicker()
 		if kind == pickerModelAPI {
@@ -998,7 +1015,7 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 	case m.picker.kind == pickerModel && (key.Code == tea.KeyRight || key.Code == tea.KeyKpRight):
 		m.cycleModelEffort(1)
 		return m, nil
-	case navigation == navigationSearch && keyIsCtrl(message, 'u'):
+	case navigation == navigationSearch && editorControlIs(message, 'u'):
 		m.picker.query = ""
 		m.picker.reconcileSelection()
 		return m, nil
@@ -1023,7 +1040,7 @@ func (m screenModel) handlePickerKey(message tea.KeyPressMsg) (screenModel, tea.
 			return m.selectPickerItem()
 		}
 		return m, nil
-	case isEnterKey(message):
+	case action == actionConfirm:
 		return m.selectPickerItem()
 	default:
 		return m, nil

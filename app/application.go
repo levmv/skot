@@ -353,7 +353,7 @@ func (application *Application) SwitchToolSet(ctx context.Context, value string)
 		return errors.New("cannot enable process or external-work tools in an in-memory one-shot session")
 	}
 	selected, programSnapshots, err := bindToolSetTools(
-		application.config.tools, toolSets, application.config.settings, toolSet,
+		application.config.tools, toolSets, toolSet,
 		application.config.programDeclarations, application.config.programToolsFile, processes,
 	)
 	if err != nil {
@@ -480,7 +480,7 @@ func (application *Application) Login(ctx context.Context, provider, token strin
 	if masker == nil {
 		return errors.New("application is closed")
 	}
-	if err := application.updateCredential(ctx, provider, "login", func(settings *state.Store, normalizedProvider string) error {
+	if err := application.updateCredential(ctx, provider, func(settings *state.Store, normalizedProvider string) error {
 		return storeProviderCredential(settings, normalizedProvider, token)
 	}); err != nil {
 		return err
@@ -490,11 +490,14 @@ func (application *Application) Login(ctx context.Context, provider, token strin
 }
 
 func (application *Application) Logout(ctx context.Context, provider string) error {
-	return application.updateCredential(ctx, provider, "logout", deleteProviderCredential)
+	return application.updateCredential(ctx, provider, deleteProviderCredential)
 }
 
-func (application *Application) updateCredential(ctx context.Context, provider, operation string, mutate func(*state.Store, string) error) error {
+func (application *Application) updateCredential(ctx context.Context, provider string, mutate func(*state.Store, string) error) error {
 	if _, err := application.requireRuntime(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	settings := application.config.settings
@@ -502,57 +505,7 @@ func (application *Application) updateCredential(ctx context.Context, provider, 
 		return errors.New("application is closed")
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	previousAvailable, err := workspacetools.WebSearchAvailable(webCredentialLookup(settings))
-	if err != nil {
-		return err
-	}
-	previousToken, previousStored, err := settings.APIKey(provider)
-	if err != nil {
-		return err
-	}
-	if err := mutate(settings, provider); err != nil {
-		return err
-	}
-	rollback := func(cause error) error {
-		return errors.Join(cause, restoreStoredCredential(settings, provider, previousToken, previousStored))
-	}
-	nextAvailable, err := workspacetools.WebSearchAvailable(webCredentialLookup(settings))
-	if err != nil {
-		return rollback(err)
-	}
-	if previousAvailable != nextAvailable {
-		if err := application.reloadActiveTools(ctx); err != nil {
-			return rollback(fmt.Errorf("reload tools after %s: %w", operation, err))
-		}
-	}
-	return nil
-}
-
-func (application *Application) reloadActiveTools(ctx context.Context) error {
-	runtime, err := application.requireRuntime()
-	if err != nil {
-		return err
-	}
-	toolSets, settings := application.config.toolSets, application.config.settings
-	application.mu.RLock()
-	toolSet := application.state.toolSet
-	processes := application.state.processes
-	application.mu.RUnlock()
-	selected, programSnapshots, err := bindToolSetTools(
-		application.config.tools, toolSets, settings, toolSet,
-		application.config.programDeclarations, application.config.programToolsFile, processes,
-	)
-	if err != nil {
-		return err
-	}
-	return runtime.SetToolsWithProgramTools(ctx, selected, toolSet, programSnapshots)
-}
-
-func restoreStoredCredential(store *state.Store, provider, token string, existed bool) error {
-	if existed {
-		return store.SetAPIKey(provider, token)
-	}
-	return store.DeleteAPIKey(provider)
+	return mutate(settings, provider)
 }
 
 func (application *Application) SessionID() string {

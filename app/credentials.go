@@ -33,6 +33,7 @@ var providerCredentialCatalog = []providerCredentialSpec{
 	{name: "openai", environment: "OPENAI_API_KEY", description: "model provider", credentialURL: "https://platform.openai.com/api-keys", capabilities: credentialModel},
 	{name: "anthropic", environment: "ANTHROPIC_API_KEY", description: "model provider", credentialURL: "https://platform.claude.com/settings/keys", capabilities: credentialModel},
 	{name: "opencode-go", environment: "OPENCODE_API_KEY", description: "OpenCode Go subscription", credentialURL: "https://opencode.ai/auth", capabilities: credentialModel},
+	{name: "keenable", environment: "KEENABLE_API_KEY", description: "web search and fetch", credentialURL: "https://app.keenable.ai", capabilities: credentialWebSearch | credentialWebFetch},
 	{name: "tavily", environment: "TAVILY_API_KEY", description: "web search", credentialURL: "https://app.tavily.com", capabilities: credentialWebSearch},
 	{name: "firecrawl", environment: "FIRECRAWL_API_KEY", description: "web fetch", credentialURL: "https://www.firecrawl.dev/app/api-keys", capabilities: credentialWebFetch},
 	{name: "exa", environment: "EXA_API_KEY", description: "web search and fetch", credentialURL: "https://dashboard.exa.ai/api-keys", capabilities: credentialWebSearch | credentialWebFetch},

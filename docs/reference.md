@@ -99,9 +99,16 @@ Web tools use separate credentials:
 
 | Service | Credential | Capability |
 | --- | --- | --- |
+| Keenable | `KEENABLE_API_KEY` (optional) | Web search and fetch |
 | Tavily | `TAVILY_API_KEY` | Web search |
 | Exa | `EXA_API_KEY` | Web search and fetch |
 | Firecrawl | `FIRECRAWL_API_KEY` | Web fetch |
+
+Keenable is the default search provider and the first fetch backend. Without a
+key, Skot uses Keenable's public endpoints and their shared per-IP limits.
+`/login keenable` or the environment variable switches both operations to the
+account's allowance. If Keenable fails, configured providers and the bounded
+direct fetcher remain fallbacks.
 
 ### Models Skot does not list
 
@@ -248,9 +255,8 @@ Images are reduced to at most 2000 pixels on the longer side before delivery.
 | `edit` | `read`, `ls`, `grep`, `glob`, `edit`, `write` |
 | `read-only` | `read`, `ls`, `grep`, `glob` |
 
-All built-in tool sets include bounded public `web_fetch`. They include
-`web_search` when a Tavily or Exa key is available. A custom tool set is an
-exact tool list, not a set of additions to a built-in set.
+All built-in tool sets include bounded public `web_fetch` and `web_search`. A
+custom tool set is an exact tool list, not a set of additions to a built-in set.
 
 On Linux, `default` also includes `ls` whenever protected paths are configured.
 The process boundary may make some ancestor-directory operations unavailable;

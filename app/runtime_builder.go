@@ -174,7 +174,7 @@ func modelInfoMatchesURI(info agent.ModelInfo, modelURI string) bool {
 }
 
 func (builder runtimeBuilder) newRuntime(params runtimeBuildParams, modelInfo agent.ModelInfo, backend agent.Backend) (*agent.Runtime, error) {
-	selectedTools, err := toolSetTools(builder.toolSets, builder.tools, builder.credentials, builder.toolSet)
+	selectedTools, err := builder.toolSets.Tools(builder.tools, builder.toolSet)
 	if err != nil {
 		return nil, fmt.Errorf("select tools for tool set: %w", err)
 	}

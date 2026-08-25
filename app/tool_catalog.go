@@ -125,37 +125,16 @@ func bindProgramToolsForSet(catalog []agent.Tool, toolSets toolpolicy.ToolSets, 
 	return bound, snapshots, nil
 }
 
-func bindToolSetTools(catalog []agent.Tool, toolSets toolpolicy.ToolSets, credentials *state.Store, toolSet string, declarations []workspacetools.ProgramTool, toolsFile string, processes *workspacetools.ProcessManager) ([]agent.Tool, []agent.ProgramToolSnapshot, error) {
+func bindToolSetTools(catalog []agent.Tool, toolSets toolpolicy.ToolSets, toolSet string, declarations []workspacetools.ProgramTool, toolsFile string, processes *workspacetools.ProcessManager) ([]agent.Tool, []agent.ProgramToolSnapshot, error) {
 	bound, snapshots, err := bindProgramToolsForSet(catalog, toolSets, toolSet, declarations, toolsFile, processes)
 	if err != nil {
 		return nil, nil, err
 	}
-	selected, err := toolSetTools(toolSets, bound, credentials, toolSet)
+	selected, err := toolSets.Tools(bound, toolSet)
 	if err != nil {
 		return nil, nil, err
 	}
 	return selected, snapshots, nil
-}
-
-func toolSetTools(toolSets toolpolicy.ToolSets, tools []agent.Tool, credentials *state.Store, toolSet string) ([]agent.Tool, error) {
-	selected, err := toolSets.Tools(tools, toolSet)
-	if err != nil {
-		return nil, err
-	}
-	searchAvailable, err := workspacetools.WebSearchAvailable(webCredentialLookup(credentials))
-	if err != nil {
-		return nil, fmt.Errorf("check web search credentials: %w", err)
-	}
-	if searchAvailable {
-		return selected, nil
-	}
-	filtered := selected[:0]
-	for _, tool := range selected {
-		if tool.Spec.Name != "web_search" {
-			filtered = append(filtered, tool)
-		}
-	}
-	return filtered, nil
 }
 
 func toolSetNeedsProcessBoundary(toolSets toolpolicy.ToolSets, programs []workspacetools.ProgramTool, toolSet string) bool {

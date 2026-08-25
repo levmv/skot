@@ -8,7 +8,7 @@ import (
 	"github.com/levmv/skot/agent"
 )
 
-func TestWebCatalogTracksCredentialAvailability(t *testing.T) {
+func TestWebCatalogIncludesPublicSearchWithoutCredentials(t *testing.T) {
 	clearWebCredentialEnvironment(t)
 	application, err := Open(context.Background(), Config{
 		Home: t.TempDir(), Root: t.TempDir(), ModelURI: "deepseek/test",
@@ -18,24 +18,12 @@ func TestWebCatalogTracksCredentialAvailability(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer application.Close()
-	if names := availableApplicationTools(t, application); !strings.Contains(names, "web_fetch") || strings.Contains(names, "web_search") {
-		t.Fatalf("tools without search credential = %q", names)
-	}
-	if err := application.Login(context.Background(), "tavily", "search-token"); err != nil {
-		t.Fatal(err)
-	}
 	if names := availableApplicationTools(t, application); !strings.Contains(names, "web_fetch") || !strings.Contains(names, "web_search") {
-		t.Fatalf("tools after login = %q", names)
-	}
-	if err := application.Logout(context.Background(), "tavily"); err != nil {
-		t.Fatal(err)
-	}
-	if names := availableApplicationTools(t, application); strings.Contains(names, "web_search") {
-		t.Fatalf("tools after logout = %q", names)
+		t.Fatalf("tools without search credential = %q", names)
 	}
 }
 
-func TestWebLoginRollsBackCredentialWhenCatalogReloadFails(t *testing.T) {
+func TestCancelledWebLoginDoesNotStoreCredential(t *testing.T) {
 	clearWebCredentialEnvironment(t)
 	home := t.TempDir()
 	application, err := Open(context.Background(), Config{
@@ -48,11 +36,11 @@ func TestWebLoginRollsBackCredentialWhenCatalogReloadFails(t *testing.T) {
 	defer application.Close()
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := application.Login(cancelled, "tavily", "temporary-token"); err == nil {
-		t.Fatal("login with cancelled catalog reload succeeded")
+	if err := application.Login(cancelled, "keenable", "temporary-token"); err == nil {
+		t.Fatal("cancelled login succeeded")
 	}
-	if token, _, err := credentialForProvider(application.config.settings, "tavily"); err != nil || token != "" {
-		t.Fatalf("rolled-back credential = %q, %v", token, err)
+	if token, _, err := credentialForProvider(application.config.settings, "keenable"); err != nil || token != "" {
+		t.Fatalf("credential after cancelled login = %q, %v", token, err)
 	}
 }
 
@@ -76,10 +64,10 @@ func TestProviderStatusesIncludeWebServices(t *testing.T) {
 		descriptions[status.Name] = status.Description
 		toolServices[status.Name] = status.ToolService
 	}
-	if descriptions["tavily"] != "web search" || descriptions["firecrawl"] != "web fetch" || descriptions["exa"] != "web search and fetch" {
+	if descriptions["keenable"] != "web search and fetch" || descriptions["tavily"] != "web search" || descriptions["firecrawl"] != "web fetch" || descriptions["exa"] != "web search and fetch" {
 		t.Fatalf("provider statuses = %#v", descriptions)
 	}
-	if toolServices["deepseek"] || !toolServices["tavily"] || !toolServices["firecrawl"] || !toolServices["exa"] {
+	if toolServices["deepseek"] || !toolServices["keenable"] || !toolServices["tavily"] || !toolServices["firecrawl"] || !toolServices["exa"] {
 		t.Fatalf("tool service statuses = %#v", toolServices)
 	}
 }
@@ -87,10 +75,10 @@ func TestProviderStatusesIncludeWebServices(t *testing.T) {
 func availableApplicationTools(t *testing.T, application *Application) string {
 	t.Helper()
 	application.mu.RLock()
-	toolSets, toolSet, settings := application.config.toolSets, application.state.toolSet, application.config.settings
+	toolSets, toolSet := application.config.toolSets, application.state.toolSet
 	tools := append([]agent.Tool(nil), application.config.tools...)
 	application.mu.RUnlock()
-	selected, err := toolSetTools(toolSets, tools, settings, toolSet)
+	selected, err := toolSets.Tools(tools, toolSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +91,7 @@ func availableApplicationTools(t *testing.T, application *Application) string {
 
 func clearWebCredentialEnvironment(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"TAVILY_API_KEY", "EXA_API_KEY", "FIRECRAWL_API_KEY"} {
+	for _, name := range []string{"KEENABLE_API_KEY", "TAVILY_API_KEY", "EXA_API_KEY", "FIRECRAWL_API_KEY"} {
 		t.Setenv(name, "")
 	}
 }

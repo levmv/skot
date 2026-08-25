@@ -8,15 +8,150 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
 const (
-	firecrawlScrapeEndpoint = "https://api.firecrawl.dev/v2/scrape"
-	exaContentsEndpoint     = "https://api.exa.ai/contents"
-	tavilySearchEndpoint    = "https://api.tavily.com/search"
-	exaSearchEndpoint       = "https://api.exa.ai/search"
+	keenableSearchEndpoint       = "https://api.keenable.ai/v1/search"
+	keenablePublicSearchEndpoint = "https://api.keenable.ai/v1/search/public"
+	keenableFetchEndpoint        = "https://api.keenable.ai/v1/fetch"
+	keenablePublicFetchEndpoint  = "https://api.keenable.ai/v1/fetch/public"
+	firecrawlScrapeEndpoint      = "https://api.firecrawl.dev/v2/scrape"
+	exaContentsEndpoint          = "https://api.exa.ai/contents"
+	tavilySearchEndpoint         = "https://api.tavily.com/search"
+	exaSearchEndpoint            = "https://api.exa.ai/search"
 )
+
+type keenableFetchBackend struct {
+	token    string
+	endpoint string
+	client   *http.Client
+}
+
+func newKeenableFetchBackend(token string) *keenableFetchBackend {
+	token = strings.TrimSpace(token)
+	endpoint := keenableFetchEndpoint
+	if token == "" {
+		endpoint = keenablePublicFetchEndpoint
+	}
+	return &keenableFetchBackend{
+		token: token, endpoint: endpoint,
+		client: &http.Client{Timeout: keenableFetchTimeout},
+	}
+}
+
+func (*keenableFetchBackend) Name() string { return "keenable" }
+
+func (backend *keenableFetchBackend) Fetch(ctx context.Context, request webFetchRequest) (webFetchResult, error) {
+	query := url.Values{
+		"url":       {request.URL},
+		"max_chars": {strconv.Itoa(webMaxTextBytes)},
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, backend.endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return webFetchResult{}, err
+	}
+	setKeenableHeaders(httpRequest, backend.token)
+	response, err := backend.client.Do(httpRequest)
+	if err != nil {
+		return webFetchResult{}, fmt.Errorf("request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		discardWebErrorBody(response.Body)
+		return webFetchResult{}, fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	var payload struct {
+		URL     string `json:"url"`
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if err := decodeWebJSON(response.Body, &payload); err != nil {
+		return webFetchResult{}, fmt.Errorf("decode response: %w", err)
+	}
+	resultURL := strings.TrimSpace(payload.URL)
+	if resultURL == "" {
+		resultURL = request.URL
+	}
+	return webFetchResult{URL: resultURL, Title: payload.Title, Text: payload.Content}, nil
+}
+
+type keenableSearchProvider struct {
+	token    string
+	endpoint string
+	client   *http.Client
+}
+
+func newKeenableSearchProvider(token string) *keenableSearchProvider {
+	token = strings.TrimSpace(token)
+	endpoint := keenableSearchEndpoint
+	if token == "" {
+		endpoint = keenablePublicSearchEndpoint
+	}
+	return &keenableSearchProvider{
+		token: token, endpoint: endpoint,
+		client: &http.Client{Timeout: webSearchAttemptTimeout},
+	}
+}
+
+func (*keenableSearchProvider) Name() string { return "keenable" }
+
+func (provider *keenableSearchProvider) Search(ctx context.Context, request webSearchRequest) ([]webSearchResult, error) {
+	body, err := json.Marshal(struct {
+		Query            string `json:"query"`
+		MaxResults       int    `json:"max_results"`
+		SnippetMaxLength int    `json:"snippet_max_length"`
+	}{request.Query, request.Limit, webSearchSnippetChars}, json.Deterministic(true))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	setKeenableHeaders(httpRequest, provider.token)
+	response, err := provider.client.Do(httpRequest)
+	if err != nil {
+		return nil, fmt.Errorf("request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		discardWebErrorBody(response.Body)
+		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	var payload struct {
+		Results []struct {
+			Title       string `json:"title"`
+			URL         string `json:"url"`
+			Description string `json:"description"`
+			Snippet     string `json:"snippet"`
+		} `json:"results"`
+	}
+	if err := decodeWebJSON(response.Body, &payload); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	results := make([]webSearchResult, 0, min(request.Limit, len(payload.Results)))
+	for _, result := range payload.Results {
+		snippet := result.Snippet
+		if strings.TrimSpace(snippet) == "" {
+			snippet = result.Description
+		}
+		results = append(results, webSearchResult{Title: result.Title, URL: result.URL, Snippet: snippet})
+	}
+	return results, nil
+}
+
+func setKeenableHeaders(request *http.Request, token string) {
+	request.Header.Set("Accept", "application/json")
+	if token == "" {
+		request.Header.Set("X-Keenable-Title", "Skot")
+		return
+	}
+	request.Header.Set("X-API-Key", token)
+}
 
 type firecrawlFetchBackend struct {
 	token    string

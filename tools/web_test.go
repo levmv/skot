@@ -3,7 +3,11 @@ package tools
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,19 +28,132 @@ func TestWebToolCatalogIsNativeAndValid(t *testing.T) {
 	}
 }
 
-func TestWebSearchAvailabilityUsesCurrentCredentials(t *testing.T) {
-	tokens := map[string]string{}
-	lookup := func(provider string) (string, error) { return tokens[provider], nil }
-	if available, err := WebSearchAvailable(lookup); err != nil || available {
-		t.Fatalf("empty credentials = %t, %v", available, err)
+func TestWebSearchProvidersPreferPublicKeenable(t *testing.T) {
+	tokens := map[string]string{"tavily": "tavily-token", "exa": "exa-token"}
+	web := webTools{credential: func(provider string) (string, error) {
+		return tokens[provider], nil
+	}}
+	providers, err := web.searchProviders()
+	if err != nil {
+		t.Fatal(err)
 	}
-	tokens["exa"] = "token"
-	if available, err := WebSearchAvailable(lookup); err != nil || !available {
-		t.Fatalf("exa credential = %t, %v", available, err)
+	if len(providers) != 3 || providers[0].Name() != "keenable" || providers[1].Name() != "tavily" || providers[2].Name() != "exa" {
+		t.Fatalf("search providers = %#v", providers)
 	}
-	want := errors.New("store failed")
-	if _, err := WebSearchAvailable(func(string) (string, error) { return "", want }); !errors.Is(err, want) {
-		t.Fatalf("availability error = %v", err)
+	keenable, ok := providers[0].(*keenableSearchProvider)
+	if !ok || keenable.endpoint != keenablePublicSearchEndpoint {
+		t.Fatalf("default search provider = %#v", providers[0])
+	}
+
+	tokens["keenable"] = "keen_account"
+	providers, err = web.searchProviders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keenable, ok = providers[0].(*keenableSearchProvider)
+	if !ok || keenable.endpoint != keenableSearchEndpoint || keenable.token != "keen_account" {
+		t.Fatalf("authenticated search provider = %#v", providers[0])
+	}
+}
+
+func TestKeenableSearchUsesPublicOrAuthenticatedAPI(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		token    string
+		endpoint string
+	}{
+		{name: "public", endpoint: keenablePublicSearchEndpoint},
+		{name: "authenticated", token: "keen_test", endpoint: keenableSearchEndpoint},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPost {
+					t.Errorf("method = %s", request.Method)
+				}
+				if test.token == "" {
+					if got := request.Header.Get("X-Keenable-Title"); got != "Skot" {
+						t.Errorf("public title = %q", got)
+					}
+				} else if got := request.Header.Get("X-API-Key"); got != test.token {
+					t.Errorf("API key = %q", got)
+				}
+				var body struct {
+					Query            string `json:"query"`
+					MaxResults       int    `json:"max_results"`
+					SnippetMaxLength int    `json:"snippet_max_length"`
+				}
+				if err := decodeWebJSON(request.Body, &body); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				if body.Query != "agent search" || body.MaxResults != 3 || body.SnippetMaxLength != webSearchSnippetChars {
+					t.Errorf("request body = %#v", body)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, `{"results":[{"title":"Result","url":"https://example.com/result","description":"Fallback summary","snippet":""}]}`)
+			}))
+			defer server.Close()
+
+			provider := newKeenableSearchProvider(test.token)
+			if provider.endpoint != test.endpoint {
+				t.Fatalf("endpoint = %q, want %q", provider.endpoint, test.endpoint)
+			}
+			provider.endpoint = server.URL
+			results, err := provider.Search(context.Background(), webSearchRequest{Query: "agent search", Limit: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) != 1 || results[0].Title != "Result" || results[0].URL != "https://example.com/result" || results[0].Snippet != "Fallback summary" {
+				t.Fatalf("results = %#v", results)
+			}
+		})
+	}
+}
+
+func TestKeenableFetchUsesPublicOrAuthenticatedAPI(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		token    string
+		endpoint string
+	}{
+		{name: "public", endpoint: keenablePublicFetchEndpoint},
+		{name: "authenticated", token: "keen_test", endpoint: keenableFetchEndpoint},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet {
+					t.Errorf("method = %s", request.Method)
+				}
+				if test.token == "" {
+					if got := request.Header.Get("X-Keenable-Title"); got != "Skot" {
+						t.Errorf("public title = %q", got)
+					}
+				} else if got := request.Header.Get("X-API-Key"); got != test.token {
+					t.Errorf("API key = %q", got)
+				}
+				if got := request.URL.Query().Get("url"); got != "https://example.com/a?b=c" {
+					t.Errorf("fetch URL = %q", got)
+				}
+				if got := request.URL.Query().Get("max_chars"); got != strconv.Itoa(webMaxTextBytes) {
+					t.Errorf("max_chars = %q", got)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, `{"url":"https://example.com/final","title":"Fetched","content":"# Page"}`)
+			}))
+			defer server.Close()
+
+			backend := newKeenableFetchBackend(test.token)
+			if backend.endpoint != test.endpoint {
+				t.Fatalf("endpoint = %q, want %q", backend.endpoint, test.endpoint)
+			}
+			backend.endpoint = server.URL
+			result, err := backend.Fetch(context.Background(), webFetchRequest{URL: "https://example.com/a?b=c"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.URL != "https://example.com/final" || result.Title != "Fetched" || result.Text != "# Page" {
+				t.Fatalf("fetch result = %#v", result)
+			}
+		})
 	}
 }
 

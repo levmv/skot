@@ -62,6 +62,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	var notices []string
 	theme := state.ThemeAuto
+	displayProfile := state.DisplayCompact
 	var interactiveStore *state.InteractiveStore
 	var workspaceSettings state.WorkspaceSettings
 	var lastModel state.ModelPreference
@@ -85,6 +86,9 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		notices = append(notices, interactiveSettings.Notices...)
 		if interactiveSettings.Theme != "" {
 			theme = interactiveSettings.Theme
+		}
+		if interactiveSettings.Display != "" {
+			displayProfile = interactiveSettings.Display
 		}
 		workspaceSettings = interactiveSettings.Workspace
 		lastModel = interactiveSettings.LastModel()
@@ -317,6 +321,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			children:                children,
 			toolSet:                 config.ToolSet,
 			theme:                   theme,
+			displayProfile:          displayProfile,
 			security:                security,
 			additions:               layers.additions,
 			protection:              layers.protection,

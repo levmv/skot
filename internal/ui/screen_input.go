@@ -26,6 +26,26 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	}
 
 	switch {
+	case action == actionDisplayCompact || action == actionDisplayDetailed || action == actionDisplayFull:
+		// Legacy terminal encodings cannot distinguish Ctrl+digits safely. A
+		// positive enhancement report makes these direct bindings unambiguous.
+		if !m.keyboard.supportsKeyDisambiguation() {
+			return m, nil
+		}
+		profile := DisplayCompact
+		if action == actionDisplayDetailed {
+			profile = DisplayDetailed
+		} else if action == actionDisplayFull {
+			profile = DisplayFull
+		}
+		m.switchTranscriptDisplayFromKey(profile)
+		return m, nil
+	case action == actionDisplayMore:
+		m.shiftTranscriptDisplay(1)
+		return m, nil
+	case action == actionDisplayLess:
+		m.shiftTranscriptDisplay(-1)
+		return m, nil
 	case action == actionInterrupt:
 		if m.operation.isTurn() {
 			m.cancelTurn(false)

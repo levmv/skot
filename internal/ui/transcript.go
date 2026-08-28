@@ -18,6 +18,7 @@ const (
 	screenBlockAssistant
 	screenBlockTool
 	screenBlockError
+	screenBlockChangeSummary
 	screenBlockDuration
 )
 
@@ -30,24 +31,28 @@ type screenBlock struct {
 }
 
 type toolBlock struct {
-	name       string
-	callIDs    []string
-	done       bool
-	failed     bool
-	startedAt  time.Time
-	elapsed    time.Duration
-	group      *toolGroupMeta
-	fileChange *fileChangeMeta
-	process    *processResultMeta
-	output     string
-	superseded bool
-	shell      *shellMeta
+	name              string
+	rawArguments      string
+	resultText        string
+	callIDs           []string
+	done              bool
+	failed            bool
+	startedAt         time.Time
+	elapsed           time.Duration
+	group             *toolGroupMeta
+	fileChange        *fileChangeMeta
+	process           *processResultMeta
+	output            string
+	superseded        bool
+	shell             *shellMeta
+	collapsed         bool
+	collapsedDuration time.Duration
 }
 
 type toolGroupMeta struct {
-	key   string
-	dir   string
-	items string
+	key  string
+	dir  string
+	item string
 }
 
 type shellMeta struct {
@@ -65,6 +70,9 @@ type transcriptState struct {
 	blocks         []screenBlock
 	currentAttempt string
 	root           string
+	// preserveToolTailHeight asks the next rendered refresh to retain the
+	// physical rows released when a live tool tail becomes stable.
+	preserveToolTailHeight bool
 
 	renderCache      []renderedScreenBlock
 	renderCacheLines []string
@@ -128,6 +136,7 @@ func (m *screenModel) continueTranscriptBelow() {
 }
 
 func (m *screenModel) clearTranscript() {
+	m.frameRowFloor = 0
 	m.transcript.clear()
 	m.operation.changedPaths = nil
 }
@@ -147,6 +156,7 @@ func (transcript *transcriptState) clear() {
 	transcript.renderCacheLines = nil
 	transcript.renderCacheWidth = 0
 	transcript.renderDirtyFrom = 0
+	transcript.preserveToolTailHeight = false
 	transcript.dirty = true
 	transcript.dirtyFrom = 0
 }
@@ -156,8 +166,77 @@ func (transcript *transcriptState) addBlock(kind screenBlockKind, text string) {
 }
 
 func (transcript *transcriptState) appendBlock(block screenBlock) {
+	if endsToolTail(block) {
+		transcript.collapseToolTail()
+	}
 	transcript.markBlockDirty(len(transcript.blocks))
 	transcript.blocks = append(transcript.blocks, block)
+}
+
+func endsToolTail(block screenBlock) bool {
+	return block.kind != screenBlockTool && (block.kind == screenBlockDuration || strings.TrimSpace(block.text) != "")
+}
+
+// modelOwnedToolBlock excludes explicit user shell escapes: they are local
+// work, not agent trace, and keep their complete output in every profile.
+func modelOwnedToolBlock(block screenBlock) bool {
+	return block.kind == screenBlockTool && block.tool != nil && block.tool.shell == nil
+}
+
+// collapseToolTail commits model-owned activity when the next meaningful
+// transcript block arrives. Compact display can then replace that stable
+// history with a summary while leaving the current tool tail observable.
+func (transcript *transcriptState) collapseToolTail() {
+	start, end, ok := transcript.modelOwnedToolTail()
+	if !ok {
+		return
+	}
+	transcript.preserveToolTailHeight = true
+	transcript.markBlockDirty(start)
+	for index := start; index <= end; index++ {
+		transcript.blocks[index].tool.collapsed = true
+	}
+	earliest := transcript.blocks[start].tool.startedAt
+	for index := start + 1; index <= end; index++ {
+		startedAt := transcript.blocks[index].tool.startedAt
+		if !startedAt.IsZero() && (earliest.IsZero() || startedAt.Before(earliest)) {
+			earliest = startedAt
+		}
+	}
+	if !earliest.IsZero() {
+		transcript.blocks[end].tool.collapsedDuration = max(time.Duration(0), time.Since(earliest))
+	}
+}
+
+func (transcript *transcriptState) modelOwnedToolTail() (int, int, bool) {
+	end := len(transcript.blocks) - 1
+	if end < 0 || !modelOwnedToolBlock(transcript.blocks[end]) {
+		return 0, 0, false
+	}
+	start := end
+	for start > 0 && modelOwnedToolBlock(transcript.blocks[start-1]) {
+		start--
+	}
+	return start, end, true
+}
+
+// foldOldestToolTailBlock advances the compact prefix by one source block.
+// The renderer still expands failures and running work, so folding never hides
+// the part of a tool that currently needs attention.
+func (transcript *transcriptState) foldOldestToolTailBlock() bool {
+	start, end, ok := transcript.modelOwnedToolTail()
+	if !ok {
+		return false
+	}
+	for index := start; index <= end; index++ {
+		if transcript.blocks[index].tool.collapsed {
+			continue
+		}
+		transcript.markBlockDirty(start)
+		transcript.blocks[index].tool.collapsed = true
+		return true
+	}
+	return false
 }
 
 func (transcript *transcriptState) markBlockDirty(index int) {
@@ -177,33 +256,23 @@ func (m *screenModel) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
 
 func (transcript *transcriptState) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
 	display := describeToolCall(call.Name, call.RawArguments, transcript.root)
-	if display.GroupKey != "" && len(transcript.blocks) > 0 {
-		last := &transcript.blocks[len(transcript.blocks)-1]
-		if last.kind == screenBlockTool && last.tool != nil && !last.tool.failed && last.tool.group != nil && last.tool.group.key == display.GroupKey {
-			transcript.markBlockDirty(len(transcript.blocks) - 1)
-			items := append(splitCompactToolItems(last.tool.group.items), display.GroupItem)
-			last.text = sanitizeTerminalText(formatReadGroup(last.tool.group.dir, items))
-			last.tool.group.items = strings.Join(items, compactToolItemSeparator)
-			// Joining an idle group restarts the clock: the gap since the last
-			// read is the model thinking, not a wait any tool spent.
-			if len(last.tool.callIDs) == 0 {
-				last.tool.startedAt = startedAt
-			}
-			last.tool.callIDs = append(last.tool.callIDs, call.ID)
-			last.tool.done = false
-			return
-		}
-	}
 	var group *toolGroupMeta
 	if display.GroupKey != "" {
-		group = &toolGroupMeta{key: display.GroupKey, dir: display.GroupDir, items: display.GroupItem}
+		group = &toolGroupMeta{key: display.GroupKey, dir: display.GroupDir, item: display.GroupItem}
+	}
+	if len(transcript.blocks) > 0 && group != nil {
+		lastIndex := len(transcript.blocks) - 1
+		last := transcript.blocks[lastIndex]
+		if last.kind == screenBlockTool && last.tool != nil && last.tool.group != nil && last.tool.group.key == group.key {
+			transcript.markBlockDirty(transcript.toolPresentationGroupStart(lastIndex))
+		}
 	}
 	transcript.appendBlock(screenBlock{
 		kind: screenBlockTool,
 		text: sanitizeTerminalText(display.Text),
 		tool: &toolBlock{
 			name: sanitizeTerminalText(call.Name), callIDs: []string{call.ID},
-			group: group, startedAt: startedAt,
+			rawArguments: call.RawArguments, group: group, startedAt: startedAt,
 		},
 	})
 }
@@ -236,16 +305,17 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 		if callIndex < 0 {
 			continue
 		}
-		transcript.markBlockDirty(index)
+		transcript.markBlockDirty(transcript.toolPresentationGroupStart(index))
 		tool.callIDs = append(tool.callIDs[:callIndex], tool.callIDs[callIndex+1:]...)
 		tool.done = len(tool.callIDs) == 0
-		// A group keeps the longest stretch it measured, so a slow read stays
-		// reported instead of vanishing when a fast one joins its line.
+		// Presentation groups use the longest member duration, so each source
+		// call keeps only the time it actually spent running.
 		if tool.done && !tool.startedAt.IsZero() {
 			tool.elapsed = max(tool.elapsed, time.Since(tool.startedAt))
 		}
 		failed := result.Error || result.Unknown
 		tool.failed = tool.failed || failed
+		tool.resultText = displayableToolResult(result.Content)
 		recognizedDetail := false
 		for _, detail := range result.Details {
 			if change, ok := agent.FileChangeFromDetail(detail); ok {
@@ -281,9 +351,49 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 	transcript.appendBlock(screenBlock{
 		kind: screenBlockTool,
 		text: sanitizeTerminalText(text),
-		tool: &toolBlock{done: true, failed: result.Error || result.Unknown},
+		tool: &toolBlock{done: true, failed: result.Error || result.Unknown, resultText: displayableToolResult(result.Content)},
 	})
 	return changedPaths
+}
+
+func (transcript transcriptState) toolPresentationGroupStart(index int) int {
+	if index < 0 || index >= len(transcript.blocks) {
+		return max(0, index)
+	}
+	block := transcript.blocks[index]
+	if block.kind != screenBlockTool || block.tool == nil || block.tool.group == nil {
+		return index
+	}
+	key := block.tool.group.key
+	for index > 0 {
+		previous := transcript.blocks[index-1]
+		if previous.kind != screenBlockTool || previous.tool == nil || previous.tool.group == nil || previous.tool.group.key != key {
+			break
+		}
+		index--
+	}
+	return index
+}
+
+func displayableToolResult(content agent.Content) string {
+	var result strings.Builder
+	endsWithNewline := true
+	for _, part := range content {
+		switch {
+		case part.Kind == agent.ContentPartText:
+			result.WriteString(part.Text)
+			if part.Text != "" {
+				endsWithNewline = strings.HasSuffix(part.Text, "\n")
+			}
+		case part.Kind == agent.ContentPartImage && part.Image != nil:
+			if result.Len() > 0 && !endsWithNewline {
+				result.WriteString("  ")
+			}
+			fmt.Fprintf(&result, "[%s %d×%d]", part.Image.MediaType, part.Image.Width, part.Image.Height)
+			endsWithNewline = false
+		}
+	}
+	return result.String()
 }
 
 func recordedShellItems(items []agent.Item, index int) (agent.ToolCall, agent.ToolResult, bool) {
@@ -317,10 +427,22 @@ func toolCallIndex(callIDs []string, callID string) int {
 }
 
 func (m *screenModel) refreshTranscript() {
-	m.transcript.refresh(m.contentWidth(), m.renderBlockLines)
+	preserveHeight := m.displayProfile == DisplayCompact && m.transcript.preserveToolTailHeight &&
+		m.renderer != nil && m.renderer.started && !m.renderer.invalidated &&
+		m.renderer.previousWidth == m.width && m.renderer.previousHeight == m.height
+	previousFrameRows := 0
+	if preserveHeight {
+		previousFrameRows = len(m.renderer.previousTranscript) + len(m.renderer.previousDynamic)
+	}
+	m.transcript.preserveToolTailHeight = false
+	m.transcript.refresh(m.contentWidth(), m.renderBlockLinesAt)
+	m.fitCompactToolTail()
+	if preserveHeight && previousFrameRows > m.baseInlineFrameRows() {
+		m.frameRowFloor = max(m.frameRowFloor, previousFrameRows)
+	}
 }
 
-func (transcript *transcriptState) refresh(width int, renderBlock func(screenBlock) []string) {
+func (transcript *transcriptState) refresh(width int, renderBlock func(int, screenBlock) []string) {
 	lines, dirtyFrom := transcript.renderLinesFromDirty(width, renderBlock)
 	if dirtyFrom == len(transcript.lines) && len(lines) == len(transcript.lines) {
 		return
@@ -333,7 +455,7 @@ func (transcript *transcriptState) refresh(width int, renderBlock func(screenBlo
 	transcript.dirty = true
 }
 
-func (transcript *transcriptState) renderLinesFromDirty(width int, renderBlock func(screenBlock) []string) ([]string, int) {
+func (transcript *transcriptState) renderLinesFromDirty(width int, renderBlock func(int, screenBlock) []string) ([]string, int) {
 	if transcript.renderCacheWidth != width || len(transcript.renderCache) > len(transcript.blocks) {
 		transcript.renderCache = nil
 		transcript.renderCacheLines = nil
@@ -348,7 +470,7 @@ func (transcript *transcriptState) renderLinesFromDirty(width int, renderBlock f
 	transcript.renderCache = transcript.renderCache[:common]
 	transcript.renderCacheLines = transcript.renderCacheLines[:lineEnd]
 	for index := common; index < len(transcript.blocks); index++ {
-		lines := renderBlock(transcript.blocks[index])
+		lines := renderBlock(index, transcript.blocks[index])
 		// Blocks declare the air they want on both sides, so neighbours that
 		// both want it would double-space. Drop the leading blank where the
 		// previous block already ended in one, or at the top of the transcript.
@@ -400,7 +522,7 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 			return m.renderProcessResultLines(block)
 		}
 		if tool.fileChange != nil {
-			return m.renderFileChangeLines(block.text, *tool.fileChange, m.toolMarker(tool.failed))
+			return m.renderFileChangeBlock(block)
 		}
 		detail := ""
 		if tool.done {
@@ -409,7 +531,15 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 		return m.renderToolSummaryLines(m.toolMarker(tool.failed), block.text, detail)
 	case screenBlockError:
 		return m.renderErrorNotice(block.text)
+	case screenBlockChangeSummary:
+		if m.displayProfile == DisplayCompact {
+			return nil
+		}
+		return m.padded(m.wrappedMarked(" ", m.renderSystemText(block.text)))
 	case screenBlockDuration:
+		if m.displayProfile == DisplayCompact {
+			return nil
+		}
 		return m.padded([]string{m.renderDurationLine(block.duration)})
 	default:
 		return m.wrappedMarked(" ", block.text)

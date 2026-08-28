@@ -50,7 +50,8 @@ type ModelPreference struct {
 // state. Notices describe known invalid values which were ignored without
 // rewriting the source document.
 type InteractiveSettings struct {
-	Theme string
+	Theme   string
+	Display string
 	// ModelHistory is every deliberate selection from any workspace, most
 	// recent first.
 	ModelHistory []ModelPreference
@@ -74,6 +75,7 @@ type interactiveDocument struct {
 
 type interactiveUIDocument struct {
 	Theme        *string                `json:"theme,omitzero"`
+	Display      *string                `json:"display,omitzero"`
 	ModelHistory []modelHistoryDocument `json:"model_history,omitempty"`
 
 	// LegacyRecentModels accepts the pre-history key so an existing document
@@ -261,6 +263,20 @@ func (store *InteractiveStore) SetThemeSelection(value string) error {
 	})
 }
 
+func (store *InteractiveStore) SetDisplaySelection(value string) error {
+	profile, err := NormalizeDisplayProfile(value)
+	if err != nil {
+		return err
+	}
+	return store.mutate(func(document *interactiveDocument) bool {
+		if storedStringEquals(document.UI.Display, profile) {
+			return false
+		}
+		document.UI.Display = new(profile)
+		return true
+	})
+}
+
 func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (returnErr error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -318,6 +334,13 @@ func (document interactiveDocument) settings(workspace string) InteractiveSettin
 	if document.UI.Theme != nil {
 		if theme, err := NormalizeTheme(*document.UI.Theme); err == nil {
 			settings.Theme = theme
+		} else {
+			settings.Notices = append(settings.Notices, err.Error()+" in interactive state; ignored")
+		}
+	}
+	if document.UI.Display != nil {
+		if profile, err := NormalizeDisplayProfile(*document.UI.Display); err == nil {
+			settings.Display = profile
 		} else {
 			settings.Notices = append(settings.Notices, err.Error()+" in interactive state; ignored")
 		}

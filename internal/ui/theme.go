@@ -80,6 +80,7 @@ func (m *screenModel) applyTerminalTheme(dark bool) {
 	m.darkTheme = dark
 	palette := terminalPaletteFor(dark)
 	m.mutedStyle = lipgloss.NewStyle()
+	m.summaryStyle = lipgloss.NewStyle()
 	m.accentStyle = lipgloss.NewStyle()
 	m.errorStyle = lipgloss.NewStyle()
 	m.successStyle = lipgloss.NewStyle()
@@ -87,6 +88,7 @@ func (m *screenModel) applyTerminalTheme(dark bool) {
 	m.userBarStyle = lipgloss.NewStyle()
 	if m.useStyle {
 		m.mutedStyle = m.mutedStyle.Foreground(palette.muted)
+		m.summaryStyle = m.summaryStyle.Bold(true)
 		m.accentStyle = m.accentStyle.Foreground(palette.accent).Bold(true)
 		m.errorStyle = m.errorStyle.Foreground(palette.error)
 		m.successStyle = m.successStyle.Foreground(palette.success)

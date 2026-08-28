@@ -10,8 +10,6 @@ import (
 	"unicode/utf8"
 )
 
-const compactToolItemSeparator = "\x00"
-
 type compactToolCall struct {
 	Text      string
 	GroupKey  string
@@ -237,13 +235,6 @@ func formatReadGroup(dir string, items []string) string {
 		return "read  " + strings.Join(items, ", ")
 	}
 	return "read  " + strings.TrimSuffix(dir, "/") + "/ → " + strings.Join(items, ", ")
-}
-
-func splitCompactToolItems(items string) []string {
-	if items == "" {
-		return nil
-	}
-	return strings.Split(items, compactToolItemSeparator)
 }
 
 func quoteToolValue(value string, limit int) string {

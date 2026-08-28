@@ -76,6 +76,7 @@ type applicationState struct {
 	children                *childSupervisor
 	toolSet                 string
 	theme                   string
+	displayProfile          string
 	security                securityState
 	additions               *workspacetools.AddedDirectoryPolicy
 	protection              *workspacetools.ProtectedPathPolicy
@@ -195,6 +196,29 @@ func (application *Application) SwitchTheme(value string) error {
 	application.mu.Unlock()
 	return application.persistInteractivePreference("theme", func(preferences *state.InteractiveStore) error {
 		return preferences.SetThemeSelection(theme)
+	})
+}
+
+func (application *Application) CurrentDisplayProfile() string {
+	application.mu.RLock()
+	defer application.mu.RUnlock()
+	return application.state.displayProfile
+}
+
+func (application *Application) SwitchDisplayProfile(value string) error {
+	profile, err := state.NormalizeDisplayProfile(value)
+	if err != nil {
+		return err
+	}
+	application.mu.Lock()
+	if application.state.session == nil {
+		application.mu.Unlock()
+		return errors.New("application is closed")
+	}
+	application.state.displayProfile = profile
+	application.mu.Unlock()
+	return application.persistInteractivePreference("display", func(preferences *state.InteractiveStore) error {
+		return preferences.SetDisplaySelection(profile)
 	})
 }
 

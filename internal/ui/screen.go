@@ -71,6 +71,8 @@ type Agent interface {
 	UnprotectPath(context.Context, string) error
 	CurrentTheme() string
 	SwitchTheme(string) error
+	CurrentDisplayProfile() string
+	SwitchDisplayProfile(string) error
 
 	// Credentials.
 	ProviderStatuses() ([]ProviderStatus, error)
@@ -114,6 +116,7 @@ const (
 	pickerToolSet
 	pickerScope
 	pickerTheme
+	pickerDisplay
 	pickerLogin
 	pickerLogout
 	pickerSession
@@ -245,21 +248,26 @@ type screenModel struct {
 	pathCompletion pathCompletionCache
 	sessionStatus  agent.SessionStatus
 
-	width     int
-	height    int
-	quitting  bool
-	operation activeOperation
-	scope     scopeSwitchState
+	width  int
+	height int
+	// frameRowFloor is a transient layout anchor. Blank dynamic rows preserve
+	// the screen height released by a folded tool tail until new content fills it.
+	frameRowFloor int
+	quitting      bool
+	operation     activeOperation
+	scope         scopeSwitchState
 
-	renderer     *inlineRenderer
-	renderErr    error
-	theme        string
-	themePending bool
-	themeQuery   uint64
-	darkTheme    bool
-	useStyle     bool
+	renderer       *inlineRenderer
+	renderErr      error
+	theme          string
+	displayProfile string
+	themePending   bool
+	themeQuery     uint64
+	darkTheme      bool
+	useStyle       bool
 
 	mutedStyle   lipgloss.Style
+	summaryStyle lipgloss.Style
 	accentStyle  lipgloss.Style
 	errorStyle   lipgloss.Style
 	successStyle lipgloss.Style
@@ -361,21 +369,26 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 	// Auto starts dark and is corrected by OSC 11: terminals skew dark, and a
 	// dark palette on a light terminal stays readable where the reverse does not.
 	darkTheme := requestedTheme != ThemeLight
+	displayProfile, err := normalizeDisplayProfile(runtime.CurrentDisplayProfile())
+	if err != nil {
+		return screenModel{}, err
+	}
 
 	m := screenModel{
-		ctx:          ctx,
-		agent:        runtime,
-		config:       config,
-		composer:     composer,
-		secret:       secret,
-		keymap:       newDefaultKeyMap(),
-		renderer:     newInlineRenderer(out),
-		theme:        requestedTheme,
-		themePending: requestedTheme == ThemeAuto,
-		darkTheme:    darkTheme,
-		useStyle:     useStyle,
-		modelChoices: runtime.ModelChoices(),
-		transcript:   transcriptState{root: config.Root},
+		ctx:            ctx,
+		agent:          runtime,
+		config:         config,
+		composer:       composer,
+		secret:         secret,
+		keymap:         newDefaultKeyMap(),
+		renderer:       newInlineRenderer(out),
+		theme:          requestedTheme,
+		displayProfile: displayProfile,
+		themePending:   requestedTheme == ThemeAuto,
+		darkTheme:      darkTheme,
+		useStyle:       useStyle,
+		modelChoices:   runtime.ModelChoices(),
+		transcript:     transcriptState{root: config.Root},
 	}
 	m.applyTerminalTheme(darkTheme)
 	m.syncCommandSuggestions()
@@ -426,6 +439,10 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		!strings.Contains(event.event.Text, "\n") {
 		return next, cmd
 	}
+	// Editor, picker, and queued-input rows can grow without changing the
+	// transcript. Account for them before every rendered frame so an active
+	// compact tool tail remains inside the mutable terminal viewport.
+	next.fitCompactToolTail()
 	if err := next.renderer.RenderFrame(next.inlineFrame(), next.width, next.height); err != nil {
 		next.renderErr = fmt.Errorf("render terminal: %w", err)
 		next.quitting = true
@@ -546,6 +563,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 func (m screenModel) View() tea.View { return tea.NewView("") }
 
 func (m *screenModel) resize(width, height int) {
+	if m.width != width || m.height != height {
+		m.frameRowFloor = 0
+	}
 	m.width = width
 	m.height = height
 	m.composer.resize(m.contentWidth(), height)
@@ -553,12 +573,47 @@ func (m *screenModel) resize(width, height int) {
 }
 
 func (m screenModel) inlineFrame() inlineFrame {
+	dynamic, editorDynamicStart := m.baseInlineDynamic()
+	padding := max(0, m.frameRowFloor-len(m.transcript.lines)-len(dynamic))
+	if padding > 0 {
+		dynamic = append(make([]string, padding), dynamic...)
+		if editorDynamicStart >= 0 {
+			editorDynamicStart += padding
+		}
+	}
+
+	var cursor *tea.Cursor
+	if editorDynamicStart >= 0 {
+		if editorCursor := m.editorCursor(); editorCursor != nil {
+			copy := *editorCursor
+			copy.Position.X += transcriptGutter
+			copy.Position.Y += len(m.transcript.lines) + editorDynamicStart
+			cursor = &copy
+		}
+	}
+	return inlineFrame{
+		transcript:          m.transcript.lines,
+		dynamic:             dynamic,
+		cursor:              cursor,
+		transcriptChanged:   m.transcript.dirty,
+		transcriptDirtyFrom: m.transcript.dirtyFrom,
+	}
+}
+
+func (m screenModel) baseInlineFrameRows() int {
+	dynamic, _ := m.baseInlineDynamic()
+	return len(m.transcript.lines) + len(dynamic)
+}
+
+func (m screenModel) baseInlineDynamic() ([]string, int) {
 	// The idle working line doubles as the gap above the composer, so it is
 	// dropped when the transcript already ends in one: the same blank-run
 	// collapsing the transcript does, applied across the seam to the dynamic area.
 	var dynamic []string
-	if working := m.workingLine(); working != "" || !transcriptEndsBlank(m.transcript.lines) {
-		dynamic = append(dynamic, working)
+	if working := m.workingLine(); working != "" {
+		dynamic = append(dynamic, working, "")
+	} else if !transcriptEndsBlank(m.transcript.lines) {
+		dynamic = append(dynamic, "")
 	}
 	editorDynamicStart := -1
 	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() {
@@ -579,22 +634,7 @@ func (m screenModel) inlineFrame() inlineFrame {
 	}
 	dynamic = append(dynamic, "", strings.Repeat(" ", transcriptGutter)+m.footerLine())
 
-	var cursor *tea.Cursor
-	if editorDynamicStart >= 0 {
-		if editorCursor := m.editorCursor(); editorCursor != nil {
-			copy := *editorCursor
-			copy.Position.X += transcriptGutter
-			copy.Position.Y += len(m.transcript.lines) + editorDynamicStart
-			cursor = &copy
-		}
-	}
-	return inlineFrame{
-		transcript:          m.transcript.lines,
-		dynamic:             dynamic,
-		cursor:              cursor,
-		transcriptChanged:   m.transcript.dirty,
-		transcriptDirtyFrom: m.transcript.dirtyFrom,
-	}
+	return dynamic, editorDynamicStart
 }
 
 func (m screenModel) markedEditorLines() []string {

@@ -23,13 +23,16 @@ func (m screenModel) renderProcessResultLines(block screenBlock) []string {
 	output := tool.output
 	userOwned := tool.shell != nil || result.UserInitiated
 	_, _, outputIndent, _ := toolCommandPrefix(block.text)
+	if m.displayProfile == DisplayFull && !userOwned {
+		output = tool.resultText
+	}
 	if output == "" && !userOwned && result.Status != agent.ProcessCompleted && result.Status != agent.ProcessRunning {
 		output = result.FailureTail
 	}
-	if userOwned {
+	if userOwned || m.displayProfile == DisplayFull {
 		lines = append(lines, m.renderFullProcessOutput(output, outputIndent)...)
 	} else {
-		lines = append(lines, m.renderModelProcessPreview(output, outputIndent)...)
+		lines = append(lines, m.renderModelProcessOutput(output, outputIndent, tool.failed)...)
 	}
 	return lines
 }
@@ -46,8 +49,12 @@ func (m screenModel) renderFullProcessOutput(output string, indent int) []string
 	return lines
 }
 
-func (m screenModel) renderModelProcessPreview(output string, indent int) []string {
-	preview := processOutputPreviewLines(sanitizeTerminalText(output), maxModelProcessPreviewLines)
+func (m screenModel) renderModelProcessOutput(output string, indent int, failed bool) []string {
+	output = sanitizeTerminalText(output)
+	if m.displayProfile == DisplayCompact && !failed {
+		return nil
+	}
+	preview := processOutputPreviewLines(output, maxModelProcessPreviewLines)
 	lines := make([]string, 0, len(preview))
 	for _, outputLine := range preview {
 		lines = append(lines, m.renderProcessOutputLine(outputLine, indent, false)...)

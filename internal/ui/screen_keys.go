@@ -1,6 +1,10 @@
 package ui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"runtime"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 // actionID names behavior owned by Skot rather than the physical key which
 // currently invokes it. Textarea-native movement and editing stay with the
@@ -20,6 +24,11 @@ const (
 	actionHistoryNext        actionID = "input.history-next"
 	actionCycleScope         actionID = "scope.next"
 	actionRestoreQueuedInput actionID = "queue.restore-last"
+	actionDisplayCompact     actionID = "display.compact"
+	actionDisplayDetailed    actionID = "display.detailed"
+	actionDisplayFull        actionID = "display.full"
+	actionDisplayMore        actionID = "display.more"
+	actionDisplayLess        actionID = "display.less"
 )
 
 type keyStroke struct {
@@ -40,7 +49,11 @@ type keyMap struct {
 }
 
 func newDefaultKeyMap() keyMap {
-	return keyMap{bindings: []keyBinding{
+	return newDefaultKeyMapFor(runtime.GOOS)
+}
+
+func newDefaultKeyMapFor(goos string) keyMap {
+	bindings := []keyBinding{
 		{action: actionInterrupt, keys: []keyStroke{{code: 'c', mod: tea.ModCtrl}}, help: "ctrl+c"},
 		{action: actionCancel, keys: []keyStroke{{code: tea.KeyEscape}}, help: "esc"},
 		{action: actionConfirm, keys: []keyStroke{{code: tea.KeyEnter}}, help: "enter"},
@@ -55,7 +68,17 @@ func newDefaultKeyMap() keyMap {
 		{action: actionHistoryNext, keys: []keyStroke{{code: 'n', mod: tea.ModCtrl}}, help: "ctrl+n"},
 		{action: actionCycleScope, keys: []keyStroke{{code: tea.KeyTab, mod: tea.ModShift}}, help: "shift+tab"},
 		{action: actionRestoreQueuedInput, keys: []keyStroke{{code: tea.KeyUp, mod: tea.ModAlt}}, help: "alt+up"},
-	}}
+		{action: actionDisplayCompact, keys: []keyStroke{{code: '1', mod: tea.ModCtrl}}, help: "ctrl+1"},
+		{action: actionDisplayDetailed, keys: []keyStroke{{code: '2', mod: tea.ModCtrl}}, help: "ctrl+2"},
+		{action: actionDisplayFull, keys: []keyStroke{{code: '3', mod: tea.ModCtrl}}, help: "ctrl+3"},
+	}
+	if goos != "darwin" {
+		bindings = append(bindings,
+			keyBinding{action: actionDisplayMore, keys: []keyStroke{{code: tea.KeyUp, mod: tea.ModCtrl}}, help: "ctrl+up"},
+			keyBinding{action: actionDisplayLess, keys: []keyStroke{{code: tea.KeyDown, mod: tea.ModCtrl}}, help: "ctrl+down"},
+		)
+	}
+	return keyMap{bindings: bindings}
 }
 
 func (keymap keyMap) actionFor(message tea.KeyPressMsg) actionID {

@@ -26,14 +26,26 @@ var tuiCommands []tuiCommand
 // tuiCommandHelp deliberately omits the command list: typing "/" already shows
 // it as a vertical menu with descriptions, and that menu also completes the
 // command. Help covers what the menu cannot — keys, shell escapes, and what
-// input does while a turn is running. Shortcut labels come from the same map
-// which dispatches them.
-func tuiCommandHelp(keymap keyMap) string {
+// input does while a turn is running. It advertises only shortcuts the current
+// terminal can actually distinguish.
+func (m screenModel) tuiCommandHelp() string {
+	displayLines := make([]string, 0, 2)
+	if direct := m.directDisplayShortcutLabel(); direct != "" {
+		displayLines = append(displayLines, fmt.Sprintf("  %-24s select compact/detailed/full", direct))
+	} else {
+		displayLines = append(displayLines, fmt.Sprintf("  %-24s choose transcript detail", "/display"))
+	}
+	if relative := m.relativeDisplayShortcutLabel(); relative != "" {
+		displayLines = append(displayLines, fmt.Sprintf("  %-24s increase/decrease detail", relative))
+	}
+	displayKeys := strings.Join(displayLines, "\n")
+	keymap := m.keymap
 	return fmt.Sprintf(`Keys
   %-24s send
   %-24s insert a newline
   %-24s accept the suggestion
   %-24s cycle filesystem scope
+%s
   %-24s walk input history
   %-24s start, end, back, forward
   %-24s erase to start, to end, word
@@ -54,6 +66,7 @@ Type / for commands.`,
 		keymap.helpFor(actionInsertNewline),
 		keymap.helpFor(actionAcceptSuggestion),
 		keymap.helpFor(actionCycleScope),
+		displayKeys,
 		"up/down, "+keymap.helpFor(actionHistoryPrevious)+"/"+keymap.helpFor(actionHistoryNext),
 		"ctrl+a/e/b/f",
 		"ctrl+u/k/w",
@@ -77,6 +90,7 @@ func init() {
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
 		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
+		{name: "/display", description: "show or switch transcript detail", usage: "/display [compact|detailed|full]", maxArgs: 1, duringTurn: true, run: runDisplayCommand},
 		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
 		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
 		// Logout sits with exit rather than next to login: it is rare, and the
@@ -106,6 +120,12 @@ var themePickerItems = []pickerItem{
 	{value: ThemeDark, label: ThemeDark, description: "colors for a dark background"},
 }
 
+var displayPickerItems = []pickerItem{
+	{value: DisplayCompact, label: DisplayCompact, description: "show live work, then fold it into a compact conversation"},
+	{value: DisplayDetailed, label: DisplayDetailed, description: "keep tool activity and turn details in the transcript"},
+	{value: DisplayFull, label: DisplayFull, description: "show each tool call without UI preview limits"},
+}
+
 func (m *screenModel) syncCommandSuggestions() {
 	if m.pathPrompt != notFilesystemPath {
 		m.composer.setSuggestionCandidates(pathCompletionCandidates(&m.pathCompletion, m.config.Root, m.composer.value()))
@@ -125,6 +145,10 @@ func (m *screenModel) syncCommandSuggestions() {
 	case strings.HasPrefix(value, "/theme "):
 		for _, item := range themePickerItems {
 			candidates = append(candidates, "/theme "+item.value)
+		}
+	case strings.HasPrefix(value, "/display "):
+		for _, item := range displayPickerItems {
+			candidates = append(candidates, "/display "+item.value)
 		}
 	case strings.HasPrefix(value, "/model "):
 		for _, choice := range m.modelChoices {
@@ -290,7 +314,7 @@ func (m *screenModel) acceptCommand(input string) {
 
 func runHelpCommand(m *screenModel, _ string, _ []string) tea.Cmd {
 	m.composer.reset()
-	m.addBlock(screenBlockSystem, tuiCommandHelp(m.keymap))
+	m.addBlock(screenBlockSystem, m.tuiCommandHelp())
 	return nil
 }
 
@@ -422,6 +446,25 @@ func runThemeCommand(m *screenModel, input string, args []string) tea.Cmd {
 		m.addBlock(screenBlockError, "theme: "+err.Error())
 	}
 	return command
+}
+
+func runDisplayCommand(m *screenModel, input string, args []string) tea.Cmd {
+	if len(args) == 0 {
+		m.composer.remember(input)
+		m.openDisplayPicker()
+		return nil
+	}
+	err := m.switchTranscriptDisplay(args[0])
+	if err != nil && !preferenceAppliedDespiteError(err) {
+		m.addBlock(screenBlockError, "display: "+err.Error())
+		return nil
+	}
+	m.acceptCommand(input)
+	m.addBlock(screenBlockSystem, m.displayNotice(m.displayProfile))
+	if err != nil {
+		m.addBlock(screenBlockError, "display: "+err.Error())
+	}
+	return nil
 }
 
 func runContextCommand(m *screenModel, input string, _ []string) tea.Cmd {
@@ -817,6 +860,11 @@ func (m *screenModel) openThemePicker() {
 	m.openPicker(pickerTheme, items, markCurrentPickerItem(items, m.theme))
 }
 
+func (m *screenModel) openDisplayPicker() {
+	items := append([]pickerItem(nil), displayPickerItems...)
+	m.openPicker(pickerDisplay, items, markCurrentPickerItem(items, m.displayProfile))
+}
+
 func markCurrentPickerItem(items []pickerItem, current string) int {
 	selected := 0
 	for index := range items {
@@ -842,7 +890,7 @@ type pickerNote struct {
 // pickerNoteFor is contextual guidance about the act of choosing, shown once
 // under the rows. It lives here rather than in a row description because it is
 // not one of the differences the rows are meant to compare.
-func pickerNoteFor(kind pickerKind) pickerNote {
+func (m screenModel) pickerNoteFor(kind pickerKind) pickerNote {
 	switch kind {
 	case pickerToolSet:
 		return pickerNote{text: "switching resets the prompt cache, so the next message costs full price", warning: true}
@@ -850,6 +898,10 @@ func pickerNoteFor(kind pickerKind) pickerNote {
 		return pickerNote{text: "a wrong protocol fails on the first request", warning: true}
 	case pickerScope:
 		return pickerNote{text: "Shift+Tab cycles scope without opening this menu"}
+	case pickerDisplay:
+		if hint := m.displayShortcutHint(); hint != "" {
+			return pickerNote{text: "Anytime: " + hint}
+		}
 	}
 	return pickerNote{}
 }
@@ -865,7 +917,7 @@ const currentPickerMark = "  ✓"
 // Search-filtered pickers are excluded, since the column would move while typing.
 func pickerAlignsDescriptions(kind pickerKind) bool {
 	switch kind {
-	case pickerToolSet, pickerScope, pickerTheme:
+	case pickerToolSet, pickerScope, pickerTheme, pickerDisplay:
 		return true
 	default:
 		return false
@@ -894,7 +946,7 @@ func pickerNavigationFor(kind pickerKind) pickerNavigation {
 	switch kind {
 	case pickerModel:
 		return navigationSearch
-	case pickerModelAPI, pickerToolSet, pickerScope, pickerTheme, pickerLogin, pickerSession:
+	case pickerModelAPI, pickerToolSet, pickerScope, pickerTheme, pickerDisplay, pickerLogin, pickerSession:
 		return navigationNumbers
 	default:
 		// Logout keeps arrows only: it is the one destructive picker, and rare
@@ -1131,6 +1183,18 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		}
 		m.refreshTranscript()
 		return m, command
+	case pickerDisplay:
+		err := m.switchTranscriptDisplay(item.value)
+		if err != nil && !preferenceAppliedDespiteError(err) {
+			m.addBlock(screenBlockError, "display: "+err.Error())
+		} else {
+			m.addBlock(screenBlockSystem, m.displayNotice(m.displayProfile))
+			if err != nil {
+				m.addBlock(screenBlockError, "display: "+err.Error())
+			}
+		}
+		m.refreshTranscript()
+		return m, nil
 	case pickerLogin:
 		pendingModel := ""
 		if picker.startupLogin {
@@ -1418,7 +1482,7 @@ func (m *screenModel) refreshModelChoices() {
 
 func (m screenModel) renderPicker() []string {
 	searchable := pickerNavigationFor(m.picker.kind) == navigationSearch
-	note := pickerNoteFor(m.picker.kind)
+	note := m.pickerNoteFor(m.picker.kind)
 	visible := m.picker.visibleIndices()
 	reservedLines := 5
 	if searchable {

@@ -179,7 +179,7 @@ A representative configuration is:
 | `agent_models` | Models that the optional `agent` tool may select explicitly. |
 | `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
 
-Interactive theme and the model selection history are shared across workspaces.
+Interface preferences are shared across workspaces.
 Workspace-specific model, reasoning effort, tool set, and filesystem settings
 (scope, added directories, and protected paths) are remembered per canonical
 workspace path. Symlink aliases share preferences, while separate clones and
@@ -223,6 +223,7 @@ recent session for that workspace.
 | `/tools [name]` | Show or switch the active tool set. |
 | `/scope [workspace|machine]` | Show or change the filesystem scope, added directories, and protected paths. |
 | `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
+| `/display [compact|detailed|full]` | Show or persist transcript detail. Default: `compact`. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
 | `/logout [provider]` | Remove a stored key. |
@@ -231,6 +232,11 @@ recent session for that workspace.
 Enter sends a message. Shift/Alt+Enter or Ctrl+J inserts a newline. Shift+Tab
 cycles the filesystem scope, including while a turn is running. Escape cancels
 the active turn, Alt+Up recalls queued input, and Ctrl+C exits.
+
+Ctrl+1, Ctrl+2, and Ctrl+3 select `compact`, `detailed`, and `full`. If these
+shortcuts do not work in your terminal, use `/display`. Outside macOS,
+Ctrl+Up increases display detail and Ctrl+Down decreases it. These relative
+shortcuts stop at the ends rather than wrapping.
 
 `! command` runs a shell command and includes its result in the conversation.
 `!! command` runs it privately. Both are user-owned commands and therefore use

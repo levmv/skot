@@ -14,3 +14,7 @@ func (state *terminalKeyboardState) record(message tea.KeyboardEnhancementsMsg) 
 	state.reported = true
 	state.activeFlags = message.Flags
 }
+
+func (state terminalKeyboardState) supportsKeyDisambiguation() bool {
+	return state.reported && state.activeFlags > 0
+}

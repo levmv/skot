@@ -45,6 +45,7 @@ func TestDescribeToolCallUsesToolArguments(t *testing.T) {
 func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 	fake := &fakeAgent{}
 	model := testScreenModel(t, fake)
+	model.clearTranscript()
 	model.transcript.root = "/home/dev"
 	// Models name the same directory both ways, so both forms join one group.
 	for index, file := range []string{"skot/main.go", "/home/dev/skot/config.go", "skot/process.go"} {
@@ -55,19 +56,20 @@ func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 		})
 	}
 
-	last := model.transcript.blocks[len(model.transcript.blocks)-1]
-	if got := last.text; got != "read  skot/ → main.go, config.go, process.go" {
-		t.Fatalf("read group = %q", got)
+	if len(model.transcript.blocks) != 3 {
+		t.Fatalf("source calls were merged: %#v", model.transcript.blocks)
 	}
-	if last.tool == nil || len(last.tool.callIDs) != 3 {
-		t.Fatalf("pending calls = %#v", last.tool)
+	model.refreshTranscript()
+	if got := strings.Join(model.transcript.lines, "\n"); !strings.Contains(got, "read  skot/ → main.go, config.go, process.go") {
+		t.Fatalf("read group = %q", got)
 	}
 	model.finishTool(agent.ToolResult{CallID: "a"})
 	model.finishTool(agent.ToolResult{CallID: "b"})
 	model.finishTool(agent.ToolResult{CallID: "c"})
-	last = model.transcript.blocks[len(model.transcript.blocks)-1]
-	if last.tool == nil || !last.tool.done || len(last.tool.callIDs) != 0 {
-		t.Fatalf("completed group = %#v", last)
+	for _, block := range model.transcript.blocks {
+		if block.tool == nil || !block.tool.done || len(block.tool.callIDs) != 0 {
+			t.Fatalf("completed call = %#v", block)
+		}
 	}
 }
 
@@ -82,6 +84,28 @@ func TestImageReadShowsDimensionsWithoutPayload(t *testing.T) {
 	if !strings.Contains(text, "[image/png 1200×800]") || strings.Contains(text, "payload-must-stay-hidden") {
 		t.Fatalf("image tool display = %q", text)
 	}
+	model.refreshTranscript()
+	rendered := strings.Join(model.transcript.lines, "\n")
+	if !strings.Contains(rendered, "[image/png 1200×800]") || strings.Contains(rendered, "payload-must-stay-hidden") {
+		t.Fatalf("rendered image tool = %q", rendered)
+	}
+}
+
+func TestFailedReadKeepsItsDiagnosticOutsidePresentationGroup(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.clearTranscript()
+	model.addToolCall(agent.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"internal/a.go"}`})
+	model.finishTool(agent.ToolResult{CallID: "first"})
+	model.addToolCall(agent.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"internal/b.go"}`})
+	model.finishTool(agent.ToolResult{CallID: "second", Content: agent.TextContent("permission denied"), Error: true})
+	model.refreshTranscript()
+
+	rendered := strings.Join(model.transcript.lines, "\n")
+	for _, want := range []string{"internal/a.go", "internal/b.go: permission denied"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("failed read lost %q: %q", want, rendered)
+		}
+	}
 }
 
 func TestReadGroupTimesOnlyTheToolWorkAcrossSeparateCalls(t *testing.T) {
@@ -95,7 +119,8 @@ func TestReadGroupTimesOnlyTheToolWorkAcrossSeparateCalls(t *testing.T) {
 	model.addToolCallAt(agent.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"agent/details.go"}`}, time.Now())
 	model.finishTool(agent.ToolResult{CallID: "second"})
 
-	rendered := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
+	model.refreshTranscript()
+	rendered := strings.Join(model.transcript.lines, "\n")
 	if strings.ContainsAny(rendered, "0123456789") {
 		t.Fatalf("grouped read charged the model gap to the tool: %q", rendered)
 	}

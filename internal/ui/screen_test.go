@@ -50,6 +50,8 @@ type fakeAgent struct {
 	scopeErr         error
 	theme            string
 	themeErr         error
+	displayProfile   string
+	displayErr       error
 	contextReport    agent.ContextReport
 	compaction       agent.ContextCompactedRecord
 	compactionErr    error
@@ -273,6 +275,16 @@ func (fake *fakeAgent) SwitchTheme(theme string) error {
 	return fake.themeErr
 }
 
+func (fake *fakeAgent) CurrentDisplayProfile() string { return fake.displayProfile }
+
+func (fake *fakeAgent) SwitchDisplayProfile(profile string) error {
+	if fake.displayErr != nil && !preferenceAppliedDespiteError(fake.displayErr) {
+		return fake.displayErr
+	}
+	fake.displayProfile = profile
+	return fake.displayErr
+}
+
 func (fake *fakeAgent) SessionStatus() agent.SessionStatus {
 	return agent.SessionStatus{
 		ContextReport: fake.contextReport,
@@ -334,6 +346,9 @@ func testScreenModel(t *testing.T, fake *fakeAgent) screenModel {
 	if fake.theme == "" {
 		fake.theme = ThemeLight
 	}
+	if fake.displayProfile == "" {
+		fake.displayProfile = DisplayDetailed
+	}
 	model, err := newScreenModel(context.Background(), fake, Config{}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +363,7 @@ func TestHelpKeepsItsColumnsOnANarrowTerminal(t *testing.T) {
 	model.resize(60, 40)
 	// Help is a two column layout, and the transcript wraps a long line back to
 	// the left margin, which would break the columns rather than shorten them.
-	for line := range strings.SplitSeq(tuiCommandHelp(model.keymap), "\n") {
+	for line := range strings.SplitSeq(model.tuiCommandHelp(), "\n") {
 		if len(line) > model.contentWidth() {
 			t.Fatalf("help line of %d columns does not fit %d: %q", len(line), model.contentWidth(), line)
 		}
@@ -964,7 +979,7 @@ func TestTextDeltasFlushAtNewlineOrMaxDelay(t *testing.T) {
 
 func TestTranscriptTracksDirtyRenderedSuffix(t *testing.T) {
 	var transcript transcriptState
-	render := func(block screenBlock) []string { return []string{block.text} }
+	render := func(_ int, block screenBlock) []string { return []string{block.text} }
 	transcript.addBlock(screenBlockSystem, "stable prefix")
 	transcript.addBlock(screenBlockAssistant, "old tail")
 	transcript.refresh(80, render)
@@ -1092,6 +1107,26 @@ func TestFrameKeepsOneBlankLineAboveTheComposer(t *testing.T) {
 	// must not lay down a second one across the transcript/dynamic seam.
 	if !isBlankTranscriptLine(lines[prompt-1]) || isBlankTranscriptLine(lines[prompt-2]) {
 		t.Fatalf("blank lines above the composer: %#v", lines[:prompt+1])
+	}
+}
+
+func TestFrameSeparatesWorkingStatusFromComposer(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{})
+	model.clearTranscript()
+	model.operation = activeOperation{kind: operationTurn, startedAt: time.Now()}
+
+	dynamic := model.inlineFrame().dynamic
+	working, prompt := -1, -1
+	for index, line := range dynamic {
+		if strings.Contains(line, "Working (") {
+			working = index
+		}
+		if strings.HasPrefix(line, userMarker) {
+			prompt = index
+		}
+	}
+	if working < 0 || prompt != working+2 || !isBlankTranscriptLine(dynamic[working+1]) {
+		t.Fatalf("working status and composer are not separated: %#v", dynamic)
 	}
 }
 

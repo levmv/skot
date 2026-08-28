@@ -42,7 +42,7 @@ func formatTurnDuration(duration time.Duration) string {
 
 func (m *screenModel) finishTurnChanges() {
 	if summary := formatChangedFiles(m.operation.changedPaths); summary != "" {
-		m.addBlock(screenBlockSystem, summary)
+		m.addBlock(screenBlockChangeSummary, summary)
 	}
 	m.operation.changedPaths = nil
 }

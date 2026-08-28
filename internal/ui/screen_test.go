@@ -921,6 +921,40 @@ func TestDurableMaintenanceEventsReachTranscript(t *testing.T) {
 	}
 }
 
+func TestTurnCompletionRingsOnlyAfterAnUnfocusedQueueDrains(t *testing.T) {
+	fake := &fakeAgent{}
+	model := testScreenModel(t, fake)
+	model.operation = activeOperation{kind: operationTurn, startedAt: time.Now()}
+
+	model, command := model.update(agentDoneMsg{})
+	if command != nil {
+		t.Fatal("focused turn completion sent a notification")
+	}
+
+	model, _ = model.update(tea.BlurMsg{})
+	model.operation = activeOperation{kind: operationTurn, startedAt: time.Now()}
+	fake.queued = []string{"continue"}
+	model, command = model.update(agentDoneMsg{})
+	if command == nil || !model.operation.isTurn() {
+		t.Fatalf("queued turn did not continue: command=%v operation=%#v", command, model.operation)
+	}
+
+	model.operation = activeOperation{kind: operationTurn, startedAt: time.Now()}
+	model, command = model.update(agentDoneMsg{})
+	if command == nil {
+		t.Fatal("unfocused final turn completion sent no notification")
+	}
+	raw, ok := command().(tea.RawMsg)
+	if !ok || raw.Msg != terminalBell {
+		t.Fatalf("completion notification = %#v", raw)
+	}
+
+	model, _ = model.update(tea.FocusMsg{})
+	if !model.focused {
+		t.Fatal("focus event left the terminal blurred")
+	}
+}
+
 func TestTextDeltasFlushAtNewlineOrMaxDelay(t *testing.T) {
 	var output bytes.Buffer
 	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeLight}, Config{}, &output)

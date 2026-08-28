@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
@@ -24,6 +25,7 @@ const (
 	resizeInterval     = 75 * time.Millisecond
 	transcriptMaxDelay = 200 * time.Millisecond
 	themeQueryTimeout  = 150 * time.Millisecond
+	terminalBell       = "\a"
 )
 
 type ConversationAgent interface {
@@ -254,6 +256,7 @@ type screenModel struct {
 	// the screen height released by a folded tool tail until new content fills it.
 	frameRowFloor int
 	quitting      bool
+	focused       bool
 	operation     activeOperation
 	scope         scopeSwitchState
 
@@ -318,6 +321,14 @@ func RunScreen(ctx context.Context, runtime Agent, config Config, in, out *os.Fi
 		}
 		model.transcript.presented()
 	}
+	if _, err := io.WriteString(out, ansi.SetModeFocusEvent); err != nil {
+		return fmt.Errorf("enable terminal focus reporting: %w", err)
+	}
+	defer func() {
+		if _, err := io.WriteString(out, ansi.ResetModeFocusEvent); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("disable terminal focus reporting: %w", err))
+		}
+	}()
 
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out), tea.WithContext(ctx), tea.WithoutRenderer())
 	resizeCtx, stopResize := context.WithCancel(ctx)
@@ -384,6 +395,7 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 		renderer:       newInlineRenderer(out),
 		theme:          requestedTheme,
 		displayProfile: displayProfile,
+		focused:        true,
 		themePending:   requestedTheme == ThemeAuto,
 		darkTheme:      darkTheme,
 		useStyle:       useStyle,
@@ -455,6 +467,12 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		m.focused = true
+		return m, nil
+	case tea.BlurMsg:
+		m.focused = false
+		return m, nil
 	case tea.KeyboardEnhancementsMsg:
 		m.keyboard.record(msg)
 		return m, nil
@@ -554,6 +572,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 			return m, cmd
 		}
 		m.refreshTranscript()
+		if !m.focused {
+			return m, tea.Raw(terminalBell)
+		}
 		return m, nil
 	default:
 		return m.updateInput(msg)

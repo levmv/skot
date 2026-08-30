@@ -198,9 +198,6 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	currentSession := resources.session
 	journal := opened.journal
 	sessionID := opened.id
-	if journal.TailRepaired() {
-		notices = append(notices, "repaired an incomplete journal tail; the interrupted final record was discarded")
-	}
 	sessionState, _, err := agent.Reconcile(ctx, journal)
 	if err != nil {
 		return resources.fail(fmt.Errorf("reconcile session: %w", err))

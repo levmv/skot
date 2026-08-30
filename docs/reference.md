@@ -229,14 +229,15 @@ recent session for that workspace.
 | `/logout [provider]` | Remove a stored key. |
 | `/exit`, `/quit`, `/q` | Exit Skot. |
 
-Enter sends a message. Shift/Alt+Enter or Ctrl+J inserts a newline. Shift+Tab
-cycles the filesystem scope, including while a turn is running. Escape cancels
-the active turn, Alt+Up recalls queued input, and Ctrl+C exits.
+Enter sends a message; Shift/Alt+Enter or Ctrl+J inserts a newline. Escape
+interrupts current work, Alt+Up returns the newest pending message to the
+editor, and Ctrl+C interrupts while working or exits when idle.
 
-Ctrl+1, Ctrl+2, and Ctrl+3 select `compact`, `detailed`, and `full`. If these
-shortcuts do not work in your terminal, use `/display`. Outside macOS,
-Ctrl+Up increases display detail and Ctrl+Down decreases it. These relative
-shortcuts stop at the ends rather than wrapping.
+Shift+Tab cycles the filesystem scope, including while a turn is running.
+
+Use `/display` to choose transcript detail. On terminals that support them,
+Ctrl+1, Ctrl+2, and Ctrl+3 select `compact`, `detailed`, and `full` directly.
+Outside macOS, Ctrl+Up and Ctrl+Down move between detail levels.
 
 `! command` runs a shell command and includes its result in the conversation.
 `!! command` runs it privately. Both are user-owned commands and therefore use

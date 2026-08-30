@@ -23,8 +23,8 @@ func TestMemoryStoreImplementsJournalLifecycleWithoutFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Sequence != 1 || !store.HasUserTurn() || store.TailRepaired() {
-		t.Fatalf("memory journal state = %#v, user=%v repaired=%v", record, store.HasUserTurn(), store.TailRepaired())
+	if record.Sequence != 1 || !store.HasUserTurn() {
+		t.Fatalf("memory journal state = %#v, user=%v", record, store.HasUserTurn())
 	}
 	records, err := store.Records(context.Background())
 	if err != nil || len(records) != 1 {

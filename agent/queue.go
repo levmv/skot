@@ -44,15 +44,6 @@ func (runtime *Runtime) PopQueued() (string, bool) {
 	return input, true
 }
 
-// RestoreQueued returns all undelivered input in FIFO order and clears it.
-func (runtime *Runtime) RestoreQueued() []string {
-	runtime.queueMu.Lock()
-	defer runtime.queueMu.Unlock()
-	inputs := append([]string(nil), runtime.pendingInputs...)
-	runtime.pendingInputs = nil
-	return inputs
-}
-
 func (runtime *Runtime) QueuedInputs() []string {
 	runtime.queueMu.Lock()
 	defer runtime.queueMu.Unlock()

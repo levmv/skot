@@ -25,7 +25,6 @@ type Store struct {
 	failed         error
 	maxRecordBytes int
 	dirty          bool
-	tailRepaired   bool
 }
 
 var ErrLocked = errors.New("session is already open")
@@ -62,7 +61,7 @@ func Open(path string) (*Store, error) {
 		}
 		return nil, fmt.Errorf("lock journal: %w", err)
 	}
-	tailRepaired, err := repairIncompleteTail(file)
+	tailRepaired, err := repairIncompleteTail(file, productlimits.MaxJournalRecordBytes)
 	if err != nil {
 		_ = file.Close()
 		return nil, err
@@ -76,7 +75,6 @@ func Open(path string) (*Store, error) {
 		file: file, path: path, records: records,
 		maxRecordBytes: productlimits.MaxJournalRecordBytes,
 		dirty:          tailRepaired,
-		tailRepaired:   tailRepaired,
 	}, nil
 }
 
@@ -156,12 +154,6 @@ func (store *Store) Close() error {
 	return store.closeLocked(true)
 }
 
-func (store *Store) TailRepaired() bool {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return store.tailRepaired
-}
-
 // HasUserTurn reports whether the journal contains a submitted user input.
 // Inspecting the record kinds keeps the answer valid for both live and reopened
 // sessions without depending on a caller's replay snapshot.
@@ -231,10 +223,11 @@ func (store *Store) closeLocked(syncChanges bool) error {
 	return errors.Join(syncErr, closeErr)
 }
 
-// repairIncompleteTail removes only a final fragment not terminated by a
-// newline. Complete but malformed JSONL records remain errors in readRecords;
-// repair is deliberately not a general corruption recovery mechanism.
-func repairIncompleteTail(file *os.File) (bool, error) {
+// repairIncompleteTail terminates a valid final record or removes an invalid
+// fragment when the journal does not end in a newline. Complete but malformed
+// JSONL records remain errors in readRecords; repair is deliberately not a
+// general corruption recovery mechanism.
+func repairIncompleteTail(file *os.File, maxRecordBytes int) (bool, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return false, fmt.Errorf("stat journal before tail repair: %w", err)
@@ -249,6 +242,20 @@ func repairIncompleteTail(file *os.File) (bool, error) {
 	}
 	if last[0] == '\n' {
 		return false, nil
+	}
+	// Scanner accepts a final token without a newline, so the normal reader is
+	// also the source of truth for whether the tail is a complete record. Add
+	// the missing delimiter instead of discarding a record that reached disk in
+	// full before the process stopped.
+	if _, err := readRecords(file, maxRecordBytes); err == nil {
+		written, err := file.Write([]byte{'\n'})
+		if err == nil && written != 1 {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return false, fmt.Errorf("terminate final journal record: %w", err)
+		}
+		return true, nil
 	}
 
 	const blockBytes = 64 * 1024

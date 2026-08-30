@@ -21,8 +21,17 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 			if maintenance.cancel != nil {
 				maintenance.cancel()
 			}
+			return m, nil
 		}
-		return m, nil
+		if maintenance.kind != operationCompaction {
+			return m, nil
+		}
+		// Manual compaction does not use the composer, so it can collect the
+		// next turn while the context summary is being prepared. Keep shortcuts
+		// which would start another operation disabled until compaction finishes.
+		if action == actionCycleScope || action == actionDeleteOrExit && strings.TrimSpace(m.composer.value()) == "" {
+			return m, nil
+		}
 	}
 
 	switch {
@@ -48,7 +57,7 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		return m, nil
 	case action == actionInterrupt:
 		if m.operation.isTurn() {
-			m.cancelTurn(false)
+			m.cancelTurn()
 			return m, nil
 		}
 		m.quitting = true
@@ -70,11 +79,11 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 	case action == actionConfirm:
 		return m.submitInput()
 	case action == actionRestoreQueuedInput:
-		if m.operation.isTurn() && m.composer.value() == "" {
+		if m.operation.acceptsQueuedInput() && m.composer.value() == "" {
 			if input, ok := m.agent.PopQueued(); ok {
 				m.composer.setValue(input)
 				m.composer.cursorEnd()
-				m.addBlock(screenBlockSystem, "queued input returned to editor")
+				m.addBlock(screenBlockSystem, "pending steer returned to editor")
 				m.refreshTranscript()
 			}
 		}
@@ -85,7 +94,7 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 			return m, nil
 		}
 		if m.operation.isTurn() {
-			m.cancelTurn(true)
+			m.cancelTurn()
 		}
 		return m, nil
 	case m.composer.historyAtEnd() && m.commandSuggestionsVisible() && ((!hasCtrl && isUpKey(msg)) || action == actionHistoryPrevious):
@@ -205,8 +214,8 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 	if command, handled := m.dispatchCommand(input); handled {
 		return m, command
 	}
-	if m.operation.isTurn() && strings.HasPrefix(input, "!") {
-		m.addBlock(screenBlockError, "shell escapes are unavailable while Skot is working; wait or cancel the turn")
+	if m.operation.acceptsQueuedInput() && strings.HasPrefix(input, "!") {
+		m.addBlock(screenBlockError, "shell escapes are unavailable while Skot is working; wait or cancel the current operation")
 		m.refreshTranscript()
 		return m, nil
 	}
@@ -225,7 +234,7 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 
 	m.composer.reset()
 	m.composer.remember(input)
-	if m.operation.isTurn() {
+	if m.operation.acceptsQueuedInput() {
 		if err := m.agent.QueueInput(input); err != nil {
 			m.addBlock(screenBlockError, "queue input: "+err.Error())
 			m.composer.setValue(input)
@@ -269,26 +278,11 @@ func shellCommandDisplay(command string, private bool) string {
 	return "$ " + compactCommand(command, 180)
 }
 
-func (m *screenModel) cancelTurn(restoreQueued bool) {
+func (m *screenModel) cancelTurn() {
 	if m.operation.cancel != nil {
 		m.operation.cancel()
 	}
-	if restoreQueued {
-		restored := m.agent.RestoreQueued()
-		if draft := strings.TrimSpace(m.composer.value()); draft != "" {
-			restored = append(restored, draft)
-		}
-		if len(restored) != 0 {
-			m.composer.setValue(strings.Join(restored, "\n"))
-			m.composer.cursorEnd()
-			m.syncCommandSuggestions()
-			m.addBlock(screenBlockSystem, "cancelled; queued input restored to editor")
-		} else {
-			m.addBlock(screenBlockSystem, "cancelling current turn")
-		}
-	} else {
-		m.addBlock(screenBlockSystem, "cancelling current turn")
-	}
+	m.addBlock(screenBlockSystem, "cancelling current turn")
 	m.refreshTranscript()
 }
 

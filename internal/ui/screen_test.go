@@ -102,12 +102,6 @@ func (fake *fakeAgent) PopQueued() (string, bool) {
 	return input, true
 }
 
-func (fake *fakeAgent) RestoreQueued() []string {
-	queued := append([]string(nil), fake.queued...)
-	fake.queued = nil
-	return queued
-}
-
 func (fake *fakeAgent) QueuedInputs() []string {
 	return append([]string(nil), fake.queued...)
 }
@@ -403,7 +397,7 @@ func TestSubmitWhileWorkingQueuesInput(t *testing.T) {
 	if got := len(model.transcript.blocks); got != blocksBefore {
 		t.Fatalf("transcript blocks = %d, want %d", got, blocksBefore)
 	}
-	if got := strings.TrimSpace(model.queuedLine()); got != "queued: follow up" {
+	if got := strings.TrimSpace(model.queuedLine()); got != "pending steer: follow up" {
 		t.Fatalf("queued line = %q", got)
 	}
 }
@@ -488,7 +482,7 @@ func TestCommandMenuUsesPlainLabelsAndAccentsTheSelection(t *testing.T) {
 
 func TestQueuedLineShowsLatestInputAndCount(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{queued: []string{"first", "latest"}})
-	if got := strings.TrimSpace(model.queuedLine()); got != "queued 2 · latest: latest" {
+	if got := strings.TrimSpace(model.queuedLine()); got != "pending steers 2 · latest: latest" {
 		t.Fatalf("queued line = %q", got)
 	}
 }
@@ -526,7 +520,7 @@ func TestAltUpRecallsNewestQueuedInput(t *testing.T) {
 	if len(fake.queued) != 1 || fake.queued[0] != "first" {
 		t.Fatalf("remaining queue = %#v", fake.queued)
 	}
-	if got := strings.TrimSpace(model.queuedLine()); got != "queued: first" {
+	if got := strings.TrimSpace(model.queuedLine()); got != "pending steer: first" {
 		t.Fatalf("queued line = %q", got)
 	}
 }
@@ -709,25 +703,44 @@ func TestCommandSuggestionsCompleteAndSelectArguments(t *testing.T) {
 	}
 }
 
-func TestEscapeCancelsAndRestoresQueuedInput(t *testing.T) {
+func TestControlCInterruptsWithoutReclaimingPendingInput(t *testing.T) {
 	fake := &fakeAgent{queued: []string{"one", "two"}}
 	model := testScreenModel(t, fake)
 	model.operation.kind = operationTurn
 	cancelled := false
 	model.operation.cancel = func() { cancelled = true }
 
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape, BaseCode: tea.KeyEscape})
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: 'c', BaseCode: 'c', Mod: tea.ModCtrl})
 	if !cancelled {
 		t.Fatal("turn was not cancelled")
 	}
-	if got := model.composer.value(); got != "one\ntwo" {
-		t.Fatalf("restored input = %q", got)
+	if got := model.composer.value(); got != "" {
+		t.Fatalf("input = %q", got)
 	}
-	if len(fake.queued) != 0 {
-		t.Fatalf("queue = %#v", fake.queued)
+	if len(fake.queued) != 2 {
+		t.Fatalf("pending input = %#v", fake.queued)
 	}
-	if got := model.queuedLine(); got != "" {
-		t.Fatalf("stale queued line = %q", got)
+}
+
+func TestEscapeInterruptsForQueuedInput(t *testing.T) {
+	fake := &fakeAgent{queued: []string{"send now"}}
+	model := testScreenModel(t, fake)
+	model.operation.kind = operationTurn
+	cancelled := false
+	model.operation.cancel = func() { cancelled = true }
+
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape, BaseCode: tea.KeyEscape})
+	if !cancelled || len(fake.queued) != 1 || model.composer.value() != "" {
+		t.Fatalf("cancelled=%v queue=%#v input=%q", cancelled, fake.queued, model.composer.value())
+	}
+
+	model, command := model.update(agentDoneMsg{err: context.Canceled})
+	if command == nil || !model.operation.isTurn() || len(fake.queued) != 0 {
+		t.Fatalf("command=%v operation=%#v queue=%#v", command, model.operation, fake.queued)
+	}
+	last := model.transcript.blocks[len(model.transcript.blocks)-1]
+	if last.kind != screenBlockUser || last.text != "send now" {
+		t.Fatalf("last block = %#v", last)
 	}
 }
 

@@ -207,8 +207,8 @@ func TestQueuedInputAfterFinalBoundaryRemainsClaimable(t *testing.T) {
 	if input, ok := runtime.ClaimQueued(); !ok || input != "first" {
 		t.Fatalf("ClaimQueued = %q, %v", input, ok)
 	}
-	if restored := runtime.RestoreQueued(); len(restored) != 1 || restored[0] != "second" {
-		t.Fatalf("RestoreQueued = %#v", restored)
+	if input, ok := runtime.ClaimQueued(); !ok || input != "second" {
+		t.Fatalf("final ClaimQueued = %q, %v", input, ok)
 	}
 	if _, ok := runtime.PopQueued(); ok {
 		t.Fatal("cleared queue still had input")
@@ -238,8 +238,8 @@ func TestCancellationKeepsUndeliveredQueuedInput(t *testing.T) {
 	if err := waitForError(t, done); !errors.Is(err, context.Canceled) {
 		t.Fatalf("run error = %v", err)
 	}
-	if restored := runtime.RestoreQueued(); len(restored) != 1 || restored[0] != "restore me" {
-		t.Fatalf("restored queue = %#v", restored)
+	if input, ok := runtime.ClaimQueued(); !ok || input != "restore me" {
+		t.Fatalf("queued input after cancellation = %q, %v", input, ok)
 	}
 	state, err := Replay(journal.snapshot())
 	if err != nil {

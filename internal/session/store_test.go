@@ -142,9 +142,6 @@ func TestStoreRepairsOnlyIncompleteFinalRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !repaired.TailRepaired() {
-		t.Fatal("incomplete tail was not reported as repaired")
-	}
 	records, err := repaired.Records(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +172,46 @@ func TestStoreRepairsOnlyIncompleteFinalRecord(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
 	if len(lines) != 2 || !jsontext.Value(lines[0]).IsValid() || !jsontext.Value(lines[1]).IsValid() {
 		t.Fatalf("journal records after repair = %#v", lines)
+	}
+}
+
+func TestStorePreservesValidFinalRecordWithoutNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	contents := `{"sequence":1,"time":"2026-08-20T12:00:00Z","kind":"aux/test","data":{}}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := repaired.Records(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Sequence != 1 || records[0].Kind != "aux/test" {
+		t.Fatalf("records after repair = %#v", records)
+	}
+	next, err := repaired.Append(context.Background(), agent.PendingRecord{
+		Kind: agent.RecordRunFinished,
+		Data: jsontext.Value(`{"run_id":"run_1","status":"interrupted"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Sequence != 2 {
+		t.Fatalf("sequence after repair = %d", next.Sequence)
+	}
+	if err := repaired.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(raw), contents+"\n") {
+		t.Fatalf("journal after repair = %q", raw)
 	}
 }
 

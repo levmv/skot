@@ -34,7 +34,6 @@ type ConversationAgent interface {
 	QueueInput(string) error
 	ClaimQueued() (string, bool)
 	PopQueued() (string, bool)
-	RestoreQueued() []string
 	QueuedInputs() []string
 	State(context.Context) (agent.State, error)
 	ToolStatus(string) ([]agent.Detail, bool)
@@ -545,9 +544,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		m.refreshTranscript()
 		return m, nil
 	case compactionDoneMsg:
-		m.finishCompaction(msg)
+		cmd := m.finishCompaction(msg)
 		m.refreshTranscript()
-		return m, nil
+		return m, cmd
 	case resumeSessionMsg:
 		m.resumeSession(msg.idOrPrefix)
 		m.refreshTranscript()
@@ -640,6 +639,13 @@ func (m screenModel) baseInlineDynamic() ([]string, int) {
 	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() {
 		elapsed := formatTurnDuration(time.Since(maintenance.startedAt))
 		dynamic = append(dynamic, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render(maintenance.label()+" ("+elapsed+" · esc to interrupt)"))
+		if maintenance.kind == operationCompaction {
+			if queued := m.queuedLine(); queued != "" {
+				dynamic = append(dynamic, queued)
+			}
+			editorDynamicStart = len(dynamic)
+			dynamic = append(dynamic, m.markedEditorLines()...)
+		}
 	} else if m.picker.active() {
 		dynamic = append(dynamic, m.renderPicker()...)
 	} else {
@@ -697,9 +703,9 @@ func (m screenModel) queuedLine() string {
 	if len(queued) == 0 {
 		return ""
 	}
-	text := "queued: " + compactSingleLine(queued[len(queued)-1], 120)
+	text := "pending steer: " + compactSingleLine(queued[len(queued)-1], 120)
 	if len(queued) > 1 {
-		text = fmt.Sprintf("queued %d · latest: %s", len(queued), compactSingleLine(queued[len(queued)-1], 120))
+		text = fmt.Sprintf("pending steers %d · latest: %s", len(queued), compactSingleLine(queued[len(queued)-1], 120))
 	}
 	return m.marked(" ", m.mutedStyle.Render(text))
 }

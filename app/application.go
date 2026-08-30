@@ -299,14 +299,6 @@ func (application *Application) PopQueued() (string, bool) {
 	return runtime.PopQueued()
 }
 
-func (application *Application) RestoreQueued() []string {
-	runtime := application.runtimeOrNil()
-	if runtime == nil {
-		return nil
-	}
-	return runtime.RestoreQueued()
-}
-
 func (application *Application) QueuedInputs() []string {
 	runtime := application.runtimeOrNil()
 	if runtime == nil {

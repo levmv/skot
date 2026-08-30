@@ -49,8 +49,7 @@ func (m screenModel) tuiCommandHelp() string {
   %-24s walk input history
   %-24s start, end, back, forward
   %-24s erase to start, to end, word
-  %-24s cancel the running turn
-  %-24s cancel the turn, else exit
+  %-24s interrupt; apply pending steer
   %-24s exit when the input is empty
 
 Shell
@@ -58,8 +57,8 @@ Shell
   !! command               private, keeps nothing
 
 While Skot is working
-  %-24s queue for the next turn
-  %-24s take the last one back
+  %-24s steer at next model request
+  %-24s edit the last pending steer
 
 Type / for commands.`,
 		keymap.helpFor(actionConfirm),
@@ -71,7 +70,6 @@ Type / for commands.`,
 		"ctrl+a/e/b/f",
 		"ctrl+u/k/w",
 		keymap.helpFor(actionCancel),
-		keymap.helpFor(actionInterrupt),
 		keymap.helpFor(actionDeleteOrExit),
 		keymap.helpFor(actionConfirm),
 		keymap.helpFor(actionRestoreQueuedInput),
@@ -261,6 +259,11 @@ func (m *screenModel) dispatchCommand(input string) (tea.Cmd, bool) {
 			return nil, false
 		}
 		m.addBlock(screenBlockError, "unknown command: "+input)
+		m.refreshTranscript()
+		return nil, true
+	}
+	if m.operation.kind == operationCompaction {
+		m.addBlock(screenBlockError, "commands are unavailable while compacting; wait or cancel compaction")
 		m.refreshTranscript()
 		return nil, true
 	}

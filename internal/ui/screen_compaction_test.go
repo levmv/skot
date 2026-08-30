@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
 )
 
@@ -18,6 +19,38 @@ func TestContextCommandShowsBudgetBreakdown(t *testing.T) {
 	got := model.transcript.blocks[len(model.transcript.blocks)-1].text
 	if !strings.Contains(got, "context: 12.5k / 80k") || !strings.Contains(got, "history 12k") {
 		t.Fatalf("context report = %q", got)
+	}
+}
+
+func TestCompactionAcceptsInputForTheNextTurn(t *testing.T) {
+	fake := &fakeAgent{}
+	model := testScreenModel(t, fake)
+	model.operation = activeOperation{kind: operationCompaction}
+
+	model, _ = model.handleKey(tea.KeyPressMsg{Text: "n", Code: 'n', BaseCode: 'n'})
+	if model.composer.value() != "n" {
+		t.Fatalf("input during compaction = %q", model.composer.value())
+	}
+	if dynamic, editorStart := model.baseInlineDynamic(); editorStart < 0 || !strings.Contains(strings.Join(dynamic, "\n"), "n") {
+		t.Fatalf("editor during compaction: start=%d lines=%q", editorStart, dynamic)
+	}
+
+	model.composer.setValue("follow up")
+	model, command := model.submitInput()
+	if command != nil || model.operation.kind != operationCompaction {
+		t.Fatalf("submit command=%v operation=%#v", command, model.operation)
+	}
+	if len(fake.queued) != 1 || fake.queued[0] != "follow up" || model.composer.value() != "" {
+		t.Fatalf("queue=%#v input=%q", fake.queued, model.composer.value())
+	}
+
+	command = model.finishCompaction(compactionDoneMsg{})
+	if command == nil || model.operation.kind != operationTurn || len(fake.queued) != 0 {
+		t.Fatalf("finish command=%v operation=%#v queue=%#v", command, model.operation, fake.queued)
+	}
+	last := model.transcript.blocks[len(model.transcript.blocks)-1]
+	if last.kind != screenBlockUser || last.text != "follow up" {
+		t.Fatalf("last block = %#v", last)
 	}
 }
 

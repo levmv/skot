@@ -89,8 +89,6 @@ func (store *MemoryStore) HasUserTurn() bool {
 	return false
 }
 
-func (store *MemoryStore) TailRepaired() bool { return false }
-
 func (store *MemoryStore) Close() error             { return store.close(false) }
 func (store *MemoryStore) ClosePruningEmpty() error { return store.close(false) }
 func (store *MemoryStore) CloseDiscarding() error   { return store.close(true) }

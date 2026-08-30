@@ -19,14 +19,19 @@ func (m *screenModel) startCompaction() tea.Cmd {
 	}
 }
 
-func (m *screenModel) finishCompaction(message compactionDoneMsg) {
+func (m *screenModel) finishCompaction(message compactionDoneMsg) tea.Cmd {
 	m.operation.clear()
 	m.refreshSessionStatus()
 	if message.err != nil {
 		m.addBlock(screenBlockError, "compact: "+message.err.Error())
-		return
+	} else {
+		m.addBlock(screenBlockSystem, "context compacted\n"+formatContextReport(m.sessionStatus.ContextReport))
 	}
-	m.addBlock(screenBlockSystem, "context compacted\n"+formatContextReport(m.sessionStatus.ContextReport))
+	if input, ok := m.agent.ClaimQueued(); ok {
+		m.addBlock(screenBlockUser, input)
+		return m.startTurn(input)
+	}
+	return nil
 }
 
 func formatContextReport(report agent.ContextReport) string {

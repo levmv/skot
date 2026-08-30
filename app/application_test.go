@@ -1961,33 +1961,6 @@ func TestApplicationDoesNotWarnWhenSelectingAnUnreviewedRoute(t *testing.T) {
 	}
 }
 
-func TestApplicationReportsRepairedJournalTail(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	if err := os.WriteFile(path, []byte(`{"sequence":1`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	application, err := Open(context.Background(), Config{
-		Home: t.TempDir(), Root: t.TempDir(), JournalPath: path,
-		ModelURI: "deepseek/test-model", Interactive: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notices := strings.Join(application.StartupNotices(), "\n"); !strings.Contains(notices, "repaired an incomplete journal tail") {
-		t.Fatalf("startup notices = %q", notices)
-	}
-	if err := application.Close(); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Size() != 0 {
-		t.Fatalf("repaired journal size = %d", info.Size())
-	}
-}
-
 func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 	t.Helper()
 	home := t.TempDir()

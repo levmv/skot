@@ -60,6 +60,10 @@ func (operation activeOperation) isMaintenance() bool {
 	return operation.kind != operationNone && !operation.isTurn()
 }
 
+func (operation activeOperation) acceptsQueuedInput() bool {
+	return operation.kind == operationTurn || operation.kind == operationCompaction
+}
+
 func (operation activeOperation) label() string {
 	switch operation.kind {
 	case operationShell:

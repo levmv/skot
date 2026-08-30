@@ -21,7 +21,6 @@ type liveSession struct {
 type sessionJournal interface {
 	agent.Journal
 	HasUserTurn() bool
-	TailRepaired() bool
 	Close() error
 	ClosePruningEmpty() error
 	CloseDiscarding() error

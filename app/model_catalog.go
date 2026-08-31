@@ -38,7 +38,8 @@ type modelSpec struct {
 	ReasoningEfforts      []string
 	ChatTraits            *chatcompletions.RouteTraits
 	ResponsesTraits       *responsemodel.RouteTraits
-	Compatibility         modelCompatibility
+	// Compatibility overrides the supported default for a reviewed declaration.
+	Compatibility modelCompatibility
 }
 
 type modelRouteOverrides struct {
@@ -134,7 +135,6 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "deepseek/deepseek-v4-pro", Name: "DeepSeek V4 Pro", ContextWindow: 1_000_000,
@@ -144,25 +144,22 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	// The Messages adapter sends no thinking controls, so this route declares no
 	// reasoning vocabulary even though the model reasons by default.
 	{
 		URI: "anthropic/claude-opus-5", Name: "Claude Opus 5", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
 	},
-	{URI: "openrouter/free", Name: "OpenRouter Free", Compatibility: modelCompatibilitySupported},
-	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest", Compatibility: modelCompatibilitySupported},
-	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest", Compatibility: modelCompatibilitySupported},
-	{URI: "openrouter/~google/gemini-pro-latest", Name: "Gemini Pro Latest", Compatibility: modelCompatibilitySupported},
+	{URI: "openrouter/free", Name: "OpenRouter Free"},
+	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest"},
+	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest"},
+	{URI: "openrouter/~google/gemini-pro-latest", Name: "Gemini Pro Latest"},
 	{
 		URI: "opencode-go/gpt-5.6-luna", Name: "OpenCode Go · GPT 5.6 Luna", API: modelAPIResponses,
 		ContextWindow:    922_000,
 		ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
 		ResponsesTraits:  &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto},
-		Compatibility:    modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/deepseek-v4-flash", Name: "OpenCode Go · DeepSeek V4 Flash", ContextWindow: 1_000_000,
@@ -172,7 +169,6 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/deepseek-v4-pro", Name: "OpenCode Go · DeepSeek V4 Pro", ContextWindow: 1_000_000,
@@ -182,7 +178,14 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
 		},
-		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/deepseek-v4-flash-vision-exp", Name: "OpenCode Go · DeepSeek V4 Flash Vision Exp",
+		ContextWindow: 1_000_000, ReasoningEfforts: []string{"", "off", "low", "high", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
+			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+		},
 	},
 	{
 		URI: "opencode-go/kimi-k3", Name: "OpenCode Go · Kimi K3", ContextWindow: 1_048_576,
@@ -191,7 +194,6 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/glm-5.2", Name: "OpenCode Go · GLM-5.2", ContextWindow: 1_000_000,
@@ -201,19 +203,24 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
-		URI: "opencode-go/grok-4.5", Name: "OpenCode Go · Grok 4.5", API: modelAPIResponses,
-		ContextWindow: 500_000, ReasoningEfforts: []string{"", "low", "medium", "high"},
+		URI: "opencode-go/grok-4.6", Name: "OpenCode Go · Grok 4.6", API: modelAPIResponses,
+		ContextWindow: 500_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
 		ResponsesTraits: &responsemodel.RouteTraits{},
-		Compatibility:   modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/muse-spark-1.2-contributor", Name: "OpenCode Go · Muse Spark 1.2 Contributor", API: modelAPIResponses,
 		ContextWindow: 1_048_576, ReasoningEfforts: []string{"", "minimal", "low", "medium", "high", "xhigh"},
 		ResponsesTraits: &responsemodel.RouteTraits{},
-		Compatibility:   modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/glm-5.3-flash", Name: "OpenCode Go · GLM-5.3-Flash", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "low", "high", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
+		},
 	},
 	{
 		URI: "opencode-go/glm-5.3", Name: "OpenCode Go · GLM-5.3", ContextWindow: 1_000_000,
@@ -223,7 +230,6 @@ var modelCatalog = []modelSpec{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	// These routes reason, but do not publish an optional effort vocabulary or
 	// a reasoning replay contract for this endpoint.
@@ -231,27 +237,36 @@ var modelCatalog = []modelSpec{
 		URI: "opencode-go/glm-5.1", Name: "OpenCode Go · GLM-5.1", ContextWindow: 202_752,
 		ImageInputUnsupported: true,
 		ReasoningEfforts:      []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/kimi-k2.7-code", Name: "OpenCode Go · Kimi K2.7 Code", ContextWindow: 262_144,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/kimi-k2.6", Name: "OpenCode Go · Kimi K2.6", ContextWindow: 262_144,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/longcat-2.0", Name: "OpenCode Go · LongCat-2.0", ContextWindow: 1_000_000,
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{""},
+		ChatTraits:            &chatcompletions.RouteTraits{},
 	},
 	{
 		URI: "opencode-go/mimo-v2.5", Name: "OpenCode Go · MiMo V2.5", ContextWindow: 1_000_000,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/mimo-v2.5-pro", Name: "OpenCode Go · MiMo V2.5 Pro", ContextWindow: 1_048_576,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/hy4-preview", Name: "OpenCode Go · Hy4 preview", ContextWindow: 1_024_000,
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "none", "high"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+		},
 	},
 	{
 		URI: "opencode-go/hy3", Name: "OpenCode Go · Hy3", ContextWindow: 256_000,
@@ -259,37 +274,34 @@ var modelCatalog = []modelSpec{
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 		},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/minimax-m3", Name: "OpenCode Go · MiniMax M3", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/minimax-m2.7", Name: "OpenCode Go · MiniMax M2.7", API: modelAPIAnthropicMessages,
 		ContextWindow: 204_800, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
+	},
+	{
+		URI: "opencode-go/qwen3.8-flash", Name: "OpenCode Go · Qwen3.8 Flash", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
 	},
 	{
 		URI: "opencode-go/qwen3.7-max", Name: "OpenCode Go · Qwen3.7 Max", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/qwen3.7-plus", Name: "OpenCode Go · Qwen3.7 Plus", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
 	},
 	{
 		URI: "opencode-go/qwen3.6-plus", Name: "OpenCode Go · Qwen3.6 Plus", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
-		Compatibility: modelCompatibilitySupported,
 	},
 }
 
@@ -320,8 +332,11 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	}
 	declaredAPI := api
 	compatibility := modelCompatibilityUnverified
-	if declared && declaration.Compatibility != "" {
-		compatibility = declaration.Compatibility
+	if declared {
+		compatibility = modelCompatibilitySupported
+		if declaration.Compatibility != "" {
+			compatibility = declaration.Compatibility
+		}
 	}
 	if overrides.API != "" {
 		if !knownModelAPI(overrides.API) {

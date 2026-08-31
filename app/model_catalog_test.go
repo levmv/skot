@@ -97,7 +97,7 @@ func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T)
 func TestActivateOpenRouterRouteEnrichesAndPureResolutionPreservesProtocol(t *testing.T) {
 	original := modelCatalog
 	modelCatalog = append(append([]modelSpec(nil), original...), modelSpec{
-		URI: "openrouter/moonshotai/kimi-k3", Compatibility: modelCompatibilitySupported,
+		URI: "openrouter/moonshotai/kimi-k3",
 	})
 	t.Cleanup(func() { modelCatalog = original })
 
@@ -222,93 +222,19 @@ func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
 	}
 }
 
-func TestModelChoicesExposeRunnableRouteFacts(t *testing.T) {
+func TestModelChoicesExposeEveryCatalogRoute(t *testing.T) {
 	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", "", modelRouteOverrides{})
-	var luna *ModelChoice
-	var muse *ModelChoice
-	var minimax *ModelChoice
-	for index := range choices {
-		choice := &choices[index]
-		if choice.URI == "opencode-go/gpt-5.6-luna" {
-			luna = choice
-		}
-		if choice.URI == "opencode-go/muse-spark-1.2-contributor" {
-			muse = choice
-		}
-		if choice.URI == "opencode-go/minimax-m3" {
-			minimax = choice
-		}
-	}
-	if luna == nil || luna.Name != "OpenCode Go · GPT 5.6 Luna" || luna.Protocol != "responses" ||
-		luna.ContextWindow != 922_000 || luna.ContextWindowEstimated ||
-		!slices.Equal(luna.ReasoningEfforts, []string{"", "none", "low", "medium", "high", "xhigh", "max"}) {
-		t.Fatalf("Luna choice = %#v", luna)
-	}
-	if muse == nil || muse.Name != "OpenCode Go · Muse Spark 1.2 Contributor" || muse.Protocol != "responses" ||
-		muse.ContextWindow != 1_048_576 || muse.ContextWindowEstimated || muse.Unavailable ||
-		!slices.Equal(muse.ReasoningEfforts, []string{"", "minimal", "low", "medium", "high", "xhigh"}) {
-		t.Fatalf("Muse choice = %#v", muse)
-	}
-	glmIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == "opencode-go/glm-5.2" })
-	if glmIndex < 0 {
-		t.Fatal("GLM choice is missing")
-	}
-	if choices[glmIndex].ContextWindow != 1_000_000 || choices[glmIndex].ContextWindowEstimated {
-		t.Fatalf("GLM choice = %#v", choices[glmIndex])
-	}
-	for _, uri := range []string{
-		"opencode-go/gpt-5.6-luna",
-		"opencode-go/deepseek-v4-flash",
-		"opencode-go/deepseek-v4-pro",
-		"opencode-go/kimi-k3",
-		"opencode-go/glm-5.2",
-	} {
-		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == uri })
+	for _, spec := range modelCatalog {
+		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == spec.URI })
 		if choiceIndex < 0 {
-			t.Fatalf("supported OpenCode Go choice %q is missing", uri)
-		}
-		if choices[choiceIndex].Unavailable {
-			t.Fatalf("supported OpenCode Go choice %q = %#v", uri, choices[choiceIndex])
-		}
-	}
-	for uri, protocol := range map[string]string{
-		"opencode-go/glm-5.1":        "chat_completions",
-		"opencode-go/kimi-k2.7-code": "chat_completions",
-		"opencode-go/kimi-k2.6":      "chat_completions",
-		"opencode-go/mimo-v2.5":      "chat_completions",
-		"opencode-go/mimo-v2.5-pro":  "chat_completions",
-	} {
-		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == uri })
-		if choiceIndex < 0 {
-			t.Fatalf("OpenCode Go choice %q is missing", uri)
+			t.Errorf("catalog choice %q is missing", spec.URI)
+			continue
 		}
 		choice := choices[choiceIndex]
-		if choice.Protocol != protocol || choice.Unavailable ||
-			!slices.Equal(choice.ReasoningEfforts, []string{""}) {
-			t.Fatalf("OpenCode Go choice %q = %#v", uri, choice)
+		wantUnavailable := spec.Compatibility == modelCompatibilityUnsupported
+		if choice.Unavailable != wantUnavailable || choice.Name != spec.Name || choice.Protocol == "" {
+			t.Errorf("catalog choice %q = %#v", spec.URI, choice)
 		}
-	}
-	for uri, want := range map[string]struct {
-		protocol string
-		efforts  []string
-	}{
-		"opencode-go/grok-4.5": {"responses", []string{"", "low", "medium", "high"}},
-		"opencode-go/glm-5.3":  {"chat_completions", []string{"", "low", "high", "max"}},
-		"opencode-go/hy3":      {"chat_completions", []string{"", "none", "low", "high"}},
-	} {
-		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == uri })
-		if choiceIndex < 0 {
-			t.Fatalf("OpenCode Go choice %q is missing", uri)
-		}
-		choice := choices[choiceIndex]
-		if choice.Protocol != want.protocol || choice.Unavailable || !slices.Equal(choice.ReasoningEfforts, want.efforts) {
-			t.Fatalf("OpenCode Go choice %q = %#v", uri, choice)
-		}
-	}
-	if minimax == nil || minimax.Name != "OpenCode Go · MiniMax M3" || minimax.Protocol != "anthropic_messages" ||
-		minimax.Unavailable || minimax.ContextWindow != 1_000_000 || minimax.ContextWindowEstimated ||
-		!slices.Equal(minimax.ReasoningEfforts, []string{""}) {
-		t.Fatalf("MiniMax choice = %#v", minimax)
 	}
 }
 

@@ -89,7 +89,9 @@ func TestModelCatalogInvariants(t *testing.T) {
 			t.Errorf("catalog URI %q max output tokens/API = %d/%q", spec.URI, spec.MaxOutputTokens, spec.API)
 		}
 		switch spec.Compatibility {
-		case modelCompatibilitySupported, modelCompatibilityUnverified, modelCompatibilityUnsupported:
+		case "", modelCompatibilityUnverified, modelCompatibilityUnsupported:
+		case modelCompatibilitySupported:
+			t.Errorf("catalog URI %q redundantly declares the supported default", spec.URI)
 		default:
 			t.Errorf("catalog URI %q compatibility = %q", spec.URI, spec.Compatibility)
 		}

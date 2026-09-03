@@ -21,6 +21,7 @@ type jsonResult struct {
 	Model            string           `json:"model"`
 	ReasoningEffort  string           `json:"reasoning_effort"`
 	ToolSet          string           `json:"tool_set"`
+	SystemPromptMode string           `json:"system_prompt"`
 	ModelAttempts    int              `json:"model_attempts"`
 	RunID            string           `json:"run_id,omitempty"`
 	SessionID        string           `json:"session_id,omitempty"`
@@ -30,11 +31,12 @@ type jsonResult struct {
 }
 
 type jsonRunMetadata struct {
-	DurationMillis  int64
-	Model           string
-	ReasoningEffort string
-	ToolSet         string
-	ModelAttempts   int
+	DurationMillis   int64
+	Model            string
+	ReasoningEffort  string
+	ToolSet          string
+	SystemPromptMode string
+	ModelAttempts    int
 }
 
 func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsage, sessionID string, metadata jsonRunMetadata, runErr error) error {
@@ -47,6 +49,7 @@ func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsa
 		Model:            metadata.Model,
 		ReasoningEffort:  metadata.ReasoningEffort,
 		ToolSet:          metadata.ToolSet,
+		SystemPromptMode: metadata.SystemPromptMode,
 		ModelAttempts:    metadata.ModelAttempts,
 		RunID:            run.RunID,
 		SessionID:        sessionID,

@@ -53,6 +53,20 @@ func loadInstructions(root string, protections ...*workspacetools.ProtectedPathP
 	return prompts, nil
 }
 
+// loadEffectiveInstructions keeps the explicit no-instructions state outside
+// prompt composition. In that state project files are not merely omitted from
+// the result; they are not inspected at all.
+func loadEffectiveInstructions(systemPrompt string, explicit bool, root string, protection *workspacetools.ProtectedPathPolicy) (string, error) {
+	if explicit && strings.TrimSpace(systemPrompt) == "" {
+		return "", nil
+	}
+	projectPrompts, err := loadInstructions(root, protection)
+	if err != nil {
+		return "", err
+	}
+	return effectiveInstructions(systemPrompt, root, projectPrompts), nil
+}
+
 // effectiveInstructions joins the authored prompt with the AGENTS.md chain and
 // resolves workspaceRootToken. The default prompt carries that token itself, so
 // a custom prompt decides for itself whether the workspace root is worth stating

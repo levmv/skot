@@ -41,16 +41,17 @@ type Application struct {
 // replacement must not make callers retain a stale runtime, but it does not
 // change the stores, catalog, workspace, or runtime policy used to build one.
 type applicationConfig struct {
-	settings            *state.Store
-	interactive         *state.InteractiveStore
-	tools               []agent.Tool
-	programDeclarations []workspacetools.ProgramTool
-	programToolsFile    string
-	applicationBuild    agent.BuildSnapshot
-	toolSets            toolpolicy.ToolSets
-	systemPrompt        string
-	root                string
-	home                string
+	settings             *state.Store
+	interactive          *state.InteractiveStore
+	tools                []agent.Tool
+	programDeclarations  []workspacetools.ProgramTool
+	programToolsFile     string
+	applicationBuild     agent.BuildSnapshot
+	toolSets             toolpolicy.ToolSets
+	systemPrompt         string
+	systemPromptExplicit bool
+	root                 string
+	home                 string
 	// invocation and settings paths are the filesystem-policy layers a running
 	// session does not own: flags last for this run, config.json for every run
 	// using that data directory.
@@ -643,6 +644,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	maxToolIterations := application.config.maxToolIterations
 	settings, masker := application.config.settings, application.config.masker
 	root, systemPrompt := application.config.root, application.config.systemPrompt
+	systemPromptExplicit := application.config.systemPromptExplicit
 	tools := append([]agent.Tool(nil), application.config.tools...)
 	toolSets := application.config.toolSets
 	awaitRequiredJobs := application.config.awaitRequiredJobs
@@ -683,11 +685,10 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	if err != nil {
 		return err
 	}
-	projectInstructions, err := loadInstructions(root, protection)
+	instructions, err := loadEffectiveInstructions(systemPrompt, systemPromptExplicit, root, protection)
 	if err != nil {
 		return fmt.Errorf("load project instructions: %w", err)
 	}
-	instructions := effectiveInstructions(systemPrompt, root, projectInstructions)
 	builder := runtimeBuilder{
 		baseURL:           baseURL,
 		modelAPI:          application.config.modelAPI,

@@ -159,7 +159,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	}
 	wantKeys := []string{
 		"version", "reply", "usage", "status", "duration_ms", "model",
-		"reasoning_effort", "tool_set", "model_attempts", "run_id", "session_id",
+		"reasoning_effort", "tool_set", "system_prompt", "model_attempts", "run_id", "session_id",
 	}
 	if len(wire) != len(wantKeys) {
 		t.Fatalf("JSON wire key count = %d, want %d; output=%s", len(wire), len(wantKeys), stdout.String())
@@ -194,7 +194,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if result.Reply != "done" || result.Status != agent.RunCompleted ||
 		result.RunID == "" || result.SessionID == "" || result.Error != "" || result.DurationMillis < 0 ||
 		result.Model != "deepseek/test-model" || result.ReasoningEffort != "default" ||
-		result.ToolSet != toolpolicy.ToolSetDefault || result.ModelAttempts != 1 {
+		result.ToolSet != toolpolicy.ToolSetDefault || result.SystemPromptMode != "default" || result.ModelAttempts != 1 {
 		t.Fatalf("JSON result = %#v", result)
 	}
 	if result.Usage.InputTokens != 12 || result.Usage.CachedInputTokens != 4 ||
@@ -927,6 +927,64 @@ func TestRunAddsApplicableAgentsInstructions(t *testing.T) {
 	}
 }
 
+func TestRunSupportsModelOnlyRequest(t *testing.T) {
+	var requests []chatRequestForTest
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		var request chatRequestForTest
+		if err := json.UnmarshalRead(incoming.Body, &request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests = append(requests, request)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("SK_SYSTEM_PROMPT_FILE", "")
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("must not be loaded"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	runModelOnly := func(promptArgs ...string) {
+		t.Helper()
+		args := []string{
+			"-model", "deepseek/local-model", "-base-url", server.URL,
+			"-home", t.TempDir(), "-root", root, "-scope", "machine",
+			"-tools", toolpolicy.ToolSetNone,
+		}
+		args = append(args, promptArgs...)
+		args = append(args, "-json", "task")
+		var output bytes.Buffer
+		if err := run(context.Background(), args, bytes.NewReader(nil), &output, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		var result jsonResult
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatalf("decode JSON result: %v; output=%q", err, output.String())
+		}
+		if result.ToolSet != toolpolicy.ToolSetNone || result.SystemPromptMode != "none" {
+			t.Fatalf("JSON result = %#v", result)
+		}
+	}
+	runModelOnly("-system-prompt=")
+	t.Setenv("SK_SYSTEM_PROMPT", "")
+	runModelOnly()
+
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d", len(requests))
+	}
+	for index, request := range requests {
+		if len(request.Tools) != 0 || len(request.Messages) != 1 || request.Messages[0].Role != "user" {
+			t.Fatalf("model-only request %d = %#v", index, request)
+		}
+	}
+}
+
 func TestSystemPromptFileRejectsMissingEmptyAndConflictingSources(t *testing.T) {
 	if prompt, err := loadPromptFile("  ", "system prompt"); err != nil || prompt != "" {
 		t.Fatalf("unset prompt file = %q, %v", prompt, err)
@@ -942,11 +1000,13 @@ func TestSystemPromptFileRejectsMissingEmptyAndConflictingSources(t *testing.T) 
 		t.Fatalf("empty file error = %v", err)
 	}
 	t.Setenv("SK_HOME", t.TempDir())
-	err := run(context.Background(), []string{
-		"-system-prompt", "inline", "-system-prompt-file", emptyPath, "task",
-	}, bytes.NewReader(nil), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "not both") {
-		t.Fatalf("conflicting source error = %v", err)
+	for _, inline := range []string{"inline", ""} {
+		err := run(context.Background(), []string{
+			"-system-prompt", inline, "-system-prompt-file", emptyPath, "task",
+		}, bytes.NewReader(nil), io.Discard, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "not both") {
+			t.Fatalf("conflicting source %q error = %v", inline, err)
+		}
 	}
 }
 

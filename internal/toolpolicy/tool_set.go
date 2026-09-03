@@ -15,19 +15,19 @@ const (
 	ToolSetDefault  = "default"
 	ToolSetEdit     = "edit"
 	ToolSetReadOnly = "read-only"
+	ToolSetNone     = "none"
 )
 
 // The default set leads: it is what a session runs unless told otherwise.
-var builtInToolSetOrder = []string{ToolSetDefault, ToolSetEdit, ToolSetReadOnly}
+var builtInToolSetOrder = []string{ToolSetDefault, ToolSetEdit, ToolSetReadOnly, ToolSetNone}
 
 var builtInToolSetTools = map[string][]string{
-	ToolSetReadOnly: {"read", "ls", "grep", "glob"},
-	ToolSetEdit:     {"read", "ls", "grep", "glob", "edit", "write"},
+	ToolSetReadOnly: {"read", "ls", "grep", "glob", "web_fetch", "web_search"},
+	ToolSetEdit:     {"read", "ls", "grep", "glob", "edit", "write", "web_fetch", "web_search"},
 	// Default normally omits ls: Bash provides richer directory inspection.
-	ToolSetDefault: {"read", "grep", "glob", "edit", "write", "bash", "job"},
+	ToolSetDefault: {"read", "grep", "glob", "edit", "write", "bash", "job", "web_fetch", "web_search"},
+	ToolSetNone:    nil,
 }
-
-var optionalBuiltInTools = []string{"web_fetch", "web_search"}
 
 // BuiltInOptions adjusts product-owned sets before exact user overrides are
 // applied.
@@ -74,11 +74,6 @@ func NewToolSetsWithOptions(catalog []agent.Tool, options BuiltInOptions, overri
 			withLS := make([]string, 0, len(definitions[name])+1)
 			withLS = append(withLS, definitions[name][0], "ls")
 			definitions[name] = append(withLS, definitions[name][1:]...)
-		}
-		for _, optional := range optionalBuiltInTools {
-			if _, exists := available[optional]; exists {
-				definitions[name] = append(definitions[name], optional)
-			}
 		}
 	}
 	for _, configured := range overrides {

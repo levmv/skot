@@ -125,11 +125,10 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
 	}
-	projectInstructions, err := loadInstructions(root, layers.protection)
+	instructions, err := loadEffectiveInstructions(config.SystemPrompt, config.SystemPromptExplicit, root, layers.protection)
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
-	instructions := effectiveInstructions(config.SystemPrompt, root, projectInstructions)
 	processes, err := workspacetools.NewProcessManagerWithAccess(access, home, "")
 	if err != nil {
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
@@ -301,6 +300,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			applicationBuild:         build,
 			toolSets:                 toolSets,
 			systemPrompt:             config.SystemPrompt,
+			systemPromptExplicit:     config.SystemPromptExplicit,
 			root:                     root,
 			home:                     home,
 			invocationAddedPaths:     layers.invocationAdded,

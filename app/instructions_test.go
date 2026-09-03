@@ -54,6 +54,22 @@ func TestLoadInstructionsUsesCurrentHierarchy(t *testing.T) {
 	}
 }
 
+func TestExplicitEmptyInstructionsDoNotInspectProjectFiles(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	instructions, err := loadEffectiveInstructions(" \n", true, root, nil)
+	if err != nil || instructions != "" {
+		t.Fatalf("instructions = %q, %v", instructions, err)
+	}
+}
+
 func TestLoadInstructionsRejectsSymlinkOutsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.md")

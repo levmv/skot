@@ -45,7 +45,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-retry-budget duration` | `SK_RETRY_BUDGET` | Wall-clock retry budget for one logical model request. Default: `15m`. |
 | `-stream-idle-timeout duration` | `SK_STREAM_IDLE_TIMEOUT` | Maximum silence between stream events. Default: `5m`. |
 | `-max-tool-iterations n` | `SK_MAX_TOOL_ITERATIONS` | Emergency model-to-tool cycle limit. Default: `128`; use `unlimited` to disable it. |
-| `-system-prompt text` | `SK_SYSTEM_PROMPT` | Replace the built-in system instructions. Use `{{workspace_root}}` to insert the workspace root. |
+| `-system-prompt text` | `SK_SYSTEM_PROMPT` | Replace the built-in system instructions. An empty value disables system and project instructions; `{{workspace_root}}` inserts the workspace root. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |
 | `-root path` | `SK_ROOT` | Primary workspace and default path base for model-owned file and process tools. Default: current directory. |
 | `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |
@@ -236,12 +236,13 @@ Images are reduced to at most 2000 pixels on the longer side before delivery.
 
 | Tool set | Tools |
 | --- | --- |
-| `default` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job` |
-| `edit` | `read`, `ls`, `grep`, `glob`, `edit`, `write` |
-| `read-only` | `read`, `ls`, `grep`, `glob` |
+| `default` | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `job`, `web_fetch`, `web_search` |
+| `edit` | `read`, `ls`, `grep`, `glob`, `edit`, `write`, `web_fetch`, `web_search` |
+| `read-only` | `read`, `ls`, `grep`, `glob`, `web_fetch`, `web_search` |
+| `none` | — |
 
-All built-in tool sets include bounded public `web_fetch` and `web_search`. A
-custom tool set is an exact tool list, not a set of additions to a built-in set.
+`web_fetch` and `web_search` provide bounded public web access. A custom tool
+set is an exact tool list, not a set of additions to a built-in set.
 
 On Linux, `default` also includes `ls` whenever protected paths are configured.
 The process boundary may make some ancestor-directory operations unavailable;
@@ -481,6 +482,7 @@ a raw provider response.
   "model": "deepseek/deepseek-v4-flash",
   "reasoning_effort": "high",
   "tool_set": "read-only",
+  "system_prompt": "default",
   "model_attempts": 1,
   "run_id": "run_...",
   "session_id": "session_..."
@@ -488,8 +490,9 @@ a raw provider response.
 ```
 
 The stable fields are `version`, `reply`, `usage`, `status`,
-`duration_ms`, `model`, `reasoning_effort`, `tool_set`, and
-`model_attempts`. Depending on lifecycle and outcome, the object may also
+`duration_ms`, `model`, `reasoning_effort`, `tool_set`, `system_prompt`, and
+`model_attempts`. `system_prompt` is `default`, `custom`, or `none`. Depending
+on lifecycle and outcome, the object may also
 contain `run_id`, `session_id`, `tool_limit_reached`, `detached_jobs`,
 and `error`.
 

@@ -18,6 +18,7 @@ const (
 	ToolSetDefault  = toolpolicy.ToolSetDefault
 	ToolSetEdit     = toolpolicy.ToolSetEdit
 	ToolSetReadOnly = toolpolicy.ToolSetReadOnly
+	ToolSetNone     = toolpolicy.ToolSetNone
 
 	ScopeWorkspace = workspacetools.ScopeWorkspace
 	ScopeMachine   = workspacetools.ScopeMachine
@@ -47,6 +48,9 @@ type Config struct {
 	StreamIdleTimeout       time.Duration
 	MaxToolIterations       int
 	SystemPrompt            string
+	// SystemPromptExplicit affects an empty SystemPrompt: false selects the
+	// built-in and project instructions, while true selects no instructions.
+	SystemPromptExplicit bool
 	// ToolsFile is a strict JSON catalog of executable-backed tools. Empty uses
 	// tools.json in Home; a missing file is an empty catalog.
 	ToolsFile string

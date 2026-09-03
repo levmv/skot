@@ -23,28 +23,29 @@ import (
 )
 
 type cliConfig struct {
-	modelURI          string
-	reasoningEffort   string
-	modelAPI          string
-	baseURL           string
-	contextWindow     int
-	retryBudget       string
-	streamIdleTimeout string
-	maxToolIterations string
-	systemPrompt      string
-	systemPromptFile  string
-	toolsFile         string
-	home              string
-	journalPath       string
-	root              string
-	toolSet           string
-	saveSession       bool
-	scope             string
-	addedPaths        stringListFlag
-	protectedPaths    stringListFlag
-	verbose           bool
-	jsonOutput        bool
-	showVersion       bool
+	modelURI             string
+	reasoningEffort      string
+	modelAPI             string
+	baseURL              string
+	contextWindow        int
+	retryBudget          string
+	streamIdleTimeout    string
+	maxToolIterations    string
+	systemPrompt         string
+	systemPromptExplicit bool
+	systemPromptFile     string
+	toolsFile            string
+	home                 string
+	journalPath          string
+	root                 string
+	toolSet              string
+	saveSession          bool
+	scope                string
+	addedPaths           stringListFlag
+	protectedPaths       stringListFlag
+	verbose              bool
+	jsonOutput           bool
+	showVersion          bool
 }
 
 type cliInvocation struct {
@@ -85,6 +86,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (returnErr error) {
 	defaultHome := strings.TrimSpace(os.Getenv("SK_HOME"))
+	systemPromptEnv, systemPromptEnvSet := os.LookupEnv("SK_SYSTEM_PROMPT")
 	if resolved, err := app.ResolveHome(defaultHome); err == nil {
 		// Resolution is best-effort until flags are parsed so `sk -version` does
 		// not depend on a usable home directory. app.Open validates it for every
@@ -102,7 +104,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.retryBudget, "retry-budget", strings.TrimSpace(os.Getenv("SK_RETRY_BUDGET")), fmt.Sprintf("wall-clock budget for one logical model request, attempts included (default %s)", app.DefaultRetryBudget))
 	flags.StringVar(&config.streamIdleTimeout, "stream-idle-timeout", strings.TrimSpace(os.Getenv("SK_STREAM_IDLE_TIMEOUT")), fmt.Sprintf("maximum silence between model stream payloads (default %s)", app.DefaultStreamIdleTimeout))
 	flags.StringVar(&config.maxToolIterations, "max-tool-iterations", strings.TrimSpace(os.Getenv("SK_MAX_TOOL_ITERATIONS")), fmt.Sprintf("maximum completed model-to-tool cycles per run, or unlimited (default %d)", agent.DefaultMaxToolIterations))
-	flags.StringVar(&config.systemPrompt, "system-prompt", os.Getenv("SK_SYSTEM_PROMPT"), "system instructions")
+	flags.StringVar(&config.systemPrompt, "system-prompt", systemPromptEnv, "system instructions; empty disables system and project instructions")
 	flags.StringVar(&config.systemPromptFile, "system-prompt-file", strings.TrimSpace(os.Getenv("SK_SYSTEM_PROMPT_FILE")), "system instructions from a file")
 	flags.StringVar(&config.toolsFile, "tools-file", strings.TrimSpace(os.Getenv("SK_TOOLS_FILE")), "external program tool definitions (default: tools.json in the Skot data directory)")
 	flags.StringVar(&config.home, "home", defaultHome, "Skot data directory")
@@ -120,6 +122,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err := flags.Parse(args); err != nil {
 		return agent.MarkInvalidRequest(err)
 	}
+	setFlags := make(map[string]bool)
+	flags.Visit(func(value *flag.Flag) { setFlags[value.Name] = true })
+	config.systemPromptExplicit = setFlags["system-prompt"] || systemPromptEnvSet
 	parsedOffset := len(args) - flags.NArg()
 	explicitPrompt := parsedOffset > 0 && args[parsedOffset-1] == "--"
 	if config.showVersion {
@@ -149,16 +154,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return agent.MarkInvalidRequest(err)
 	}
 	if strings.TrimSpace(config.systemPromptFile) != "" {
-		if strings.TrimSpace(config.systemPrompt) != "" {
+		if config.systemPromptExplicit {
 			return agent.MarkInvalidRequest(errors.New("set system instructions with -system-prompt or -system-prompt-file, not both"))
 		}
 		config.systemPrompt, err = loadPromptFile(config.systemPromptFile, "system prompt")
 		if err != nil {
 			return agent.MarkInvalidRequest(err)
 		}
+		config.systemPromptExplicit = true
 	}
-	setFlags := make(map[string]bool)
-	flags.Visit(func(value *flag.Flag) { setFlags[value.Name] = true })
 	modelExplicit := setFlags["model"] || strings.TrimSpace(os.Getenv("SK_MODEL")) != ""
 	reasoningEffortExplicit := setFlags["reasoning-effort"] || strings.TrimSpace(os.Getenv("SK_REASONING_EFFORT")) != ""
 	toolSetExplicit := setFlags["tools"] || strings.TrimSpace(os.Getenv("SK_TOOLS")) != ""
@@ -179,7 +183,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		ModelURI: config.modelURI, ReasoningEffort: config.reasoningEffort, ModelAPI: config.modelAPI,
 		ModelExplicit: modelExplicit, ReasoningEffortExplicit: reasoningEffortExplicit,
 		BaseURL: config.baseURL, ContextWindow: config.contextWindow,
-		RetryBudget: retryBudget, StreamIdleTimeout: streamIdleTimeout, MaxToolIterations: maxToolIterations, SystemPrompt: config.systemPrompt,
+		RetryBudget: retryBudget, StreamIdleTimeout: streamIdleTimeout, MaxToolIterations: maxToolIterations,
+		SystemPrompt: config.systemPrompt, SystemPromptExplicit: config.systemPromptExplicit,
 		ToolsFile: config.toolsFile,
 		ToolSet:   config.toolSet, ToolSetExplicit: toolSetExplicit,
 		Scope: config.scope, ScopeExplicit: scopeExplicit,
@@ -249,11 +254,12 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 			reasoningEffort = "default"
 		}
 		metadata := jsonRunMetadata{
-			DurationMillis:  durationMillis,
-			Model:           application.CurrentModel(),
-			ReasoningEffort: reasoningEffort,
-			ToolSet:         application.CurrentToolSet(),
-			ModelAttempts:   int(observer.modelAttempts.Load()),
+			DurationMillis:   durationMillis,
+			Model:            application.CurrentModel(),
+			ReasoningEffort:  reasoningEffort,
+			ToolSet:          application.CurrentToolSet(),
+			SystemPromptMode: systemPromptMode(config.systemPrompt, config.systemPromptExplicit),
+			ModelAttempts:    int(observer.modelAttempts.Load()),
 		}
 		if err := writeJSONResult(stdout, result, usage, application.SessionID(), metadata, runErr); err != nil {
 			return errors.Join(runErr, fmt.Errorf("write JSON result: %w", err))
@@ -272,6 +278,16 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 		writeResumeHint(stderr, application.ShortSessionID())
 	}
 	return runErr
+}
+
+func systemPromptMode(prompt string, explicit bool) string {
+	if !explicit {
+		return "default"
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return "none"
+	}
+	return "custom"
 }
 
 // writeResumeHint prints nothing for sessions Skot cannot address, such as an

@@ -10,15 +10,16 @@ import (
 )
 
 func TestBuiltInToolSetsSelectExactOrderedTools(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "custom")
+	catalog := builtInCatalog("custom")
 	toolSets, err := NewToolSets(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for toolSet, want := range map[string]string{
-		ToolSetReadOnly: "read,ls,grep,glob",
-		ToolSetEdit:     "read,ls,grep,glob,edit,write",
-		ToolSetDefault:  "read,grep,glob,edit,write,bash,job",
+		ToolSetReadOnly: "read,ls,grep,glob,web_fetch,web_search",
+		ToolSetEdit:     "read,ls,grep,glob,edit,write,web_fetch,web_search",
+		ToolSetDefault:  "read,grep,glob,edit,write,bash,job,web_fetch,web_search",
+		ToolSetNone:     "",
 	} {
 		if got := toolNames(mustToolSetTools(t, toolSets, catalog, toolSet)); got != want {
 			t.Fatalf("%s tools = %q, want %q", toolSet, got, want)
@@ -27,12 +28,12 @@ func TestBuiltInToolSetsSelectExactOrderedTools(t *testing.T) {
 }
 
 func TestBuiltInOptionsAddDefaultLSWithoutChangingOverrides(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "custom")
+	catalog := builtInCatalog("custom")
 	toolSets, err := NewToolSetsWithOptions(catalog, BuiltInOptions{DefaultIncludesLS: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := toolNames(mustToolSetTools(t, toolSets, catalog, ToolSetDefault)); got != "read,ls,grep,glob,edit,write,bash,job" {
+	if got := toolNames(mustToolSetTools(t, toolSets, catalog, ToolSetDefault)); got != "read,ls,grep,glob,edit,write,bash,job,web_fetch,web_search" {
 		t.Fatalf("conditional default tools = %q", got)
 	}
 	toolSets, err = NewToolSetsWithOptions(
@@ -46,22 +47,8 @@ func TestBuiltInOptionsAddDefaultLSWithoutChangingOverrides(t *testing.T) {
 	}
 }
 
-func TestBuiltInToolSetsIncludeKnownWebTools(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "web_fetch", "web_search")
-	toolSets, err := NewToolSets(catalog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, toolSet := range []string{ToolSetReadOnly, ToolSetEdit, ToolSetDefault} {
-		got := toolNames(mustToolSetTools(t, toolSets, catalog, toolSet))
-		if !strings.HasSuffix(got, "web_fetch,web_search") {
-			t.Fatalf("%s tools = %q", toolSet, got)
-		}
-	}
-}
-
 func TestConfiguredToolSetsReplaceBuiltInsAndAddNames(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "custom")
+	catalog := builtInCatalog("custom")
 	toolSets, err := NewToolSets(catalog,
 		map[string][]string{"default": {"read", "custom"}, "review": {"custom", "read"}},
 		map[string][]string{" DEFAULT ": {"custom"}, "empty": nil},
@@ -78,7 +65,7 @@ func TestConfiguredToolSetsReplaceBuiltInsAndAddNames(t *testing.T) {
 	if got := toolNames(mustToolSetTools(t, toolSets, catalog, "empty")); got != "" {
 		t.Fatalf("empty tools = %q", got)
 	}
-	if got := strings.Join(toolSets.Names(), ","); got != "default,edit,read-only,empty,review" {
+	if got := strings.Join(toolSets.Names(), ","); got != "default,edit,read-only,none,empty,review" {
 		t.Fatalf("tool set names = %q", got)
 	}
 	if got := strings.Join(toolSets.ToolNames(ToolSetDefault), ","); got != "custom" {
@@ -102,7 +89,7 @@ func TestConfiguredToolSetsReplaceBuiltInsAndAddNames(t *testing.T) {
 }
 
 func TestConfiguredToolSetsRejectInvalidDefinitions(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job")
+	catalog := builtInCatalog()
 	for name, configured := range map[string]map[string][]string{
 		"unknown tool":         {"review": {"missing"}},
 		"duplicate tool":       {"review": {"read", "read"}},
@@ -120,30 +107,36 @@ func TestConfiguredToolSetsRejectInvalidDefinitions(t *testing.T) {
 }
 
 func TestNormalizeRejectsUnknownToolSet(t *testing.T) {
-	toolSets, err := NewToolSets(testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job"))
+	toolSets, err := NewToolSets(builtInCatalog())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, input := range []string{"admin", "full"} {
-		if _, err := toolSets.Normalize(input); err == nil || !strings.Contains(err.Error(), "default, edit, read-only") {
+		if _, err := toolSets.Normalize(input); err == nil || !strings.Contains(err.Error(), "default, edit, read-only, none") {
 			t.Fatalf("unknown tool set %q error = %v", input, err)
 		}
 	}
 }
 
 func TestToolsRejectsCatalogDrift(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job")
+	catalog := builtInCatalog()
 	toolSets, err := NewToolSets(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := toolSets.Tools(catalog[:len(catalog)-1], ToolSetDefault); err == nil || !strings.Contains(err.Error(), `requires tool "job"`) {
+	withoutJob := make([]agent.Tool, 0, len(catalog)-1)
+	for _, tool := range catalog {
+		if tool.Spec.Name != "job" {
+			withoutJob = append(withoutJob, tool)
+		}
+	}
+	if _, err := toolSets.Tools(withoutJob, ToolSetDefault); err == nil || !strings.Contains(err.Error(), `requires tool "job"`) {
 		t.Fatalf("catalog drift error = %v", err)
 	}
 }
 
 func TestBackgroundCapableToolsRequireJobWithoutChangingExactToolSet(t *testing.T) {
-	catalog := testCatalog("read", "ls", "grep", "glob", "edit", "write", "bash", "job", "worker")
+	catalog := builtInCatalog("worker")
 	toolSets, err := NewToolSets(catalog, map[string][]string{
 		"safe":   {"read", "worker", "job"},
 		"broken": {"worker"},
@@ -157,6 +150,11 @@ func TestBackgroundCapableToolsRequireJobWithoutChangingExactToolSet(t *testing.
 	if got := toolNames(mustToolSetTools(t, toolSets, catalog, "safe")); got != "read,worker,job" {
 		t.Fatalf("tool set was modified = %q", got)
 	}
+}
+
+func builtInCatalog(extra ...string) []agent.Tool {
+	names := []string{"read", "ls", "grep", "glob", "edit", "write", "bash", "job", "web_fetch", "web_search"}
+	return testCatalog(append(names, extra...)...)
 }
 
 func testCatalog(names ...string) []agent.Tool {

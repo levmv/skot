@@ -1142,7 +1142,7 @@ func TestOpenLoadsCustomToolSetsAndLetsConfigReplaceBuiltIns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = application.Close() })
 	configuredToolSets[toolpolicy.ToolSetDefault][0] = "read"
-	if got := strings.Join(application.ToolSets(), ","); got != "default,edit,read-only,review" {
+	if got := strings.Join(application.ToolSets(), ","); got != "default,edit,read-only,none,review" {
 		t.Fatalf("tool sets = %q", got)
 	}
 	if got := strings.Join(application.ToolSetTools(toolpolicy.ToolSetDefault), ","); got != "custom" {
@@ -1451,6 +1451,8 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 		applicationTool("write"),
 		applicationTool("bash"),
 		applicationTool("job"),
+		applicationTool("web_fetch"),
+		applicationTool("web_search"),
 	}
 	toolSets, err := toolpolicy.NewToolSets(catalog)
 	if err != nil {
@@ -1461,7 +1463,7 @@ func TestApplicationOwnsAndPersistsToolSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err := newApplicationTestRuntime(agent.Config{
-		Backend: toolSetCaptureModel{t: t, want: "read,ls,grep,glob"},
+		Backend: toolSetCaptureModel{t: t, want: "read,ls,grep,glob,web_fetch,web_search"},
 		Journal: &applicationMemoryJournal{},
 		Tools:   selectedTools,
 	})
@@ -2021,6 +2023,7 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 		t.Fatal(err)
 	}
 	catalog = append(catalog, processes.Tools()...)
+	catalog = append(catalog, applicationTool("web_fetch"), applicationTool("web_search"))
 	toolSets, err := toolpolicy.NewToolSets(catalog)
 	if err != nil {
 		t.Fatal(err)

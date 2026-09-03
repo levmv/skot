@@ -50,9 +50,12 @@ type runtimeBuildParams struct {
 	// declare. A session being reopened supplies its own, so a route selected
 	// that way stays usable across resume.
 	modelSelectionAPI string
-	instructions      string
-	modelOptions      modelBackendOptions
-	resumedState      *agent.State
+	// selectionContext is metadata supplied for an undeclared route. A resumed
+	// session obtains its effective window from the recorded runtime policy.
+	selectionContext int
+	instructions     string
+	modelOptions     modelBackendOptions
+	resumedState     *agent.State
 	// knownModel may only describe the same saved selection being reopened, or
 	// the current Runtime selection carried through ClearSession. It permits an
 	// inspectable Runtime when that exact route no longer resolves.
@@ -108,7 +111,7 @@ func (builder runtimeBuilder) activateRoute(ctx context.Context, params runtimeB
 
 func (builder runtimeBuilder) modelOverrides(params runtimeBuildParams) modelRouteOverrides {
 	overrides := modelRouteOverrides{BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
-	return overrides.withSelection(params.modelURI, params.selectionAPI())
+	return overrides.withSelection(params.modelURI, params.selectionAPI(), params.selectionContextWindow())
 }
 
 // selectionAPI prefers the protocol the caller chose. A session which already
@@ -127,6 +130,22 @@ func (params runtimeBuildParams) selectionAPI() string {
 		return ""
 	}
 	return string(modelAPIFromBackendID(selection.Backend))
+}
+
+func (params runtimeBuildParams) selectionContextWindow() int {
+	if params.selectionContext > 0 {
+		return params.selectionContext
+	}
+	if params.resumedState == nil || params.resumedState.Configured == nil ||
+		params.resumedState.Configured.RuntimePolicy.ContextWindowEstimated {
+		return 0
+	}
+	selection := params.resumedState.Selection
+	saved := strings.TrimSpace(selection.Provider) + "/" + strings.TrimSpace(selection.Model)
+	if !strings.EqualFold(strings.TrimSpace(params.modelURI), saved) {
+		return 0
+	}
+	return max(0, params.resumedState.Configured.RuntimePolicy.ContextWindow)
 }
 
 func (builder runtimeBuilder) modelForRoute(route resolvedModelRoute, options modelBackendOptions) (agent.ModelInfo, agent.Backend, error) {

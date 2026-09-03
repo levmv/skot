@@ -114,9 +114,23 @@ func (application *Application) Run(ctx context.Context, input string, emit agen
 // caller chose for a route this build does not declare; it is ignored for a
 // declared route and for a process-wide protocol override.
 func (application *Application) SwitchModel(ctx context.Context, uri, effort, api string) error {
+	return application.switchModel(ctx, uri, effort, api, 0, false)
+}
+
+// SwitchModelWithContextWindow selects a route with optional context metadata.
+// An undeclared route whose window cannot be discovered requires a positive
+// value.
+func (application *Application) SwitchModelWithContextWindow(ctx context.Context, uri, effort, api string, contextWindow int) error {
+	return application.switchModel(ctx, uri, effort, api, contextWindow, true)
+}
+
+func (application *Application) switchModel(ctx context.Context, uri, effort, api string, contextWindow int, requireContext bool) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return err
+	}
+	if contextWindow < 0 {
+		return agent.MarkInvalidRequest(errors.New("model context window cannot be negative"))
 	}
 	// A protocol supplied for this switch is user input and must be rejected
 	// when it is not one Skot implements; a protocol remembered by another
@@ -125,24 +139,46 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort, ap
 		return agent.MarkInvalidRequest(err)
 	}
 	selectionAPI := string(selectionModelAPI(uri, api))
+	selectionContextWindow := 0
+	if application.config.contextWindow == 0 {
+		selectionContextWindow = selectionModelContextWindow(uri, contextWindow)
+	}
 	overrides := modelRouteOverrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
-	}.withSelection(uri, selectionAPI)
+	}.withSelection(uri, selectionAPI, selectionContextWindow)
 	route, err := resolveModelRoute(uri, effort, overrides, modelRouteEnrichment{})
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
 	}
+	activated := false
+	_, declared := catalogModelSpec(uri)
+	if requireContext && contextWindow == 0 && !declared && route.ContextWindowEstimated {
+		route, err = activateModelRoute(ctx, uri, effort, overrides,
+			savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
+		if err != nil {
+			return agent.MarkInvalidRequest(err)
+		}
+		activated = true
+		if route.ContextWindowEstimated {
+			return agent.MarkInvalidRequest(&ModelContextWindowRequiredError{URI: uri})
+		}
+	}
 	currentModel := runtime.CurrentModel()
 	currentEffort := runtime.CurrentReasoningEffort()
-	if strings.EqualFold(route.URI, currentModel) && route.ReasoningEffort == currentEffort {
+	currentInfo := runtime.CurrentModelInfo()
+	sameProtocol := selectionAPI == "" || modelAPIFromBackendID(currentInfo.BackendID) == route.API
+	sameContext := (selectionContextWindow == 0 && !activated) || currentInfo.ContextWindow == route.ContextWindow
+	if strings.EqualFold(route.URI, currentModel) && route.ReasoningEffort == currentEffort && sameProtocol && sameContext {
 		return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
-			return preferences.SetModelSelection(currentModel, currentEffort, selectionAPI)
+			return preferences.SetModelSelectionWithContext(currentModel, currentEffort, selectionAPI, selectionContextWindow)
 		})
 	}
-	route, err = activateModelRoute(ctx, uri, effort, overrides,
-		savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
-	if err != nil {
-		return agent.MarkInvalidRequest(err)
+	if !activated {
+		route, err = activateModelRoute(ctx, uri, effort, overrides,
+			savedModelContextFromInfo(currentInfo), application.config.metadataLookup)
+		if err != nil {
+			return agent.MarkInvalidRequest(err)
+		}
 	}
 	modelInfo, err := modelInfoForRoute(route)
 	if err != nil {
@@ -159,10 +195,10 @@ func (application *Application) SwitchModel(ctx context.Context, uri, effort, ap
 	children := application.state.children
 	application.mu.RUnlock()
 	if children != nil {
-		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), selectionAPI)
+		children.setModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), selectionAPI, selectionContextWindow)
 	}
 	return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
-		return preferences.SetModelSelection(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), selectionAPI)
+		return preferences.SetModelSelectionWithContext(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), selectionAPI, selectionContextWindow)
 	})
 }
 
@@ -677,15 +713,20 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	// The session being replaced proves the protocol of the route it runs, so a
 	// route this build does not declare survives clearing and resuming.
 	selectionAPI := ""
+	selectionContextWindow := 0
 	if current := application.runtimeOrNil(); current != nil {
 		info := current.CurrentModelInfo()
 		if modelInfoMatchesURI(info, modelURI) {
 			selectionAPI = string(modelAPIFromBackendID(info.BackendID))
+			if !info.ContextWindowEstimated {
+				selectionContextWindow = selectionModelContextWindow(modelURI, info.ContextWindow)
+			}
 		}
 	}
 	params := runtimeBuildParams{
 		journal: journal, sessionID: id, modelURI: modelURI, reasoningEffort: reasoningEffort,
-		modelSelectionAPI: selectionAPI, instructions: instructions,
+		modelSelectionAPI: selectionAPI, selectionContext: selectionContextWindow,
+		instructions: instructions,
 		resumedState: resumedState, knownModel: knownModel,
 	}
 	runtime, err := builder.buildRestored(ctx, params)
@@ -712,7 +753,8 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	application.state.session = nextSession
 	application.state.startupNotices = append(application.state.startupNotices, attachNotices...)
 	if children != nil {
-		children.setSessionDefaults(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), params.selectionAPI(), instructions, security.snapshot())
+		children.setSessionDefaults(runtime.CurrentModel(), runtime.CurrentReasoningEffort(), params.selectionAPI(),
+			params.selectionContextWindow(), instructions, security.snapshot())
 	}
 	application.mu.Unlock()
 

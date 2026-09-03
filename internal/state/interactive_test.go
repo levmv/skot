@@ -497,7 +497,7 @@ func TestInteractiveStoreRejectsUnknownFieldsAndSymlinks(t *testing.T) {
 	})
 }
 
-func TestInteractiveStoreRemembersAndClearsSelectionAPI(t *testing.T) {
+func TestInteractiveStoreRemembersAndClearsSelectionMetadata(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	if _, err := Open(home); err != nil {
 		t.Fatal(err)
@@ -506,15 +506,16 @@ func TestInteractiveStoreRemembersAndClearsSelectionAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetModelSelection("opencode-go/ox-alpha-free", "high", "Chat_Completions"); err != nil {
+	if err := store.SetModelSelectionWithContext("opencode-go/ox-alpha-free", "high", "Chat_Completions", 1_000_000); err != nil {
 		t.Fatal(err)
 	}
 	settings, err := store.Settings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Workspace.ModelAPI != "chat_completions" || settings.LastModel().ModelAPI != "chat_completions" {
-		t.Fatalf("stored selection API = %#v", settings)
+	if settings.Workspace.ModelAPI != "chat_completions" || settings.LastModel().ModelAPI != "chat_completions" ||
+		settings.Workspace.ContextWindow != 1_000_000 || settings.LastModel().ContextWindow != 1_000_000 {
+		t.Fatalf("stored selection metadata = %#v", settings)
 	}
 	// Selecting a route which describes itself must not leave the previous
 	// protocol behind for it.
@@ -525,10 +526,12 @@ func TestInteractiveStoreRemembersAndClearsSelectionAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Workspace.ModelAPI != "" || settings.LastModel().ModelAPI != "" {
-		t.Fatalf("cleared selection API = %#v", settings)
+	if settings.Workspace.ModelAPI != "" || settings.LastModel().ModelAPI != "" ||
+		settings.Workspace.ContextWindow != 0 || settings.LastModel().ContextWindow != 0 {
+		t.Fatalf("cleared selection metadata = %#v", settings)
 	}
-	if len(settings.ModelHistory) != 2 || settings.ModelHistory[1].ModelAPI != "chat_completions" {
+	if len(settings.ModelHistory) != 2 || settings.ModelHistory[1].ModelAPI != "chat_completions" ||
+		settings.ModelHistory[1].ContextWindow != 1_000_000 {
 		t.Fatalf("model history = %#v", settings.ModelHistory)
 	}
 }

@@ -124,6 +124,7 @@ type childSupervisor struct {
 	defaultModel        string
 	defaultEffort       string
 	defaultSelectionAPI string
+	defaultContext      int
 	allowedModels       map[string]struct{}
 	configured          bool
 	closed              bool
@@ -167,7 +168,7 @@ func normalizeChildModel(value string) (string, error) {
 	return provider + "/" + model, nil
 }
 
-func (supervisor *childSupervisor) configure(builder runtimeBuilder, instructions, model, effort, selectionAPI string) error {
+func (supervisor *childSupervisor) configure(builder runtimeBuilder, instructions, model, effort, selectionAPI string, contextWindow int) error {
 	canonicalModel, err := normalizeChildModel(model)
 	if err != nil {
 		return fmt.Errorf("configure child default model: %w", err)
@@ -196,6 +197,7 @@ func (supervisor *childSupervisor) configure(builder runtimeBuilder, instruction
 	supervisor.defaultModel = canonicalModel
 	supervisor.defaultEffort = effort
 	supervisor.defaultSelectionAPI = selectionAPI
+	supervisor.defaultContext = contextWindow
 	supervisor.configured = true
 	return nil
 }
@@ -213,13 +215,14 @@ func childReadOnlyToolNames(catalog []agent.Tool) []string {
 	return names
 }
 
-func (supervisor *childSupervisor) setModelSelection(model, effort, selectionAPI string) {
+func (supervisor *childSupervisor) setModelSelection(model, effort, selectionAPI string, contextWindow int) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	if !supervisor.closed {
 		supervisor.defaultModel = model
 		supervisor.defaultEffort = effort
 		supervisor.defaultSelectionAPI = selectionAPI
+		supervisor.defaultContext = contextWindow
 	}
 }
 
@@ -233,13 +236,21 @@ func (supervisor *childSupervisor) selectionAPILocked(model string) string {
 	return supervisor.defaultSelectionAPI
 }
 
-func (supervisor *childSupervisor) setSessionDefaults(model, effort, selectionAPI, instructions string, scope agent.ScopeSnapshot) {
+func (supervisor *childSupervisor) selectionContextWindowLocked(model string) int {
+	if !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(supervisor.defaultModel)) {
+		return 0
+	}
+	return supervisor.defaultContext
+}
+
+func (supervisor *childSupervisor) setSessionDefaults(model, effort, selectionAPI string, contextWindow int, instructions string, scope agent.ScopeSnapshot) {
 	supervisor.mu.Lock()
 	defer supervisor.mu.Unlock()
 	if !supervisor.closed {
 		supervisor.defaultModel = model
 		supervisor.defaultEffort = effort
 		supervisor.defaultSelectionAPI = selectionAPI
+		supervisor.defaultContext = contextWindow
 		supervisor.instructions = instructions
 		supervisor.builder.scope = cloneAgentScopeSnapshot(scope)
 	}
@@ -535,6 +546,7 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 	runtime, err := supervisor.builder.build(ctx, runtimeBuildParams{
 		journal: journal, sessionID: sessionID, modelURI: model, reasoningEffort: effort,
 		modelSelectionAPI: supervisor.selectionAPILocked(model),
+		selectionContext:  supervisor.selectionContextWindowLocked(model),
 		instructions:      supervisor.instructions, modelOptions: modelBackendOptions{requireCredential: true},
 	})
 	if err != nil {

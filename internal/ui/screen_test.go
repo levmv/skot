@@ -33,6 +33,7 @@ type fakeAgent struct {
 	toolSetErr       error
 	model            string
 	modelAPI         string
+	modelContext     int
 	reasoningEffort  string
 	reasoningEfforts map[string][]string
 	modelErr         error
@@ -172,13 +173,20 @@ func (fake *fakeAgent) ModelChoices() []ModelChoice {
 	return choices
 }
 
-func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort, api string) error {
-	changed := fake.model != model || fake.reasoningEffort != effort || fake.modelAPI != api
+func (fake *fakeAgent) SwitchModelWithContextWindow(_ context.Context, model, effort, api string, contextWindow int) error {
+	changed := fake.model != model || fake.reasoningEffort != effort || fake.modelAPI != api ||
+		fake.modelContext != contextWindow
 	err := fake.modelErr
 	if app.IsModelAPIRequired(err) {
 		// The refusal stands until the caller supplies the protocol, exactly as
 		// the application refuses an undeclared mixed-protocol route.
 		if api == "" {
+			return err
+		}
+		err = &app.ModelContextWindowRequiredError{URI: model}
+	}
+	if app.IsModelContextWindowRequired(err) {
+		if contextWindow == 0 {
 			return err
 		}
 		err = nil
@@ -188,6 +196,7 @@ func (fake *fakeAgent) SwitchModel(_ context.Context, model, effort, api string)
 	}
 	fake.model = model
 	fake.modelAPI = api
+	fake.modelContext = contextWindow
 	fake.reasoningEffort = effort
 	if changed {
 		fake.state.ImageDelivery = agent.ImageDeliveryObservedRecord{}

@@ -89,6 +89,11 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		}
 		return m, nil
 	case action == actionCancel:
+		if m.modelContextSelection.uri != "" {
+			m.cancelModelContextChoice()
+			m.refreshTranscript()
+			return m, nil
+		}
 		if m.pathPrompt != notFilesystemPath {
 			m.closePathPrompt()
 			return m, nil
@@ -190,6 +195,22 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 				m.switchModel(pending)
 			}
 		}
+		m.refreshTranscript()
+		return m, nil
+	}
+	if m.modelContextSelection.uri != "" {
+		selection := m.modelContextSelection
+		contextWindow, err := parseModelTokenCount(input)
+		if err != nil {
+			m.addBlock(screenBlockError, "model: "+err.Error())
+			m.refreshTranscript()
+			return m, nil
+		}
+		m.modelContextSelection = modelSelection{}
+		m.composer.reset()
+		m.syncCommandSuggestions()
+		selection.contextWindow = contextWindow
+		m.selectModel(selection, pickerState{})
 		m.refreshTranscript()
 		return m, nil
 	}

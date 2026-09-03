@@ -405,7 +405,7 @@ func TestModelPickerMarksEstimatedFallbackWithoutRepeatingProtocol(t *testing.T)
 		Protocol:      "chat_completions",
 		ContextWindow: 128 * 1024, ContextWindowEstimated: true,
 	})
-	if description != "~131K context" || strings.Contains(description, "chat completions") {
+	if description != "~131K context" || strings.Contains(description, "Chat Completions") {
 		t.Fatalf("estimated description = %q", description)
 	}
 }
@@ -438,7 +438,7 @@ func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	details := strings.Join(model.transcript.lines, "\n")
 	if !strings.Contains(details, "MiniMax M3 (opencode-go/minimax-m3)") ||
-		!strings.Contains(details, "anthropic messages") || fake.model != "deepseek/model" {
+		!strings.Contains(details, "Anthropic Messages") || fake.model != "deepseek/model" {
 		t.Fatalf("unavailable details = %q, model = %q", details, fake.model)
 	}
 }
@@ -466,9 +466,20 @@ func TestModelPickerAsksForProtocolOnlyWhenTheRouteNeedsOne(t *testing.T) {
 	if model.picker.items[2].value != "anthropic_messages" || model.picker.items[2].description != "like minimax-m3" {
 		t.Fatalf("protocol rows = %#v", model.picker.items)
 	}
+	if model.picker.items[0].label != "OpenAI Chat Completions" || model.picker.items[1].label != "Open Responses" ||
+		model.picker.items[2].label != "Anthropic Messages" {
+		t.Fatalf("protocol labels = %#v", model.picker.items)
+	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Text: "3", Code: '3', BaseCode: '3'})
-	if fake.model != "opencode-go/ox-alpha-free" || fake.modelAPI != "anthropic_messages" || model.picker.active() {
-		t.Fatalf("selected route = %q protocol %q picker %#v", fake.model, fake.modelAPI, model.picker)
+	if model.modelContextSelection.uri == "" || model.modelContextSelection.api != "anthropic_messages" ||
+		fake.model != "deepseek/model" || model.picker.active() {
+		t.Fatalf("context step = %#v, model = %q, picker = %#v", model.modelContextSelection, fake.model, model.picker)
+	}
+	model.composer.setValue("1M")
+	model, _ = model.submitInput()
+	if fake.model != "opencode-go/ox-alpha-free" || fake.modelAPI != "anthropic_messages" ||
+		fake.modelContext != 1_000_000 || model.modelContextSelection.uri != "" {
+		t.Fatalf("selected route = %q protocol %q context %d", fake.model, fake.modelAPI, fake.modelContext)
 	}
 }
 
@@ -492,6 +503,39 @@ func TestModelProtocolChoiceCancelsIntoTheTypedForm(t *testing.T) {
 	}
 }
 
+func TestModelContextChoiceValidatesAndCancelsIntoTheTypedForm(t *testing.T) {
+	fake := &fakeAgent{model: "deepseek/model"}
+	model := testScreenModel(t, fake)
+	model.askModelContextWindow(modelSelection{uri: "opencode-go/ox-alpha-free", api: "responses"})
+	model.composer.setValue("plenty")
+	model, _ = model.submitInput()
+	if model.modelContextSelection.uri == "" || fake.model != "deepseek/model" ||
+		!strings.Contains(strings.Join(model.transcript.lines, "\n"), "128K or 1M") {
+		t.Fatalf("invalid context input = pending %#v, model %q", model.modelContextSelection, fake.model)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape, BaseCode: tea.KeyEscape})
+	transcript := strings.Join(model.transcript.lines, "\n")
+	if model.modelContextSelection.uri != "" || !strings.Contains(transcript, "/model") {
+		t.Fatalf("cancelled context choice: pending %#v, transcript %q", model.modelContextSelection, transcript)
+	}
+}
+
+func TestParseModelTokenCount(t *testing.T) {
+	for input, want := range map[string]int{
+		"128K": 128_000, "1M": 1_000_000, "1_048_576": 1_048_576,
+	} {
+		got, err := parseModelTokenCount(input)
+		if err != nil || got != want {
+			t.Errorf("parseModelTokenCount(%q) = %d, %v; want %d", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"", "0", "-1M", "1.5M", "many"} {
+		if got, err := parseModelTokenCount(input); err == nil {
+			t.Errorf("parseModelTokenCount(%q) = %d, want error", input, got)
+		}
+	}
+}
+
 func TestModelPickerNamesProtocolOnlyForRoutesTheUserChoseItFor(t *testing.T) {
 	chosen := modelChoiceActiveDetail(ModelChoice{
 		Protocol: "chat_completions", ProtocolExplicit: true,
@@ -500,7 +544,24 @@ func TestModelPickerNamesProtocolOnlyForRoutesTheUserChoseItFor(t *testing.T) {
 	reviewed := modelChoiceActiveDetail(ModelChoice{
 		Protocol: "chat_completions", ContextWindow: 1_000_000,
 	})
-	if chosen != "~131K context · chat completions" || reviewed != "1M context" {
+	if chosen != "~131K context · OpenAI Chat Completions" || reviewed != "1M context" {
 		t.Fatalf("active details = %q / %q", chosen, reviewed)
+	}
+}
+
+func TestModelCommandKeepsRememberedContextForSingleAPIModel(t *testing.T) {
+	fake := &fakeAgent{
+		model: "deepseek/current",
+		modelChoices: []ModelChoice{
+			{URI: "deepseek/current"},
+			{URI: "deepseek/future", ContextWindow: 1_000_000},
+		},
+		providers: []ProviderStatus{{Name: "deepseek", Source: "auth store"}},
+	}
+	model := testScreenModel(t, fake)
+	model.composer.setValue("/model deepseek/future")
+	model, _ = model.submitInput()
+	if fake.model != "deepseek/future" || fake.modelContext != 1_000_000 {
+		t.Fatalf("selected model = %q, context = %d", fake.model, fake.modelContext)
 	}
 }

@@ -29,6 +29,7 @@ type WorkspaceSettings struct {
 	Model           string
 	ReasoningEffort *string
 	ModelAPI        string
+	ContextWindow   int
 	ToolSet         string
 	Scope           string
 	AddedPaths      []string
@@ -37,13 +38,14 @@ type WorkspaceSettings struct {
 
 // ModelPreference is one remembered model selection. A nil ReasoningEffort
 // means no override; a non-nil empty value means the provider default was
-// explicitly selected. ModelAPI is the protocol the user attached to a route
-// this build does not describe; it is an opaque string here, and the caller
-// which owns the protocol vocabulary decides whether it still applies.
+// explicitly selected. ModelAPI and ContextWindow are metadata the user
+// attached to a route this build does not describe. The caller decides whether
+// those values still apply after its model catalog changes.
 type ModelPreference struct {
 	Model           string
 	ReasoningEffort *string
 	ModelAPI        string
+	ContextWindow   int
 }
 
 // InteractiveSettings is one read-only view of the machine-owned interactive
@@ -91,15 +93,17 @@ type modelHistoryDocument struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	API             string `json:"api,omitempty"`
+	ContextWindow   int    `json:"context_window,omitempty"`
 }
 
-// Pointer fields preserve absent versus present-but-invalid string values.
+// Pointer fields preserve absent versus present-but-invalid values.
 // Mutating a different field can therefore rewrite the document atomically
 // without silently healing or deleting the invalid value.
 type workspaceDocument struct {
 	Model           *string  `json:"model,omitzero"`
 	ReasoningEffort *string  `json:"reasoning_effort,omitzero"`
 	ModelAPI        *string  `json:"model_api,omitzero"`
+	ContextWindow   *int     `json:"model_context_window,omitzero"`
 	ToolSet         *string  `json:"tool_set,omitzero"`
 	Scope           *string  `json:"scope,omitzero"`
 	AddedPaths      []string `json:"added_paths,omitempty"`
@@ -156,13 +160,22 @@ func (store *InteractiveStore) Settings() (InteractiveSettings, error) {
 	return document.settings(store.workspace), nil
 }
 
-// SetModelSelection records one deliberate selection. An empty api removes a
-// protocol recorded earlier: the route either describes itself now or is being
-// selected without that choice.
+// SetModelSelection records one deliberate selection without user-supplied
+// context metadata. An empty api removes a protocol recorded earlier: the route
+// either describes itself now or is being selected without that choice.
 func (store *InteractiveStore) SetModelSelection(model, reasoningEffort, api string) error {
+	return store.SetModelSelectionWithContext(model, reasoningEffort, api, 0)
+}
+
+// SetModelSelectionWithContext records optional route metadata supplied with
+// one model selection. A zero context window removes metadata recorded earlier.
+func (store *InteractiveStore) SetModelSelectionWithContext(model, reasoningEffort, api string, contextWindow int) error {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return errors.New("model is required")
+	}
+	if contextWindow < 0 {
+		return errors.New("model context window cannot be negative")
 	}
 	reasoningEffort = strings.ToLower(strings.TrimSpace(reasoningEffort))
 	encodedEffort := reasoningEffort
@@ -173,11 +186,13 @@ func (store *InteractiveStore) SetModelSelection(model, reasoningEffort, api str
 	return store.mutate(func(document *interactiveDocument) bool {
 		workspace := document.workspace(store.workspace)
 		history := pushModelHistory(document.UI.ModelHistory, modelHistoryDocument{
-			Model: model, ReasoningEffort: encodedEffort, API: api,
+			Model: model, ReasoningEffort: encodedEffort, API: api, ContextWindow: contextWindow,
 		})
 		storedAPI := storedStringEquals(workspace.ModelAPI, api) || (workspace.ModelAPI == nil && api == "")
+		storedContext := workspace.ContextWindow == nil && contextWindow == 0 ||
+			workspace.ContextWindow != nil && *workspace.ContextWindow == contextWindow
 		if storedStringEquals(workspace.Model, model) && storedStringEquals(workspace.ReasoningEffort, encodedEffort) &&
-			storedAPI && slices.Equal(history, document.UI.ModelHistory) {
+			storedAPI && storedContext && slices.Equal(history, document.UI.ModelHistory) {
 			return false
 		}
 		workspace.Model = new(model)
@@ -185,6 +200,10 @@ func (store *InteractiveStore) SetModelSelection(model, reasoningEffort, api str
 		workspace.ModelAPI = nil
 		if api != "" {
 			workspace.ModelAPI = new(api)
+		}
+		workspace.ContextWindow = nil
+		if contextWindow > 0 {
+			workspace.ContextWindow = new(contextWindow)
 		}
 		document.Workspaces[store.workspace] = workspace
 		document.UI.ModelHistory = history
@@ -353,6 +372,13 @@ func (document interactiveDocument) settings(workspace string) InteractiveSettin
 	settings.Workspace.Model = preference.Model
 	settings.Workspace.ReasoningEffort = preference.ReasoningEffort
 	settings.Workspace.ModelAPI = strings.ToLower(validWorkspaceString("model_api", raw.ModelAPI, workspace, &settings.Notices))
+	if raw.ContextWindow != nil {
+		if *raw.ContextWindow > 0 && preference.Model != "" {
+			settings.Workspace.ContextWindow = *raw.ContextWindow
+		} else {
+			settings.Notices = append(settings.Notices, fmt.Sprintf("invalid workspace model_context_window %d for %s; ignored", *raw.ContextWindow, workspace))
+		}
+	}
 	settings.Workspace.ToolSet = validWorkspaceString("tool_set", raw.ToolSet, workspace, &settings.Notices)
 	if raw.Scope != nil {
 		scope := strings.ToLower(strings.TrimSpace(*raw.Scope))
@@ -465,8 +491,11 @@ func validModelHistory(entries []modelHistoryDocument, notices *[]string) []Mode
 		seen[key] = struct{}{}
 		history = append(history, ModelPreference{
 			Model: model, ReasoningEffort: decodeReasoningEffort(entry.ReasoningEffort),
-			ModelAPI: strings.ToLower(strings.TrimSpace(entry.API)),
+			ModelAPI: strings.ToLower(strings.TrimSpace(entry.API)), ContextWindow: max(0, entry.ContextWindow),
 		})
+		if entry.ContextWindow < 0 {
+			*notices = append(*notices, "interactive model_history contains a negative context_window; invalid value was ignored")
+		}
 	}
 	if len(history) != len(entries) {
 		*notices = append(*notices, "interactive model_history contains empty, duplicate, or excess entries; invalid entries were ignored")

@@ -301,7 +301,7 @@ func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := preferences.SetModelSelection("ollama/saved-model", "", ""); err != nil {
+	if err := preferences.SetModelSelectionWithContext("ollama/saved-model", "", "", 1_000_000); err != nil {
 		t.Fatal(err)
 	}
 	if err := preferences.SetToolSetSelection(toolpolicy.ToolSetReadOnly); err != nil {
@@ -324,6 +324,10 @@ func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T)
 		t.Fatalf("first workspace: model=%q effort=%q tools=%q scope=%q theme=%q",
 			first.CurrentModel(), first.CurrentReasoningEffort(), first.CurrentToolSet(), first.CurrentScope(), first.CurrentTheme())
 	}
+	firstInfo := first.runtimeOrNil().CurrentModelInfo()
+	if firstInfo.ContextWindow != 1_000_000 || firstInfo.ContextWindowEstimated {
+		t.Fatalf("first workspace context = %#v", firstInfo)
+	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -339,6 +343,10 @@ func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T)
 		second.CurrentScope() != ScopeWorkspace || second.CurrentTheme() != state.ThemeDark {
 		t.Fatalf("second workspace: model=%q effort=%q tools=%q scope=%q theme=%q",
 			second.CurrentModel(), second.CurrentReasoningEffort(), second.CurrentToolSet(), second.CurrentScope(), second.CurrentTheme())
+	}
+	secondInfo := second.runtimeOrNil().CurrentModelInfo()
+	if secondInfo.ContextWindow != 1_000_000 || secondInfo.ContextWindowEstimated {
+		t.Fatalf("shared context = %#v", secondInfo)
 	}
 }
 
@@ -1312,6 +1320,31 @@ func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
 	}
 }
 
+func TestApplicationBuildsAndPersistsUnknownModelContextWindow(t *testing.T) {
+	application, preferences, _ := newModelSwitchApplication(t)
+	if err := application.SwitchModelWithContextWindow(context.Background(), "deepseek/new-model", "high", "", 0); !IsModelContextWindowRequired(err) {
+		t.Fatalf("missing context error = %v", err)
+	}
+	if err := application.SwitchModelWithContextWindow(context.Background(), "deepseek/new-model", "high", "", 1_000_000); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := preferences.Settings()
+	info := application.runtimeOrNil().CurrentModelInfo()
+	if err != nil || stored.Workspace.ContextWindow != 1_000_000 ||
+		stored.LastModel().ContextWindow != 1_000_000 || info.ContextWindow != 1_000_000 || info.ContextWindowEstimated {
+		t.Fatalf("stored=%#v info=%#v err=%v", stored, info, err)
+	}
+	for _, choice := range application.ModelChoices() {
+		if choice.URI == "deepseek/new-model" {
+			if choice.ContextWindow != 1_000_000 || choice.ContextWindowEstimated {
+				t.Fatalf("model choice = %#v", choice)
+			}
+			return
+		}
+	}
+	t.Fatal("selected model is missing from choices")
+}
+
 func TestApplicationKeepsSwitchedModelWhenSavingSelectionFails(t *testing.T) {
 	application, preferences, home := newModelSwitchApplication(t)
 	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
@@ -1749,6 +1782,14 @@ func TestApplicationResumeRebuildsUndeclaredRouteFromItsRecordedProtocol(t *test
 	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
 		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "ox-alpha-free", Epoch: "epoch-typed",
 	})
+	appendApplicationRecord(t, source, agent.RecordSessionConfigured, agent.EffectiveConfigSnapshot{
+		ModelContext: agent.ModelContextSnapshot{
+			CompactionInstructions: "compact", ToolLimitInstructions: "limit tools",
+		},
+		RuntimePolicy: agent.RuntimePolicySnapshot{
+			ContextWindow: 1_000_000, MaxModelAttempts: 1, MaxToolIterations: 1,
+		},
+	})
 	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "typed-run"})
 	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "typed-run", Text: "saved question"})
 	appendApplicationRecord(t, source, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "typed-run", Status: agent.RunCompleted})
@@ -1758,14 +1799,15 @@ func TestApplicationResumeRebuildsUndeclaredRouteFromItsRecordedProtocol(t *test
 	if _, err := application.ResumeSession(context.Background(), session.ShortID(sourceID)); err != nil {
 		t.Fatal(err)
 	}
-	// The session itself is the evidence for a protocol Skot cannot infer, so
-	// reopening it must not degrade a route which was already running.
+	// The session itself is the evidence for route metadata Skot cannot infer,
+	// so reopening it must not degrade a route which was already running.
 	choices := application.ModelChoices()
 	current := slices.IndexFunc(choices, func(choice ModelChoice) bool {
 		return strings.EqualFold(choice.URI, "opencode-go/ox-alpha-free")
 	})
 	if current < 0 || choices[current].Unavailable || choices[current].Protocol != "anthropic_messages" ||
-		!choices[current].ProtocolExplicit {
+		!choices[current].ProtocolExplicit || choices[current].ContextWindow != 1_000_000 ||
+		choices[current].ContextWindowEstimated {
 		t.Fatalf("resumed route choice = %#v", choices)
 	}
 }

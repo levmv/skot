@@ -48,12 +48,14 @@ type modelRouteOverrides struct {
 	ContextWindow int
 }
 
-// withSelection adds the protocol carried by one model selection. The
-// process-wide override wins: it is the more recent explicit instruction, and
-// the picker must describe the route the backend will build.
-func (overrides modelRouteOverrides) withSelection(uri, api string) modelRouteOverrides {
+// withSelection adds metadata carried by one model selection. Process-wide
+// overrides win because they are the more recent explicit instruction.
+func (overrides modelRouteOverrides) withSelection(uri, api string, contextWindow int) modelRouteOverrides {
 	if overrides.API == "" {
 		overrides.API = selectionModelAPI(uri, api)
+	}
+	if overrides.ContextWindow == 0 {
+		overrides.ContextWindow = selectionModelContextWindow(uri, contextWindow)
 	}
 	return overrides
 }
@@ -71,6 +73,15 @@ func selectionModelAPI(uri, api string) modelAPI {
 		return ""
 	}
 	return value
+}
+
+// selectionModelContextWindow is user-supplied metadata for one undeclared
+// route. A later reviewed declaration replaces the remembered value.
+func selectionModelContextWindow(uri string, contextWindow int) int {
+	if _, declared := catalogModelSpec(uri); declared {
+		return 0
+	}
+	return contextWindow
 }
 
 // ModelAPIRequiredError reports a route which a mixed-protocol gateway serves
@@ -91,6 +102,23 @@ func (failure *ModelAPIRequiredError) Error() string {
 // usable, so a frontend can offer that choice instead of the error.
 func IsModelAPIRequired(err error) bool {
 	_, ok := errors.AsType[*ModelAPIRequiredError](err)
+	return ok
+}
+
+// ModelContextWindowRequiredError reports an undeclared route whose context
+// window could not be discovered.
+type ModelContextWindowRequiredError struct {
+	URI string
+}
+
+func (failure *ModelContextWindowRequiredError) Error() string {
+	return fmt.Sprintf("model %q needs a context window", strings.TrimSpace(failure.URI))
+}
+
+// IsModelContextWindowRequired reports a selection which needs its context
+// window before it can be used.
+func IsModelContextWindowRequired(err error) bool {
+	_, ok := errors.AsType[*ModelContextWindowRequiredError](err)
 	return ok
 }
 
@@ -503,26 +531,32 @@ func canonicalOpenRouterModelID(modelID string) string {
 	return modelID
 }
 
-// modelSelection is one known route together with the protocol its last
-// deliberate selection carried. An empty API means the route describes itself.
+// modelSelection is one known route together with metadata its last deliberate
+// selection carried. Zero values mean the route describes itself.
 type modelSelection struct {
-	URI string
-	API string
+	URI           string
+	API           string
+	ContextWindow int
 }
 
 func knownModelSelections(store *state.InteractiveStore, current, currentAPI string) []modelSelection {
 	var stored []modelSelection
 	if store != nil {
 		if settings, err := store.Settings(); err == nil {
-			stored = append(stored, modelSelection{URI: settings.Workspace.Model, API: settings.Workspace.ModelAPI})
+			stored = append(stored, modelSelection{
+				URI: settings.Workspace.Model, API: settings.Workspace.ModelAPI,
+				ContextWindow: settings.Workspace.ContextWindow,
+			})
 			for _, selection := range settings.ModelHistory {
-				stored = append(stored, modelSelection{URI: selection.Model, API: selection.ModelAPI})
+				stored = append(stored, modelSelection{
+					URI: selection.Model, API: selection.ModelAPI, ContextWindow: selection.ContextWindow,
+				})
 			}
 		}
 	}
 	selections := make([]modelSelection, 0, len(modelCatalog)+len(stored)+1)
 	seen := make(map[string]struct{}, cap(selections))
-	add := func(uri, api string) {
+	add := func(uri, api string, contextWindow int) {
 		uri = strings.TrimSpace(uri)
 		key := strings.ToLower(uri)
 		if key == "" {
@@ -532,14 +566,14 @@ func knownModelSelections(store *state.InteractiveStore, current, currentAPI str
 			return
 		}
 		seen[key] = struct{}{}
-		selections = append(selections, modelSelection{URI: uri, API: api})
+		selections = append(selections, modelSelection{URI: uri, API: api, ContextWindow: contextWindow})
 	}
-	add(current, currentAPI)
+	add(current, currentAPI, 0)
 	for _, selection := range stored {
-		add(selection.URI, selection.API)
+		add(selection.URI, selection.API, selection.ContextWindow)
 	}
 	for _, spec := range modelCatalog {
-		add(spec.URI, "")
+		add(spec.URI, "", 0)
 	}
 	return selections
 }
@@ -549,7 +583,7 @@ func modelChoices(store *state.InteractiveStore, current, currentAPI string, ove
 	for _, selection := range knownModelSelections(store, current, currentAPI) {
 		uri := selection.URI
 		declaration, _ := catalogModelSpec(uri)
-		selected := overrides.withSelection(uri, selection.API)
+		selected := overrides.withSelection(uri, selection.API, selection.ContextWindow)
 		explicitProtocol := selected.API != "" && overrides.API == ""
 		route, err := resolveModelRoute(uri, "", selected, modelRouteEnrichment{})
 		if err != nil {

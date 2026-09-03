@@ -59,7 +59,7 @@ type Agent interface {
 	SwitchToolSet(context.Context, string) error
 	CurrentModel() string
 	ModelChoices() []app.ModelChoice
-	SwitchModel(context.Context, string, string, string) error
+	SwitchModelWithContextWindow(context.Context, string, string, string, int) error
 	CurrentReasoningEffort() string
 	CurrentScope() string
 	ScopeSummary() string
@@ -188,12 +188,13 @@ type pickerState struct {
 	startupLogin bool
 }
 
-// modelSelection is one model switch in progress. api is only present for a
-// route Skot does not describe, whose protocol the user had to supply.
+// modelSelection is one model switch in progress. api is present only when the
+// user chose it; contextWindow preserves an exact value carried by the route.
 type modelSelection struct {
-	uri    string
-	effort string
-	api    string
+	uri           string
+	effort        string
+	api           string
+	contextWindow int
 }
 
 func (picker pickerState) active() bool {
@@ -243,6 +244,9 @@ type screenModel struct {
 	loginProvider  string
 	loginSelection modelSelection
 	loginReturn    pickerState
+	// modelContextSelection is the unknown route whose context window the input
+	// line is collecting. An empty URI means ordinary input.
+	modelContextSelection modelSelection
 	// pathPrompt is the list a typed path will join once the input line is
 	// collecting one. notFilesystemPath means ordinary input.
 	pathPrompt     filesystemPathRow
@@ -653,6 +657,9 @@ func (m screenModel) baseInlineDynamic() ([]string, int) {
 			dynamic = append(dynamic, queued)
 		}
 		if prompt := m.pathPromptLine(); prompt != "" {
+			dynamic = append(dynamic, prompt)
+		}
+		if prompt := m.modelContextPromptLine(); prompt != "" {
 			dynamic = append(dynamic, prompt)
 		}
 		editorDynamicStart = len(dynamic)

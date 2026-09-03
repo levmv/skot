@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -127,6 +128,10 @@ var displayPickerItems = []pickerItem{
 func (m *screenModel) syncCommandSuggestions() {
 	if m.pathPrompt != notFilesystemPath {
 		m.composer.setSuggestionCandidates(pathCompletionCandidates(&m.pathCompletion, m.config.Root, m.composer.value()))
+		return
+	}
+	if m.modelContextSelection.uri != "" {
+		m.composer.setSuggestionCandidates(nil)
 		return
 	}
 	value := strings.ToLower(strings.TrimLeft(m.composer.value(), " \t"))
@@ -366,7 +371,7 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 		return nil
 	}
 	m.acceptCommand(input)
-	selection := modelSelection{uri: args[0]}
+	selection := m.modelSelectionForURI(args[0])
 	if len(args) > 1 {
 		selection.api = args[1]
 	}
@@ -568,6 +573,36 @@ func (m *screenModel) askModelAPI(selection modelSelection) {
 	m.picker.pendingModel = selection
 }
 
+// askModelContextWindow collects the final field of an undeclared model.
+func (m *screenModel) askModelContextWindow(selection modelSelection) {
+	m.modelContextSelection = selection
+	m.composer.reset()
+	m.syncCommandSuggestions()
+}
+
+func (m screenModel) modelContextPromptLine() string {
+	if m.modelContextSelection.uri == "" {
+		return ""
+	}
+	return strings.Repeat(" ", transcriptGutter) + m.mutedStyle.Render(
+		"context window · e.g. 128K or 1M · esc cancels",
+	)
+}
+
+func (m *screenModel) cancelModelContextChoice() {
+	if m.modelContextSelection.uri == "" {
+		return
+	}
+	selection := m.modelContextSelection
+	m.modelContextSelection = modelSelection{}
+	m.composer.reset()
+	m.syncCommandSuggestions()
+	m.addBlock(screenBlockError, fmt.Sprintf(
+		"model: selection cancelled; retry with /model %s %s",
+		selection.uri, selection.api,
+	))
+}
+
 // cancelModelAPIChoice leaves the selection unchanged and names the typed form
 // of the same answer, so declining the list is not a dead end.
 func (m *screenModel) cancelModelAPIChoice(selection modelSelection) {
@@ -693,7 +728,16 @@ func modelChoiceActiveDetail(choice ModelChoice) string {
 }
 
 func modelProtocolLabel(protocol string) string {
-	return strings.ReplaceAll(strings.TrimSpace(protocol), "_", " ")
+	switch strings.TrimSpace(protocol) {
+	case modelAPIChatCompletions:
+		return "OpenAI Chat Completions"
+	case modelAPIResponses:
+		return "Open Responses"
+	case modelAPIAnthropicMessages:
+		return "Anthropic Messages"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(protocol), "_", " ")
+	}
 }
 
 func modelChoiceDiagnosticDescription(choice ModelChoice) string {
@@ -711,6 +755,25 @@ func formatModelTokenCount(tokens int) string {
 	millions := float64(tokens) / 1_000_000
 	value := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", millions), "0"), ".")
 	return value + "M"
+}
+
+func parseModelTokenCount(value string) (int, error) {
+	original := strings.TrimSpace(value)
+	normalized := strings.ToLower(strings.ReplaceAll(original, "_", ""))
+	multiplier := int64(1)
+	if strings.HasSuffix(normalized, "k") {
+		multiplier = 1_000
+		normalized = strings.TrimSuffix(normalized, "k")
+	} else if strings.HasSuffix(normalized, "m") {
+		multiplier = 1_000_000
+		normalized = strings.TrimSuffix(normalized, "m")
+	}
+	amount, err := strconv.ParseInt(normalized, 10, 64)
+	maxInt := int64(^uint(0) >> 1)
+	if err != nil || amount <= 0 || amount > maxInt/multiplier {
+		return 0, fmt.Errorf("invalid context window %q; use a positive token count such as 128K or 1M", original)
+	}
+	return int(amount * multiplier), nil
 }
 
 func appendDescription(description, part string) string {
@@ -1154,7 +1217,9 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 			m.syncCommandSuggestions()
 			return m, nil
 		}
-		m.selectModel(modelSelection{uri: item.value, effort: selectedModelEffort(item)}, picker)
+		selection := m.modelSelectionForURI(item.value)
+		selection.effort = selectedModelEffort(item)
+		m.selectModel(selection, picker)
 	case pickerModelAPI:
 		selection := picker.pendingModel
 		selection.api = item.value
@@ -1390,13 +1455,19 @@ func (m *screenModel) selectModel(selection modelSelection, returnPicker pickerS
 
 func (m *screenModel) switchModel(selection modelSelection) {
 	before := m.agent.CurrentModel()
-	switchErr := m.agent.SwitchModel(m.ctx, selection.uri, selection.effort, selection.api)
+	switchErr := m.agent.SwitchModelWithContextWindow(
+		m.ctx, selection.uri, selection.effort, selection.api, selection.contextWindow,
+	)
 	if switchErr != nil && !preferenceAppliedDespiteError(switchErr) {
 		// A route whose gateway serves several protocols needs one fact Skot
 		// does not have. Asking for it here keeps the answer attached to the
 		// selection being made instead of to the whole process.
 		if selection.api == "" && app.IsModelAPIRequired(switchErr) {
 			m.askModelAPI(selection)
+			return
+		}
+		if app.IsModelContextWindowRequired(switchErr) {
+			m.askModelContextWindow(selection)
 			return
 		}
 		m.addBlock(screenBlockError, "model: "+switchErr.Error())
@@ -1409,6 +1480,23 @@ func (m *screenModel) switchModel(selection modelSelection) {
 	if switchErr != nil {
 		m.addBlock(screenBlockError, "model: "+switchErr.Error())
 	}
+}
+
+func (m screenModel) modelSelectionForURI(uri string) modelSelection {
+	selection := modelSelection{uri: strings.TrimSpace(uri)}
+	for _, choice := range m.modelChoices {
+		if !strings.EqualFold(strings.TrimSpace(choice.URI), selection.uri) {
+			continue
+		}
+		if choice.ProtocolExplicit {
+			selection.api = choice.Protocol
+		}
+		if !choice.ContextWindowEstimated {
+			selection.contextWindow = choice.ContextWindow
+		}
+		break
+	}
+	return selection
 }
 
 func (m *screenModel) cycleModelEffort(delta int) {

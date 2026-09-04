@@ -16,9 +16,14 @@ func TestCatalogListsWorkspaceSessionsAndResolvesPrefix(t *testing.T) {
 	home := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	firstID := createCatalogSession(t, home, workspace, "  first   task  \nignored")
-	time.Sleep(10 * time.Millisecond)
 	secondID := createCatalogSession(t, home, workspace, strings.Repeat("д", 80))
 	_ = createCatalogSession(t, home, filepath.Join(t.TempDir(), "other"), "other task")
+	for index, id := range []string{firstID, secondID} {
+		updated := time.Date(2026, time.January, 1+index, 0, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(filepath.Join(home, "sessions", id, journalName), updated, updated); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	summaries, err := List(home, workspace)
 	if err != nil {

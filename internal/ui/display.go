@@ -46,15 +46,7 @@ func (m *screenModel) switchTranscriptDisplayFromKey(profile string) {
 	if profile == m.displayProfile {
 		return
 	}
-	err := m.switchTranscriptDisplay(profile)
-	if err != nil && !preferenceAppliedDespiteError(err) {
-		m.addBlock(screenBlockError, "display: "+err.Error())
-	} else {
-		m.addBlock(screenBlockSystem, m.displayNotice(m.displayProfile))
-		if err != nil {
-			m.addBlock(screenBlockError, "display: "+err.Error())
-		}
-	}
+	m.selectDisplay(profile)
 	m.refreshTranscript()
 }
 

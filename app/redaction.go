@@ -9,8 +9,9 @@ import (
 )
 
 type secretMasker struct {
-	mu      sync.RWMutex
-	secrets []string
+	mu       sync.RWMutex
+	secrets  []string
+	replacer *strings.Replacer
 }
 
 func newSecretMasker(store *state.Store, extra ...string) *secretMasker {
@@ -40,6 +41,14 @@ func (masker *secretMasker) Add(secret string) {
 		return
 	}
 	masker.secrets = append(masker.secrets, secret)
+	// Prefer the complete key when another key is its prefix. Replacer scans
+	// the original text once, without matching against inserted markers.
+	slices.SortFunc(masker.secrets, func(a, b string) int { return len(b) - len(a) })
+	pairs := make([]string, 0, 2*len(masker.secrets))
+	for _, value := range masker.secrets {
+		pairs = append(pairs, value, "[REDACTED]")
+	}
+	masker.replacer = strings.NewReplacer(pairs...)
 }
 
 func (masker *secretMasker) Redact(text string) string {
@@ -48,8 +57,8 @@ func (masker *secretMasker) Redact(text string) string {
 	}
 	masker.mu.RLock()
 	defer masker.mu.RUnlock()
-	for _, secret := range masker.secrets {
-		text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	if masker.replacer == nil {
+		return text
 	}
-	return text
+	return masker.replacer.Replace(text)
 }

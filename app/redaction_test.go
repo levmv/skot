@@ -25,3 +25,21 @@ func TestSecretMaskerLoadsStoredAndEnvironmentCredentials(t *testing.T) {
 		t.Fatalf("added secret = %q", got)
 	}
 }
+
+func TestSecretMaskerRedactsKeysWithSharedPrefix(t *testing.T) {
+	for _, secrets := range [][]string{
+		{"sk-test-token", "sk-test-token-extended"},
+		{"sk-test-token-extended", "sk-test-token"},
+	} {
+		t.Run(secrets[0], func(t *testing.T) {
+			masker := &secretMasker{}
+			for _, secret := range secrets {
+				masker.Add(secret)
+			}
+			got := masker.Redact("keys: sk-test-token-extended sk-test-token")
+			if got != "keys: [REDACTED] [REDACTED]" {
+				t.Fatalf("redacted = %q", got)
+			}
+		})
+	}
+}

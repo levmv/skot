@@ -1,12 +1,11 @@
 # Skot
 
-Skot is a small, opinionated coding agent for the terminal. It has
-deliberately few tools and supports both interactive sessions and one-shot
-runs.
+Skot is a small, opinionated agent for the terminal. It has a deliberately
+small set of tools and supports both interactive sessions and one-shot runs.
 
-It stays small on purpose: sessions and job state stay local, capabilities are
-explicit, and plans, roles, and larger workflows are left to prompts rather
-than built in.
+The built-in tools and defaults give you a complete setup out of the box.
+Plans, roles, and larger workflows are left to prompts. Sessions and job state
+stay local.
 
 It ships as a single Go binary with no runtime to install alongside it, starts
 in a few milliseconds, and stays light on memory. The same binary serves an
@@ -25,7 +24,7 @@ until they are restarted:
 sk update
 ```
 
-Or build from a checkout:
+Or build from a checkout with Go 1.27 or later:
 
 ```sh
 cd skot
@@ -55,13 +54,13 @@ Data lives in `~/.skot` by default. Set `SK_HOME` or pass `-home` to move it.
 
 ## Sessions and jobs
 
-Running `sk` without a prompt starts a persistent session. One-shot runs are
-ephemeral unless you save them or leave detached work behind.
+Running `sk` without a prompt starts a saved session. One-shot runs are
+normally discarded when they finish. Use `-save-session` to keep one:
 
 ```sh
 sk -save-session "fix the failing tests"
 sk resume                         # latest session for this workspace
-sk resume 0f3a "continue the fix" # ID or unambiguous prefix
+sk resume 0f3a "continue the fix"   # ID or unambiguous prefix
 ```
 
 A Bash command still running after about ten seconds becomes a managed job the
@@ -70,27 +69,32 @@ process and be adopted when the session is resumed.
 
 ## Scripts
 
-Pass a prompt as arguments or through stdin. The answer goes to stdout and
-diagnostics go to stderr, so ordinary shell composition works as expected:
+Pass a prompt as arguments or through stdin. When arguments are present, stdin
+is ignored. To review a diff, send both the instruction and the diff through
+stdin. Answers go to stdout; diagnostics go to stderr:
 
 ```sh
-git diff | SK_TOOLS=read-only sk "review this patch"
+{
+  printf 'Review this patch:\n\n'
+  git diff
+} | SK_TOOLS=read-only sk
 SK_TOOLS=read-only sk -json "summarize this project" > result.json
 ```
 
-`-json` emits exactly one versioned result object for the run. Retry and
-iteration limits bound unattended execution, and exit codes distinguish an
-invalid or incomplete run from a transient provider failure.
+`-json` returns one JSON object with the answer, token usage, and completion
+status. Retry and tool-call limits help keep unattended runs from continuing
+indefinitely. The [reference](docs/reference.md#scripts-and-unattended-runs)
+describes the JSON fields and exit codes.
 
-Headless runs do not inherit model, tool-set, or filesystem choices made
-in the interactive UI. For non-default behavior, pass flags or set environment
-variables; resumed sessions may restore their recorded model and reasoning
-effort.
+Runs from scripts use flags and environment variables, ignoring preferences
+saved in the interactive UI. Resuming a session can also restore its model and
+reasoning effort.
 
 ## Tools
 
-A tool set is an exact list of capabilities available to the model. Custom
-program tools expose narrow commands with JSON input.
+A tool set lists the tools the model can use. For example, `read-only` allows
+reading and searching, and `none` disables tools. You can also define custom
+tools that run a command with JSON input.
 
 Delegation is optional. When the `agent` tool is enabled, child agents share the
 current workspace and filesystem scope but receive only built-in read-only
@@ -98,12 +102,11 @@ tools; they cannot edit files or create more agents.
 
 ## Filesystem access
 
-Skot does not approve individual commands: every tool in the active tool set may
-act without confirmation. `workspace`, the default scope, limits built-in file
-tools and model-owned processes to the project; `machine` opens the surrounding
-filesystem. Added directories grant access to specific paths outside the
-project without opening the whole machine; protected paths exclude selected
-locations under either scope.
+Tools run without asking for confirmation. The default `workspace` scope gives
+the model access to the project, plus the runtime files needed to execute
+commands. Use `-add-dir` to allow another directory or `-scope machine` to allow
+the surrounding filesystem. Protected paths exclude selected locations in
+either scope.
 
 This does not filter network access or make hostile code safe to run. Use a
 dedicated container or virtual machine for that threat model. See

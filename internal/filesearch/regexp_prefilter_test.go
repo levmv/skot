@@ -2,6 +2,7 @@ package filesearch
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -37,8 +38,17 @@ func TestRegexpPrefilterPreservesMatches(t *testing.T) {
 }
 
 func TestRegexpPrefilterBounded(t *testing.T) {
-	pattern := `a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q`
-	if literals := regexpRequiredLiterals(pattern); len(literals) != 0 {
+	// Distinct multi-character alternatives stay alternatives after parsing;
+	// a|b|c would collapse to a character class before reaching the limit.
+	var alternatives []string
+	for index := range maxRegexpPrefilterAlternatives {
+		alternatives = append(alternatives, string(rune('a'+index))+"-needle")
+	}
+	if literals := regexpRequiredLiterals(strings.Join(alternatives, "|")); len(literals) != len(alternatives) {
+		t.Fatalf("prefilter at the limit = %q", literals)
+	}
+	alternatives = append(alternatives, "extra-needle")
+	if literals := regexpRequiredLiterals(strings.Join(alternatives, "|")); len(literals) != 0 {
 		t.Fatalf("oversized prefilter = %q", literals)
 	}
 }

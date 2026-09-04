@@ -1,7 +1,6 @@
 # Skot user reference
 
-This document describes Skot's user-facing behavior and configuration. For
-installation and a short introduction, see the [project README](../README.md).
+For installation and a quick start, see the [README](../README.md).
 
 ## Invocation
 
@@ -37,44 +36,50 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 
 | Flag | Environment | Meaning |
 | --- | --- | --- |
-| `-model provider/model` | `SK_MODEL` | Select the model route. The product default is `deepseek/deepseek-v4-flash`. |
+| `-model provider/model` | `SK_MODEL` | Select a model. Default: `deepseek/deepseek-v4-flash`. |
 | `-reasoning-effort value` | `SK_REASONING_EFFORT` | Select a route-supported effort such as `default`, `off`, `high`, or `max`. Accepted values depend on the route. |
 | `-model-api api` | `SK_MODEL_API` | Override the protocol with `chat_completions`, `responses`, or `anthropic_messages`. |
 | `-base-url url` | `SK_BASE_URL` | Override the provider API base URL. |
 | `-context-window tokens` | — | Override model context metadata; `0` uses route metadata. |
-| `-retry-budget duration` | `SK_RETRY_BUDGET` | Wall-clock retry budget for one logical model request. Default: `15m`. |
+| `-retry-budget duration` | `SK_RETRY_BUDGET` | Time allowed for a model request, including retries and the delays between them. Default: `15m`. |
 | `-stream-idle-timeout duration` | `SK_STREAM_IDLE_TIMEOUT` | Maximum silence between stream events. Default: `5m`. |
-| `-max-tool-iterations n` | `SK_MAX_TOOL_ITERATIONS` | Emergency model-to-tool cycle limit. Default: `128`; use `unlimited` to disable it. |
+| `-max-tool-iterations n` | `SK_MAX_TOOL_ITERATIONS` | Maximum rounds of tool calls in one run. Default: `128`; use `unlimited` to disable it. |
 | `-system-prompt text` | `SK_SYSTEM_PROMPT` | Replace the built-in system instructions. An empty value disables system and project instructions; `{{workspace_root}}` inserts the workspace root. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |
-| `-root path` | `SK_ROOT` | Primary workspace and default path base for model-owned file and process tools. Default: current directory. |
-| `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Product default: `default`. |
+| `-root path` | `SK_ROOT` | Workspace directory. Relative tool paths start here. Default: current directory. |
+| `-tools name` | `SK_TOOLS` | Select the tool set available to the model. Default: `default`. |
 | `-tools-file path` | `SK_TOOLS_FILE` | Load custom program tool definitions. Default: `tools.json` in the Skot data directory. |
-| `-scope value` | `SK_SCOPE` | Select the filesystem reach of built-in file tools and model-owned processes: `workspace` or `machine`. Default: `workspace`. |
+| `-scope value` | `SK_SCOPE` | Choose where the model's tools can access files: `workspace` or `machine`. Default: `workspace`. |
 | `-add-dir path` | — | Add a directory tree to `workspace` scope. Repeat the flag to add more than one. |
 | `-protect-path path` | — | Hide a path from model-owned tools for this run. Repeat the flag to protect more than one. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
 | `-journal path` | — | Use an explicit JSONL session journal. |
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
-| `-json` | — | Emit one versioned JSON result on stdout. |
+| `-json` | — | Write the answer, usage, and status as one JSON object to stdout. |
 | `-v` | — | Show attempts, retries, tool activity, maintenance, status, and final token usage on stderr. |
 | `-version` | — | Print the version and exit. |
 
 `SK_COLOR=always|never` overrides automatic styled-output detection.
 `NO_COLOR` disables styling.
 
-For a new interactive session, an explicit flag or environment variable wins
-over the current workspace preference, which wins over the model and effort last
-selected in any workspace, which wins over the product default. Interactive
-resume additionally restores the session-recorded model and effort between
-explicit input and the workspace preference.
+### Which settings are used?
 
-Headless runs never read interactive preferences. A fresh one-shot or
-`-save-session` run uses only explicit CLI/environment input and product
-defaults. Headless resume may restore the session-recorded model and effort;
-tool-set and filesystem settings still come from the current invocation and
-configuration. A new or empty `-journal` follows the fresh rule; an existing
-journal with a recorded selection follows the continuation rule.
+Interactive sessions choose the model and reasoning effort in this order:
+
+1. Command-line flags, then environment variables.
+2. The saved session's selection, when resuming.
+3. Preferences saved for the current workspace.
+4. The last selection made in any workspace.
+5. Skot's defaults.
+
+Runs without the interactive screen ignore interactive preferences. New runs,
+including `-save-session`, use flags, environment variables, and defaults.
+Resuming can also restore the session's model and reasoning effort. Tool sets
+and filesystem access are chosen from the current flags, environment, and
+configuration.
+
+With `-journal`, an existing journal can restore its saved model selection;
+a new or empty journal starts with the settings for a new run.
 
 ## Models and credentials
 
@@ -108,8 +113,9 @@ Web tools use separate credentials:
 Keenable is the default search provider and the first fetch backend. Without a
 key, Skot uses Keenable's public endpoints and their shared per-IP limits.
 `/login keenable` or the environment variable switches both operations to the
-account's allowance. If Keenable fails, configured providers and the bounded
-direct fetcher remain fallbacks.
+account's allowance. If Keenable fails, Skot tries the other configured
+providers. For fetching, it can also download the page directly, subject to
+its size and time limits.
 
 ## Data directory and configuration
 
@@ -128,18 +134,17 @@ A missing data directory is created with mode `0700`; an existing
 with mode `0600`. Session journals contain conversation and workspace data and
 should also be treated as private.
 
-Model-owned processes in `workspace` scope use a separate disposable home under
-the platform user cache, not under the Skot data directory. On Linux its root
-is `$XDG_CACHE_HOME/skot/tool-home` when `XDG_CACHE_HOME` is set and otherwise
-`$HOME/.cache/skot/tool-home`; each canonical workspace gets a hashed
-subdirectory. Consequently `-home`/`SK_HOME` moves private Skot state but does
-not isolate or relocate this shared cache. Set the platform cache environment
-as well when a CI job needs a fully separate process home. A workspace cache
-may be removed when no Skot invocation or surviving job/process for that
-workspace is still running; Skot does not currently garbage-collect it
-automatically.
+Commands run by the model in `workspace` scope get a separate home directory
+for each workspace. On Linux these directories live under
+`$XDG_CACHE_HOME/skot/tool-home`, or `$HOME/.cache/skot/tool-home` if
+`XDG_CACHE_HOME` is unset. Changing `-home` or `SK_HOME` does not move this cache;
+set `XDG_CACHE_HOME` too if a Linux CI job needs its own command home.
 
-A representative configuration is:
+Skot does not clean up these directories automatically. You can remove a
+workspace's cache once all Skot processes and jobs for that workspace have
+stopped.
+
+For example:
 
 ```json
 {
@@ -153,9 +158,9 @@ A representative configuration is:
 
 | Field | Meaning |
 | --- | --- |
-| `tool_sets` | Map of tool set names to exact ordered tool-name lists. A custom definition replaces a built-in set with the same name. |
-| `agent_models` | Models that the optional `agent` tool may select explicitly. |
-| `protected_paths` | Paths hidden from built-in file tools and model-owned processes. Empty by default. |
+| `tool_sets` | Named lists of tools. A custom definition replaces a built-in set with the same name. |
+| `agent_models` | Models the optional `agent` tool can choose instead of the parent's model. |
+| `protected_paths` | Paths hidden from the model's file tools and commands. Empty by default. |
 
 Interface preferences are shared across workspaces.
 Workspace-specific model, reasoning effort, tool set, and filesystem settings
@@ -168,15 +173,14 @@ Use `/login` rather than editing `auth.json` directly.
 
 ## Sessions and interactive use
 
-Running `sk` with no prompt creates a managed persistent session. A one-shot
-run is ephemeral unless `-save-session` or `-journal` is used, it creates a
-child agent, or it leaves detached work running.
+Starting `sk` interactively saves the conversation automatically. A one-shot
+run is kept if you use `-save-session` or `-journal`, or if it creates a child
+agent or leaves detached work running. Other one-shot conversations are
+discarded after normal completion.
 
-Without `-save-session` or `-journal`, a one-shot run with only built-in
-non-process tools keeps its conversation in memory and leaves no journal in
-`SK_HOME`. A run whose tools can create durable work uses a temporary on-disk
-journal; it is removed after normal completion unless the session becomes
-resumable.
+A one-shot run limited to built-in tools that cannot start processes or child
+agents keeps its conversation in memory. Other one-shot runs may write a
+temporary journal under `SK_HOME` while they work.
 
 ```sh
 sk -save-session "fix the failing tests"
@@ -227,9 +231,9 @@ to the current directory.
 
 ## Tools and tool sets
 
-Built-in file tools use the current filesystem scope, bound their reads and
-searches, and write atomically. See [Filesystem access](#filesystem-access)
-for path and scope rules.
+Built-in file tools follow the current filesystem scope. Reads and searches
+have output limits; truncated results include a notice. File updates are
+written atomically. See [Filesystem access](#filesystem-access) for path rules.
 
 `read` handles UTF-8 text and images. `offset` and `limit` apply only to text.
 Images are reduced to at most 2000 pixels on the longer side before delivery.
@@ -241,17 +245,17 @@ Images are reduced to at most 2000 pixels on the longer side before delivery.
 | `read-only` | `read`, `ls`, `grep`, `glob`, `web_fetch`, `web_search` |
 | `none` | — |
 
-`web_fetch` and `web_search` provide bounded public web access. A custom tool
-set is an exact tool list, not a set of additions to a built-in set.
+`web_fetch` and `web_search` access the public web with size and time limits.
+A custom tool set lists all the tools to enable; it replaces a built-in set
+with the same name.
 
 On Linux, `default` also includes `ls` whenever protected paths are configured.
-The process boundary may make some ancestor-directory operations unavailable;
-the built-in tool keeps directory listing available. Explicit custom tool sets
-remain exact.
+This lets the model list directories that Bash cannot list under that policy.
+Custom tool sets are used as written.
 
 ### Child agents
 
-Add the single `agent` capability to a custom tool set to permit delegation:
+Add `agent` to a custom tool set to enable child agents:
 
 ```json
 {
@@ -262,11 +266,11 @@ Add the single `agent` capability to a custom tool set to permit delegation:
 }
 ```
 
-The parent can start, continue, inspect, wait for, or stop children through that
-one tool. Children share the workspace and inherit the current model by default,
-but receive a fresh conversation and only the built-in read-only tools. They
-cannot create more agents. `agent_models` allowlists explicit child model
-overrides and may be omitted.
+The parent can start, continue, inspect, wait for, or stop child agents.
+Children share the workspace and use the parent's model by default. Each starts
+with a fresh conversation and only the built-in read-only tools; children
+cannot create more agents. `agent_models` lists alternative models the parent
+may choose for a child. Omit it to use only the parent's model.
 
 Up to four children run concurrently. Their journals live under the parent
 session, stay out of the normal session picker, and remain available after the
@@ -295,8 +299,8 @@ Skot loads `tools.json` from its data directory, or another file selected by
 }
 ```
 
-The executable receives one JSON object on stdin. Stdout becomes the model-facing
-result; non-empty stderr is captured separately and appended under a `stderr:`
+The executable receives one JSON object on stdin. Its stdout is returned to the
+model; non-empty stderr is captured separately and appended under a `stderr:`
 header. A configured tool is visible only when the active tool set names it.
 Skot validates the declaration at startup and resolves its executable when that
 tool set is activated.
@@ -340,29 +344,27 @@ an outer container when whole-process-tree containment matters.
 instructions, tool definitions, rolling summary, history, and queued input.
 Reasoning data that will not be sent again is excluded.
 
-When the next request would exceed its input limit, Skot first tries to prune
-older tool-result bodies and then compacts an older completed prefix into a
-rolling summary. Maintenance never rewrites the active run. `/compact`
-requests the same compaction explicitly.
+When a conversation gets too large for the model, Skot first shortens older
+tool results. If more space is needed, it summarizes older completed turns.
+The current turn is kept intact. Use `/compact` to request a summary yourself.
 
 `-context-window` overrides missing or incorrect route metadata.
-`-max-tool-iterations` is an emergency fuse for repeated tool cycles; when it
-is reached, Skot asks the model for a final answer without offering tools.
+`-max-tool-iterations` limits repeated rounds of tool calls. When the limit is
+reached, Skot asks the model for a final answer with tools disabled.
 
 ## Filesystem access
 
-Skot does not approve individual commands. Every tool in the active tool set
-may act without confirmation. Filesystem reach is bounded structurally:
+Tools run without asking for confirmation. You control their access through
+four settings:
 
-- a tool set decides which capabilities the model has;
-- one selected scope controls both built-in file tools and model-owned Bash or
-  program processes;
+- a tool set decides which tools the model can use;
+- the scope controls access for both file tools and commands run by the model;
 - added directories can extend `workspace` scope without selecting `machine`;
 - protected paths hide named trees under either scope.
 
-Built-in tools enforce these paths inside Skot. Model-owned processes receive
-an operating-system filesystem boundary whenever the selected policy needs
-one. Neither layer filters network egress or makes hostile code safe to run.
+Skot checks paths for built-in file tools and uses operating-system restrictions
+for commands run by the model when the selected settings require them.
+These restrictions do not filter network access or make hostile code safe to run.
 Use a dedicated container or virtual machine when the model or the code it runs
 is untrusted. User-owned `!` and `!!` commands intentionally use the user's
 ordinary environment and filesystem permissions.
@@ -448,23 +450,27 @@ Built-in file tools do not have this limitation.
 ## Scripts and unattended runs
 
 A prompt is read from arguments, or from stdin when no prompt argument is
-present:
+present. Arguments take precedence: Skot does not append piped input to them.
+Send the instruction and its input together through stdin:
 
 ```sh
 sk "review this change"
-git diff | SK_TOOLS=read-only sk "review this patch"
+{
+  printf 'Review this patch:\n\n'
+  git diff
+} | SK_TOOLS=read-only sk
 ```
 
 The ordinary answer is written to stdout. Progress, diagnostics, resume hints,
 and verbose events go to stderr. `-retry-budget`,
-`-stream-idle-timeout`, and `-max-tool-iterations` bound unattended
-behavior.
+`-stream-idle-timeout`, and `-max-tool-iterations` limit retries, stalled
+streams, and repeated tool calls.
 
 ### JSON output
 
-`-json` writes exactly one versioned product-run object to stdout. A run can
-span retries, tools, compaction, and multiple provider responses, so this is not
-a raw provider response.
+`-json` writes one JSON object to stdout with the answer, total token usage,
+and completion status for the run. It covers the whole task, including retries
+and tool calls. The `version` field identifies the output format.
 
 ```json
 {
@@ -492,7 +498,7 @@ a raw provider response.
 The stable fields are `version`, `reply`, `usage`, `status`,
 `duration_ms`, `model`, `reasoning_effort`, `tool_set`, `system_prompt`, and
 `model_attempts`. `system_prompt` is `default`, `custom`, or `none`. Depending
-on lifecycle and outcome, the object may also
+on how the run ends, the object may also
 contain `run_id`, `session_id`, `tool_limit_reached`, `detached_jobs`,
 and `error`.
 
@@ -506,6 +512,6 @@ publish the breakdown leave it at zero.
 | ---: | --- |
 | `0` | Success. |
 | `1` | Other application or runtime failure. |
-| `2` | Invalid/configuration request, incomplete model result, or fatal tool failure. Inspect or change the invocation before rerunning. |
-| `3` | Provider failure. The unchanged invocation may be retryable depending on the diagnostic. |
+| `2` | Invalid input or configuration, incomplete model result, or fatal tool failure. Read the diagnostic before rerunning. |
+| `3` | Provider failure. Read the diagnostic to decide whether to retry. |
 | `130` | Interrupted or cancelled. |

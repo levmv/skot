@@ -27,11 +27,7 @@ Your workspace root is {{workspace_root}}.`
 // loadInstructions reads the AGENTS.md chain that applies to the current
 // working directory. Sessions keep no historical copy: a new process or an
 // in-process resume uses the repository's current instructions.
-func loadInstructions(root string, protections ...*workspacetools.ProtectedPathPolicy) ([]string, error) {
-	var protection *workspacetools.ProtectedPathPolicy
-	if len(protections) > 0 {
-		protection = protections[0]
-	}
+func loadInstructions(root string, protection *workspacetools.ProtectedPathPolicy) ([]string, error) {
 	root, err := workspacetools.ResolveWorkspaceRoot(root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve instruction root: %w", err)

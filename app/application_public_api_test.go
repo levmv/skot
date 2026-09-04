@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,12 @@ import (
 // without sharing mutable session state. Keep this test in package app_test.
 func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 	const childCount = 3
+	ctx, cancelRuns := context.WithCancel(t.Context())
+	var runs sync.WaitGroup
+	defer func() {
+		cancelRuns()
+		runs.Wait()
+	}()
 
 	parallelStarted := make(chan string, childCount)
 	parallelRelease := make(chan struct{})
@@ -73,12 +80,8 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 			t.Fatalf("open child %d: %v", index, err)
 		}
 		children[index] = child
+		t.Cleanup(func() { _ = child.Close() })
 	}
-	t.Cleanup(func() {
-		for _, child := range children {
-			_ = child.Close()
-		}
-	})
 
 	type outcome struct {
 		index  int
@@ -87,10 +90,10 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 	}
 	outcomes := make(chan outcome, childCount)
 	for index, child := range children {
-		go func() {
-			result, err := child.Run(context.Background(), fmt.Sprintf("parallel-%d", index), nil)
+		runs.Go(func() {
+			result, err := child.Run(ctx, fmt.Sprintf("parallel-%d", index), nil)
 			outcomes <- outcome{index: index, result: result, err: err}
-		}()
+		})
 	}
 
 	started := make(map[string]struct{}, childCount)
@@ -160,19 +163,20 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 		t.Fatalf("closed child remained usable: %v", err)
 	}
 
-	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	cancelled := make(chan outcome, 1)
-	go func() {
+	runs.Go(func() {
 		result, err := children[1].Run(cancelCtx, "cancel-me", nil)
 		cancelled <- outcome{index: 1, result: result, err: err}
-	}()
+	})
 	select {
 	case <-cancelStarted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancelled child did not reach the model")
 	}
 
-	survivor, err := children[2].Run(context.Background(), "still-alive", nil)
+	survivor, err := children[2].Run(ctx, "still-alive", nil)
 	if err != nil || survivor.Status != agent.RunCompleted || survivor.Answer != "answer: still-alive" {
 		t.Fatalf("sibling run while another child was blocked = %#v, %v", survivor, err)
 	}

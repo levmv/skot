@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/app"
 )
 
 type scopeSwitchState struct {
@@ -151,4 +152,121 @@ func scopeSummaryDetail(scope, summary string) string {
 		return strings.ReplaceAll(strings.TrimSpace(detail), " · ", "\n")
 	}
 	return strings.ReplaceAll(summary, " · ", "\n")
+}
+
+func (m *screenModel) openScopePicker() {
+	items := m.scopePickerRows()
+	m.openPicker(pickerScope, items, markCurrentPickerItem(items, m.agent.CurrentScope()))
+}
+
+// refreshScopePicker rebuilds an open scope picker after the policy changed, so
+// a removed path leaves the list without closing the menu.
+func (m *screenModel) refreshScopePicker() {
+	if m.picker.kind != pickerScope {
+		return
+	}
+	items := m.scopePickerRows()
+	m.picker.items = items
+	m.picker.index = min(max(0, m.picker.index), len(items)-1)
+}
+
+// scopePickerRows lists the scopes first, so their digits and the muscle memory
+// of the two top rows survive however many paths follow.
+func (m screenModel) scopePickerRows() []pickerItem {
+	items := append([]pickerItem(nil), scopePickerItems...)
+	added, protected := m.agent.FilesystemPaths()
+	items = append(items, m.filesystemPathSection(added, addedDirectoryRow, "-add-dir",
+		"+ add a directory", "reachable in workspace scope")...)
+	items = append(items, m.filesystemPathSection(protected, protectedPathRow, "-protect-path",
+		"+ protect a path", "hidden from the model")...)
+	return items
+}
+
+// filesystemPathSection is one list and the row which adds to it. The add row
+// closes the section so an empty list still costs a single line.
+func (m screenModel) filesystemPathSection(paths []FilesystemPath, kind filesystemPathRow, flag, label, description string) []pickerItem {
+	rows := m.filesystemPathRows(paths, kind, flag)
+	return append(rows, pickerItem{
+		label: label, description: description, dividerBefore: len(rows) == 0,
+		filesystemPath: kind, addRow: true,
+	})
+}
+
+// filesystemPathRows describes only what departs from the ordinary row: one
+// remembered for this workspace says nothing, because the section it sits in
+// already says what it is.
+func (m screenModel) filesystemPathRows(paths []FilesystemPath, kind filesystemPathRow, flag string) []pickerItem {
+	rows := make([]pickerItem, 0, len(paths))
+	for index, entry := range paths {
+		row := pickerItem{
+			value:          entry.Path,
+			label:          displayToolPath(m.config.Root, entry.Path),
+			dividerBefore:  index == 0,
+			filesystemPath: kind,
+			dimmed:         entry.Origin != app.FilesystemPathRemembered,
+		}
+		switch entry.Origin {
+		case app.FilesystemPathRemembered:
+			row.activeDetail = "(d or backspace to remove)"
+		case app.FilesystemPathInvocation:
+			row.description = flag + " this run"
+		case app.FilesystemPathSettings:
+			row.description = "config.json"
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// openPathPrompt turns the input line into a path field for one list. What it
+// is collecting is named by pathPromptLine, next to the line itself.
+func (m *screenModel) openPathPrompt(kind filesystemPathRow) {
+	m.pathPrompt = kind
+	m.pathCompletion.reset()
+	m.composer.reset()
+	m.syncCommandSuggestions()
+}
+
+// pathPromptLine names what the input line is collecting. It lives in the
+// dynamic area rather than the transcript: it belongs to the prompt, and a
+// transcript line would pile up every time the prompt is opened.
+func (m screenModel) pathPromptLine() string {
+	if m.pathPrompt == notFilesystemPath {
+		return ""
+	}
+	subject := "directory to add"
+	if m.pathPrompt == protectedPathRow {
+		subject = "path to protect"
+	}
+	return strings.Repeat(" ", transcriptGutter) +
+		m.mutedStyle.Render(subject+" · tab completes · esc returns to /scope")
+}
+
+// reopenPathPrompt puts a refused path back in the input line, ready to edit.
+func (m *screenModel) reopenPathPrompt(kind filesystemPathRow, typed string) {
+	m.pathPrompt = kind
+	m.composer.setValue(typed)
+	m.composer.cursorEnd()
+	m.syncCommandSuggestions()
+}
+
+// openScopePickerAt returns to the menu with the section which was just edited
+// under the cursor, so another path costs one keystroke and the new row is in
+// view.
+func (m *screenModel) openScopePickerAt(kind filesystemPathRow) {
+	m.openScopePicker()
+	for index, item := range m.picker.items {
+		if item.addRow && item.filesystemPath == kind {
+			m.picker.index = index
+			break
+		}
+	}
+}
+
+// closePathPrompt returns to the menu the prompt was opened from.
+func (m *screenModel) closePathPrompt() {
+	m.pathPrompt = notFilesystemPath
+	m.pathCompletion.reset()
+	m.composer.reset()
+	m.openScopePicker()
 }

@@ -144,15 +144,8 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("create Anthropic Messages request: %w", err))
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "text/event-stream")
 	httpRequest.Header.Set("anthropic-version", anthropicVersion)
-	for name, values := range backend.header {
-		for _, value := range values {
-			httpRequest.Header.Add(name, value)
-		}
-	}
-	modelhttp.SetIdentityHeaders(httpRequest.Header, request.SessionID)
+	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
 	if backend.dropMismatchedThinking {
 		betas := append(httpRequest.Header.Values("anthropic-beta"), thinkingBindingBeta)
 		httpRequest.Header.Set("anthropic-beta", strings.Join(betas, ","))

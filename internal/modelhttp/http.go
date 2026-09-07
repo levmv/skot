@@ -17,8 +17,15 @@ func MarshalRequestJSON(value any) ([]byte, error) {
 	return json.Marshal(value, json.Deterministic(true))
 }
 
-// SetIdentityHeaders supplies a default user agent and the current conversation ID.
-func SetIdentityHeaders(header http.Header, sessionID string) {
+// SetRequestHeaders sets common headers for streaming JSON model requests.
+func SetRequestHeaders(header, extra http.Header, sessionID string) {
+	header.Set("Content-Type", "application/json")
+	header.Set("Accept", "text/event-stream")
+	for name, values := range extra {
+		for _, value := range values {
+			header.Add(name, value)
+		}
+	}
 	if header.Get("User-Agent") == "" {
 		header.Set("User-Agent", "Skot")
 	}

@@ -117,14 +117,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("create chat completion request: %w", err))
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	httpRequest.Header.Set("Accept", "text/event-stream")
-	for name, values := range backend.header {
-		for _, value := range values {
-			httpRequest.Header.Add(name, value)
-		}
-	}
-	modelhttp.SetIdentityHeaders(httpRequest.Header, request.SessionID)
+	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
 	}

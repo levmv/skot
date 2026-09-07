@@ -152,6 +152,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			httpRequest.Header.Add(name, value)
 		}
 	}
+	modelhttp.SetIdentityHeaders(httpRequest.Header, request.SessionID)
 	if backend.dropMismatchedThinking {
 		betas := append(httpRequest.Header.Values("anthropic-beta"), thinkingBindingBeta)
 		httpRequest.Header.Set("anthropic-beta", strings.Join(betas, ","))

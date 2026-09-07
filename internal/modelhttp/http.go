@@ -17,6 +17,16 @@ func MarshalRequestJSON(value any) ([]byte, error) {
 	return json.Marshal(value, json.Deterministic(true))
 }
 
+// SetIdentityHeaders supplies a default user agent and the current conversation ID.
+func SetIdentityHeaders(header http.Header, sessionID string) {
+	if header.Get("User-Agent") == "" {
+		header.Set("User-Agent", "Skot")
+	}
+	if sessionID != "" {
+		header.Set("X-Session-ID", sessionID)
+	}
+}
+
 // PublicEndpoint canonicalizes an adapter base URL and removes credentials and
 // request-only URL data before it is journaled or compared with saved state.
 func PublicEndpoint(value string) string {

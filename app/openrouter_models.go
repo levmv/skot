@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/levmv/skot/internal/modelhttp"
 )
 
 const openRouterModelsURL = "https://openrouter.ai/api/v1"
@@ -33,7 +35,7 @@ func fetchOpenRouterContextWindow(ctx context.Context, client *http.Client, base
 		return 0, err
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", "Skot")
+	modelhttp.SetIdentityHeaders(request.Header, "")
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, err

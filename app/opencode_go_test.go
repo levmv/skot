@@ -125,9 +125,16 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			test.request.SessionID = "session_opencode_test"
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				if request.URL.Path != test.path {
 					t.Errorf("server path = %q", request.URL.Path)
+				}
+				if got := request.Header.Get("X-Session-ID"); got != test.request.SessionID {
+					t.Errorf("session header = %q, want %q", got, test.request.SessionID)
+				}
+				if got := request.Header.Get("User-Agent"); got != "Skot" {
+					t.Errorf("user agent = %q", got)
 				}
 				if test.protocol == modelAPIAnthropicMessages {
 					if key := request.Header.Get("x-api-key"); key != "subscription-secret" {

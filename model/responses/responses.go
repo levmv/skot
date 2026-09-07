@@ -126,6 +126,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			httpRequest.Header.Add(name, value)
 		}
 	}
+	modelhttp.SetIdentityHeaders(httpRequest.Header, request.SessionID)
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
 	}

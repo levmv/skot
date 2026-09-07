@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	defaultMaxTokens = 64 * 1024
-	anthropicVersion = "2023-06-01"
-	thinkingDataKind = "anthropic_messages.thinking_block.v1"
+	defaultMaxTokens    = 64 * 1024
+	anthropicVersion    = "2023-06-01"
+	thinkingDataKind    = "anthropic_messages.thinking_block.v1"
+	thinkingBindingBeta = "thinking-binding-controls-2026-08-01"
 )
 
 // ProviderStateContract identifies signature-bearing thinking blocks that must
@@ -49,24 +50,28 @@ type Config struct {
 	// off for compatible endpoints that place their own breakpoints, because the
 	// protocol allows only a few per request.
 	PromptCache bool
-	BaseURL     string
-	HTTPClient  *http.Client
-	Authorizer  Authorizer
-	Header      http.Header
+	// DropMismatchedThinking asks the API to drop thinking invalidated by context
+	// edits. It enables adaptive thinking and requires support for the binding beta.
+	DropMismatchedThinking bool
+	BaseURL                string
+	HTTPClient             *http.Client
+	Authorizer             Authorizer
+	Header                 http.Header
 }
 
 type Backend struct {
-	provider           string
-	model              string
-	apiModel           string
-	maxTokens          int
-	promptCache        bool
-	endpoint           string
-	client             *http.Client
-	authorizer         Authorizer
-	header             http.Header
-	maxRequestBytes    int
-	maxCompletionBytes int
+	provider               string
+	model                  string
+	apiModel               string
+	maxTokens              int
+	promptCache            bool
+	dropMismatchedThinking bool
+	endpoint               string
+	client                 *http.Client
+	authorizer             Authorizer
+	header                 http.Header
+	maxRequestBytes        int
+	maxCompletionBytes     int
 }
 
 func New(config Config) (*Backend, error) {
@@ -102,15 +107,15 @@ func New(config Config) (*Backend, error) {
 	}
 	return &Backend{
 		provider: provider, model: model, apiModel: apiModel, maxTokens: maxTokens,
-		promptCache: config.PromptCache,
-		endpoint:    baseURL + "/messages", client: client,
+		promptCache:            config.PromptCache,
+		dropMismatchedThinking: config.DropMismatchedThinking,
+		endpoint:               baseURL + "/messages", client: client,
 		authorizer: config.Authorizer, header: config.Header.Clone(),
 		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
 }
 
-// ProjectModelItems keeps all runtime-owned items because signed thinking stays
-// replayable for the whole provider epoch.
+// ProjectModelItems retains thinking blocks for replay with their signatures.
 func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 	return items
 }
@@ -146,6 +151,10 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		for _, value := range values {
 			httpRequest.Header.Add(name, value)
 		}
+	}
+	if backend.dropMismatchedThinking {
+		betas := append(httpRequest.Header.Values("anthropic-beta"), thinkingBindingBeta)
+		httpRequest.Header.Set("anthropic-beta", strings.Join(betas, ","))
 	}
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
@@ -271,11 +280,11 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		}
 		stopReason = normalized
 	}
-	items, err := backend.responseItems(blocks, limited)
+	items, err := backend.responseItems(blocks, stopReason)
 	if err != nil {
 		return agent.ModelResponse{}, err
 	}
-	if len(items) == 0 && !limited && !agent.IsIncompleteStopReason(stopReason) {
+	if len(items) == 0 && !agent.IsIncompleteStopReason(stopReason) {
 		return agent.ModelResponse{}, errors.New("messages response returned no output items")
 	}
 	return agent.ModelResponse{Items: items, Usage: usage.modelUsage(), StopReason: stopReason}, nil
@@ -302,7 +311,8 @@ func (backend *Backend) normalizeStopReason(reason string) (string, error) {
 	return normalized, nil
 }
 
-func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool) ([]agent.Item, error) {
+func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason string) ([]agent.Item, error) {
+	locallyLimited := stopReason == agent.StopReasonOutputLimit
 	items := make([]agent.Item, 0, len(blocks))
 	indices := make([]int, 0, len(blocks))
 	for index := range blocks {
@@ -311,7 +321,11 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 	slices.Sort(indices)
 	for _, index := range indices {
 		block := blocks[index]
-		if !limited && (block.kind == "text" || block.kind == "thinking" || block.kind == "redacted_thinking" || block.kind == "tool_use") && !block.closed {
+		// Tool arguments may be truncated even when the thinking blocks are complete.
+		if block.kind == "tool_use" && agent.IsIncompleteStopReason(stopReason) {
+			continue
+		}
+		if !locallyLimited && (block.kind == "text" || block.kind == "thinking" || block.kind == "redacted_thinking" || block.kind == "tool_use") && !block.closed {
 			return nil, fmt.Errorf("%s returned an incomplete %s block", backend.provider, block.kind)
 		}
 		switch block.kind {
@@ -322,7 +336,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 		case "thinking":
 			if block.reasoning.Len() != 0 || block.signature.Len() != 0 {
 				item := agent.Item{Kind: agent.ItemReasoning, Text: block.reasoning.String()}
-				if !limited && block.signature.Len() != 0 {
+				if !locallyLimited && block.signature.Len() != 0 {
 					state, err := json.Marshal(thinkingBlockState{
 						Type: "thinking", Thinking: block.reasoning.String(), Signature: block.signature.String(),
 					}, json.Deterministic(true))
@@ -335,7 +349,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 			}
 		case "redacted_thinking":
 			// Ignore malformed incoming state for compatibility; saved state is validated before replay.
-			if !limited && validRedactedThinkingData(block.data) {
+			if !locallyLimited && validRedactedThinkingData(block.data) {
 				state, err := json.Marshal(thinkingBlockState{Type: "redacted_thinking", Data: block.data}, json.Deterministic(true))
 				if err != nil {
 					return nil, fmt.Errorf("encode %s redacted thinking state: %w", backend.provider, err)
@@ -346,9 +360,6 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, limited bool)
 				})
 			}
 		case "tool_use":
-			if limited {
-				continue
-			}
 			if strings.TrimSpace(block.id) == "" || strings.TrimSpace(block.name) == "" {
 				return nil, fmt.Errorf("%s returned an incomplete tool_use block", backend.provider)
 			}

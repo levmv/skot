@@ -219,9 +219,8 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if text.Len() != 0 {
 		items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: text.String()})
 	}
-	// Tool calls are not durable unless they are complete enough to execute.
-	// If the response was cut locally, keep only renderable partial content.
-	if !limited {
+	// Tool arguments can be truncated when a response stops early.
+	if !agent.IsIncompleteStopReason(stopReason) {
 		for _, call := range calls.snapshot() {
 			if strings.TrimSpace(call.Function.Name) == "" {
 				return agent.ModelResponse{}, errors.New("chat completion returned a tool call without a name")
@@ -243,7 +242,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	}
 	// Empty output is valid for an incomplete provider stop, which the runtime
 	// reports as an incomplete run rather than a transport failure.
-	if len(items) == 0 && !limited && !agent.IsIncompleteStopReason(stopReason) {
+	if len(items) == 0 && !agent.IsIncompleteStopReason(stopReason) {
 		return agent.ModelResponse{}, errors.New("chat completion returned no output items")
 	}
 	return agent.ModelResponse{Items: items, Usage: usage, StopReason: stopReason}, nil

@@ -34,10 +34,11 @@ type modelSpec struct {
 	MaxOutputTokens int
 	// ImageInputUnsupported is a reviewed negative route fact. Its zero value
 	// deliberately leaves image delivery optimistic for new and unknown models.
-	ImageInputUnsupported bool
-	ReasoningEfforts      []string
-	ChatTraits            *chatcompletions.RouteTraits
-	ResponsesTraits       *responsemodel.RouteTraits
+	ImageInputUnsupported  bool
+	ReasoningEfforts       []string
+	ChatTraits             *chatcompletions.RouteTraits
+	ResponsesTraits        *responsemodel.RouteTraits
+	DropMismatchedThinking bool
 	// Compatibility overrides the supported default for a reviewed declaration.
 	Compatibility modelCompatibility
 }
@@ -144,6 +145,7 @@ type resolvedModelRoute struct {
 	ContextWindowEstimated bool
 	MaxOutputTokens        int
 	PromptCache            bool
+	DropMismatchedThinking bool
 	ReasoningEffort        string
 	ReasoningEfforts       []string
 	ChatTraits             chatcompletions.RouteTraits
@@ -173,11 +175,16 @@ var modelCatalog = []modelSpec{
 			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
 		},
 	},
-	// The Messages adapter sends no thinking controls, so this route declares no
-	// reasoning vocabulary even though the model reasons by default.
 	{
 		URI: "anthropic/claude-opus-5", Name: "Claude Opus 5", API: modelAPIAnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+	},
+	// Fable 5.1 binds thinking signatures to the preceding conversation context.
+	// https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
+	{
+		URI: "anthropic/claude-fable-5-1", Name: "Claude Fable 5.1", API: modelAPIAnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		DropMismatchedThinking: true, Compatibility: modelCompatibilityUnverified,
 	},
 	{URI: "openrouter/free", Name: "OpenRouter Free"},
 	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest"},
@@ -388,7 +395,7 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		reasoningEfforts = declaration.ReasoningEfforts
 	}
 	if api == modelAPIAnthropicMessages {
-		// This adapter does not yet send optional thinking controls.
+		// This adapter leaves reasoning effort at the provider default.
 		reasoningEfforts = []string{defaultReasoningEffort}
 	}
 	reasoningEfforts = append([]string(nil), reasoningEfforts...)
@@ -426,6 +433,8 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	// Placing cache breakpoints is a route claim like the traits above: a custom
 	// compatible endpoint starts from the conservative generic behavior.
 	promptCache := api == modelAPIAnthropicMessages && !customEndpoint && providerDescription.promptCache
+	dropMismatchedThinking := api == modelAPIAnthropicMessages && !customEndpoint &&
+		usesReviewedProtocol && declaration.DropMismatchedThinking
 
 	contextWindow, contextEstimated := 0, false
 	switch {
@@ -464,7 +473,8 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 		CustomEndpoint: customEndpoint, ImageInputUnsupported: imageInputUnsupported,
 		ContextWindow: contextWindow, ContextWindowEstimated: contextEstimated,
 		MaxOutputTokens: maxOutputTokens, PromptCache: promptCache,
-		ReasoningEffort: reasoningEffort, ReasoningEfforts: reasoningEfforts,
+		DropMismatchedThinking: dropMismatchedThinking,
+		ReasoningEffort:        reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,
 		Compatibility: compatibility, ProviderStateContract: stateContract,
 	}, nil

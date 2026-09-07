@@ -298,7 +298,7 @@ func TestRedactedThinkingRoundTripsAsProviderState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	items, err := backend.responseItems(map[int]*streamBlock{
 		0: {kind: "redacted_thinking", data: jsontext.Value(`"opaque-state"`), closed: true},
-	}, false)
+	}, "stop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestInvalidRedactedThinkingDataIsDroppedAndRejectedWhenSaved(t *testing.T) 
 		t.Run(string(data), func(t *testing.T) {
 			items, err := backend.responseItems(map[int]*streamBlock{
 				0: {kind: "redacted_thinking", data: data, closed: true},
-			}, false)
+			}, "stop")
 			if err != nil || len(items) != 0 {
 				t.Fatalf("items/error = %#v/%v", items, err)
 			}
@@ -351,7 +351,7 @@ func TestResponseItemsSortSparseProviderIndices(t *testing.T) {
 	}
 	blocks[5_000].text.WriteString("late")
 	blocks[2].text.WriteString("early")
-	items, err := backend.responseItems(blocks, false)
+	items, err := backend.responseItems(blocks, "stop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,6 +403,59 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	}, nil)
 	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) || requests.Load() != 0 {
 		t.Fatalf("error/requests = %v/%d", err, requests.Load())
+	}
+}
+
+func TestCompletePreservesPartialOutputWithoutToolCalls(t *testing.T) {
+	for _, test := range []struct {
+		name, reason string
+		wantError    bool
+	}{
+		{name: "token limit", reason: "max_tokens"},
+		{name: "malformed completed call", reason: "tool_use", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				for _, event := range []map[string]any{
+					{"type": "message_start", "message": map[string]any{"usage": map[string]any{"input_tokens": 10, "output_tokens": 0}}},
+					{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking", "thinking": "checking", "signature": "signed-thinking"}},
+					{"type": "content_block_stop", "index": 0},
+					{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "text", "text": "partial"}},
+					{"type": "content_block_stop", "index": 1},
+					{"type": "content_block_start", "index": 2, "content_block": map[string]any{"type": "tool_use", "id": "toolu_1", "name": "read", "input": map[string]any{"path": "first"}}},
+					{"type": "content_block_stop", "index": 2},
+					{"type": "content_block_start", "index": 3, "content_block": map[string]any{"type": "tool_use", "id": "toolu_2", "name": "read", "input": map[string]any{}}},
+					{"type": "content_block_delta", "index": 3, "delta": map[string]any{"type": "input_json_delta", "partial_json": `{"path":"unfinished`}},
+					{"type": "content_block_stop", "index": 3},
+					{"type": "message_delta", "delta": map[string]any{"stop_reason": test.reason}, "usage": map[string]any{"output_tokens": 3}},
+					{"type": "message_stop"},
+				} {
+					writeSSEEvent(t, writer, event)
+				}
+			}))
+			backend := newTestServerBackend(t, server, "")
+			response, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+					t.Fatalf("malformed completed call error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Items) != 2 || response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking" ||
+				len(response.Items[0].ProviderData) != 1 || response.Items[1].Kind != agent.ItemAssistantText || response.Items[1].Text != "partial" ||
+				response.StopReason != test.reason || response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
+				t.Fatalf("incomplete response = %#v", response)
+			}
+			var thinking thinkingBlockState
+			if err := json.Unmarshal(response.Items[0].ProviderData[0].Data, &thinking); err != nil ||
+				thinking.Type != "thinking" || thinking.Thinking != "checking" || thinking.Signature != "signed-thinking" {
+				t.Fatalf("saved thinking = %#v, error = %v", thinking, err)
+			}
+		})
 	}
 }
 

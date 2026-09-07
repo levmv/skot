@@ -16,7 +16,17 @@ type messagesRequest struct {
 	System    string           `json:"system,omitempty"`
 	Messages  []message        `json:"messages"`
 	Tools     []toolDefinition `json:"tools,omitempty"`
+	Thinking  *thinkingConfig  `json:"thinking,omitzero"`
 	Stream    bool             `json:"stream"`
+}
+
+type thinkingConfig struct {
+	Type         string               `json:"type"`
+	BlockBinding thinkingBlockBinding `json:"block_binding"`
+}
+
+type thinkingBlockBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior"`
 }
 
 type message struct {
@@ -175,10 +185,16 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesReques
 	if backend.promptCache {
 		markPromptCacheBreakpoint(messages)
 	}
-	return messagesRequest{
+	wireRequest := messagesRequest{
 		Model: backend.apiModel, MaxTokens: backend.maxTokens, System: system,
 		Messages: messages, Tools: tools, Stream: true,
-	}, nil
+	}
+	if backend.dropMismatchedThinking {
+		wireRequest.Thinking = &thinkingConfig{
+			Type: "adaptive", BlockBinding: thinkingBlockBinding{PrefixMismatchBehavior: "drop_block"},
+		}
+	}
+	return wireRequest, nil
 }
 
 // markPromptCacheBreakpoint caches everything the request sends before its final

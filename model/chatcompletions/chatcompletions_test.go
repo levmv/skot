@@ -888,6 +888,43 @@ func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {
 	}
 }
 
+func TestCompletePreservesPartialOutputWithoutToolCalls(t *testing.T) {
+	for _, test := range []struct {
+		name, reason string
+		wantError    bool
+	}{
+		{name: "token limit", reason: "length"},
+		{name: "content filter", reason: "content_filter"},
+		{name: "malformed completed call", reason: "tool_calls", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				// A complete call followed by a truncated one.
+				io.WriteString(writer, `data: {"choices":[{"index":0,"delta":{"content":"partial","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"first\"}"}},{"index":1,"id":"call_2","type":"function","function":{"name":"read","arguments":"{\"path\":\"unfinished"}}]}}]}
+
+`)
+				fmt.Fprintf(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":%q}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13}}\n\ndata: [DONE]\n\n", test.reason)
+			}))
+			backend := newTestServerBackend(t, server, "")
+			response, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+			if test.wantError {
+				if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+					t.Fatalf("malformed completed call error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "partial"}}) ||
+				response.StopReason != test.reason || response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
+				t.Fatalf("incomplete response = %#v", response)
+			}
+		})
+	}
+}
+
 func TestCompleteRejectsEmptyFinishedResponse(t *testing.T) {
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")

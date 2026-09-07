@@ -119,9 +119,8 @@ func UnsupportedCompletionReasonError(provider, reason string) error {
 	}
 }
 
-// NewProviderError classifies a decoded provider response without scraping its
-// prose. Exact provider code/type values may refine the conservative status
-// mapping after a live baseline establishes their meaning.
+// NewProviderError classifies failures by HTTP status and structured code/type.
+// The message is preserved for display, not used to decide whether to retry.
 func NewProviderError(details ProviderErrorDetails) error {
 	provider := strings.TrimSpace(details.Provider)
 	model := strings.TrimSpace(details.Model)
@@ -171,6 +170,10 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 	if strings.EqualFold(strings.TrimSpace(provider), "deepseek") &&
 		(code == "insufficient_quota" || errorType == "insufficient_quota") {
 		return agent.ProviderErrorQuota
+	}
+	// Responses can report a rate limit inside an HTTP 200 event stream.
+	if code == "rate_limit_exceeded" || errorType == "rate_limit_exceeded" {
+		return agent.ProviderErrorRateLimit
 	}
 	// Anthropic's context-window overflow shares the generic 400
 	// invalid_request_error used by ordinary invalid requests. Treating that pair

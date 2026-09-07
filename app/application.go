@@ -513,7 +513,8 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 		backend, err = anthropic.New(anthropic.Config{
 			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
 			MaxTokens: route.MaxOutputTokens, PromptCache: route.PromptCache,
-			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: apiKeyAuthorizer, Header: route.Header,
+			DropMismatchedThinking: route.DropMismatchedThinking,
+			BaseURL:                route.BaseURL, HTTPClient: options.httpClient, Authorizer: apiKeyAuthorizer, Header: route.Header,
 		})
 	default:
 		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))

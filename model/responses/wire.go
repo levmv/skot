@@ -418,8 +418,15 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 	if response.Error != nil {
 		return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, response.Error)
 	}
+	stopReason := "stop"
+	if response.Status == "incomplete" {
+		reason, err := backend.normalizeIncompleteReason(response.IncompleteDetails)
+		if err != nil {
+			return agent.ModelResponse{}, err
+		}
+		stopReason = reason
+	}
 	items := make([]agent.Item, 0, len(response.Output))
-	hasToolCall := false
 	for index, raw := range response.Output {
 		var output responseOutputItem
 		if err := json.Unmarshal(raw, &output); err != nil {
@@ -466,6 +473,10 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 				items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: text.String()})
 			}
 		case "function_call":
+			// Skip all calls in an incomplete response; their arguments may be truncated.
+			if response.Status == "incomplete" {
+				continue
+			}
 			if strings.TrimSpace(output.CallID) == "" || strings.TrimSpace(output.Name) == "" {
 				return agent.ModelResponse{}, fmt.Errorf("%s response function call item %d is incomplete", backend.provider, index)
 			}
@@ -481,7 +492,7 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 				Name: output.Name, RawArguments: arguments,
 				ProviderReferences: []agent.ProviderReference{{Kind: backend.callReferenceKind(), Data: identity}},
 			}})
-			hasToolCall = true
+			stopReason = "tool_calls"
 		default:
 			return agent.ModelResponse{}, fmt.Errorf("%s response contains unsupported output item %q", backend.provider, output.Type)
 		}
@@ -489,17 +500,6 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 	usage := agent.ModelUsage{}
 	if response.Usage != nil {
 		usage = response.Usage.modelUsage()
-	}
-	stopReason := "stop"
-	if hasToolCall {
-		stopReason = "tool_calls"
-	}
-	if response.Status == "incomplete" {
-		reason, err := backend.normalizeIncompleteReason(response.IncompleteDetails)
-		if err != nil {
-			return agent.ModelResponse{}, err
-		}
-		stopReason = reason
 	}
 	if len(items) == 0 && response.Status != "incomplete" {
 		return agent.ModelResponse{}, fmt.Errorf("%s response returned no output items", backend.provider)

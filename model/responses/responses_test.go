@@ -261,18 +261,40 @@ func TestParseResponseMapsFunctionCallsAndRefusals(t *testing.T) {
 	}
 }
 
-func TestParseResponseMapsIncompleteStatusAndUsage(t *testing.T) {
-	backend := newTestBackend(t, "http://example.invalid/v1")
-	response, err := backend.parseResponse(wireResponse{
-		Status: "incomplete", IncompleteDetails: &incompleteDetail{Reason: "max_output_tokens"},
-		Output: []jsontext.Value{jsontext.Value(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
-		Usage:  &responseUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StopReason != "max_output_tokens" || response.Items[0].Text != "partial" || response.Usage.TotalTokens != 13 {
-		t.Fatalf("response = %#v", response)
+func TestParseResponsePreservesPartialOutputWithoutToolCalls(t *testing.T) {
+	for _, test := range []struct {
+		name, status string
+		details      *incompleteDetail
+	}{
+		{name: "token limit", status: "incomplete", details: &incompleteDetail{Reason: "max_output_tokens"}},
+		{name: "content filter", status: "incomplete", details: &incompleteDetail{Reason: "content_filter"}},
+		{name: "malformed completed call", status: "completed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := newTestBackend(t, "http://example.invalid/v1")
+			response, err := backend.parseResponse(wireResponse{
+				Status: test.status, IncompleteDetails: test.details,
+				Output: []jsontext.Value{
+					jsontext.Value(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`),
+					jsontext.Value(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\":\"first\"}"}`),
+					jsontext.Value(`{"type":"function_call","id":"fc_2","call_id":"call_2","name":"read","arguments":"{\"path\":\"unfinished"}`),
+				},
+				Usage: &responseUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
+			})
+			if test.status == "completed" {
+				if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+					t.Fatalf("malformed completed call error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "partial"}}) ||
+				response.StopReason != test.details.Reason || response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
+				t.Fatalf("incomplete response = %#v", response)
+			}
+		})
 	}
 }
 
@@ -286,6 +308,24 @@ func TestParseResponseAcceptsDocumentedIncompleteReasonAlias(t *testing.T) {
 	}
 	if response.StopReason != "max_tokens" || !agent.IsIncompleteStopReason(response.StopReason) {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestCompleteClassifiesStreamRateLimit(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "response.failed", "response": map[string]any{
+				"status": "failed", "error": map[string]any{"code": "rate_limit_exceeded", "message": "opaque provider detail"},
+			},
+		})
+	}))
+	backend := newTestServerBackend(t, server, "")
+	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+	var providerErr *agent.ProviderError
+	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != agent.ProviderErrorRateLimit || providerErr.Code != "rate_limit_exceeded" || !providerErr.Retryable {
+		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
 }
 

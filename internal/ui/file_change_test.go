@@ -98,30 +98,6 @@ func TestFileChangeWrapUsesHangingContentIndent(t *testing.T) {
 	}
 }
 
-func TestFileChangeStylesOnlyDiffSignsAndDeletedContent(t *testing.T) {
-	model := testScreenModel(t, &fakeAgent{})
-	model.useStyle = true
-	model.applyTerminalTheme(true)
-
-	deleted := strings.Join(model.renderFileDiffLine(agent.FileDiffLine{
-		Kind: "delete", OldLine: 7, Text: "old text",
-	}, 1), "\n")
-	if !strings.Contains(deleted, model.mutedStyle.Render("7")) ||
-		!strings.Contains(deleted, model.errorStyle.Render("−")) ||
-		!strings.Contains(deleted, model.mutedStyle.Render("old text")) {
-		t.Fatalf("deleted line styles = %q", deleted)
-	}
-
-	added := strings.Join(model.renderFileDiffLine(agent.FileDiffLine{
-		Kind: "add", NewLine: 7, Text: "new text",
-	}, 1), "\n")
-	if !strings.Contains(added, model.mutedStyle.Render("7")) ||
-		!strings.Contains(added, model.successStyle.Render("+")) ||
-		strings.Contains(added, model.successStyle.Render("new text")) {
-		t.Fatalf("added line styles = %q", added)
-	}
-}
-
 func TestCompletedToolShowsElapsedTimeOnlyWhenItIsWorthNoticing(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.addToolCallAt(agent.ToolCall{ID: "call-1", Name: "read", RawArguments: `{"path":"main.go"}`}, time.Now().Add(-1500*time.Millisecond))

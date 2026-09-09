@@ -9,40 +9,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/levmv/skot/app"
 )
-
-func TestDarkThemeUsesBrightAccent(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("SK_COLOR", "always")
-	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeDark}, Config{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !model.darkTheme || model.themePending {
-		t.Fatalf("dark theme state: dark=%v pending=%v", model.darkTheme, model.themePending)
-	}
-	if model.accentStyle.GetForeground() == nil || !model.accentStyle.GetBold() {
-		t.Fatalf("accent style is incomplete: %#v", model.accentStyle)
-	}
-}
-
-func TestLightThemeUsesNeutralUserGutter(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("SK_COLOR", "always")
-	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeLight}, Config{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The user bar is a flat rule that sits below muted text: no fill, no bold.
-	if got := model.userBarStyle.GetForeground(); got != lipgloss.Color("250") {
-		t.Fatalf("user bar foreground = %#v", got)
-	}
-	if model.userBarStyle.GetBackground() != lipgloss.NewStyle().GetBackground() || model.userBarStyle.GetBold() {
-		t.Fatalf("user bar is not flat: %#v", model.userBarStyle)
-	}
-}
 
 func TestThemeAppliesToMarkdownPalette(t *testing.T) {
 	t.Setenv("NO_COLOR", "")

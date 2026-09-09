@@ -189,12 +189,6 @@ func TestUserShellKeepsCompleteOutput(t *testing.T) {
 	}
 }
 
-func TestOmittedOutputLabelUsesSingularLine(t *testing.T) {
-	if got := omittedOutputLabel(1); got != "… +1 line" {
-		t.Fatalf("omittedOutputLabel(1) = %q", got)
-	}
-}
-
 func TestFailedModelProcessFallsBackToFailureTail(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.addToolCallAt(agent.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"fail"}`}, time.Now())

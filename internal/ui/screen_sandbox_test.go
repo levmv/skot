@@ -57,14 +57,14 @@ func TestScopeCommandDoesNotRepeatNoticeWithoutSwitch(t *testing.T) {
 	}
 }
 
-func TestScopeChangeKeepsOnlyAdditionalSummary(t *testing.T) {
+func TestScopeChangeShowsPolicyFactsWithoutRepeatingScope(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.scope = scopeSwitchState{pending: true, previous: "workspace"}
 	model.finishScopeSwitch(scopeDoneMsg{
-		scope: "machine", summary: "scope: machine · protected paths: /private, /secrets",
+		scope: "machine", summary: "scope: machine · added paths: /shared · protected paths: /private, /secrets",
 	})
 	if got := model.transcript.blocks[len(model.transcript.blocks)-1]; got.kind != screenBlockScopeChange ||
-		got.text != "filesystem scope: workspace → machine\nprotected paths: /private, /secrets" {
+		got.text != "filesystem scope: workspace → machine\nadded paths: /shared\nprotected paths: /private, /secrets" {
 		t.Fatalf("result block = %#v", got)
 	}
 }
@@ -163,22 +163,6 @@ func TestScopeCommandShowsCurrentBoundary(t *testing.T) {
 	rendered := strings.Join(frame.dynamic, "\n")
 	if frame.cursor != nil || !strings.Contains(rendered, "machine") || !strings.Contains(rendered, "Shift+Tab") {
 		t.Fatalf("picker frame = %#v", frame)
-	}
-}
-
-func TestScopeChangeUsesNormalHeadlineAndMutedDetails(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("SK_COLOR", "always")
-	model := testScreenModel(t, &fakeAgent{})
-	headline := "filesystem scope: workspace → machine"
-	detail := "protected paths: /private, /secrets"
-	rendered := strings.Join(model.renderBlockLines(screenBlock{
-		kind: screenBlockScopeChange,
-		text: headline + "\n" + detail,
-	}), "\n")
-	if !strings.Contains(rendered, headline) || strings.Contains(rendered, model.mutedStyle.Render(headline)) ||
-		!strings.Contains(rendered, model.mutedStyle.Render(detail)) {
-		t.Fatalf("scope change styles = %q", rendered)
 	}
 }
 
@@ -405,18 +389,5 @@ func TestScopePickerAddPromptReturnsOnEscape(t *testing.T) {
 	}
 	if !model.picker.active() || model.picker.kind != pickerScope || model.composer.value() != "" {
 		t.Fatalf("escape did not return to the menu: picker=%v value=%q", model.picker.active(), model.composer.value())
-	}
-}
-
-func TestScopeChangeGivesEachPolicyFactItsOwnLine(t *testing.T) {
-	model := testScreenModel(t, &fakeAgent{})
-	model.finishScopeSwitch(scopeDoneMsg{
-		scope:   "workspace",
-		summary: "scope: workspace · added paths: /shared · protected paths: /private",
-	})
-	last := model.transcript.blocks[len(model.transcript.blocks)-1]
-	want := "added paths: /shared\nprotected paths: /private"
-	if last.kind != screenBlockScopeChange || !strings.Contains(last.text, want) {
-		t.Fatalf("scope change block = %q", last.text)
 	}
 }

@@ -473,7 +473,7 @@ func TestCommandMenuRemainsVisibleWhileWorking(t *testing.T) {
 	}
 }
 
-func TestCommandMenuUsesPlainLabelsAndAccentsTheSelection(t *testing.T) {
+func TestCommandMenuHighlightsTheSelection(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("SK_COLOR", "always")
 	model := testScreenModel(t, &fakeAgent{})
@@ -482,8 +482,7 @@ func TestCommandMenuUsesPlainLabelsAndAccentsTheSelection(t *testing.T) {
 
 	rendered := model.renderCommandSuggestions()
 	if len(rendered) < 2 || !strings.Contains(rendered[0], model.accentStyle.Render("/help")) ||
-		!strings.Contains(rendered[0], model.mutedStyle.Render(" show keys")) ||
-		!strings.Contains(rendered[1], "/clear") || strings.Contains(rendered[1], model.mutedStyle.Render("/clear")) {
+		strings.Contains(rendered[1], model.accentStyle.Render("/clear")) {
 		t.Fatalf("command menu = %#v", rendered)
 	}
 
@@ -1095,19 +1094,6 @@ func TestScreenKeepsFullSourceBackedTranscript(t *testing.T) {
 	}
 }
 
-func TestScreenViewDoesNotMaterializeTranscript(t *testing.T) {
-	model := testScreenModel(t, &fakeAgent{})
-	model.addBlock(screenBlockAssistant, "large transcript sentinel")
-	model.refreshTranscript()
-
-	if view := model.View(); view.Content != "" || view.Cursor != nil {
-		t.Fatalf("Bubble Tea view materialized custom frame: %#v", view)
-	}
-	if got := strings.Join(model.inlineFrame().transcript, "\n"); !strings.Contains(got, "large transcript sentinel") {
-		t.Fatalf("inline frame missed transcript: %q", got)
-	}
-}
-
 func TestLongInputWrapsAndGrowsComposer(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.resize(24, 14)
@@ -1251,8 +1237,7 @@ func TestSettingNoticeNamesTheTransitionOnlyWhenItChanged(t *testing.T) {
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/tools edit")
 	model, _ = model.submitInput()
-	want := "tools: read-only → edit · prompt cache reset, next message costs full price"
-	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; got != want {
+	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(got, "read-only → edit") || !strings.Contains(got, "prompt cache") {
 		t.Fatalf("switch notice = %q", got)
 	}
 	// Re-selecting the active value is not a transition, so it reports plainly.

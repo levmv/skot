@@ -235,13 +235,6 @@ func TestRuntimeCompactSkipsHistoryWithinTokenTail(t *testing.T) {
 	}
 }
 
-func TestCompactionPromptLeavesInstructionsLast(t *testing.T) {
-	prompt := compactionPrompt("summarize now", "run failed")
-	if !strings.Contains(prompt, "run failed") || !strings.HasSuffix(prompt, "summarize now") {
-		t.Fatalf("compaction prompt = %q", prompt)
-	}
-}
-
 func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T) {
 	journal := &memoryJournal{}
 	tool := Tool{

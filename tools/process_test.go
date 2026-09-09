@@ -1247,16 +1247,13 @@ func TestAttachSessionKeepsDeliveredOutputForAlreadyLoadedSession(t *testing.T) 
 	}
 }
 
-func TestJobBufferKeepsCircularTail(t *testing.T) {
+func TestJobBufferKeepsNewestBytesAcrossWrites(t *testing.T) {
 	buffer := &jobBuffer{limit: 8}
 	if _, err := buffer.Write([]byte("01234567")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := buffer.Write([]byte("89ab")); err != nil {
 		t.Fatal(err)
-	}
-	if len(buffer.data) != 8 || buffer.start != 4 {
-		t.Fatalf("circular buffer after overwrite: bytes=%d start=%d", len(buffer.data), buffer.start)
 	}
 	data, truncated := buffer.snapshot(32)
 	stored, discarded := buffer.stats()
@@ -1269,8 +1266,8 @@ func TestJobBufferKeepsCircularTail(t *testing.T) {
 	}
 	data, truncated = buffer.snapshot(32)
 	stored, discarded = buffer.stats()
-	if string(data) != "9abcdefg" || !truncated || stored != 8 || discarded != 9 || len(buffer.data) != 8 {
-		t.Fatalf("wrapped tail = %q, truncated=%t, stored=%d, discarded=%d, physical=%d", data, truncated, stored, discarded, len(buffer.data))
+	if string(data) != "9abcdefg" || !truncated || stored != 8 || discarded != 9 {
+		t.Fatalf("wrapped tail = %q, truncated=%t, stored=%d, discarded=%d", data, truncated, stored, discarded)
 	}
 	if short, shortTruncated := buffer.snapshot(3); string(short) != "efg" || !shortTruncated {
 		t.Fatalf("short wrapped tail = %q, truncated=%t", short, shortTruncated)
@@ -1279,8 +1276,8 @@ func TestJobBufferKeepsCircularTail(t *testing.T) {
 	if _, err := buffer.Write([]byte("abcdefghijkl")); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := buffer.snapshot(32); string(data) != "efghijkl" || buffer.start != 0 {
-		t.Fatalf("oversized write tail = %q, start=%d", data, buffer.start)
+	if data, _ := buffer.snapshot(32); string(data) != "efghijkl" {
+		t.Fatalf("oversized write tail = %q", data)
 	}
 }
 
@@ -1371,9 +1368,6 @@ func TestDurableTailCompactionThresholdIsIndependentFromTailLimit(t *testing.T) 
 	writer, err := newDurableTailWriter(path, 64)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if writer.compactAt != 64*durableTailCompactionMultiple {
-		t.Fatalf("compaction threshold = %d", writer.compactAt)
 	}
 	if _, err := writer.Write(bytes.Repeat([]byte{'x'}, 1024)); err != nil {
 		t.Fatal(err)

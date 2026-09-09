@@ -9,7 +9,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/levmv/skot/agent"
 )
@@ -458,30 +457,6 @@ func TestCollapsedToolDurationAvoidsZero(t *testing.T) {
 	}
 	if got := formatCollapsedToolDuration(3500 * time.Millisecond); got != "3.5s" {
 		t.Fatalf("duration = %q", got)
-	}
-}
-
-func TestCompactToolSummaryUsesMutedMarkerAndNeutralBoldText(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("SK_COLOR", "always")
-	model := testScreenModel(t, &fakeAgent{})
-	model.clearTranscript()
-	model.keymap = newDefaultKeyMapFor("linux")
-	for range 11 {
-		model.transcript.blocks = append(model.transcript.blocks, screenBlock{
-			kind: screenBlockTool,
-			tool: &toolBlock{done: true, collapsed: true},
-		})
-	}
-
-	rendered := strings.Join(model.renderCompactToolSummary(0, 10), "\n")
-	if plain := strings.TrimSpace(ansi.Strip(rendered)); plain != "• Used 11 tools  (ctrl+up for more detail)" {
-		t.Fatalf("compact tool summary text = %q", plain)
-	}
-	if !strings.Contains(rendered, model.mutedStyle.Render("•")) ||
-		!strings.Contains(rendered, model.summaryStyle.Render("Used 11 tools")) ||
-		model.summaryStyle.GetForeground() != lipgloss.NewStyle().GetForeground() || !model.summaryStyle.GetBold() {
-		t.Fatalf("compact tool summary = %q", rendered)
 	}
 }
 

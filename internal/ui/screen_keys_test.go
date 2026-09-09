@@ -68,7 +68,7 @@ func TestDisplayDirectKeysRequireKeyboardEnhancements(t *testing.T) {
 	if model.displayProfile != DisplayDetailed || fake.displayProfile != DisplayDetailed {
 		t.Fatalf("unconfirmed Ctrl+1 changed display to %q", model.displayProfile)
 	}
-	model.keyboard.record(tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes})
+	model, _ = model.update(tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes})
 	model, _ = model.handleKey(compact)
 	if model.displayProfile != DisplayCompact || fake.displayProfile != DisplayCompact {
 		t.Fatalf("confirmed Ctrl+1 left display at %q", model.displayProfile)
@@ -117,15 +117,5 @@ func TestDisplayHelpMatchesPlatformBindings(t *testing.T) {
 	macOS.keyboard.record(tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes})
 	if enhanced := macOS.tuiCommandHelp(); !strings.Contains(enhanced, "ctrl+1/2/3") || strings.Contains(enhanced, "ctrl+up/down") {
 		t.Fatalf("enhanced macOS display help = %q", enhanced)
-	}
-}
-
-func TestScreenRecordsActiveKeyboardProtocolFlags(t *testing.T) {
-	model := testScreenModel(t, &fakeAgent{})
-	flags := ansi.KittyDisambiguateEscapeCodes | ansi.KittyReportAlternateKeys
-	updated, _ := model.update(tea.KeyboardEnhancementsMsg{Flags: flags})
-
-	if !updated.keyboard.reported || updated.keyboard.activeFlags != flags {
-		t.Fatalf("keyboard protocol state = %#v", updated.keyboard)
 	}
 }

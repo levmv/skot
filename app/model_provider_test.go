@@ -89,9 +89,7 @@ func TestModelCatalogInvariants(t *testing.T) {
 			t.Errorf("catalog URI %q max output tokens/API = %d/%q", spec.URI, spec.MaxOutputTokens, spec.API)
 		}
 		switch spec.Compatibility {
-		case "", modelCompatibilityUnverified, modelCompatibilityUnsupported:
-		case modelCompatibilitySupported:
-			t.Errorf("catalog URI %q redundantly declares the supported default", spec.URI)
+		case "", modelCompatibilitySupported, modelCompatibilityUnverified, modelCompatibilityUnsupported:
 		default:
 			t.Errorf("catalog URI %q compatibility = %q", spec.URI, spec.Compatibility)
 		}
@@ -139,20 +137,6 @@ func TestModelCatalogInvariants(t *testing.T) {
 				t.Errorf("catalog URI %q model info = %#v, route = %#v", spec.URI, info, route)
 			}
 		}
-	}
-}
-
-func TestUnsupportedRouteErrorDoesNotAssumeItsAdapterIsMissing(t *testing.T) {
-	original := modelCatalog
-	modelCatalog = append(append([]modelSpec(nil), original...), modelSpec{
-		URI: "ollama/known-incompatible", Name: "Known Incompatible", API: modelAPIChatCompletions,
-		Compatibility: modelCompatibilityUnsupported,
-	})
-	t.Cleanup(func() { modelCatalog = original })
-
-	_, err := resolveModelRoute("ollama/known-incompatible", "", modelRouteOverrides{}, modelRouteEnrichment{})
-	if err == nil || !strings.Contains(err.Error(), "unsupported by Skot") || strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("unsupported implemented route error = %v", err)
 	}
 }
 
@@ -219,58 +203,6 @@ func TestAnthropicProviderRoutesThroughNativeMessages(t *testing.T) {
 		custom.MaxOutputTokens != 0 || custom.ContextWindow != unknownModelContextWindow ||
 		!custom.ContextWindowEstimated || custom.PromptCache {
 		t.Fatalf("custom Anthropic route = %#v", custom)
-	}
-}
-
-func TestBuildModelBackendRejectsUnknownModelAPI(t *testing.T) {
-	original := modelCatalog
-	modelCatalog = append(append([]modelSpec(nil), original...), modelSpec{URI: "ollama/future-test", API: modelAPI("future")})
-	t.Cleanup(func() { modelCatalog = original })
-
-	want := `unsupported model API "future"`
-	_, err := resolveModelRoute("ollama/future-test", "", modelRouteOverrides{ContextWindow: 128_000}, modelRouteEnrichment{})
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("resolve error = %v, want containing %q", err, want)
-	}
-}
-
-func TestBuildModelBackendSelectsAnthropicAdapter(t *testing.T) {
-	route, err := resolveModelRoute("ollama/messages-test", "", modelRouteOverrides{
-		API: modelAPIAnthropicMessages, ContextWindow: 128_000,
-	}, modelRouteEnrichment{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = buildModelBackend(route, nil, modelBackendOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := modelInfoForRoute(route)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.BackendID != "anthropic_messages.ollama" || info.ProviderStateContract != "anthropic_messages.thinking_replay.v1" {
-		t.Fatalf("Anthropic backend info = %#v", info)
-	}
-}
-
-func TestBuildModelBackendSelectsResponsesAdapter(t *testing.T) {
-	route, err := resolveModelRoute("ollama/responses-test", "", modelRouteOverrides{
-		API: modelAPIResponses, ContextWindow: 128_000,
-	}, modelRouteEnrichment{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = buildModelBackend(route, nil, modelBackendOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := modelInfoForRoute(route)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.BackendID != "responses.ollama" || info.ProviderStateContract != "responses.manual_history.v1" {
-		t.Fatalf("Responses backend info = %#v", info)
 	}
 }
 

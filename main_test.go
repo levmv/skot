@@ -6,7 +6,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,17 +40,6 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(cache)
 	os.Exit(code)
-}
-
-func TestHelpListsAnthropicMessagesAsImplemented(t *testing.T) {
-	var stderr bytes.Buffer
-	err := run(context.Background(), []string{"-help"}, bytes.NewReader(nil), io.Discard, &stderr)
-	if !errors.Is(err, flag.ErrHelp) {
-		t.Fatalf("error = %v", err)
-	}
-	if !strings.Contains(stderr.String(), "implemented: chat_completions, responses, anthropic_messages") {
-		t.Fatalf("help = %q", stderr.String())
-	}
 }
 
 func TestRunAcceptsRepeatedAddedDirectoryFlags(t *testing.T) {

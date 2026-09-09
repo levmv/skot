@@ -15,44 +15,38 @@ func (model routeDiagnosticTestModel) Complete(context.Context, agent.ModelReque
 	return agent.ModelResponse{}, model.err
 }
 
-func TestUnverifiedRouteAddsProtocolContextOnlyAfterAProviderFailure(t *testing.T) {
+func TestRouteDiagnosticsExplainOnlyUnverifiedProtocolFailures(t *testing.T) {
 	providerErr := agent.MarkProviderFailure(errors.New("upstream rejected field"))
-	model := addRouteDiagnostics(routeDiagnosticTestModel{err: providerErr}, resolvedModelRoute{
-		URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: modelCompatibilityUnverified,
-	})
-	_, err := model.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if !errors.Is(err, agent.ErrProviderFailure) ||
-		!strings.Contains(err.Error(), `route "opencode-go/candidate" is unverified, so the request may not match its responses protocol`) {
-		t.Fatalf("provider error = %v", err)
-	}
-
-	localErr := agent.MarkInvalidRequest(errors.New("invalid local request"))
-	model = addRouteDiagnostics(routeDiagnosticTestModel{err: localErr}, resolvedModelRoute{
-		URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: modelCompatibilityUnverified,
-	})
-	_, err = model.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if strings.Contains(err.Error(), `route "opencode-go/candidate" is unverified`) {
-		t.Fatalf("local error received route diagnostic: %v", err)
-	}
-
 	authErr := &agent.ProviderError{
 		Cause: agent.MarkProviderFailure(errors.New("credential rejected")),
 		Kind:  agent.ProviderErrorAuthentication,
 	}
-	model = addRouteDiagnostics(routeDiagnosticTestModel{err: authErr}, resolvedModelRoute{
-		URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: modelCompatibilityUnverified,
-	})
-	_, err = model.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if strings.Contains(err.Error(), `route "opencode-go/candidate" is unverified`) {
-		t.Fatalf("authentication error received irrelevant route diagnostic: %v", err)
-	}
-}
-
-func TestSupportedRouteDoesNotWrapItsBackend(t *testing.T) {
-	inner := routeDiagnosticTestModel{err: agent.MarkProviderFailure(errors.New("service down"))}
-	model := addRouteDiagnostics(inner, resolvedModelRoute{Compatibility: modelCompatibilitySupported})
-	if _, wrapped := model.(routeDiagnosticBackend); wrapped {
-		t.Fatal("supported route was wrapped with an unverified-route diagnostic")
+	for _, test := range []struct {
+		name          string
+		compatibility modelCompatibility
+		cause         error
+		wantContext   bool
+	}{
+		{"protocol failure", modelCompatibilityUnverified, providerErr, true},
+		{"supported route", modelCompatibilitySupported, providerErr, false},
+		{"local failure", modelCompatibilityUnverified, agent.MarkInvalidRequest(errors.New("invalid local request")), false},
+		{"authentication failure", modelCompatibilityUnverified, authErr, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			route := resolvedModelRoute{URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: test.compatibility}
+			model := addRouteDiagnostics(routeDiagnosticTestModel{err: test.cause}, route)
+			_, err := model.Complete(t.Context(), agent.ModelRequest{}, nil)
+			if !errors.Is(err, test.cause) {
+				t.Fatalf("lost original error: %v", err)
+			}
+			if test.wantContext {
+				if !strings.Contains(err.Error(), route.URI) || !strings.Contains(err.Error(), string(route.API)) {
+					t.Fatalf("protocol failure lacks route context: %v", err)
+				}
+			} else if err.Error() != test.cause.Error() {
+				t.Fatalf("unrelated failure received route diagnostic: %v", err)
+			}
+		})
 	}
 }
 

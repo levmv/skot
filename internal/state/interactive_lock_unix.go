@@ -3,6 +3,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,9 +14,19 @@ import (
 )
 
 func acquireInteractiveLock(path string, timeout time.Duration) (*os.File, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	file, err := acquireStateLock(ctx, path, "interactive state")
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, fmt.Errorf("lock interactive state: timed out after %s", timeout)
+	}
+	return file, err
+}
+
+func acquireStateLock(ctx context.Context, path, label string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_CLOEXEC|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("open interactive state lock: %w", err)
+		return nil, fmt.Errorf("open %s lock: %w", label, err)
 	}
 	file := os.NewFile(uintptr(fd), path)
 	fail := func(err error) (*os.File, error) {
@@ -24,29 +35,32 @@ func acquireInteractiveLock(path string, timeout time.Duration) (*os.File, error
 	}
 	var info unix.Stat_t
 	if err := unix.Fstat(fd, &info); err != nil {
-		return fail(fmt.Errorf("inspect interactive state lock: %w", err))
+		return fail(fmt.Errorf("inspect %s lock: %w", label, err))
 	}
 	if info.Mode&unix.S_IFMT != unix.S_IFREG {
-		return fail(errors.New("interactive state lock must be a regular file"))
+		return fail(fmt.Errorf("%s lock must be a regular file", label))
 	}
 	privatefs.TryRestrictOpenFile(file)
-	deadline := time.Now().Add(timeout)
 	for {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
 		err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
 		if err == nil {
 			return file, nil
 		}
 		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
-			return fail(fmt.Errorf("lock interactive state: %w", err))
+			return fail(fmt.Errorf("lock %s: %w", label, err))
 		}
-		if !time.Now().Before(deadline) {
-			return fail(fmt.Errorf("lock interactive state: timed out after %s", timeout))
+		select {
+		case <-ctx.Done():
+			return fail(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func releaseInteractiveLock(file *os.File) error {
+func releaseStateLock(file *os.File) error {
 	if file == nil {
 		return nil
 	}

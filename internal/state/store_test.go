@@ -136,7 +136,7 @@ func TestStoreKeepsNamedCredentialsSeparateFromSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetAPIKey(" DeepSeek ", " secret-token "); err != nil {
+	if err := store.SetAPIKey(t.Context(), " DeepSeek ", " secret-token "); err != nil {
 		t.Fatal(err)
 	}
 	token, ok, err := store.APIKey("deepseek")
@@ -158,7 +158,7 @@ func TestStoreKeepsNamedCredentialsSeparateFromSettings(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("auth mode = %v, %v", info, err)
 	}
-	if err := store.DeleteAPIKey("deepseek"); err != nil {
+	if err := store.DeleteAPIKey(t.Context(), "deepseek"); err != nil {
 		t.Fatal(err)
 	}
 	if token, ok, err := store.APIKey("deepseek"); err != nil || ok || token != "" {

@@ -77,7 +77,10 @@ type Agent interface {
 
 	// Credentials.
 	ProviderStatuses() ([]ProviderStatus, error)
+	AccountQuota() app.AccountQuota
+	RefreshAccountQuota(context.Context) error
 	Login(context.Context, string, string) error
+	BeginBrowserLogin(context.Context, string) (app.BrowserLogin, error)
 	Logout(context.Context, string) error
 
 	// Sessions.
@@ -242,6 +245,7 @@ type screenModel struct {
 	modelChoices   []ModelChoice
 	providers      []ProviderStatus
 	loginProvider  string
+	browserLogin   app.BrowserLogin
 	loginSelection modelSelection
 	loginReturn    pickerState
 	// modelContextSelection is the unknown route whose context window the input
@@ -292,6 +296,8 @@ func CanUseScreen(in io.Reader, out io.Writer) (*os.File, *os.File, bool) {
 }
 
 func RunScreen(ctx context.Context, runtime Agent, config Config, in, out *os.File) (returnErr error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	terminalState, err := term.MakeRaw(in.Fd())
 	if err != nil {
 		return fmt.Errorf("enter terminal raw mode: %w", err)
@@ -424,9 +430,9 @@ func newScreenModel(ctx context.Context, runtime Agent, config Config, out io.Wr
 
 func (m screenModel) Init() tea.Cmd {
 	if m.themePending {
-		return queryTerminalTheme(m.themeQuery)
+		return tea.Batch(queryTerminalTheme(m.themeQuery), m.refreshAccountQuota())
 	}
-	return nil
+	return m.refreshAccountQuota()
 }
 
 func queryTerminalTheme(generation uint64) tea.Cmd {
@@ -470,6 +476,18 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case accountQuotaUpdatedMsg:
+		return m, tea.Tick(5*time.Second, func(time.Time) tea.Msg { return accountQuotaTickMsg{} })
+	case accountQuotaTickMsg:
+		return m, m.refreshAccountQuota()
+	case browserLoginDoneMsg:
+		command := m.finishBrowserLogin(msg)
+		m.refreshTranscript()
+		return m, command
+	case credentialDoneMsg:
+		m.finishCredentialUpdate(msg)
+		m.refreshTranscript()
+		return m, nil
 	case tea.FocusMsg:
 		m.focused = true
 		return m, nil

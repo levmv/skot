@@ -16,6 +16,9 @@ type secretMasker struct {
 
 func newSecretMasker(store *state.Store, extra ...string) *secretMasker {
 	masker := &secretMasker{}
+	if tokens, err := storedCodexTokens(store); err == nil {
+		maskCodexTokens(masker, tokens)
+	}
 	for _, provider := range providerCredentialCatalog {
 		if token, _, err := credentialForProvider(store, provider.name); err == nil {
 			masker.Add(token)

@@ -1,6 +1,8 @@
 package state
 
 import (
+	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/levmv/skot/internal/privatefs"
 )
@@ -118,7 +121,7 @@ func Open(home string) (*Store, error) {
 	if _, err := store.Settings(); err != nil {
 		return nil, err
 	}
-	if _, err := store.loadCredentialsLocked(); err != nil {
+	if _, err := store.loadCredentials(); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -151,7 +154,7 @@ func (store *Store) APIKey(provider string) (string, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	provider = normalizeProvider(provider)
-	credentials, err := store.loadCredentialsLocked()
+	credentials, err := store.loadCredentials()
 	if err != nil {
 		return "", false, err
 	}
@@ -168,7 +171,7 @@ func (store *Store) APIKey(provider string) (string, bool, error) {
 	return payload.Token, payload.Token != "", nil
 }
 
-func (store *Store) SetAPIKey(provider, token string) error {
+func (store *Store) SetAPIKey(ctx context.Context, provider, token string) error {
 	provider = normalizeProvider(provider)
 	token = strings.TrimSpace(token)
 	if provider == "" || token == "" {
@@ -178,34 +181,92 @@ func (store *Store) SetAPIKey(provider, token string) error {
 	if err != nil {
 		return fmt.Errorf("encode API key profile: %w", err)
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	credentials, err := store.loadCredentialsLocked()
-	if err != nil {
-		return err
-	}
-	name := credentials.Defaults[provider]
-	if name == "" {
-		name = provider
-	}
-	credentials.Profiles[name] = CredentialProfile{Provider: provider, Kind: "api_key", Payload: payload}
-	credentials.Defaults[provider] = name
-	return store.saveJSON(store.authPath, "credentials", credentials)
+	return store.UpdateCredential(ctx, provider, func(CredentialProfile) (CredentialProfile, error) {
+		return CredentialProfile{Provider: provider, Kind: "api_key", Payload: payload}, nil
+	})
 }
 
-func (store *Store) DeleteAPIKey(provider string) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
+func (store *Store) DeleteAPIKey(ctx context.Context, provider string) error {
+	return store.UpdateCredential(ctx, provider, func(profile CredentialProfile) (CredentialProfile, error) {
+		if profile.Kind == "api_key" {
+			return CredentialProfile{}, nil
+		}
+		return profile, nil
+	})
+}
+
+// Credential reads an atomic snapshot; the returned payload belongs to the
+// caller. Reads need no process lock because writes replace the whole file.
+func (store *Store) Credential(provider string) (CredentialProfile, error) {
+	credentials, err := store.loadCredentials()
+	if err != nil {
+		return CredentialProfile{}, err
+	}
 	provider = normalizeProvider(provider)
-	credentials, err := store.loadCredentialsLocked()
+	profile := credentials.Profiles[credentials.Defaults[provider]]
+	if normalizeProvider(profile.Provider) != provider {
+		return CredentialProfile{}, nil
+	}
+	return profile, nil
+}
+
+// UpdateCredential serializes read/modify/write across processes, including a
+// remote OAuth refresh. Refresh tokens can rotate, so the callback must read
+// the latest profile under this lock. An empty result deletes the credential.
+func (store *Store) UpdateCredential(ctx context.Context, provider string, update func(CredentialProfile) (CredentialProfile, error)) error {
+	provider = normalizeProvider(provider)
+	if provider == "" {
+		return errors.New("credential provider is required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := privatefs.EnsureDirectory(store.dir, "state directory"); err != nil {
+		return err
+	}
+	lock, err := acquireStateLock(ctx, filepath.Join(store.dir, "auth.lock"), "credential store")
+	if err != nil {
+		return err
+	}
+	defer releaseStateLock(lock)
+	credentials, err := store.loadCredentials()
 	if err != nil {
 		return err
 	}
 	name := credentials.Defaults[provider]
-	if profile, ok := credentials.Profiles[name]; ok && normalizeProvider(profile.Provider) == provider && profile.Kind == "api_key" {
-		delete(credentials.Profiles, name)
+	before := credentials.Profiles[name]
+	if normalizeProvider(before.Provider) != provider {
+		before = CredentialProfile{}
 	}
-	delete(credentials.Defaults, provider)
+	input := before
+	input.Payload = bytes.Clone(before.Payload)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	after, err := update(input)
+	if err != nil {
+		return err
+	}
+	// Once a refresh succeeds its rotated token must be saved even if the
+	// request was cancelled during the exchange.
+	if before.Provider == after.Provider && before.Kind == after.Kind && bytes.Equal(before.Payload, after.Payload) {
+		return nil
+	}
+	if after.Kind == "" {
+		delete(credentials.Profiles, name)
+		delete(credentials.Defaults, provider)
+	} else {
+		if normalizeProvider(after.Provider) != provider {
+			return errors.New("credential update changed provider")
+		}
+		if name == "" {
+			name = provider
+		}
+		credentials.Profiles[name] = after
+		credentials.Defaults[provider] = name
+	}
 	return store.saveJSON(store.authPath, "credentials", credentials)
 }
 
@@ -226,7 +287,7 @@ func (store *Store) loadConfig() (configDocument, error) {
 	return document, nil
 }
 
-func (store *Store) loadCredentialsLocked() (credentialData, error) {
+func (store *Store) loadCredentials() (credentialData, error) {
 	credentials := credentialData{
 		Profiles: make(map[string]CredentialProfile),
 		Defaults: make(map[string]string),

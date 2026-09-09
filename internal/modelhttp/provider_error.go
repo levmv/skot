@@ -161,6 +161,16 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 	if isRequestTooLargeSignal(code) || isRequestTooLargeSignal(errorType) {
 		return agent.ProviderErrorRequestTooLarge
 	}
+	if strings.EqualFold(strings.TrimSpace(provider), "openai-codex") {
+		for _, signal := range []string{code, errorType} {
+			switch signal {
+			case "usage_limit_reached":
+				return agent.ProviderErrorQuota
+			case "usage_not_included":
+				return agent.ProviderErrorSubscription
+			}
+		}
+	}
 	if code == "invalid_request_error" || errorType == "invalid_request_error" {
 		return agent.ProviderErrorRequest
 	}

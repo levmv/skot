@@ -5,11 +5,14 @@ package responses
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/levmv/skot/agent"
@@ -121,7 +124,12 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	}
 	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
+		err = fmt.Errorf("authorize %s request: %w", backend.provider, err)
+		// Refreshing credentials can fail transiently without invalidating them.
+		if errors.Is(err, agent.ErrProviderFailure) {
+			return agent.ModelResponse{}, err
+		}
+		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
 	}
 	defer func() { returnErr = agent.MarkProviderFailure(returnErr) }()
 
@@ -137,6 +145,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
 	defer stream.Close()
 	var text, reasoning strings.Builder
+	completedOutput := make(map[int]jsontext.Value)
 	completionBytes := 0
 	for {
 		payload, readErr := stream.Next()
@@ -155,17 +164,34 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			return agent.ModelResponse{}, fmt.Errorf("decode %s Responses stream event: %w", backend.provider, err)
 		}
 		switch event.Type {
+		case "response.output_item.done":
+			if event.OutputIndex == nil || *event.OutputIndex < 0 || len(event.Item) == 0 {
+				return agent.ModelResponse{}, fmt.Errorf("%s Responses output item is missing its index or content", backend.provider)
+			}
+			completedOutput[*event.OutputIndex] = event.Item
 		case "response.output_text.delta", "response.refusal.delta":
 			text.WriteString(event.Delta)
 			emitModelEvent(emit, agent.EventTextDelta, event.Delta)
 		case "response.reasoning_summary_text.delta":
 			reasoning.WriteString(event.Delta)
 			emitModelEvent(emit, agent.EventReasoningSummaryDelta, event.Delta)
-		case "response.completed", "response.incomplete":
+		case "response.completed", "response.incomplete", "response.done":
 			if event.Response == nil {
 				return agent.ModelResponse{}, fmt.Errorf("%s Responses terminal event has no response", backend.provider)
 			}
+			if event.Response.Error != nil {
+				return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Response.Error)
+			}
 			eventStatus := strings.TrimPrefix(event.Type, "response.")
+			if eventStatus == "done" {
+				eventStatus = event.Response.Status
+				if eventStatus == "" {
+					eventStatus = "completed"
+				}
+				if eventStatus != "completed" && eventStatus != "incomplete" {
+					return agent.ModelResponse{}, fmt.Errorf("%s Responses terminal event has unsupported status %q", backend.provider, eventStatus)
+				}
+			}
 			if event.Response.Status == "" {
 				event.Response.Status = eventStatus
 			} else if event.Response.Status != eventStatus {
@@ -173,6 +199,14 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 					"%s Responses terminal event %q carries status %q",
 					backend.provider, event.Type, event.Response.Status,
 				)
+			}
+			// Codex sends completed items individually and can leave output empty
+			// in the terminal response. Keep their provider order even when tools
+			// finish out of order, and prefer a full terminal snapshot when present.
+			if len(event.Response.Output) == 0 {
+				for _, index := range slices.Sorted(maps.Keys(completedOutput)) {
+					event.Response.Output = append(event.Response.Output, completedOutput[index])
+				}
 			}
 			return backend.parseResponse(*event.Response)
 		case "response.failed":

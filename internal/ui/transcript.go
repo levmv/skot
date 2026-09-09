@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -573,7 +574,13 @@ func (m screenModel) renderSystemText(text string) string {
 }
 
 func (m screenModel) renderSystemLine(line string) string {
-	return m.mutedStyle.Render(line)
+	style := m.mutedStyle
+	if link, err := url.ParseRequestURI(line); err == nil && link.Host != "" && (link.Scheme == "https" || link.Scheme == "http") {
+		// Give standalone URLs an explicit target before wrapping. The shared
+		// ID keeps all rows of a link together through wrapping and repainting.
+		style = style.Hyperlink(line, "id=skot")
+	}
+	return style.Render(line)
 }
 
 // renderScopeChangeText keeps the deliberate transition readable as ordinary

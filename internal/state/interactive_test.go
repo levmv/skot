@@ -245,7 +245,7 @@ func TestInteractiveStoreConcurrentProcessMutationsDoNotLoseUpdates(t *testing.T
 	locked := true
 	t.Cleanup(func() {
 		if locked {
-			_ = releaseInteractiveLock(lock)
+			_ = releaseStateLock(lock)
 		}
 	})
 
@@ -313,7 +313,7 @@ func TestInteractiveStoreConcurrentProcessMutationsDoNotLoseUpdates(t *testing.T
 		}
 	}
 	locked = false
-	if err := releaseInteractiveLock(lock); err != nil {
+	if err := releaseStateLock(lock); err != nil {
 		t.Fatal(err)
 	}
 	for _, child := range children {
@@ -456,7 +456,7 @@ func TestInteractiveStoreLockTimesOutWithoutOverwritingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer releaseInteractiveLock(lock)
+	defer releaseStateLock(lock)
 	store.lockTimeout = 25 * time.Millisecond
 	if err := store.SetScopeSelection("machine"); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("lock error = %v", err)

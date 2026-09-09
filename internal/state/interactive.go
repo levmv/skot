@@ -306,7 +306,7 @@ func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (r
 	if err != nil {
 		return err
 	}
-	defer func() { returnErr = errors.Join(returnErr, releaseInteractiveLock(lock)) }()
+	defer func() { returnErr = errors.Join(returnErr, releaseStateLock(lock)) }()
 	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
 		return err
 	}

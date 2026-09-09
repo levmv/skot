@@ -5,10 +5,57 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/toolpolicy"
 )
+
+func TestFooterShowsOptionalWeeklyQuota(t *testing.T) {
+	t.Setenv("SK_COLOR", "never")
+	for _, test := range []struct {
+		name  string
+		quota app.AccountQuota
+		want  string
+	}{
+		{"remaining", app.AccountQuota{Window: 7 * 24 * time.Hour, RemainingPercent: 73}, " · week 73% left"},
+		{"exhausted", app.AccountQuota{Window: 7 * 24 * time.Hour, RemainingPercent: 0}, " · week 0% left"},
+		{"nearly exhausted", app.AccountQuota{Window: 7 * 24 * time.Hour, RemainingPercent: 0.1}, " · week <1% left"},
+		{"unavailable", app.AccountQuota{}, ""},
+		{"another period", app.AccountQuota{Window: 5 * time.Hour, RemainingPercent: 73}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeAgent{model: "openai-codex/gpt-6-astra", theme: ThemeLight, accountQuota: test.quota}
+			model, err := newScreenModel(t.Context(), fake, Config{Root: "/work"}, &bytes.Buffer{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			model.resize(120, 24)
+			if got, want := model.footerLine(), fake.model+test.want+" · /work"; got != want {
+				t.Fatalf("footer = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestFooterOmitsQuotaWhenItWouldCrowdTheModelAndContext(t *testing.T) {
+	t.Setenv("SK_COLOR", "never")
+	fake := &fakeAgent{
+		model: "openai-codex/gpt-6-astra", theme: ThemeLight,
+		accountQuota:  app.AccountQuota{Window: 7 * 24 * time.Hour, RemainingPercent: 73},
+		contextReport: agent.ContextReport{Window: 100_000, TotalInputTokens: 12_000},
+	}
+	model, err := newScreenModel(t.Context(), fake, Config{Root: "/work"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(50, 24)
+	got := model.footerLine()
+	if strings.Contains(got, "week") || !strings.Contains(got, fake.model) || !strings.Contains(got, "ctx ~12%") || visibleLen(got) > model.contentWidth() {
+		t.Fatalf("narrow footer = %q", got)
+	}
+}
 
 func TestFooterShowsModelToolsRootAndContext(t *testing.T) {
 	t.Setenv("SK_COLOR", "never")

@@ -1,10 +1,15 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/app"
 )
 
 func (m *screenModel) refreshProviderStatuses() error {
@@ -117,11 +122,11 @@ func (m *screenModel) openLogoutPicker() {
 	m.openPicker(pickerLogout, items, 0)
 }
 
-func (m *screenModel) startProviderLogin(provider string, pending modelSelection, returnPicker pickerState) {
+func (m *screenModel) startProviderLogin(provider string, pending modelSelection, returnPicker pickerState) tea.Cmd {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if err := m.refreshProviderStatuses(); err != nil {
 		m.addBlock(screenBlockError, "login: "+err.Error())
-		return
+		return nil
 	}
 	for _, status := range m.providers {
 		if status.Name != provider {
@@ -133,17 +138,20 @@ func (m *screenModel) startProviderLogin(provider string, pending modelSelection
 		}
 		if pending.uri != "" && status.Source != "none" {
 			m.switchModel(pending)
-			return
+			return nil
 		}
 		if status.Source == "environment override" {
 			m.addBlock(screenBlockSystem, provider+" is supplied by an environment override")
-			return
+			return nil
 		}
 		m.loginProvider = provider
 		m.loginSelection = pending
 		m.loginReturn = returnPicker
 		m.secret.Reset()
 		m.secret.EchoMode = textinput.EchoPassword
+		if status.BrowserLogin {
+			return m.startBrowserLogin(provider)
+		}
 		m.secret.Placeholder = provider + " API key"
 		message := "enter " + provider + " API key (input is hidden)"
 		if status.Source == "auth store" {
@@ -153,9 +161,49 @@ func (m *screenModel) startProviderLogin(provider string, pending modelSelection
 			message += "; create or manage keys at " + status.CredentialURL
 		}
 		m.addBlock(screenBlockSystem, message)
-		return
+		return nil
 	}
 	m.addBlock(screenBlockError, "login: unsupported provider "+provider)
+	return nil
+}
+
+type browserLoginDoneMsg struct {
+	login app.BrowserLogin
+	err   error
+}
+
+func (m *screenModel) startBrowserLogin(provider string) tea.Cmd {
+	login, err := m.agent.BeginBrowserLogin(m.ctx, provider)
+	if err != nil {
+		m.cancelLogin()
+		m.addBlock(screenBlockError, "login: "+err.Error())
+		return nil
+	}
+	m.browserLogin = login
+	m.secret.Placeholder = "paste the full localhost callback URL, or wait for the browser · esc cancels"
+	m.addBlock(screenBlockSystem, "open this URL in your browser to sign in with ChatGPT:\n"+login.AuthorizationURL())
+	m.addBlock(screenBlockSystem, "waiting for browser login; if the browser cannot connect to localhost, copy its full address and paste it here (input is hidden)")
+	return func() tea.Msg { return browserLoginDoneMsg{login: login, err: login.Wait()} }
+}
+
+func (m *screenModel) finishBrowserLogin(message browserLoginDoneMsg) tea.Cmd {
+	// A cancelled attempt may finish after another login has started. It must
+	// neither save credentials nor change the user's pending model selection.
+	if m.browserLogin != message.login {
+		return nil
+	}
+	provider, pending := m.loginProvider, m.loginSelection
+	err := message.err
+	if err == nil {
+		return m.startCredentialUpdate(provider, false, pending, message.login.Complete)
+	}
+	m.cancelLogin()
+	if errors.Is(err, context.DeadlineExceeded) {
+		m.addBlock(screenBlockError, "login timed out; retry /login "+provider)
+	} else {
+		m.addBlock(screenBlockError, "login: "+err.Error())
+	}
+	return nil
 }
 
 func credentialSourceDescription(source string) string {
@@ -171,12 +219,64 @@ func credentialSourceDescription(source string) string {
 	}
 }
 
-func (m *screenModel) logoutProvider(provider string) {
+func (m *screenModel) logoutProvider(provider string) tea.Cmd {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if err := m.agent.Logout(m.ctx, provider); err != nil {
-		m.addBlock(screenBlockError, "logout: "+err.Error())
+	client := m.agent
+	return m.startCredentialUpdate(provider, true, modelSelection{}, func(ctx context.Context) error {
+		return client.Logout(ctx, provider)
+	})
+}
+
+type credentialDoneMsg struct {
+	provider string
+	logout   bool
+	pending  modelSelection
+	err      error
+}
+
+func (m *screenModel) startCredentialUpdate(provider string, logout bool, pending modelSelection, update func(context.Context) error) tea.Cmd {
+	m.loginProvider = ""
+	m.secret.Reset()
+	ctx, cancel := context.WithCancel(m.ctx)
+	if login := m.browserLogin; login != nil {
+		cancelContext := cancel
+		cancel = func() { cancelContext(); login.Close() }
+	}
+	kind := operationLogin
+	if logout {
+		kind = operationLogout
+	}
+	// OAuth refresh holds the process lock while exchanging a rotating token.
+	// Even a local credential write can therefore wait and must keep Esc usable.
+	m.operation = activeOperation{kind: kind, startedAt: time.Now(), cancel: cancel}
+	return func() tea.Msg {
+		return credentialDoneMsg{provider: provider, logout: logout, pending: pending, err: update(ctx)}
+	}
+}
+
+func (m *screenModel) finishCredentialUpdate(message credentialDoneMsg) {
+	m.operation.cancel()
+	m.operation.clear()
+	returnPicker := m.loginReturn
+	m.cancelLogin()
+	action, success := "login", "logged in to "
+	if message.logout {
+		action, success = "logout", "logged out of "
+	}
+	if errors.Is(message.err, context.Canceled) {
+		m.addBlock(screenBlockSystem, action+" cancelled")
+		if returnPicker.active() {
+			m.picker = returnPicker
+		}
 		return
 	}
-	m.addBlock(screenBlockSystem, "logged out of "+provider)
+	if message.err != nil {
+		m.addBlock(screenBlockError, action+": "+message.err.Error())
+		return
+	}
+	m.addBlock(screenBlockSystem, success+message.provider)
 	_ = m.refreshProviderStatuses()
+	if message.pending.uri != "" {
+		m.switchModel(message.pending)
+	}
 }

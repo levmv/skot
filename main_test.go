@@ -1528,7 +1528,7 @@ func TestRunUsesStoredCredentialWithoutEnvironmentKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetAPIKey("deepseek", "stored-secret"); err != nil {
+	if err := store.SetAPIKey(t.Context(), "deepseek", "stored-secret"); err != nil {
 		t.Fatal(err)
 	}
 	var authorization string

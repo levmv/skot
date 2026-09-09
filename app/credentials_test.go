@@ -6,10 +6,65 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/codexauth"
 	"github.com/levmv/skot/internal/state"
 )
+
+func TestCredentialChangesCanCancelWhileAnotherProcessRefreshes(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	for _, action := range []string{"login", "logout"} {
+		t.Run(action, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				application := newCodexTestApp(t)
+				store := application.config.settings
+				if err := store.SetAPIKey(t.Context(), "deepseek", "existing-key"); err != nil {
+					t.Fatal(err)
+				}
+				locked, release, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				go func() {
+					finished <- store.UpdateCredential(t.Context(), codexauth.Provider, func(profile state.CredentialProfile) (state.CredentialProfile, error) {
+						close(locked)
+						<-release
+						return profile, nil
+					})
+				}()
+				defer func() { close(release); <-finished }()
+				<-locked
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				result := make(chan error, 1)
+				go func() {
+					if action == "login" {
+						result <- application.Login(ctx, "deepseek", "replacement-key")
+					} else {
+						result <- application.Logout(ctx, codexauth.Provider)
+					}
+				}()
+				// Wait until the mutation is blocked on the held lock, then cancel.
+				synctest.Wait()
+				cancel()
+				synctest.Wait()
+				select {
+				case err := <-result:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("cancelled %s = %v", action, err)
+					}
+				default:
+					t.Fatal("credential change ignored cancellation while waiting for the lock")
+				}
+				if token, ok, err := store.APIKey("deepseek"); err != nil || !ok || token != "existing-key" {
+					t.Fatal("cancelled login changed the stored key")
+				}
+				if tokens, err := storedCodexTokens(store); err != nil || !tokens.Valid() {
+					t.Fatal("cancelled logout removed the subscription")
+				}
+			})
+		})
+	}
+}
 
 func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 	store, err := state.Open(t.TempDir())
@@ -17,7 +72,7 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("OPENAI_API_KEY", "")
-	if err := storeProviderCredential(store, " OpenAI ", "stored-key"); err != nil {
+	if err := storeProviderCredential(t.Context(), store, " OpenAI ", "stored-key"); err != nil {
 		t.Fatal(err)
 	}
 	request, _ := http.NewRequest(http.MethodPost, "https://example.test", nil)
@@ -37,7 +92,7 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 	if got := request.Header.Get("Authorization"); got != "Bearer environment-key" {
 		t.Fatalf("environment authorization = %q", got)
 	}
-	if err := deleteProviderCredential(store, "openai"); err == nil || !strings.Contains(err.Error(), "environment override") {
+	if err := deleteProviderCredential(t.Context(), store, "openai"); err == nil || !strings.Contains(err.Error(), "environment override") {
 		t.Fatalf("environment logout error = %v", err)
 	}
 }
@@ -191,7 +246,7 @@ func TestOptionalStoredAuthorizerSendsConfiguredKeyButAllowsNone(t *testing.T) {
 	if got := request.Header.Get("Authorization"); got != "" {
 		t.Fatalf("authorization without key = %q", got)
 	}
-	if err := store.SetAPIKey("deepseek", "proxy-key"); err != nil {
+	if err := store.SetAPIKey(t.Context(), "deepseek", "proxy-key"); err != nil {
 		t.Fatal(err)
 	}
 	if err := authorizer.Authorize(context.Background(), request); err != nil {
@@ -210,7 +265,7 @@ func TestProviderStatusesReportCredentialSource(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "")
 	t.Setenv("OPENAI_API_KEY", "environment")
 	t.Setenv("OPENROUTER_API_KEY", "")
-	if err := store.SetAPIKey("deepseek", "stored"); err != nil {
+	if err := store.SetAPIKey(t.Context(), "deepseek", "stored"); err != nil {
 		t.Fatal(err)
 	}
 	statuses, err := providerStatuses(store)

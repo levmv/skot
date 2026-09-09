@@ -32,9 +32,10 @@ import (
 type Application struct {
 	config applicationConfig
 
-	mu           sync.RWMutex
-	filesystemMu sync.Mutex
-	state        applicationState
+	mu             sync.RWMutex
+	filesystemMu   sync.Mutex
+	quotaRefreshMu sync.Mutex
+	state          applicationState
 }
 
 // applicationConfig is immutable after Open returns. In particular, session
@@ -84,6 +85,7 @@ type applicationState struct {
 	workspaceAddedPaths     []string
 	workspaceProtectedPaths []string
 	startupNotices          []string
+	accountQuota            accountQuotaCache
 }
 
 func (application *Application) Run(ctx context.Context, input string, emit agent.EmitFunc) (agent.RunResult, error) {
@@ -185,7 +187,7 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 	if err != nil {
 		return agent.MarkInvalidRequest(err)
 	}
-	backend, err := buildModelBackend(route, application.config.settings, modelBackendOptions{requireCredential: true})
+	backend, err := buildModelBackend(route, application.config.settings, modelBackendOptions{requireCredential: true, masker: application.config.masker})
 	if err != nil {
 		return err
 	}
@@ -483,6 +485,13 @@ func buildModelBackend(route resolvedModelRoute, credentials *state.Store, optio
 	var authorizer modelhttp.Authorizer = storedBearerAuthorizer{
 		store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
 	}
+	if route.Provider == "openai-codex" {
+		if route.CustomEndpoint || route.API != modelAPIResponses {
+			return nil, agent.MarkInvalidRequest(errors.New("openai-codex requires the ChatGPT Codex endpoint and Responses API"))
+		}
+		authorizer = codexAuthorizer{store: credentials, modelURI: route.URI, client: options.httpClient, masker: options.masker}
+		options.httpClient = codexHTTPClient(options.httpClient)
+	}
 	if route.Credentialless {
 		// Ollama ignores the token, while OpenAI-compatible clients conventionally
 		// send a non-empty placeholder.
@@ -535,7 +544,7 @@ func (application *Application) Login(ctx context.Context, provider, token strin
 		return errors.New("application is closed")
 	}
 	if err := application.updateCredential(ctx, provider, func(settings *state.Store, normalizedProvider string) error {
-		return storeProviderCredential(settings, normalizedProvider, token)
+		return storeProviderCredential(ctx, settings, normalizedProvider, token)
 	}); err != nil {
 		return err
 	}
@@ -544,7 +553,9 @@ func (application *Application) Login(ctx context.Context, provider, token strin
 }
 
 func (application *Application) Logout(ctx context.Context, provider string) error {
-	return application.updateCredential(ctx, provider, deleteProviderCredential)
+	return application.updateCredential(ctx, provider, func(settings *state.Store, normalizedProvider string) error {
+		return deleteProviderCredential(ctx, settings, normalizedProvider)
+	})
 }
 
 func (application *Application) updateCredential(ctx context.Context, provider string, mutate func(*state.Store, string) error) error {
@@ -559,7 +570,13 @@ func (application *Application) updateCredential(ctx context.Context, provider s
 		return errors.New("application is closed")
 	}
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	return mutate(settings, provider)
+	if err := mutate(settings, provider); err != nil {
+		return err
+	}
+	if provider == "openai-codex" {
+		application.invalidateAccountQuota()
+	}
+	return nil
 }
 
 func (application *Application) SessionID() string {
@@ -695,6 +712,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		modelAPI:          application.config.modelAPI,
 		contextWindow:     contextWindow,
 		credentials:       settings,
+		masker:            masker,
 		metadataLookup:    application.config.metadataLookup,
 		tools:             tools,
 		programTools:      programTools,

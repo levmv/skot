@@ -58,9 +58,11 @@ type fakeAgent struct {
 	compactionErr    error
 	providers        []ProviderStatus
 	providerErr      error
+	accountQuota     app.AccountQuota
 	loginProvider    string
 	loginToken       string
 	loginErr         error
+	browserLogin     app.BrowserLogin
 	logoutProvider   string
 	logoutErr        error
 	sessionID        string
@@ -303,6 +305,10 @@ func (fake *fakeAgent) Compact(context.Context) (agent.ContextCompactedRecord, e
 func (fake *fakeAgent) ProviderStatuses() ([]ProviderStatus, error) {
 	return append([]ProviderStatus(nil), fake.providers...), fake.providerErr
 }
+
+func (fake *fakeAgent) AccountQuota() app.AccountQuota { return fake.accountQuota }
+
+func (fake *fakeAgent) RefreshAccountQuota(context.Context) error { return nil }
 
 func (fake *fakeAgent) Login(_ context.Context, provider, token string) error {
 	fake.loginProvider = provider

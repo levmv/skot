@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/app"
 )
 
@@ -293,28 +294,28 @@ func parseModelTokenCount(value string) (int, error) {
 	return int(amount * multiplier), nil
 }
 
-func (m *screenModel) selectModel(selection modelSelection, returnPicker pickerState) {
+func (m *screenModel) selectModel(selection modelSelection, returnPicker pickerState) tea.Cmd {
 	selection.uri = strings.TrimSpace(selection.uri)
 	provider := modelProvider(selection.uri)
 	if provider == "" {
 		m.switchModel(selection)
-		return
+		return nil
 	}
 	if err := m.refreshProviderStatuses(); err != nil {
 		m.addBlock(screenBlockError, "model: "+err.Error())
-		return
+		return nil
 	}
 	for _, status := range m.providers {
 		if status.Name == provider {
 			if strings.EqualFold(selection.uri, m.agent.CurrentModel()) && selection.effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
 				m.switchModel(selection)
-				return
+				return nil
 			}
-			m.startProviderLogin(provider, selection, returnPicker)
-			return
+			return m.startProviderLogin(provider, selection, returnPicker)
 		}
 	}
 	m.switchModel(selection)
+	return nil
 }
 
 func (m *screenModel) switchModel(selection modelSelection) {

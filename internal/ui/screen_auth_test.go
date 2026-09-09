@@ -63,11 +63,16 @@ func TestLoginSecretNeverEntersTranscriptOrHistory(t *testing.T) {
 	if rendered := strings.Join(model.markedEditorLines(), "\n"); strings.Contains(rendered, "super-secret-key") {
 		t.Fatalf("secret rendered in cleartext: %q", rendered)
 	}
-	model, _ = model.submitInput()
+	model, command := model.submitInput()
+	if command == nil {
+		t.Fatal("login did not schedule credential storage")
+	}
+	model, _ = model.update(tea.PasteMsg{Content: "super-secret-key"})
+	model, _ = model.update(command())
 	if fake.loginProvider != "deepseek" || fake.loginToken != "super-secret-key" || model.loginProvider != "" {
 		t.Fatalf("login = provider %q token %q active %q", fake.loginProvider, fake.loginToken, model.loginProvider)
 	}
-	if len(model.composer.history) != 0 || strings.Contains(strings.Join(model.transcript.lines, "\n"), "super-secret-key") {
+	if model.composer.value() != "" || len(model.composer.history) != 0 || strings.Contains(strings.Join(model.transcript.lines, "\n"), "super-secret-key") {
 		t.Fatalf("secret leaked: history=%#v transcript=%q", model.composer.history, model.transcript.lines)
 	}
 }
@@ -95,7 +100,11 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 	if fake.logoutProvider != "" || !model.picker.active() {
 		t.Fatalf("logout accepted a numeric shortcut: provider=%q picker=%#v", fake.logoutProvider, model.picker)
 	}
-	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	model, command := model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("logout did not schedule credential removal")
+	}
+	model, _ = model.update(command())
 	if fake.logoutProvider != "deepseek" {
 		t.Fatalf("logout provider = %q", fake.logoutProvider)
 	}
@@ -173,7 +182,11 @@ func TestStartupLoginToAlternativeProviderFinishesModelSwitch(t *testing.T) {
 		t.Fatalf("pending login: provider=%q model=%q", model.loginProvider, model.loginSelection.uri)
 	}
 	model.secret.SetValue("openrouter-secret")
-	model, _ = model.submitInput()
+	model, command := model.submitInput()
+	if command == nil {
+		t.Fatal("login did not schedule credential storage")
+	}
+	model, _ = model.update(command())
 	if fake.loginProvider != "openrouter" || fake.loginToken != "openrouter-secret" || fake.model != "openrouter/free" {
 		t.Fatalf("login/switch: provider=%q token=%q model=%q", fake.loginProvider, fake.loginToken, fake.model)
 	}

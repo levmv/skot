@@ -15,6 +15,8 @@ const (
 	operationShell
 	operationScope
 	operationCompaction
+	operationLogin
+	operationLogout
 )
 
 // activeOperation is the screen's single exclusive cancellable-operation slot.
@@ -72,6 +74,10 @@ func (operation activeOperation) label() string {
 		return "Checking filesystem scope"
 	case operationCompaction:
 		return "Compacting context"
+	case operationLogin:
+		return "Signing in"
+	case operationLogout:
+		return "Signing out"
 	default:
 		return "Working"
 	}

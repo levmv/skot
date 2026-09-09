@@ -104,6 +104,102 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	}
 }
 
+func TestCompleteAssemblesFinishedItemsWithCompactTerminalResponse(t *testing.T) {
+	output := []jsontext.Value{
+		jsontext.Value(`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking"}],"encrypted_content":"ciphertext"}`),
+		jsontext.Value(`{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Reading."}]}`),
+		jsontext.Value(`{"id":"fc_1","type":"function_call","call_id":"provider_call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}","status":"completed"}`),
+	}
+	for _, test := range []struct {
+		name, terminal, status string
+		terminalOutput         []jsontext.Value
+	}{
+		{name: "omitted output", terminal: "response.completed", status: "completed"},
+		{name: "empty output", terminal: "response.completed", status: "completed", terminalOutput: []jsontext.Value{}},
+		{name: "done alias", terminal: "response.done", status: "completed"},
+		{name: "repeated output", terminal: "response.completed", status: "completed", terminalOutput: output},
+		{name: "incomplete output", terminal: "response.incomplete", status: "incomplete"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				writeSSEEvent(t, writer, map[string]any{"type": "response.reasoning_summary_text.delta", "delta": "checking"})
+				writeSSEEvent(t, writer, map[string]any{"type": "response.output_text.delta", "delta": "Reading."})
+				// Parallel output can finish in a different order than its indices.
+				for _, index := range []int{2, 0, 1} {
+					writeSSEEvent(t, writer, map[string]any{
+						"type": "response.output_item.done", "output_index": index, "item": output[index],
+					})
+				}
+				terminal := map[string]any{
+					"id": "resp_1", "status": test.status,
+					"usage": map[string]any{
+						"input_tokens": 12, "input_tokens_details": map[string]any{"cached_tokens": 4},
+						"output_tokens": 5, "output_tokens_details": map[string]any{"reasoning_tokens": 3}, "total_tokens": 17,
+					},
+				}
+				if test.terminalOutput != nil {
+					terminal["output"] = test.terminalOutput
+				}
+				if test.status == "incomplete" {
+					terminal["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+				}
+				writeSSEEvent(t, writer, map[string]any{"type": test.terminal, "response": terminal})
+			}))
+			backend := newTestServerBackend(t, server, "")
+			var events []agent.ModelStreamEvent
+			response, err := backend.Complete(t.Context(), agent.ModelRequest{}, func(event agent.ModelStreamEvent) { events = append(events, event) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Usage != (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17}) {
+				t.Fatalf("usage = %#v", response.Usage)
+			}
+			if !reflect.DeepEqual(events, []agent.ModelStreamEvent{
+				{Kind: agent.EventReasoningSummaryDelta, Text: "checking"}, {Kind: agent.EventTextDelta, Text: "Reading."},
+			}) {
+				t.Fatalf("duplicated or missing streaming output: %#v", events)
+			}
+			wantCount, wantStop := 3, "tool_calls"
+			if test.status == "incomplete" {
+				wantCount, wantStop = 2, "max_output_tokens"
+			}
+			if len(response.Items) != wantCount || response.StopReason != wantStop {
+				t.Fatalf("output count/stop = %d/%s", len(response.Items), response.StopReason)
+			}
+			if response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking" || len(response.Items[0].ProviderData) != 1 || string(response.Items[0].ProviderData[0].Data) != `{"id":"rs_1","encrypted_content":"ciphertext"}` || response.Items[1].Kind != agent.ItemAssistantText || response.Items[1].Text != "Reading." {
+				t.Fatalf("lost or reordered completed items: %#v", response.Items)
+			}
+			if test.status == "completed" {
+				call := response.Items[2].ToolCall
+				if call == nil || call.Name != "read_file" || call.RawArguments != `{"path":"README.md"}` || len(call.ProviderReferences) != 1 {
+					t.Fatalf("tool call = %#v", call)
+				}
+				var identity functionCallIdentity
+				if err := json.Unmarshal(call.ProviderReferences[0].Data, &identity); err != nil || identity.ID != "fc_1" || identity.CallID != "provider_call_1" {
+					t.Fatalf("tool replay identity = %#v, %v", identity, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCompleteDoesNotPromoteUnfinishedStreamItems(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "response.output_item.added", "output_index": 0,
+			"item": jsontext.Value(`{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read","arguments":"{}","status":"in_progress"}`),
+		})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed"}})
+	}))
+	backend := newTestServerBackend(t, server, "")
+	_, err := backend.Complete(t.Context(), agent.ModelRequest{}, nil)
+	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "no output items") {
+		t.Fatalf("unfinished tool call was accepted: %v", err)
+	}
+}
+
 func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	backend, err := New(Config{
 		Provider: "openai", Model: "gpt-test", ReasoningEffort: " HIGH ",
@@ -134,7 +230,7 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Model != "gpt-test" || request.Instructions != "instructions" || request.Store || !request.Stream || len(request.Input) != 6 {
+	if request.Model != "gpt-test" || request.Instructions == nil || *request.Instructions != "instructions" || request.Store || !request.Stream || len(request.Input) != 6 {
 		t.Fatalf("request = %#v", request)
 	}
 	if request.Reasoning == nil || request.Reasoning.Effort != "high" || request.Reasoning.Summary != ReasoningSummaryAuto {
@@ -529,6 +625,10 @@ func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
+		writeSSEEvent(t, writer, map[string]any{
+			"type": "response.output_item.done", "output_index": 0,
+			"item": jsontext.Value(`{"id":"fc_1","type":"function_call","call_id":"call_1","name":"read","arguments":"{}","status":"completed"}`),
+		})
 	}))
 	backend := newTestServerBackend(t, server, "")
 	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)

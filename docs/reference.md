@@ -92,14 +92,17 @@ the currently available route list and switch models. You can also enter any
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
+| ChatGPT subscription (`openai-codex`) | Browser login with `/login openai-codex` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | OpenCode Go | `OPENCODE_API_KEY` |
 | Ollama | None; defaults to the local OpenAI-compatible endpoint |
 
-Interactive `/login [provider]` stores a key in the private credential store;
-`/logout [provider]` removes it. An environment variable takes precedence over
-a stored key and must be unset before the corresponding stored key can be
-changed.
+`openai-codex/` models use your ChatGPT subscription's Codex allowance;
+`openai/` models use a separately billed API key.
+
+Interactive `/login [provider]` saves credentials in the private store;
+`/logout [provider]` removes them. An environment variable takes precedence over
+a stored API key and must be unset before the corresponding key can be changed.
 
 Web tools use separate credentials:
 
@@ -200,7 +203,7 @@ recent session for that workspace.
 | `/help` | Show keyboard shortcuts. |
 | `/clear` | Start a new session. |
 | `/resume [id-or-prefix]` | Choose or resume a previous session. |
-| `/login [provider]` | Store a provider or service key. |
+| `/login [provider]` | Sign in to a provider or service. |
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
 | `/scope [workspace|machine]` | Show or change the filesystem scope, added directories, and protected paths. |
@@ -208,7 +211,7 @@ recent session for that workspace.
 | `/display [compact|detailed|full]` | Show or persist transcript detail. Default: `compact`. |
 | `/context` | Show the current context budget. |
 | `/compact` | Compact older completed conversation blocks. |
-| `/logout [provider]` | Remove a stored key. |
+| `/logout [provider]` | Remove stored credentials. |
 | `/exit`, `/quit`, `/q` | Exit Skot. |
 
 Enter sends a message; Shift/Alt+Enter or Ctrl+J inserts a newline. Escape

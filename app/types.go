@@ -94,6 +94,16 @@ type ProviderStatus struct {
 	Description   string
 	CredentialURL string
 	ToolService   bool
+	BrowserLogin  bool
+}
+
+// AccountQuota describes an observed account allowance, shared across sessions.
+// Window zero means that no current allowance is available.
+type AccountQuota struct {
+	RemainingPercent float64
+	Window           time.Duration
+	ResetsAt         time.Time
+	ObservedAt       time.Time
 }
 
 // ModelChoice is one locally known route presented to frontends. Unavailable

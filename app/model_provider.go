@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/levmv/skot/internal/codexauth"
 )
 
 type providerSpec struct {
@@ -40,7 +42,8 @@ var modelProviderCatalog = map[string]providerSpec{
 			"X-Title":      []string{"Skot"},
 		},
 	},
-	"openai": {baseURL: "https://api.openai.com/v1", defaultAPI: modelAPIChatCompletions},
+	"openai":           {baseURL: "https://api.openai.com/v1", defaultAPI: modelAPIChatCompletions},
+	codexauth.Provider: {baseURL: codexauth.BaseURL, defaultAPI: modelAPIResponses},
 	"opencode-go": {
 		baseURL: "https://opencode.ai/zen/go/v1", defaultAPI: modelAPIChatCompletions,
 		requireDeclaredModel: true,

@@ -15,6 +15,7 @@ import (
 type modelBackendOptions struct {
 	requireCredential bool
 	httpClient        *http.Client
+	masker            *secretMasker
 }
 
 // runtimeBuilder contains the resolved application-owned dependencies shared
@@ -25,6 +26,7 @@ type runtimeBuilder struct {
 	modelAPI          modelAPI
 	contextWindow     int
 	credentials       *state.Store
+	masker            *secretMasker
 	metadataLookup    modelContextLookup
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
@@ -153,6 +155,7 @@ func (builder runtimeBuilder) modelForRoute(route resolvedModelRoute, options mo
 	if err != nil {
 		return agent.ModelInfo{}, nil, agent.MarkInvalidRequest(err)
 	}
+	options.masker = builder.masker
 	backend, err := buildModelBackend(route, builder.credentials, options)
 	if err != nil {
 		return agent.ModelInfo{}, nil, err

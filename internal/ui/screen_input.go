@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -140,6 +141,11 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 }
 
 func (m screenModel) updateInput(msg tea.Msg) (screenModel, tea.Cmd) {
+	// Paste and editor messages bypass handleKey. An operation without an
+	// editor must not collect hidden input, including a repeated credential paste.
+	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() && maintenance.kind != operationCompaction {
+		return m, nil
+	}
 	var cmd tea.Cmd
 	if m.loginProvider != "" {
 		m.secret, cmd = m.secret.Update(msg)
@@ -181,19 +187,28 @@ func editorCtrlKey(code rune) tea.KeyPressMsg {
 func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 	input := m.selectedInput()
 	if m.loginProvider != "" {
+		if m.browserLogin != nil {
+			if err := m.browserLogin.SubmitRedirect(input); err != nil {
+				m.addBlock(screenBlockError, "login: "+err.Error())
+			} else {
+				m.addBlock(screenBlockSystem, "completing browser login…")
+			}
+			m.secret.Reset()
+			m.refreshTranscript()
+			return m, nil
+		}
 		provider := m.loginProvider
 		pending := m.loginSelection
-		m.cancelLogin()
 		if input == "" {
+			m.cancelLogin()
 			m.addBlock(screenBlockError, "login: API key is required")
-		} else if err := m.agent.Login(m.ctx, provider, input); err != nil {
-			m.addBlock(screenBlockError, "login: "+err.Error())
 		} else {
-			m.addBlock(screenBlockSystem, "logged in to "+provider)
-			m.refreshProviderStatuses()
-			if pending.uri != "" {
-				m.switchModel(pending)
-			}
+			client := m.agent
+			command := m.startCredentialUpdate(provider, false, pending, func(ctx context.Context) error {
+				return client.Login(ctx, provider, input)
+			})
+			m.refreshTranscript()
+			return m, command
 		}
 		m.refreshTranscript()
 		return m, nil
@@ -210,9 +225,9 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 		m.composer.reset()
 		m.syncCommandSuggestions()
 		selection.contextWindow = contextWindow
-		m.selectModel(selection, pickerState{})
+		command := m.selectModel(selection, pickerState{})
 		m.refreshTranscript()
-		return m, nil
+		return m, command
 	}
 	if m.pathPrompt != notFilesystemPath {
 		kind := m.pathPrompt
@@ -272,6 +287,10 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 }
 
 func (m *screenModel) cancelLogin() {
+	if m.browserLogin != nil {
+		m.browserLogin.Close()
+		m.browserLogin = nil
+	}
 	m.loginProvider = ""
 	m.loginSelection = modelSelection{}
 	m.loginReturn = pickerState{}

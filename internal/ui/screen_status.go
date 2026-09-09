@@ -56,9 +56,14 @@ func (m screenModel) footerLine() string {
 	if m.sessionStatus.ImageDelivery == agent.ImageDeliveryRejected {
 		imageStatus = "images omitted"
 	}
+	quotaStatus := compactAccountQuota(m.agent.AccountQuota())
+	if visibleLen(compactFooterParts(model, contextStatus, quotaStatus, toolSet, scope, imageStatus)) > m.contentWidth() {
+		quotaStatus = ""
+	}
 	beforeRoot := compactFooterParts(
 		model,
 		contextStatus,
+		quotaStatus,
 		toolSet,
 		scope,
 		imageStatus,
@@ -66,7 +71,7 @@ func (m screenModel) footerLine() string {
 	root := sanitizeTerminalText(strings.TrimSpace(m.config.Root))
 	root = truncateFooterRoot(root, beforeRoot, "", m.contentWidth())
 
-	parts := []string{model, contextStatus, toolSet, scope, imageStatus, root}
+	parts := []string{model, contextStatus, quotaStatus, toolSet, scope, imageStatus, root}
 	rendered := make([]string, 0, len(parts))
 	for index, part := range parts {
 		part = sanitizeTerminalText(strings.TrimSpace(part))
@@ -76,9 +81,9 @@ func (m screenModel) footerLine() string {
 		style := m.mutedStyle
 		if index == 1 && contextUsagePercent(m.sessionStatus.ContextReport) >= footerContextWarningPercent {
 			style = m.warningStyle
-		} else if index == 3 && scope != "" {
+		} else if index == 4 && scope != "" {
 			style = m.warningStyle
-		} else if index == 4 && imageStatus != "" {
+		} else if index == 5 && imageStatus != "" {
 			style = m.warningStyle
 		}
 		rendered = append(rendered, style.Render(part))

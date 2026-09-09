@@ -330,7 +330,9 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		}
 		selection := m.modelSelectionForURI(item.value)
 		selection.effort = selectedModelEffort(item)
-		m.selectModel(selection, picker)
+		command := m.selectModel(selection, picker)
+		m.refreshTranscript()
+		return m, command
 	case pickerModelAPI:
 		selection := picker.pendingModel
 		selection.api = item.value
@@ -350,9 +352,13 @@ func (m screenModel) selectPickerItem() (screenModel, tea.Cmd) {
 		if picker.startupLogin {
 			pendingModel = item.modelURI
 		}
-		m.startProviderLogin(item.value, modelSelection{uri: pendingModel}, pickerState{})
+		command := m.startProviderLogin(item.value, modelSelection{uri: pendingModel}, pickerState{})
+		m.refreshTranscript()
+		return m, command
 	case pickerLogout:
-		m.logoutProvider(item.value)
+		command := m.logoutProvider(item.value)
+		m.refreshTranscript()
+		return m, command
 	case pickerSession:
 		return m, resumeSessionCmd(item.value)
 	}

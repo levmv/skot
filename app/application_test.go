@@ -1855,7 +1855,7 @@ func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T
 	t.Cleanup(func() { modelProviderCatalog["openrouter"] = originalProvider })
 
 	application, _ := newSessionApplication(t)
-	if err := application.config.settings.SetAPIKey("openrouter", "test-key"); err != nil {
+	if err := application.config.settings.SetAPIKey(t.Context(), "openrouter", "test-key"); err != nil {
 		t.Fatal(err)
 	}
 	lookups := 0
@@ -1907,7 +1907,7 @@ func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T
 
 func TestApplicationReselectUsesCurrentOpenRouterContextWhenLookupFails(t *testing.T) {
 	application, _ := newSessionApplication(t)
-	if err := application.config.settings.SetAPIKey("openrouter", "test-key"); err != nil {
+	if err := application.config.settings.SetAPIKey(t.Context(), "openrouter", "test-key"); err != nil {
 		t.Fatal(err)
 	}
 	lookups := 0

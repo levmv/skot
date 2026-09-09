@@ -238,6 +238,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		modelAPI:          modelAPIOverride,
 		contextWindow:     config.ContextWindow,
 		credentials:       settingsStore,
+		masker:            masker,
 		metadataLookup:    openRouterContextWindow,
 		tools:             catalog,
 		programTools:      programSnapshots,

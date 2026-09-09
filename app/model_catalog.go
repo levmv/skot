@@ -155,6 +155,26 @@ type resolvedModelRoute struct {
 }
 
 var modelCatalog = []modelSpec{
+	{
+		URI: "openai-codex/gpt-6-astra", Name: "ChatGPT · GPT 6 Astra", API: modelAPIResponses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
+	{
+		URI: "openai-codex/gpt-5.6-sol", Name: "ChatGPT · GPT 5.6 Sol", API: modelAPIResponses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
+	{
+		URI: "openai-codex/gpt-5.6-terra", Name: "ChatGPT · GPT 5.6 Terra", API: modelAPIResponses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
+	{
+		URI: "openai-codex/gpt-5.6-luna", Name: "ChatGPT · GPT 5.6 Luna", API: modelAPIResponses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+	},
+	{
+		URI: "openai-codex/gpt-5.5", Name: "ChatGPT · GPT 5.5", API: modelAPIResponses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
+	},
 	// Native DeepSeek V4 exposes off/high/max. The thinking switch expresses off;
 	// enabled requests pair it with reasoning_effort. Low/medium collapse to high.
 	{
@@ -349,6 +369,9 @@ func resolveModelRoute(uri, reasoningEffort string, overrides modelRouteOverride
 	if err != nil {
 		return resolvedModelRoute{}, err
 	}
+	if provider == "openai-codex" && (strings.TrimSpace(overrides.BaseURL) != "" || (overrides.API != "" && overrides.API != modelAPIResponses)) {
+		return resolvedModelRoute{}, fmt.Errorf("openai-codex uses the ChatGPT Codex endpoint and Responses API; remove -base-url and any other -model-api override")
+	}
 	if overrides.ContextWindow < 0 {
 		return resolvedModelRoute{}, fmt.Errorf("model context window cannot be negative")
 	}
@@ -510,6 +533,12 @@ func defaultModelSpec(provider string) modelSpec {
 		traits.ReasoningEffort = ""
 	}
 	responsesTraits := responsemodel.RouteTraits{}
+	if provider == "openai-codex" {
+		responsesTraits = responsemodel.RouteTraits{
+			ReasoningSummary:   responsemodel.ReasoningSummaryAuto,
+			EncryptedReasoning: true, PromptCacheKey: true, RequireInstructions: true,
+		}
+	}
 	return modelSpec{ReasoningEfforts: efforts, ChatTraits: &traits, ResponsesTraits: &responsesTraits}
 }
 

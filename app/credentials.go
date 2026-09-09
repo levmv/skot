@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/levmv/skot/internal/codexauth"
 	"github.com/levmv/skot/internal/state"
 )
 
@@ -31,6 +32,7 @@ var providerCredentialCatalog = []providerCredentialSpec{
 	{name: "deepseek", environment: "DEEPSEEK_API_KEY", description: "model provider", credentialURL: "https://platform.deepseek.com/api_keys", capabilities: credentialModel},
 	{name: "openrouter", environment: "OPENROUTER_API_KEY", description: "model provider", credentialURL: "https://openrouter.ai/settings/keys", capabilities: credentialModel},
 	{name: "openai", environment: "OPENAI_API_KEY", description: "model provider", credentialURL: "https://platform.openai.com/api-keys", capabilities: credentialModel},
+	{name: codexauth.Provider, description: "ChatGPT subscription", capabilities: credentialModel},
 	{name: "anthropic", environment: "ANTHROPIC_API_KEY", description: "model provider", credentialURL: "https://platform.claude.com/settings/keys", capabilities: credentialModel},
 	{name: "opencode-go", environment: "OPENCODE_API_KEY", description: "OpenCode Go subscription", credentialURL: "https://opencode.ai/auth", capabilities: credentialModel},
 	{name: "keenable", environment: "KEENABLE_API_KEY", description: "web search and fetch", credentialURL: "https://app.keenable.ai", capabilities: credentialWebSearch | credentialWebFetch},
@@ -83,6 +85,20 @@ func storedRequestCredential(store *state.Store, provider, modelURI string, allo
 
 func credentialForProvider(store *state.Store, provider string) (token, source string, err error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == codexauth.Provider {
+		tokens, err := storedCodexTokens(store)
+		if errors.Is(err, errInvalidCodexCredentials) {
+			// Reauthorization must remain available for an incomplete profile.
+			return "", "none", nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if tokens.Valid() {
+			return tokens.AccessToken, "auth store", nil
+		}
+		return "", "none", nil
+	}
 	if token := strings.TrimSpace(os.Getenv(providerEnvironment(provider))); token != "" {
 		return token, "environment override", nil
 	}
@@ -119,12 +135,17 @@ func credentialProviderSpec(provider string) (providerCredentialSpec, bool) {
 func credentialEnvironmentNames() []string {
 	names := make([]string, 0, len(providerCredentialCatalog))
 	for _, spec := range providerCredentialCatalog {
-		names = append(names, spec.environment)
+		if spec.environment != "" {
+			names = append(names, spec.environment)
+		}
 	}
 	return names
 }
 
 func missingProviderCredentialError(provider, modelURI string) error {
+	if provider == codexauth.Provider {
+		return fmt.Errorf("ChatGPT login is unavailable for model %q; start interactive Skot and use /login openai-codex", modelURI)
+	}
 	return fmt.Errorf(
 		"%s API key is unavailable for model %q; set %s or start interactive Skot and use /login %s",
 		provider, modelURI, providerEnvironment(provider), provider,
@@ -144,13 +165,17 @@ func providerStatuses(store *state.Store) ([]ProviderStatus, error) {
 			Description:   spec.description,
 			CredentialURL: spec.credentialURL,
 			ToolService:   spec.capabilities&credentialModel == 0,
+			BrowserLogin:  spec.name == codexauth.Provider,
 		})
 	}
 	return statuses, nil
 }
 
-func storeProviderCredential(store *state.Store, provider, token string) error {
+func storeProviderCredential(ctx context.Context, store *state.Store, provider, token string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == codexauth.Provider {
+		return errors.New("openai-codex requires browser login; use /login openai-codex")
+	}
 	if !knownCredentialProvider(provider) {
 		return fmt.Errorf("unsupported login provider %q", provider)
 	}
@@ -163,10 +188,10 @@ func storeProviderCredential(store *state.Store, provider, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return errors.New("API key is required")
 	}
-	return store.SetAPIKey(provider, token)
+	return store.SetAPIKey(ctx, provider, token)
 }
 
-func deleteProviderCredential(store *state.Store, provider string) error {
+func deleteProviderCredential(ctx context.Context, store *state.Store, provider string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if !knownCredentialProvider(provider) {
 		return fmt.Errorf("unsupported logout provider %q", provider)
@@ -177,7 +202,12 @@ func deleteProviderCredential(store *state.Store, provider string) error {
 	if store == nil {
 		return errors.New("auth store is unavailable")
 	}
-	return store.DeleteAPIKey(provider)
+	if provider == codexauth.Provider {
+		return store.UpdateCredential(ctx, provider, func(state.CredentialProfile) (state.CredentialProfile, error) {
+			return state.CredentialProfile{}, nil
+		})
+	}
+	return store.DeleteAPIKey(ctx, provider)
 }
 
 func knownCredentialProvider(provider string) bool {

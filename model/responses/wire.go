@@ -42,7 +42,10 @@ const ReasoningSummaryAuto ReasoningSummary = "auto"
 // RouteTraits contains only optional Responses fields demonstrated for a
 // concrete route. The zero value sends no optional summary request.
 type RouteTraits struct {
-	ReasoningSummary ReasoningSummary
+	ReasoningSummary    ReasoningSummary
+	EncryptedReasoning  bool
+	PromptCacheKey      bool
+	RequireInstructions bool
 }
 
 func (traits RouteTraits) validate() error {
@@ -59,13 +62,15 @@ func (RouteTraits) ProviderStateContract() agent.ProviderStateContract {
 }
 
 type responseRequest struct {
-	Model        string           `json:"model"`
-	Instructions string           `json:"instructions,omitempty"`
-	Input        []jsontext.Value `json:"input"`
-	Tools        []responseTool   `json:"tools,omitempty"`
-	Reasoning    *reasoningConfig `json:"reasoning,omitzero"`
-	Store        bool             `json:"store"`
-	Stream       bool             `json:"stream"`
+	Model          string           `json:"model"`
+	Instructions   *string          `json:"instructions,omitzero"`
+	Input          []jsontext.Value `json:"input"`
+	Tools          []responseTool   `json:"tools,omitempty"`
+	Reasoning      *reasoningConfig `json:"reasoning,omitzero"`
+	Store          bool             `json:"store"`
+	Stream         bool             `json:"stream"`
+	Include        []string         `json:"include,omitempty"`
+	PromptCacheKey string           `json:"prompt_cache_key,omitempty"`
 }
 
 type reasoningConfig struct {
@@ -204,12 +209,14 @@ func (usage responseUsage) modelUsage() agent.ModelUsage {
 }
 
 type streamEvent struct {
-	Type     string        `json:"type"`
-	Delta    string        `json:"delta,omitempty"`
-	Response *wireResponse `json:"response,omitzero"`
-	Error    *apiError     `json:"error,omitzero"`
-	Code     string        `json:"code,omitempty"`
-	Message  string        `json:"message,omitempty"`
+	Type        string         `json:"type"`
+	Delta       string         `json:"delta,omitempty"`
+	OutputIndex *int           `json:"output_index,omitzero"`
+	Item        jsontext.Value `json:"item,omitzero"`
+	Response    *wireResponse  `json:"response,omitzero"`
+	Error       *apiError      `json:"error,omitzero"`
+	Code        string         `json:"code,omitempty"`
+	Message     string         `json:"message,omitempty"`
 }
 
 type apiError = modelhttp.ProviderErrorEnvelope
@@ -317,8 +324,17 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 		})
 	}
 	wireRequest := responseRequest{
-		Model: backend.apiModel, Instructions: request.Instructions, Input: input,
+		Model: backend.apiModel, Input: input,
 		Tools: tools, Store: false, Stream: true,
+	}
+	if backend.traits.EncryptedReasoning {
+		wireRequest.Include = []string{"reasoning.encrypted_content"}
+	}
+	if backend.traits.PromptCacheKey {
+		wireRequest.PromptCacheKey = request.SessionID
+	}
+	if backend.traits.RequireInstructions || request.Instructions != "" {
+		wireRequest.Instructions = &request.Instructions
 	}
 	if backend.reasoningEffort != "" || backend.traits.ReasoningSummary != "" {
 		wireRequest.Reasoning = &reasoningConfig{

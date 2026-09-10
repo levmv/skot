@@ -910,7 +910,7 @@ func TestRunAddsApplicableAgentsInstructions(t *testing.T) {
 	if len(request.Messages) == 0 || request.Messages[0].Role != "system" ||
 		!strings.Contains(request.Messages[0].Content, "Always run the focused test.") ||
 		!strings.Contains(request.Messages[0].Content, "You are a CLI agent") ||
-		!strings.Contains(request.Messages[0].Content, "Your workspace root is ") {
+		!strings.Contains(request.Messages[0].Content, "Workspace root (default working directory): ") {
 		t.Fatalf("system instructions = %#v", request.Messages)
 	}
 }

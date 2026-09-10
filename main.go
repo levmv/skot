@@ -195,16 +195,22 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return err
 	}
-	defer func() { returnErr = errors.Join(returnErr, application.Close()) }()
-	if interactive {
-		// Registered after Close so it runs before it: Close drops the session,
-		// and the hint would then see no user turn.
-		defer func() {
-			if application.HasUserTurn() {
-				writeResumeHint(stderr, application.ShortSessionID())
+	defer func() {
+		if interactive {
+			if errors.Is(returnErr, context.Canceled) {
+				return
 			}
-		}()
-	}
+			returnErr = errors.Join(returnErr, waitForCleanup(ctx, func() error {
+				// Close drops the session, so print its resume hint first.
+				if application.HasUserTurn() {
+					writeResumeHint(stderr, application.ShortSessionID())
+				}
+				return application.Close()
+			}))
+		} else {
+			returnErr = errors.Join(returnErr, application.Close())
+		}
+	}()
 	for _, notice := range application.StartupNotices() {
 		fmt.Fprintln(stderr, "sk: "+notice)
 	}

@@ -8,10 +8,17 @@ import (
 )
 
 func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
+	action := m.keymap.actionFor(msg)
+	if m.pendingSessionAction != sessionActionNone {
+		if action == actionInterrupt {
+			command := m.quit(context.Canceled)
+			return m, command
+		}
+		return m, nil
+	}
 	if m.picker.active() {
 		return m.handlePickerKey(msg)
 	}
-	action := m.keymap.actionFor(msg)
 	if m.loginProvider != "" {
 		return m.handleLoginKey(msg, action)
 	}
@@ -61,16 +68,16 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 			m.cancelTurn()
 			return m, nil
 		}
-		m.quitting = true
-		return m, tea.Quit
+		command := m.quit(nil)
+		return m, command
 	case action == actionCycleScope:
 		command := m.startScopeSwitch(nextScope(m.agent.CurrentScope()))
 		m.refreshTranscript()
 		return m, command
 	case action == actionDeleteOrExit:
 		if !m.operation.isTurn() && strings.TrimSpace(m.composer.value()) == "" {
-			m.quitting = true
-			return m, tea.Quit
+			command := m.quit(nil)
+			return m, command
 		}
 		return m.updateInput(msg)
 	case action == actionInsertNewline:
@@ -141,6 +148,9 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 }
 
 func (m screenModel) updateInput(msg tea.Msg) (screenModel, tea.Cmd) {
+	if m.pendingSessionAction != sessionActionNone {
+		return m, nil
+	}
 	// Paste and editor messages bypass handleKey. An operation without an
 	// editor must not collect hidden input, including a repeated credential paste.
 	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() && maintenance.kind != operationCompaction {

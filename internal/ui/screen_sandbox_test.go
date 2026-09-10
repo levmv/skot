@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -116,6 +117,71 @@ func TestPendingScopeOwnsMaintenanceUIAfterConcurrentTurnEnds(t *testing.T) {
 	model, _ = model.update(message)
 	if model.maintenanceOperation().isMaintenance() || model.scope.pending || fake.scope != "workspace" {
 		t.Fatalf("operation=%#v scope=%#v current=%q", model.operation, model.scope, fake.scope)
+	}
+}
+
+func TestSessionCommandsWaitForConcurrentScopeChange(t *testing.T) {
+	for _, test := range []struct {
+		input     string
+		turnFirst bool
+	}{
+		{input: "/exit", turnFirst: true},
+		{input: "/exit", turnFirst: false},
+		{input: "/clear", turnFirst: true},
+		{input: "/clear", turnFirst: false},
+	} {
+		name := test.input + "/scope finishes first"
+		if test.turnFirst {
+			name = test.input + "/turn finishes first"
+		}
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeAgent{sessionID: "session_old", clearID: "session_new", queued: []string{"next"}}
+			model := testScreenModel(t, fake)
+			turnCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			model.operation = activeOperation{kind: operationTurn, cancel: cancel}
+			scopeCommand := model.startFilesystemPathChange("added directory", "/shared",
+				func(ctx context.Context, _ string) error {
+					if ctx.Err() == nil {
+						t.Fatal("command did not cancel the scope change")
+					}
+					return ctx.Err()
+				}, addedDirectoryRow)
+			model.composer.setValue(test.input)
+			model, command := model.submitInput()
+			if command != nil || turnCtx.Err() == nil || model.quitting || fake.sessionID != "session_old" {
+				t.Fatal("command did not cancel and wait for the turn")
+			}
+			messages := []tea.Msg{agentDoneMsg{err: context.Canceled}, scopeCommand()}
+			if !test.turnFirst {
+				messages[0], messages[1] = messages[1], messages[0]
+			}
+			model, command = model.update(messages[0])
+			if command != nil || model.quitting || fake.sessionID != "session_old" || len(fake.queued) != 1 {
+				t.Fatal("command did not wait for both operations")
+			}
+			forced, quit := model.handleKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+			if quit == nil || !forced.quitting || !errors.Is(forced.exitErr, context.Canceled) {
+				t.Fatal("Ctrl+C did not force exit while cancellation was pending")
+			}
+			model, command = model.update(messages[1])
+			if model.pathPrompt != notFilesystemPath || model.picker.active() {
+				t.Fatal("cancelled scope change reopened its prompt")
+			}
+			if test.input == "/exit" {
+				if command == nil || !model.quitting || len(fake.queued) != 1 {
+					t.Fatalf("command=%v quitting=%v queue=%q", command, model.quitting, fake.queued)
+				}
+			} else {
+				if command == nil || fake.sessionID != "session_old" {
+					t.Fatal("clear did not schedule session replacement after cancellation")
+				}
+				model, command = model.update(command())
+				if command != nil || model.quitting || fake.sessionID != "session_new" || len(fake.queued) != 0 {
+					t.Fatalf("command=%v quitting=%v session=%q queue=%q", command, model.quitting, fake.sessionID, fake.queued)
+				}
+			}
+		})
 	}
 }
 

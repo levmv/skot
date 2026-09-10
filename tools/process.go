@@ -321,12 +321,12 @@ func (manager *ProcessManager) HideModelEnvironment(names ...string) {
 }
 
 func (manager *ProcessManager) Tools() []agent.Tool {
-	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory. Relative paths start at the workspace; outside paths require machine scope or an added directory. Defaults to the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
+	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory; defaults to the workspace. Use instead of cd. Relative paths start at the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
 	return []agent.Tool{
 		{
 			Spec: agent.ToolSpec{
 				Name:         "bash",
-				Description:  "Run Bash with environment, starting directory, and filesystem access determined by the current scope, process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors.",
+				Description:  "Run Bash in a fresh shell with process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors. Check exit codes and investigate failures before continuing.",
 				InputSchema:  jsontext.Value(bashSchema),
 				ParallelSafe: false,
 			},

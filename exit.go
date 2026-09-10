@@ -18,6 +18,23 @@ const (
 	exitInterrupted = 130
 )
 
+// waitForCleanup runs cleanup and lets ctx interrupt the wait. After the TUI
+// restores the terminal, Ctrl+C cancels ctx through the signal handler.
+// Cleanup may still be running when this returns context.Canceled.
+func waitForCleanup(ctx context.Context, cleanup func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cleanup() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func exitCodeFor(err error) int {
 	if err == nil {
 		return exitOK

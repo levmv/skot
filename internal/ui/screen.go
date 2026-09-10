@@ -261,14 +261,16 @@ type screenModel struct {
 	height int
 	// frameRowFloor is a transient layout anchor. Blank dynamic rows preserve
 	// the screen height released by a folded tool tail until new content fills it.
-	frameRowFloor int
-	quitting      bool
-	focused       bool
-	operation     activeOperation
-	scope         scopeSwitchState
+	frameRowFloor        int
+	quitting             bool
+	exitErr              error
+	pendingSessionAction sessionAction
+	focused              bool
+	operation            activeOperation
+	credentialOperation  activeOperation
+	scope                scopeSwitchState
 
 	renderer       *inlineRenderer
-	renderErr      error
 	theme          string
 	displayProfile string
 	themePending   bool
@@ -295,6 +297,8 @@ func CanUseScreen(in io.Reader, out io.Writer) (*os.File, *os.File, bool) {
 	return inFile, outFile, IsTerminalFile(inFile) && IsTerminalFile(outFile)
 }
 
+// RunScreen restores the terminal before returning. On context.Canceled, active
+// work may still be running; the caller must not wait for it during cleanup.
 func RunScreen(ctx context.Context, runtime Agent, config Config, in, out *os.File) (returnErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -346,12 +350,18 @@ func RunScreen(ctx context.Context, runtime Agent, config Config, in, out *os.Fi
 
 	finalModel, err := program.Run()
 	if errors.Is(err, tea.ErrInterrupted) {
-		return context.Canceled
+		err = context.Canceled
 	}
-	if final, ok := finalModel.(screenModel); ok && final.renderErr != nil {
-		return final.renderErr
+	if final, ok := finalModel.(screenModel); ok {
+		err = errors.Join(err, final.exitErr)
 	}
 	return err
+}
+
+func (m *screenModel) quit(err error) tea.Cmd {
+	m.quitting = true
+	m.exitErr = err
+	return tea.Quit
 }
 
 func watchTerminalSize(ctx context.Context, program *tea.Program, out *os.File, width, height int) {
@@ -445,11 +455,11 @@ func queryTerminalTheme(generation uint64) tea.Cmd {
 }
 
 func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.quitting {
+		return m, nil
+	}
 	next, cmd := m.update(msg)
 	if next.quitting {
-		if err := next.renderer.Stop(); err != nil {
-			next.renderErr = fmt.Errorf("stop terminal renderer: %w", err)
-		}
 		return next, cmd
 	}
 	if next.themePending {
@@ -465,10 +475,8 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// compact tool tail remains inside the mutable terminal viewport.
 	next.fitCompactToolTail()
 	if err := next.renderer.RenderFrame(next.inlineFrame(), next.width, next.height); err != nil {
-		next.renderErr = fmt.Errorf("render terminal: %w", err)
-		next.quitting = true
-		_ = next.renderer.Stop()
-		return next, tea.Quit
+		cmd = next.quit(fmt.Errorf("render terminal: %w", err))
+		return next, cmd
 	}
 	next.transcript.presented()
 	return next, cmd
@@ -548,6 +556,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		m.refreshTranscript()
 		return m, nil
 	case turnTickMsg:
+		if m.pendingSessionAction != sessionActionNone {
+			return m, scheduleTurnTick()
+		}
 		m.refreshSessionStatus()
 		if m.refreshProcessResults() {
 			m.refreshTranscript()
@@ -563,18 +574,22 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		return m, nil
 	case scopeDoneMsg:
 		m.finishScopeSwitch(msg)
+		cmd := m.continueSessionAction()
 		m.refreshTranscript()
-		return m, nil
+		return m, cmd
 	case compactionDoneMsg:
 		cmd := m.finishCompaction(msg)
 		m.refreshTranscript()
 		return m, cmd
+	case sessionClearedMsg:
+		m.finishClearSession(msg)
+		m.refreshTranscript()
+		return m, nil
 	case resumeSessionMsg:
 		m.resumeSession(msg.idOrPrefix)
 		m.refreshTranscript()
 		return m, nil
 	case agentDoneMsg:
-		m.refreshSessionStatus()
 		if msg.err == nil {
 			m.finishModelRetryNotice()
 		} else {
@@ -586,6 +601,12 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		}
 		m.finishTurnDuration(time.Now())
 		m.operation.clear()
+		if m.pendingSessionAction != sessionActionNone {
+			cmd := m.continueSessionAction()
+			m.refreshTranscript()
+			return m, cmd
+		}
+		m.refreshSessionStatus()
 		if input, ok := m.agent.ClaimQueued(); ok {
 			m.addBlock(screenBlockUser, input)
 			cmd := m.startTurn(input)
@@ -648,6 +669,16 @@ func (m screenModel) baseInlineFrameRows() int {
 }
 
 func (m screenModel) baseInlineDynamic() ([]string, int) {
+	if m.pendingSessionAction != sessionActionNone {
+		// Cancellation and session replacement can hold application locks. Keep
+		// rendering independent of its getters so Ctrl+C remains responsive.
+		line := "Clearing session"
+		if m.pendingSessionAction == sessionActionExit {
+			line = "Exiting"
+		}
+		line += " (ctrl+c to force exit)"
+		return []string{"", m.marked(" ", m.mutedStyle.Render(line))}, -1
+	}
 	// The idle working line doubles as the gap above the composer, so it is
 	// dropped when the transcript already ends in one: the same blank-run
 	// collapsing the transcript does, applied across the seam to the dynamic area.

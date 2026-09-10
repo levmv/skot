@@ -77,9 +77,8 @@ type ConfigurationMetadata struct {
 }
 
 type Runtime struct {
-	// runMu excludes concurrent turns, shell/maintenance operations, and
-	// model/tool configuration. Model/tool changes acquire it before configMu,
-	// so a turn observes one coherent model/tool setup.
+	// runMu excludes concurrent turns and shell/maintenance operations. While
+	// a turn owns it, model/tool changes are queued until a request boundary.
 	runMu sync.Mutex
 	// statusMu protects only the last fully calculated session status. Status
 	// calculation happens before taking this lock so readers never wait on a
@@ -88,17 +87,17 @@ type Runtime struct {
 	sessionStatus  SessionStatus
 	statusSequence uint64
 	// queueMu owns pendingInputs independently of a running turn.
-	queueMu sync.Mutex
+	queueMu       sync.Mutex
+	pendingInputs []string
 	// configMu synchronizes observer reads with configuration changes.
 	// Scope changes deliberately take it without runMu so subsequently started
 	// work in an active turn can observe the new boundary.
-	configMu          sync.RWMutex
-	pendingInputs     []string
-	backend           Backend
-	modelInfo         ModelInfo
+	configMu      sync.RWMutex
+	turnActive    bool
+	pendingConfig *runtimeConfiguration
+	runtimeConfiguration
+
 	journal           Journal
-	tools             []Tool
-	toolByName        map[string]Tool
 	instructions      string
 	sessionID         string
 	workspace         string
@@ -107,11 +106,9 @@ type Runtime struct {
 	userShell         ShellFunc
 	externalWork      ExternalWork
 	sanitize          func(string) string
-	toolSet           string
 	build             BuildSnapshot
 	scope             ScopeSnapshot
 	awaitRequiredJobs bool
-	programTools      []ProgramToolSnapshot
 }
 
 // New constructs an inert Runtime: it starts no background work and does not
@@ -172,11 +169,15 @@ func New(config Config) (*Runtime, error) {
 	}
 
 	runtime := &Runtime{
-		backend:           config.Backend,
-		modelInfo:         modelInfo,
+		runtimeConfiguration: runtimeConfiguration{
+			backend:      config.Backend,
+			modelInfo:    modelInfo,
+			tools:        tools,
+			toolByName:   toolByName,
+			toolSet:      strings.TrimSpace(config.Metadata.ToolSet),
+			programTools: programTools,
+		},
 		journal:           config.Journal,
-		tools:             tools,
-		toolByName:        toolByName,
 		instructions:      instructions,
 		sessionID:         strings.TrimSpace(config.SessionID),
 		workspace:         strings.TrimSpace(config.Workspace),
@@ -185,11 +186,9 @@ func New(config Config) (*Runtime, error) {
 		userShell:         config.UserShell,
 		externalWork:      config.ExternalWork,
 		sanitize:          sanitize,
-		toolSet:           strings.TrimSpace(config.Metadata.ToolSet),
 		build:             build,
 		scope:             sanitizeScopeSnapshot(config.Metadata.Scope, sanitize),
 		awaitRequiredJobs: config.Metadata.AwaitRequiredJobs,
-		programTools:      programTools,
 	}
 	runtime.sessionStatus = runtime.calculateSessionStatus(State{})
 	return runtime, nil
@@ -255,9 +254,7 @@ func NormalizeTools(input []Tool) ([]Tool, error) {
 }
 
 func (runtime *Runtime) CurrentModel() string {
-	runtime.configMu.RLock()
-	defer runtime.configMu.RUnlock()
-	return modelURI(runtime.modelInfo)
+	return modelURI(runtime.CurrentModelInfo())
 }
 
 // CurrentSessionID returns the configured journal identity or the identity
@@ -269,18 +266,20 @@ func (runtime *Runtime) CurrentSessionID() string {
 }
 
 func (runtime *Runtime) CurrentReasoningEffort() string {
-	runtime.configMu.RLock()
-	defer runtime.configMu.RUnlock()
-	return runtime.modelInfo.ReasoningEffort
+	return runtime.CurrentModelInfo().ReasoningEffort
 }
 
-// CurrentModelInfo returns the effective, secret-free model configuration.
+// CurrentModelInfo returns the selected, secret-free model configuration. A
+// selection made during a turn takes effect at the next request boundary.
 func (runtime *Runtime) CurrentModelInfo() ModelInfo {
 	runtime.configMu.RLock()
 	defer runtime.configMu.RUnlock()
-	return runtime.modelInfo
+	return runtime.selectedConfigurationLocked().modelInfo
 }
 
+// SwitchModel applies a selection immediately when idle, or before the next
+// model request when a turn is active. The current response and its tools finish
+// with the configuration under which they were requested.
 func (runtime *Runtime) SwitchModel(ctx context.Context, modelInfo ModelInfo, backend Backend) error {
 	if backend == nil {
 		return errors.New("model backend is required")
@@ -289,53 +288,10 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, modelInfo ModelInfo, ba
 	if err != nil {
 		return err
 	}
-	if !runtime.runMu.TryLock() {
-		return ErrRunActive
-	}
-	defer runtime.runMu.Unlock()
-	runtime.configMu.Lock()
-	defer runtime.configMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	records, err := runtime.journal.Records(ctx)
-	if err != nil {
-		return fmt.Errorf("read journal before model switch: %w", err)
-	}
-	live, err := reduceRecords(records)
-	if err != nil {
-		return err
-	}
-	runtime.publishSessionStatus(live.state)
-	if live.state.hasUnfinishedWork() {
-		return unfinishedWorkError("switching model")
-	}
-	if live.state.SessionID != "" && !selectionMatchesModel(live.state.Selection, modelInfo) {
-		epoch, err := newID("epoch")
-		if err != nil {
-			return err
-		}
-		selection := ModelSelectedRecord{
-			Backend:               modelInfo.BackendID,
-			Provider:              modelInfo.Provider,
-			Model:                 modelInfo.Model,
-			ReasoningEffort:       modelInfo.ReasoningEffort,
-			ProviderStateContract: modelInfo.ProviderStateContract,
-			Epoch:                 epoch,
-		}
-		_, err = appendRecordAndApply(ctx, runtime.journal, live, RecordModelSelected, selection)
-		if err != nil {
-			return err
-		}
-	}
-	snapshot := runtime.effectiveConfigSnapshotLocked(modelInfo, runtime.tools, runtime.toolSet, runtime.scope)
-	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
-		return err
-	}
-	runtime.backend = backend
-	runtime.modelInfo = modelInfo
-	runtime.publishSessionStatus(live.state)
-	return nil
+	return runtime.reconfigure(ctx, func(configuration *runtimeConfiguration) {
+		configuration.modelInfo = modelInfo
+		configuration.backend = backend
+	})
 }
 
 func normalizeModelInfo(modelInfo ModelInfo) (ModelInfo, error) {
@@ -372,7 +328,8 @@ func selectionMatchesModel(selection ModelSelectedRecord, modelInfo ModelInfo) b
 		selection.ProviderStateContract == modelInfo.ProviderStateContract
 }
 
-// SetTools atomically replaces the model-visible tool set between runs.
+// SetTools replaces the model-visible tool set at the next request boundary,
+// or immediately when idle.
 // Tool set names and exact membership deliberately live in the application
 // assembling the runtime.
 func (runtime *Runtime) SetTools(ctx context.Context, input []Tool, toolSet string) error {
@@ -388,18 +345,11 @@ func (runtime *Runtime) SetToolsWithProgramTools(ctx context.Context, input []To
 }
 
 func (runtime *Runtime) setTools(ctx context.Context, input []Tool, toolSet string, inputPrograms []ProgramToolSnapshot, replacePrograms bool) error {
-	if !runtime.runMu.TryLock() {
-		return ErrRunActive
-	}
-	defer runtime.runMu.Unlock()
-	runtime.configMu.Lock()
-	defer runtime.configMu.Unlock()
-
 	tools, toolByName, err := normalizeTools(input)
 	if err != nil {
 		return err
 	}
-	programTools := runtime.programTools
+	var programTools []ProgramToolSnapshot
 	if replacePrograms {
 		programTools, err = normalizeProgramToolSnapshots(inputPrograms, runtime.sanitize)
 		if err != nil {
@@ -407,30 +357,14 @@ func (runtime *Runtime) setTools(ctx context.Context, input []Tool, toolSet stri
 		}
 	}
 	toolSet = runtime.sanitize(strings.TrimSpace(toolSet))
-	snapshot := runtime.effectiveConfigSnapshotWithProgramToolsLocked(runtime.modelInfo, tools, toolSet, runtime.scope, programTools)
-	if err := validateEffectiveConfigSnapshot(snapshot); err != nil {
-		return err
-	}
-	records, err := runtime.journal.Records(ctx)
-	if err != nil {
-		return fmt.Errorf("read journal before tool reconfiguration: %w", err)
-	}
-	live, err := reduceRecords(records)
-	if err != nil {
-		return err
-	}
-	runtime.publishSessionStatus(live.state)
-	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
-		return err
-	}
-	runtime.tools = tools
-	runtime.toolByName = toolByName
-	runtime.toolSet = toolSet
-	if replacePrograms {
-		runtime.programTools = programTools
-	}
-	runtime.publishSessionStatus(live.state)
-	return nil
+	return runtime.reconfigure(ctx, func(configuration *runtimeConfiguration) {
+		configuration.tools = tools
+		configuration.toolByName = toolByName
+		configuration.toolSet = toolSet
+		if replacePrograms {
+			configuration.programTools = programTools
+		}
+	})
 }
 
 func (runtime *Runtime) ToolStatus(id string) ([]Detail, bool) {
@@ -448,11 +382,28 @@ func (runtime *Runtime) ToolStatus(id string) ([]Detail, bool) {
 	return normalized, true
 }
 
-func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (RunResult, error) {
+func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (result RunResult, runErr error) {
+	runtime.configMu.Lock()
 	if !runtime.runMu.TryLock() {
+		runtime.configMu.Unlock()
 		return RunResult{}, ErrRunActive
 	}
-	defer runtime.runMu.Unlock()
+	runtime.turnActive = true
+	runtime.configMu.Unlock()
+	var live *stateReducer
+	defer func() {
+		runtime.configMu.Lock()
+		defer runtime.configMu.Unlock()
+		defer runtime.runMu.Unlock()
+		runtime.turnActive = false
+		// A final answer or cancellation may leave no next request in this run.
+		// Still apply the user's selection before another operation can start.
+		if live != nil && !live.state.hasUnfinishedWork() {
+			if err := runtime.applyPendingConfigurationLocked(context.WithoutCancel(ctx), live); err != nil {
+				runErr = errors.Join(runErr, err)
+			}
+		}
+	}()
 
 	input, err := normalizeInput(input)
 	if err != nil {
@@ -466,7 +417,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 	if err != nil {
 		return RunResult{}, fmt.Errorf("read journal: %w", err)
 	}
-	live, err := reduceRecords(records)
+	live, err = reduceRecords(records)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -500,6 +451,11 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (R
 
 	toolIterations := 0
 	for {
+		// Keep one configuration through context preparation, request retries,
+		// and every tool call accepted from the response.
+		if err := runtime.applyPendingConfiguration(ctx, live); err != nil {
+			return runtime.finishError(ctx, live, emit, runID, err)
+		}
 		delivered, deliveryErr := runtime.deliverQueuedInput(ctx, live, runID)
 		for _, queuedInput := range delivered {
 			emitEvent(emit, Event{Sequence: queuedInput.Sequence, Kind: EventQueuedInputDelivered, RunID: runID, Text: queuedInput.Text})
@@ -615,6 +571,10 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 	}
 	if ctx.Err() != nil {
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", RunCancelled, ctx.Err())
+	}
+	if err := runtime.applyPendingConfiguration(ctx, live); err != nil {
+		status, err := runFailure(ctx, err)
+		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, err)
 	}
 
 	requestSpec := runRequestSpec{

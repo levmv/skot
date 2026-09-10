@@ -248,15 +248,15 @@ func (m *screenModel) startCredentialUpdate(provider string, logout bool, pendin
 	}
 	// OAuth refresh holds the process lock while exchanging a rotating token.
 	// Even a local credential write can therefore wait and must keep Esc usable.
-	m.operation = activeOperation{kind: kind, startedAt: time.Now(), cancel: cancel}
+	m.credentialOperation = activeOperation{kind: kind, startedAt: time.Now(), cancel: cancel}
 	return func() tea.Msg {
 		return credentialDoneMsg{provider: provider, logout: logout, pending: pending, err: update(ctx)}
 	}
 }
 
 func (m *screenModel) finishCredentialUpdate(message credentialDoneMsg) {
-	m.operation.cancel()
-	m.operation.clear()
+	m.credentialOperation.cancel()
+	m.credentialOperation.clear()
 	returnPicker := m.loginReturn
 	m.cancelLogin()
 	action, success := "login", "logged in to "

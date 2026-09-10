@@ -472,13 +472,17 @@ func (transcript *transcriptState) renderLinesFromDirty(width int, renderBlock f
 	transcript.renderCacheLines = transcript.renderCacheLines[:lineEnd]
 	for index := common; index < len(transcript.blocks); index++ {
 		lines := renderBlock(index, transcript.blocks[index])
-		// Blocks declare the air they want on both sides, so neighbours that
-		// both want it would double-space. Drop the leading blank where the
-		// previous block already ended in one, or at the top of the transcript.
-		if len(lines) > 0 && isBlankTranscriptLine(lines[0]) && transcriptEndsBlank(transcript.renderCacheLines) {
-			lines = lines[1:]
+		// Keep the larger of adjacent gaps: two rows around user messages,
+		// one around notices. Omit leading padding at the top of the transcript.
+		overlap := 0
+		for overlap < len(lines) && isBlankTranscriptLine(lines[overlap]) {
+			previous := len(transcript.renderCacheLines) - 1 - overlap
+			if len(transcript.renderCacheLines) > 0 && (previous < 0 || !isBlankTranscriptLine(transcript.renderCacheLines[previous])) {
+				break
+			}
+			overlap++
 		}
-		transcript.renderCacheLines = append(transcript.renderCacheLines, lines...)
+		transcript.renderCacheLines = append(transcript.renderCacheLines, lines[overlap:]...)
 		transcript.renderCache = append(transcript.renderCache, renderedScreenBlock{end: len(transcript.renderCacheLines)})
 	}
 	transcript.renderDirtyFrom = len(transcript.blocks)
@@ -610,12 +614,12 @@ func (m screenModel) renderAssistantBlock(text string) []string {
 }
 
 func (m screenModel) renderUserBlock(text string) []string {
-	// A muted bar down the whole message stays findable when scrolling back
-	// without the visual weight of a filled gutter.
+	// Keep the bar on wrapped lines so the whole message reads as one block.
 	bar := m.userBarStyle.Render(userBarMarker)
-	lines := []string{m.marked(" ", "")}
+	blank := m.marked(" ", "")
+	lines := []string{blank, blank}
 	lines = append(lines, m.wrappedMarkedWithContinuation(bar, bar, text)...)
-	return append(lines, m.marked(" ", ""))
+	return append(lines, blank, blank)
 }
 
 func (m screenModel) wrappedMarked(marker, text string) []string {

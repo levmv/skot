@@ -40,7 +40,7 @@ func TestLoadInstructionsUsesCurrentHierarchy(t *testing.T) {
 	if substituted := effectiveInstructions("work in {{workspace_root}} only", root, nil); substituted != "work in "+root+" only" {
 		t.Fatalf("substituted prompt = %q", substituted)
 	}
-	if standard := effectiveInstructions("", root, nil); !strings.Contains(standard, "Your workspace root is "+root+".") ||
+	if standard := effectiveInstructions("", root, nil); !strings.Contains(standard, "Workspace root (default working directory): "+root+".") ||
 		strings.Contains(standard, workspaceRootToken) {
 		t.Fatalf("default prompt = %q", standard)
 	}

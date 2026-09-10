@@ -254,10 +254,10 @@ func sanitizeScopeSnapshot(snapshot ScopeSnapshot, sanitize func(string) string)
 	return snapshot
 }
 
-// SetScopeSnapshot records a boundary enforced by the embedding application.
-// It deliberately does not apply or validate filesystem scope inside agent.Runtime.
-// Unlike model and tool reconfiguration this may happen during an active run;
-// already launched work retains the boundary recorded in its own tool details.
+// SetScopeSnapshot records the filesystem boundary enforced by the application.
+// It updates the snapshot immediately, including during an active run; it does
+// not enforce or validate the policy. Already launched work retains the
+// boundary recorded in its tool details.
 func (runtime *Runtime) SetScopeSnapshot(ctx context.Context, scope ScopeSnapshot) error {
 	scope = sanitizeScopeSnapshot(scope, runtime.sanitize)
 	runtime.configMu.Lock()

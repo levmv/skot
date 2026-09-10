@@ -337,6 +337,7 @@ func (fake *fakeAgent) ClearSession(context.Context) (string, error) {
 	}
 	fake.sessionID = fake.clearID
 	fake.state = agent.State{}
+	fake.queued = nil
 	return fake.clearID, nil
 }
 
@@ -442,7 +443,7 @@ func TestSlashInputIsRefusedOnlyAsACommandName(t *testing.T) {
 		{input: "/build.sh"},
 		{input: "/mdoel", want: "unknown command: /mdoel"},
 		{input: "/", want: "unknown command: /"},
-		{input: "/clear", want: "commands are unavailable while Skot is working"},
+		{input: "/compact", want: "commands are unavailable while Skot is working"},
 	} {
 		model := testScreenModel(t, &fakeAgent{})
 		model.operation.kind = operationTurn
@@ -552,19 +553,42 @@ func TestAltUpDoesNotOverwriteDraft(t *testing.T) {
 }
 
 func TestWorkingCommandsAreNotQueued(t *testing.T) {
-	for _, input := range []string{"/model openai/gpt", "! echo no"} {
-		t.Run(input[:1], func(t *testing.T) {
-			fake := &fakeAgent{}
+	for _, test := range []struct {
+		input     string
+		wantError bool
+	}{
+		{input: "/help"},
+		{input: "/context"},
+		{input: "/model openai/gpt"},
+		{input: "/tools read-only"},
+		{input: "/resume", wantError: true},
+		{input: "/compact", wantError: true},
+		{input: "! echo no", wantError: true},
+		{input: "!! echo no", wantError: true},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			fake := &fakeAgent{toolSets: []string{"default", "read-only"}, knownModels: []string{"openai/gpt"}}
 			model := testScreenModel(t, fake)
 			model.operation.kind = operationTurn
-			model.composer.setValue(input)
+			model.composer.setValue(test.input)
+			blocksBefore := len(model.transcript.blocks)
 
 			model, _ = model.submitInput()
 			if len(fake.queued) != 0 {
 				t.Fatalf("queue = %#v", fake.queued)
 			}
-			if model.composer.value() != input {
+			if test.wantError && model.composer.value() != test.input {
 				t.Fatalf("input = %q", model.composer.value())
+			}
+			hasError := false
+			for _, block := range model.transcript.blocks[blocksBefore:] {
+				hasError = hasError || block.kind == screenBlockError
+			}
+			if hasError != test.wantError {
+				t.Fatalf("command %q: hasError=%v, want %v", test.input, hasError, test.wantError)
+			}
+			if model.operation.kind != operationTurn {
+				t.Fatal("command replaced the active turn")
 			}
 		})
 	}
@@ -1121,14 +1145,19 @@ func TestUserMessageGutterContinuesThroughWrappedLines(t *testing.T) {
 	}
 	model.resize(24, 14)
 	lines := model.renderBlockLines(screenBlock{kind: screenBlockUser, text: strings.Repeat("wrapped message ", 5)})
-	if len(lines) < 4 {
-		t.Fatalf("user message did not wrap: %#v", lines)
-	}
 	bar := model.userBarStyle.Render(userBarMarker)
-	for _, index := range []int{1, 2} {
-		if !strings.HasPrefix(lines[index], bar) {
-			t.Fatalf("user line %d has no styled bar: %q", index, lines[index])
+	contentLines := 0
+	for _, line := range lines {
+		if isBlankTranscriptLine(line) {
+			continue
 		}
+		if !strings.HasPrefix(line, bar) {
+			t.Fatalf("user line has no styled bar: %q", line)
+		}
+		contentLines++
+	}
+	if contentLines < 2 {
+		t.Fatalf("user message did not wrap: %#v", lines)
 	}
 }
 
@@ -1251,7 +1280,6 @@ func TestSettingNoticeNamesTheTransitionOnlyWhenItChanged(t *testing.T) {
 func TestNoticesArePaddedWithoutDoubleBlankLines(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.resize(60, 30)
-	model.addBlock(screenBlockUser, "change the tool set")
 	model.addToolCall(agent.ToolCall{ID: "c1", Name: "bash", RawArguments: `{"command":"go build"}`})
 	model.addToolCall(agent.ToolCall{ID: "c2", Name: "bash", RawArguments: `{"command":"go vet"}`})
 	model.addBlock(screenBlockAssistant, "Done.")

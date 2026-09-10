@@ -2,7 +2,10 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,22 +14,122 @@ import (
 )
 
 func TestClearCommandStartsCleanSessionAndInvalidatesTranscript(t *testing.T) {
-	fake := &fakeAgent{model: "deepseek/model", sessionID: "session_old", clearID: "session_new"}
-	model := testScreenModel(t, fake)
-	model.addBlock(screenBlockUser, "old conversation")
-	model.composer.history = []string{"old conversation"}
-	model.composer.historyIndex = 1
-	model.composer.setValue("/clear")
+	for _, working := range []bool{false, true} {
+		name := "idle"
+		if working {
+			name = "working"
+		}
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeAgent{model: "deepseek/model", sessionID: "session_old", clearID: "session_new", queued: []string{"next"}}
+			model := testScreenModel(t, fake)
+			model.addBlock(screenBlockUser, "old conversation")
+			model.composer.history = []string{"old conversation"}
+			model.composer.historyIndex = 1
+			model.composer.setValue("/clear")
+			turnCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if working {
+				model.operation = activeOperation{kind: operationTurn, cancel: cancel}
+			}
 
-	model, cmd := model.submitInput()
-	if cmd != nil {
-		t.Fatal("clear unexpectedly became asynchronous")
+			model, cmd := model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if working {
+				if cmd != nil || turnCtx.Err() == nil || fake.sessionID != "session_old" {
+					t.Fatal("clear did not cancel and wait for the old turn")
+				}
+				model, cmd = model.update(agentDoneMsg{err: context.Canceled})
+			}
+			if cmd == nil || fake.sessionID != "session_old" {
+				t.Fatal("clear did not defer session replacement")
+			}
+			model, cmd = model.update(cmd())
+			if cmd != nil || model.operation.kind != operationNone || len(fake.queued) != 0 {
+				t.Fatalf("clear resumed old work: command=%v operation=%#v queue=%q", cmd, model.operation, fake.queued)
+			}
+			if fake.sessionID != "session_new" || !model.renderer.invalidated || model.quitting {
+				t.Fatalf("session=%q invalidated=%v quitting=%v", fake.sessionID, model.renderer.invalidated, model.quitting)
+			}
+			if len(model.composer.history) != 0 || len(model.transcript.blocks) != 1 || model.transcript.blocks[0].text != "new session new" {
+				t.Fatalf("history=%#v blocks=%#v", model.composer.history, model.transcript.blocks)
+			}
+			model, _ = model.update(tea.PasteMsg{Content: "new task"})
+			if model.composer.value() != "new task" {
+				t.Fatal("new session did not accept input")
+			}
+		})
 	}
-	if fake.sessionID != "session_new" || !model.renderer.invalidated {
-		t.Fatalf("session=%q invalidated=%v", fake.sessionID, model.renderer.invalidated)
+}
+
+type blockingClearAgent struct {
+	Agent
+	mu      sync.RWMutex
+	started chan struct{}
+	release chan struct{}
+}
+
+func (client *blockingClearAgent) ClearSession(context.Context) (string, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	close(client.started)
+	<-client.release
+	return "session_new", nil
+}
+
+func (client *blockingClearAgent) CurrentModel() string {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	return client.Agent.CurrentModel()
+}
+
+func (client *blockingClearAgent) SessionStatus() agent.SessionStatus {
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	return client.Agent.SessionStatus()
+}
+
+func TestControlCForcesExitDuringSessionReplacement(t *testing.T) {
+	model := testScreenModel(t, &fakeAgent{sessionID: "session_old"})
+	client := &blockingClearAgent{Agent: model.agent, started: make(chan struct{}), release: make(chan struct{})}
+	model.agent = client
+	model.composer.setValue("/clear")
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(io.Discard),
+		tea.WithoutRenderer(), tea.WithoutSignalHandler())
+	defer func() {
+		close(client.release)
+		program.Kill()
+	}()
+	type result struct {
+		model tea.Model
+		err   error
 	}
-	if len(model.composer.history) != 0 || len(model.transcript.blocks) != 1 || model.transcript.blocks[0].text != "new session new" {
-		t.Fatalf("history=%#v blocks=%#v", model.composer.history, model.transcript.blocks)
+	done := make(chan result, 1)
+	go func() {
+		final, err := program.Run()
+		done <- result{model: final, err: err}
+	}()
+	go func() {
+		program.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+		select {
+		case <-client.started:
+		case <-ctx.Done():
+			return
+		}
+		program.Send(turnTickMsg{})
+		program.Send(tea.WindowSizeMsg{Width: 60, Height: 24})
+		program.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	}()
+	select {
+	case final := <-done:
+		if final.err != nil {
+			t.Fatal(final.err)
+		}
+		if !errors.Is(final.model.(screenModel).exitErr, context.Canceled) {
+			t.Fatal("Ctrl+C did not interrupt session replacement")
+		}
+	case <-ctx.Done():
+		t.Fatal("Ctrl+C kept waiting for session replacement")
 	}
 }
 

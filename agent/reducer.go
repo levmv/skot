@@ -123,8 +123,10 @@ func (reducer *stateReducer) applyModelSelected(record Record) error {
 		strings.TrimSpace(payload.Model) == "" || strings.TrimSpace(payload.Epoch) == "" {
 		return fmt.Errorf("invalid model selection at sequence %d", record.Sequence)
 	}
-	if state.hasUnfinishedWork() {
-		return fmt.Errorf("model changed while a run was active at sequence %d", record.Sequence)
+	// A run may switch models between requests, after all calls from the
+	// previous response have received their results.
+	if len(state.PendingTools) != 0 {
+		return fmt.Errorf("model changed with pending tool calls at sequence %d", record.Sequence)
 	}
 	if payload.Epoch == state.Selection.Epoch {
 		return fmt.Errorf("model selection reused epoch %q at sequence %d", payload.Epoch, record.Sequence)

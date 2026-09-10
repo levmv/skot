@@ -25,10 +25,10 @@ import (
 // resuming replaces that session as a unit. This pre-v1 API is intentionally
 // product-specific and is not yet a compatibility promise.
 //
-// Callers must serialize Close, session replacement, and model or tool
-// reconfiguration with Run and with one another. Filesystem policy is the
-// exception: SwitchScope and the added and protected path mutations may overlap
-// an active Run and affect only subsequently started tool calls and processes.
+// Callers must serialize Close and session replacement with Run and with
+// configuration changes. Model and tool selections may overlap Run and apply
+// before its next model request; callers serialize selections with one another.
+// Filesystem policy changes affect subsequently started calls and processes.
 type Application struct {
 	config applicationConfig
 

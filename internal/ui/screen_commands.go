@@ -74,21 +74,21 @@ func init() {
 	// Assigning the function-valued table here avoids a package initialization
 	// cycle through command handlers which refresh suggestions from this table.
 	tuiCommands = []tuiCommand{
-		{name: "/help", description: "show keys", usage: "/help", run: runHelpCommand},
-		{name: "/clear", description: "start a new session", usage: "/clear", run: runClearCommand},
+		{name: "/help", description: "show keys", usage: "/help", duringTurn: true, run: runHelpCommand},
+		{name: "/clear", description: "start a new session", usage: "/clear", duringTurn: true, run: runClearCommand},
 		{name: "/resume", description: "choose or resume a previous session", usage: "/resume [id-or-prefix]", maxArgs: 1, run: runResumeCommand},
-		{name: "/login", description: "sign in to a provider or service", usage: "/login [provider]", maxArgs: 1, run: runLoginCommand},
-		{name: "/model", description: "list or switch models", usage: "/model [provider/model [api]]", maxArgs: 2, run: runModelCommand},
-		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, run: runToolsCommand},
+		{name: "/login", description: "sign in to a provider or service", usage: "/login [provider]", maxArgs: 1, duringTurn: true, run: runLoginCommand},
+		{name: "/model", description: "list or switch models", usage: "/model [provider/model [api]]", maxArgs: 2, duringTurn: true, run: runModelCommand},
+		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, duringTurn: true, run: runToolsCommand},
 		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
 		{name: "/display", description: "show or switch transcript detail", usage: "/display [compact|detailed|full]", maxArgs: 1, duringTurn: true, run: runDisplayCommand},
-		{name: "/context", description: "show context budget", usage: "/context", run: runContextCommand},
+		{name: "/context", description: "show context budget", usage: "/context", duringTurn: true, run: runContextCommand},
 		{name: "/compact", description: "compact older context", usage: "/compact", run: runCompactCommand},
 		// Logout sits with exit rather than next to login: it is rare, and the
 		// suggestion list is ordered by how often a command is reached for.
-		{name: "/logout", description: "remove stored credentials", usage: "/logout [provider]", maxArgs: 1, run: runLogoutCommand},
-		{name: "/exit", aliases: []string{"/quit", "/q"}, description: "exit Skot", usage: "/exit", run: runExitCommand},
+		{name: "/logout", description: "remove stored credentials", usage: "/logout [provider]", maxArgs: 1, duringTurn: true, run: runLogoutCommand},
+		{name: "/exit", aliases: []string{"/quit", "/q"}, description: "exit Skot", usage: "/exit", duringTurn: true, run: runExitCommand},
 	}
 }
 
@@ -321,8 +321,7 @@ func runHelpCommand(m *screenModel, _ string, _ []string) tea.Cmd {
 
 func runClearCommand(m *screenModel, input string, _ []string) tea.Cmd {
 	m.acceptCommand(input)
-	m.clearSession()
-	return nil
+	return m.startSessionAction(sessionActionClear)
 }
 
 func runResumeCommand(m *screenModel, input string, args []string) tea.Cmd {
@@ -410,7 +409,11 @@ func (m *screenModel) selectToolSet(value string) bool {
 		return false
 	}
 	m.refreshSessionStatus()
-	m.addBlock(screenBlockSystem, toolSetChangeNotice(before, m.agent.CurrentToolSet()))
+	notice := toolSetChangeNotice(before, m.agent.CurrentToolSet())
+	if m.operation.isTurn() {
+		notice += " · applies before the next model request"
+	}
+	m.addBlock(screenBlockSystem, notice)
 	if switchErr != nil {
 		m.addBlock(screenBlockError, "tools: "+switchErr.Error())
 	}
@@ -492,6 +495,5 @@ func runCompactCommand(m *screenModel, input string, _ []string) tea.Cmd {
 }
 
 func runExitCommand(m *screenModel, _ string, _ []string) tea.Cmd {
-	m.quitting = true
-	return tea.Quit
+	return m.startSessionAction(sessionActionExit)
 }

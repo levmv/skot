@@ -341,7 +341,11 @@ func (m *screenModel) switchModel(selection modelSelection) {
 	current := m.agent.CurrentModel()
 	m.refreshSessionStatus()
 	m.refreshModelChoices()
-	m.addBlock(screenBlockSystem, formatSettingChange("model", before, current))
+	notice := formatSettingChange("model", before, current)
+	if m.operation.isTurn() {
+		notice += " · applies before the next model request"
+	}
+	m.addBlock(screenBlockSystem, notice)
 	if switchErr != nil {
 		m.addBlock(screenBlockError, "model: "+switchErr.Error())
 	}

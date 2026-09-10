@@ -9,22 +9,78 @@ import (
 	"github.com/levmv/skot/app"
 )
 
-func (m *screenModel) clearSession() {
-	noticeCount := len(m.agent.StartupNotices())
-	id, err := m.agent.ClearSession(m.ctx)
-	if err != nil {
-		m.addBlock(screenBlockError, "clear session: "+err.Error())
+type sessionAction uint8
+
+const (
+	sessionActionNone sessionAction = iota
+	sessionActionClear
+	sessionActionExit
+)
+
+func (m *screenModel) startSessionAction(action sessionAction) tea.Cmd {
+	m.pendingSessionAction = action
+	if m.operation.isTurn() {
+		m.cancelTurn()
+	}
+	if m.scope.cancel != nil {
+		// Leaving this session also dismisses any path prompt the cancelled
+		// change would otherwise restore.
+		m.scope.prompt = notFilesystemPath
+		m.scope.cancel()
+	}
+	return m.continueSessionAction()
+}
+
+func (m *screenModel) continueSessionAction() tea.Cmd {
+	// A scope/path change may outlive the cancelled turn. Both must finish
+	// before the session is replaced or the application closes.
+	if m.pendingSessionAction == sessionActionNone || m.operation.kind != operationNone || m.scope.pending {
+		return nil
+	}
+	switch m.pendingSessionAction {
+	case sessionActionClear:
+		return m.startClearSession()
+	case sessionActionExit:
+		m.pendingSessionAction = sessionActionNone
+		return m.quit(nil)
+	}
+	return nil
+}
+
+type sessionClearedMsg struct {
+	id      string
+	notices []string
+	err     error
+}
+
+func (m *screenModel) startClearSession() tea.Cmd {
+	m.operation = activeOperation{kind: operationClear}
+	client, ctx := m.agent, m.ctx
+	return func() tea.Msg {
+		noticeCount := len(client.StartupNotices())
+		id, err := client.ClearSession(ctx)
+		var addedNotices []string
+		if notices := client.StartupNotices(); noticeCount < len(notices) {
+			addedNotices = notices[noticeCount:]
+		}
+		return sessionClearedMsg{id: id, notices: addedNotices, err: err}
+	}
+}
+
+func (m *screenModel) finishClearSession(message sessionClearedMsg) {
+	m.operation.clear()
+	m.pendingSessionAction = sessionActionNone
+	if message.err != nil {
+		m.addBlock(screenBlockError, "clear session: "+message.err.Error())
 		return
 	}
 	m.resetTranscript()
 	m.composer.resetHistory()
 	m.refreshModelChoices()
 	m.refreshSessionStatus()
-	m.addBlock(screenBlockSystem, "new session "+app.ShortSessionID(id))
-	if notices := m.agent.StartupNotices(); noticeCount < len(notices) {
-		for _, notice := range notices[noticeCount:] {
-			m.addBlock(screenBlockError, "clear warning: "+notice)
-		}
+	m.addBlock(screenBlockSystem, "new session "+app.ShortSessionID(message.id))
+	for _, notice := range message.notices {
+		m.addBlock(screenBlockError, "clear warning: "+notice)
 	}
 }
 

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -58,6 +59,9 @@ func TestLoginSecretNeverEntersTranscriptOrHistory(t *testing.T) {
 		providers: []ProviderStatus{{Name: "deepseek", Source: "none", Description: "model provider"}},
 	}
 	model := testScreenModel(t, fake)
+	turnCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	model.operation = activeOperation{kind: operationTurn, cancel: cancel}
 	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	model.secret.SetValue("super-secret-key")
 	if rendered := strings.Join(model.markedEditorLines(), "\n"); strings.Contains(rendered, "super-secret-key") {
@@ -75,6 +79,10 @@ func TestLoginSecretNeverEntersTranscriptOrHistory(t *testing.T) {
 	if model.composer.value() != "" || len(model.composer.history) != 0 || strings.Contains(strings.Join(model.transcript.lines, "\n"), "super-secret-key") {
 		t.Fatalf("secret leaked: history=%#v transcript=%q", model.composer.history, model.transcript.lines)
 	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc, BaseCode: tea.KeyEsc})
+	if turnCtx.Err() == nil {
+		t.Fatal("login lost the active turn's cancellation")
+	}
 }
 
 func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
@@ -86,6 +94,9 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 		},
 	}
 	model := testScreenModel(t, fake)
+	turnCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	model.operation = activeOperation{kind: operationTurn, cancel: cancel}
 	model.composer.setValue("/login openai")
 	model, _ = model.submitInput()
 	if model.loginProvider != "" || !strings.Contains(model.transcript.blocks[len(model.transcript.blocks)-1].text, "environment override") {
@@ -107,6 +118,10 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 	model, _ = model.update(command())
 	if fake.logoutProvider != "deepseek" {
 		t.Fatalf("logout provider = %q", fake.logoutProvider)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc, BaseCode: tea.KeyEsc})
+	if turnCtx.Err() == nil {
+		t.Fatal("logout lost the active turn's cancellation")
 	}
 }
 

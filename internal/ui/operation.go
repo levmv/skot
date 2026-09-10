@@ -15,13 +15,13 @@ const (
 	operationShell
 	operationScope
 	operationCompaction
+	operationClear
 	operationLogin
 	operationLogout
 )
 
-// activeOperation is the screen's single exclusive cancellable-operation slot.
-// A scope switch lives separately because it may overlap a model turn; the
-// screen projects it into this slot's maintenance view once no turn is active.
+// activeOperation tracks work in the screen. Credentials and scope switches
+// use separate slots so they can overlap a turn without replacing its events.
 type activeOperation struct {
 	kind          operationKind
 	startedAt     time.Time
@@ -74,6 +74,8 @@ func (operation activeOperation) label() string {
 		return "Checking filesystem scope"
 	case operationCompaction:
 		return "Compacting context"
+	case operationClear:
+		return "Clearing session"
 	case operationLogin:
 		return "Signing in"
 	case operationLogout:
@@ -83,11 +85,12 @@ func (operation activeOperation) label() string {
 	}
 }
 
-// maintenanceOperation is the single source of truth for whether the UI is
-// occupied by maintenance. Scope switching is concurrent only with a turn: if
-// that turn finishes first, the still-pending switch immediately becomes the
-// maintenance owner without an event-order-dependent state transfer.
+// maintenanceOperation selects the task that owns the input area. Credential
+// updates take precedence; scope changes own it only when no turn is running.
 func (m screenModel) maintenanceOperation() activeOperation {
+	if m.credentialOperation.isMaintenance() {
+		return m.credentialOperation
+	}
 	if m.operation.isMaintenance() {
 		return m.operation
 	}

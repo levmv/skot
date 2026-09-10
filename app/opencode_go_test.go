@@ -36,17 +36,17 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		checkBody           func(*testing.T, map[string]jsontext.Value)
 	}{
 		{
-			name: "chat completions tool-turn replay", uri: "opencode-go/deepseek-v4-flash", effort: "high",
+			name: "chat completions all-turn replay", uri: "opencode-go/deepseek-flash", effort: "low",
 			path: "/zen/go/v1/chat/completions", protocol: modelAPIChatCompletions,
 			request:             openCodeGoReplayRequest(),
-			wantReplayReasoning: "tool reasoning",
+			wantReplayReasoning: "tool reasoningplain reasoning",
 			checkReplay:         true,
 			writeBody: func(writer io.Writer) {
 				fmt.Fprint(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			},
 			checkBody: func(t *testing.T, body map[string]jsontext.Value) {
 				t.Helper()
-				if string(body["reasoning_effort"]) != `"high"` {
+				if string(body["reasoning_effort"]) != `"low"` {
 					t.Errorf("reasoning_effort = %s", body["reasoning_effort"])
 				}
 				if _, exists := body["prompt_cache_key"]; exists {
@@ -236,6 +236,11 @@ func openCodeGoReplayRequest() agent.ModelRequest {
 			},
 			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`}},
 			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
+			{
+				Kind: agent.ItemReasoning, ResponseID: "response_2", Text: "plain reasoning",
+				ProviderContext: &agent.ProviderContext{Backend: "chat_completions.opencode-go", Epoch: "epoch_1"},
+			},
+			{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
 			{Kind: agent.ItemUserText, Text: "second"},
 		},
 	}

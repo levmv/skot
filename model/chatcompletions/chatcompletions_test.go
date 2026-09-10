@@ -310,14 +310,14 @@ func TestBuildRequestStripsReasoningFromOlderTurns(t *testing.T) {
 	}
 }
 
-func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
+func TestBuildRequestKeepsDeepSeekReasoningFromAllTurns(t *testing.T) {
 	backend, err := New(Config{
 		Provider:   "deepseek",
-		Model:      "deepseek-v4-flash",
+		Model:      "deepseek-flash",
 		BaseURL:    "http://example.invalid/v1",
 		Authorizer: BearerToken("unused"),
 		Traits: RouteTraits{
-			ReasoningReplay: ReasoningReplayToolTurns,
+			ReasoningReplay: ReasoningReplayAllTurns,
 		},
 	})
 	if err != nil {
@@ -346,7 +346,7 @@ func TestBuildRequestKeepsDeepSeekReasoningFromToolTurns(t *testing.T) {
 	if len(request.Messages) != 5 {
 		t.Fatalf("messages = %#v", request.Messages)
 	}
-	if request.Messages[1].ReasoningContent != "tool reasoning" || request.Messages[3].ReasoningContent != "" {
+	if request.Messages[1].ReasoningContent != "tool reasoning" || request.Messages[3].ReasoningContent != "plain reasoning" {
 		t.Fatalf("deepseek reasoning projection = %#v", request.Messages)
 	}
 	if len(items) != 7 || items[4].Kind != agent.ItemReasoning || items[4].Text != "plain reasoning" {
@@ -747,7 +747,7 @@ func TestProjectModelItemsAppliesRouteReplayPolicy(t *testing.T) {
 		policy ReasoningReplayPolicy
 		want   []string
 	}{
-		{name: "tool turns keep reasoning of tool-call turns only", policy: ReasoningReplayToolTurns, want: []string{"tool thinking"}},
+		{name: "all turns keep all reasoning", policy: ReasoningReplayAllTurns, want: []string{"tool thinking", "plain thinking", "current thinking"}},
 		{name: "current turn keeps reasoning after the last user message", policy: ReasoningReplayCurrentTurn, want: []string{"current thinking"}},
 		{name: "zero policy replays no reasoning", policy: "", want: nil},
 	}
@@ -781,7 +781,7 @@ func TestProviderStateContractVersionsEachReplayPolicy(t *testing.T) {
 		policy ReasoningReplayPolicy
 		want   agent.ProviderStateContract
 	}{
-		{policy: ReasoningReplayToolTurns, want: "chat_completions.reasoning_replay.tool_turns.v2"},
+		{policy: ReasoningReplayAllTurns, want: "chat_completions.reasoning_replay.all_turns.v1"},
 		{policy: ReasoningReplayCurrentTurn, want: "chat_completions.reasoning_replay.current_turn.v1"},
 		{policy: "", want: ""},
 	}

@@ -13,7 +13,7 @@ import (
 const (
 	// DefaultModelURI is Skot's product default when no CLI, environment, or
 	// persisted selection overrides it.
-	DefaultModelURI = "deepseek/deepseek-v4-flash"
+	DefaultModelURI = "deepseek/deepseek-flash"
 
 	ToolSetDefault  = toolpolicy.ToolSetDefault
 	ToolSetEdit     = toolpolicy.ToolSetEdit

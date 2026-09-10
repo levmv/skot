@@ -33,7 +33,10 @@ type ReasoningReplayPolicy string
 
 const (
 	ReasoningReplayCurrentTurn ReasoningReplayPolicy = "current_turn"
-	ReasoningReplayToolTurns   ReasoningReplayPolicy = "tool_turns"
+	// DeepSeek retains all prior reasoning when the request defines tools,
+	// including assistant replies that did not call a tool.
+	// https://api-docs.deepseek.com/guides/thinking_mode/
+	ReasoningReplayAllTurns ReasoningReplayPolicy = "all_turns"
 )
 
 // RouteTraits contains only demonstrated Chat Completions route differences.
@@ -54,7 +57,7 @@ func (traits RouteTraits) validate(reasoningEffort string) error {
 		return fmt.Errorf("reasoning effort %q needs the %q encoding", reasoningEffortOff, ReasoningEffortThinking)
 	}
 	switch traits.ReasoningReplay {
-	case "", ReasoningReplayCurrentTurn, ReasoningReplayToolTurns:
+	case "", ReasoningReplayCurrentTurn, ReasoningReplayAllTurns:
 	default:
 		return fmt.Errorf("unsupported reasoning replay policy %q", traits.ReasoningReplay)
 	}
@@ -66,11 +69,8 @@ func (traits RouteTraits) validate(reasoningEffort string) error {
 
 func (traits RouteTraits) ProviderStateContract() agent.ProviderStateContract {
 	switch traits.ReasoningReplay {
-	case ReasoningReplayToolTurns:
-		// v2 narrowed source selection from "every owned reasoning item" to the
-		// assistant turns that actually made tool calls, so a session saved
-		// under v1 must start a new epoch instead of replaying the old set.
-		return "chat_completions.reasoning_replay.tool_turns.v2"
+	case ReasoningReplayAllTurns:
+		return "chat_completions.reasoning_replay.all_turns.v1"
 	case ReasoningReplayCurrentTurn:
 		return "chat_completions.reasoning_replay.current_turn.v1"
 	default:
@@ -430,21 +430,12 @@ func (backend *Backend) normalizeFinishReason(reason string) (string, error) {
 	return normalized, nil
 }
 
-// ProjectModelItems applies the route's reasoning replay policy. Tool-turn
-// replay keeps reasoning only for assistant turns with tool calls; current-turn
-// replay keeps reasoning after the last user message; the zero policy drops it.
+// ProjectModelItems applies the route's reasoning replay policy. All-turn replay
+// keeps all reasoning; current-turn replay keeps reasoning after the last user
+// message; the zero policy drops it.
 func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
-	toolTurns := map[string]bool(nil)
 	lastUser := -1
-	switch backend.traits.ReasoningReplay {
-	case ReasoningReplayToolTurns:
-		toolTurns = make(map[string]bool)
-		for _, item := range items {
-			if item.Kind == agent.ItemToolCall && item.ResponseID != "" {
-				toolTurns[item.ResponseID] = true
-			}
-		}
-	case ReasoningReplayCurrentTurn:
+	if backend.traits.ReasoningReplay == ReasoningReplayCurrentTurn {
 		for index, item := range items {
 			if item.Kind == agent.ItemUserText {
 				lastUser = index
@@ -457,8 +448,8 @@ func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 		if item.Kind == agent.ItemReasoning {
 			keep := false
 			switch backend.traits.ReasoningReplay {
-			case ReasoningReplayToolTurns:
-				keep = toolTurns[item.ResponseID]
+			case ReasoningReplayAllTurns:
+				keep = true
 			case ReasoningReplayCurrentTurn:
 				keep = index > lastUser
 			}

@@ -175,15 +175,15 @@ var modelCatalog = []modelSpec{
 		URI: "openai-codex/gpt-5.5", Name: "ChatGPT · GPT 5.5", API: modelAPIResponses,
 		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
 	},
-	// Native DeepSeek V4 exposes off/high/max. The thinking switch expresses off;
-	// enabled requests pair it with reasoning_effort. Low/medium collapse to high.
+	// Native Flash exposes off/low/high/max. The thinking switch expresses off;
+	// enabled requests pair it with reasoning_effort.
+	// https://api-docs.deepseek.com/guides/thinking_mode/
 	{
-		URI: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash", ContextWindow: 1_000_000,
-		ImageInputUnsupported: true,
-		ReasoningEfforts:      []string{"", "off", "high", "max"},
+		URI: "deepseek/deepseek-flash", Name: "DeepSeek V4.1 Flash", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "off", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
-			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
 	{
@@ -192,7 +192,7 @@ var modelCatalog = []modelSpec{
 		ReasoningEfforts:      []string{"", "off", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
-			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
 	{
@@ -217,12 +217,20 @@ var modelCatalog = []modelSpec{
 		ResponsesTraits:  &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto},
 	},
 	{
+		URI: "opencode-go/deepseek-flash", Name: "OpenCode Go · DeepSeek V4.1 Flash", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "low", "high", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
+		},
+	},
+	{
 		URI: "opencode-go/deepseek-v4-flash", Name: "OpenCode Go · DeepSeek V4 Flash", ContextWindow: 1_000_000,
 		ImageInputUnsupported: true,
 		ReasoningEfforts:      []string{"", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
-			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
 	{
@@ -231,7 +239,7 @@ var modelCatalog = []modelSpec{
 		ReasoningEfforts:      []string{"", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
-			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
 	{
@@ -239,7 +247,7 @@ var modelCatalog = []modelSpec{
 		ContextWindow: 1_000_000, ReasoningEfforts: []string{"", "off", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
-			ReasoningReplay: chatcompletions.ReasoningReplayToolTurns,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
 	{
@@ -523,7 +531,7 @@ func defaultModelSpec(provider string) modelSpec {
 	efforts := []string{defaultReasoningEffort, "high"}
 	switch provider {
 	case "deepseek":
-		traits.ReasoningReplay = chatcompletions.ReasoningReplayToolTurns
+		traits.ReasoningReplay = chatcompletions.ReasoningReplayAllTurns
 	case "openrouter":
 		traits.ReasoningEffort = chatcompletions.ReasoningEffortNested
 	case "openai":
@@ -544,6 +552,13 @@ func defaultModelSpec(provider string) modelSpec {
 
 func catalogModelSpec(uri string) (modelSpec, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(uri))
+	// DeepSeek serves these retired model IDs with V4.1 Flash. Preserve saved
+	// selections while applying the current model's image and reasoning support.
+	// https://api-docs.deepseek.com/quick_start/pricing/
+	switch normalized {
+	case "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-flash-vision-exp":
+		normalized = "deepseek/deepseek-flash"
+	}
 	for _, spec := range modelCatalog {
 		if normalized == strings.ToLower(spec.URI) {
 			spec.URI = strings.TrimSpace(uri)

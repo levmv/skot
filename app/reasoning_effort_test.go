@@ -19,9 +19,9 @@ func TestNormalizeReasoningEffort(t *testing.T) {
 }
 
 // Route declarations, rather than the generic provider fallback, own the
-// native V4 vocabulary.
+// native DeepSeek vocabulary.
 func TestNativeDeepSeekRoutesOfferMaxReasoningEffort(t *testing.T) {
-	for _, uri := range []string{"deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"} {
+	for _, uri := range []string{"deepseek/deepseek-flash", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"} {
 		efforts := reasoningEffortsForModel(uri)
 		if !slices.Contains(efforts, "max") || !slices.Contains(efforts, "high") {
 			t.Fatalf("%s efforts = %q", uri, efforts)
@@ -40,7 +40,7 @@ func TestUndeclaredProviderRouteKeepsTheConservativeFallback(t *testing.T) {
 }
 
 func TestNativeDeepSeekRoutesCanDisableThinking(t *testing.T) {
-	for _, uri := range []string{"deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"} {
+	for _, uri := range []string{"deepseek/deepseek-flash", "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"} {
 		route, err := resolveModelRoute(uri, "off", modelRouteOverrides{}, modelRouteEnrichment{})
 		if err != nil {
 			t.Fatalf("%s: %v", uri, err)
@@ -51,16 +51,16 @@ func TestNativeDeepSeekRoutesCanDisableThinking(t *testing.T) {
 	}
 	// A gateway route for the same model was not verified for the switch and
 	// keeps the plain top-level encoding without the value.
-	if _, err := resolveModelRoute("opencode-go/deepseek-v4-flash", "off", modelRouteOverrides{}, modelRouteEnrichment{}); err == nil {
+	if _, err := resolveModelRoute("opencode-go/deepseek-flash", "off", modelRouteOverrides{}, modelRouteEnrichment{}); err == nil {
 		t.Fatal("gateway route accepted an unverified off effort")
 	}
 }
 
 func TestDeepSeekOffDoesNotCrossAProtocolOverride(t *testing.T) {
-	if _, err := resolveModelRoute("deepseek/deepseek-v4-flash", "off", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{}); err == nil {
+	if _, err := resolveModelRoute("deepseek/deepseek-flash", "off", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{}); err == nil {
 		t.Fatal("Responses override inherited the Chat-only off effort")
 	}
-	route, err := resolveModelRoute("deepseek/deepseek-v4-flash", "high", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{})
+	route, err := resolveModelRoute("deepseek/deepseek-flash", "high", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}

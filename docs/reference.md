@@ -36,7 +36,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 
 | Flag | Environment | Meaning |
 | --- | --- | --- |
-| `-model provider/model` | `SK_MODEL` | Select a model. Default: `deepseek/deepseek-v4-flash`. |
+| `-model provider/model` | `SK_MODEL` | Select a model. Default: `deepseek/deepseek-flash`. |
 | `-reasoning-effort value` | `SK_REASONING_EFFORT` | Select a route-supported effort such as `default`, `off`, `high`, or `max`. Accepted values depend on the route. |
 | `-model-api api` | `SK_MODEL_API` | Override the protocol with `chat_completions`, `responses`, or `anthropic_messages`. |
 | `-base-url url` | `SK_BASE_URL` | Override the provider API base URL. |
@@ -154,7 +154,7 @@ For example:
   "tool_sets": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
-  "agent_models": ["deepseek/deepseek-v4-flash"],
+  "agent_models": ["deepseek/deepseek-flash"],
   "protected_paths": [".env", "~/.ssh"]
 }
 ```
@@ -265,7 +265,7 @@ Add `agent` to a custom tool set to enable child agents:
   "tool_sets": {
     "delegate": ["read", "grep", "glob", "edit", "write", "bash", "job", "agent"]
   },
-  "agent_models": ["deepseek/deepseek-v4-flash"]
+  "agent_models": ["deepseek/deepseek-flash"]
 }
 ```
 
@@ -488,7 +488,7 @@ and tool calls. The `version` field identifies the output format.
   },
   "status": "completed",
   "duration_ms": 2450,
-  "model": "deepseek/deepseek-v4-flash",
+  "model": "deepseek/deepseek-flash",
   "reasoning_effort": "high",
   "tool_set": "read-only",
   "system_prompt": "default",

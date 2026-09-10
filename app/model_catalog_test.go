@@ -34,7 +34,7 @@ func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T
 	if len(models) < len(wantPrefix) || !slices.Equal(models[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("models = %#v", models)
 	}
-	for _, required := range []string{"deepseek/deepseek-v4-flash", "openrouter/free"} {
+	for _, required := range []string{DefaultModelURI, "opencode-go/deepseek-flash", "openrouter/free"} {
 		if !slices.Contains(models, required) {
 			t.Fatalf("catalog model %q is missing from %#v", required, models)
 		}
@@ -42,18 +42,18 @@ func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T
 }
 
 func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T) {
-	route, err := resolveModelRoute("deepseek/deepseek-v4-flash", "high", modelRouteOverrides{}, modelRouteEnrichment{})
+	route, err := resolveModelRoute("deepseek/deepseek-v4-pro", "high", modelRouteOverrides{}, modelRouteEnrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if route.API != modelAPIChatCompletions || route.ContextWindow != 1_000_000 || route.ContextWindowEstimated ||
 		!route.ImageInputUnsupported ||
-		route.Compatibility != modelCompatibilitySupported || route.ChatTraits.ReasoningReplay != chatcompletions.ReasoningReplayToolTurns ||
+		route.Compatibility != modelCompatibilitySupported || route.ChatTraits.ReasoningReplay != chatcompletions.ReasoningReplayAllTurns ||
 		route.ProviderStateContract == "" {
 		t.Fatalf("resolved route = %#v", route)
 	}
 
-	overridden, err := resolveModelRoute("deepseek/deepseek-v4-flash", "high", modelRouteOverrides{
+	overridden, err := resolveModelRoute("deepseek/deepseek-v4-pro", "high", modelRouteOverrides{
 		BaseURL: "https://gateway.example/v1", API: modelAPIResponses,
 	}, modelRouteEnrichment{ContextWindow: 2_000_000})
 	if err != nil {
@@ -67,7 +67,7 @@ func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T)
 		t.Fatalf("overridden route = %#v", overridden)
 	}
 
-	explicitContext, err := resolveModelRoute("deepseek/deepseek-v4-flash", "", modelRouteOverrides{
+	explicitContext, err := resolveModelRoute("deepseek/deepseek-v4-pro", "", modelRouteOverrides{
 		BaseURL: "https://gateway.example/v1", ContextWindow: 64_000,
 	}, modelRouteEnrichment{})
 	if err != nil {
@@ -78,7 +78,7 @@ func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T)
 		explicitContext.ChatTraits.ReasoningReplay != "" || explicitContext.ProviderStateContract != "" {
 		t.Fatalf("explicit context route = %#v", explicitContext)
 	}
-	optimistic, err := resolveModelRoute("deepseek/deepseek-v4-flash-vision-exp", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	optimistic, err := resolveModelRoute("deepseek/future-model", "", modelRouteOverrides{}, modelRouteEnrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,14 +210,14 @@ func knownModelURIList(selections []modelSelection) []string {
 }
 
 func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
-	models := knownModelURIList(knownModelSelections(nil, "DEEPSEEK/deepseek-v4-flash", ""))
+	models := knownModelURIList(knownModelSelections(nil, "DEEPSEEK/deepseek-flash", ""))
 	count := 0
 	for _, model := range models {
-		if model == "DEEPSEEK/deepseek-v4-flash" || model == "deepseek/deepseek-v4-flash" {
+		if model == "DEEPSEEK/deepseek-flash" || model == "deepseek/deepseek-flash" {
 			count++
 		}
 	}
-	if count != 1 || models[0] != "DEEPSEEK/deepseek-v4-flash" {
+	if count != 1 || models[0] != "DEEPSEEK/deepseek-flash" {
 		t.Fatalf("models = %#v", models)
 	}
 }
@@ -279,8 +279,8 @@ func TestModelChoicesKeepRoutesSelectedWithTheirOwnProtocol(t *testing.T) {
 func TestModelChoicesApplyGlobalProtocolOverride(t *testing.T) {
 	choices := modelChoices(nil, "", "", modelRouteOverrides{API: modelAPIResponses})
 	wanted := map[string]bool{
-		"deepseek/deepseek-v4-flash": false,
-		"opencode-go/gpt-5.6-luna":   false,
+		"deepseek/deepseek-flash":  false,
+		"opencode-go/gpt-5.6-luna": false,
 	}
 	for _, choice := range choices {
 		if _, exists := wanted[choice.URI]; !exists {

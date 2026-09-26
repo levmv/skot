@@ -137,7 +137,17 @@ func NewProviderError(details ProviderErrorDetails) error {
 	}
 	code := strings.ToLower(strings.TrimSpace(details.Code))
 	errorType := strings.ToLower(strings.TrimSpace(details.Type))
-	kind := classifyProviderError(provider, details.StatusCode, code, errorType)
+	statusForPolicy := details.StatusCode
+	// OpenRouter's numeric in-band code is an upstream HTTP status. Use it for
+	// recovery without reporting a transport failure; other providers' numeric
+	// codes have no shared meaning.
+	// https://openrouter.ai/docs/api_reference/errors-and-debugging#mid-stream-errors
+	if statusForPolicy == 0 && strings.EqualFold(provider, "openrouter") {
+		if status, err := strconv.Atoi(code); err == nil && status >= 400 && status < 600 {
+			statusForPolicy = status
+		}
+	}
+	kind := classifyProviderError(provider, statusForPolicy, code, errorType)
 	summary := providerErrorSummary(provider, model, kind)
 	var cause error
 	if status == "" {
@@ -147,8 +157,8 @@ func NewProviderError(details ProviderErrorDetails) error {
 	}
 	// A statusless, unclassified in-band error has no structured signal that
 	// retrying unchanged is futile. A recognized kind supplies its own policy.
-	retryable := details.StatusCode == http.StatusRequestTimeout ||
-		(details.StatusCode == 0 && kind == "") ||
+	retryable := statusForPolicy == http.StatusRequestTimeout ||
+		(statusForPolicy == 0 && kind == "") ||
 		kind == agent.ProviderErrorRateLimit || kind == agent.ProviderErrorUnavailable
 	return &agent.ProviderError{
 		Cause: cause, StatusCode: details.StatusCode, Kind: kind, Code: code, Type: errorType,

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelhttp"
 )
 
 type routeDiagnosticTestModel struct{ err error }
@@ -31,6 +32,13 @@ func TestRouteDiagnosticsExplainOnlyUnverifiedProtocolFailures(t *testing.T) {
 		{"supported route", modelCompatibilitySupported, providerErr, false},
 		{"local failure", modelCompatibilityUnverified, agent.MarkInvalidRequest(errors.New("invalid local request")), false},
 		{"authentication failure", modelCompatibilityUnverified, authErr, false},
+		{"generation failure", modelCompatibilityUnverified, modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
+			Provider: "openrouter", Message: `generation ended with finish_reason "error"`,
+		}), false},
+		{"unknown completion reason", modelCompatibilityUnverified, modelhttp.UnsupportedCompletionReasonError("openrouter", "unknown"), true},
+		{"invalid request", modelCompatibilityUnverified, modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
+			Provider: "openrouter", Type: "invalid_request_error", Message: "unsupported field",
+		}), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			route := resolvedModelRoute{URI: "opencode-go/candidate", API: modelAPIResponses, Compatibility: test.compatibility}

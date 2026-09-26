@@ -792,6 +792,91 @@ func TestProviderStateContractVersionsEachReplayPolicy(t *testing.T) {
 	}
 }
 
+// Failed generations must discard buffered output and tool calls. A structured
+// provider error takes precedence over the generic error finish reason.
+func TestCompleteRejectsFailedGenerations(t *testing.T) {
+	for _, test := range []struct {
+		name, terminal, wantText string
+		wantKind                 agent.ProviderErrorKind
+		wantRetryable            bool
+	}{
+		{
+			name:     "error finish reason",
+			terminal: `{"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
+			wantText: `finish_reason "error"`, wantRetryable: true,
+		},
+		{
+			name:     "native finish reason",
+			terminal: `{"choices":[{"index":0,"delta":{},"finish_reason":"error","native_finish_reason":"MALFORMED_FUNCTION_CALL"}]}`,
+			wantText: "MALFORMED_FUNCTION_CALL", wantRetryable: true,
+		},
+		{
+			name:     "top-level provider error",
+			terminal: `{"error":{"code":"server_error","message":"Provider disconnected unexpectedly"},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
+			wantText: "Provider disconnected unexpectedly", wantRetryable: true,
+		},
+		{
+			name:     "choice provider error",
+			terminal: `{"choices":[{"index":0,"delta":{},"finish_reason":"error","error":{"code":"server_error","message":"Provider disconnected unexpectedly"}}]}`,
+			wantText: "Provider disconnected unexpectedly", wantRetryable: true,
+		},
+		{
+			name:     "choice invalid request",
+			terminal: `{"choices":[{"index":0,"delta":{},"finish_reason":"error","error":{"type":"invalid_request_error","message":"Invalid messages"}}]}`,
+			wantText: "Invalid messages", wantKind: agent.ProviderErrorRequest,
+		},
+		{
+			name:     "numeric request error",
+			terminal: `{"error":{"code":400,"message":"Invalid messages","metadata":{"error_type":"invalid_prompt"}},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
+			wantText: "Invalid messages", wantKind: agent.ProviderErrorRequest,
+		},
+		{
+			name:     "numeric quota error",
+			terminal: `{"error":{"code":402,"message":"Insufficient credits","metadata":{"error_type":"payment_required"}},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
+			wantText: "Insufficient credits", wantKind: agent.ProviderErrorQuota,
+		},
+		{
+			name:     "numeric rate limit",
+			terminal: `{"error":{"code":429,"message":"Too many requests"},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
+			wantText: "Too many requests", wantKind: agent.ProviderErrorRateLimit, wantRetryable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(writer, `data: {"choices":[{"index":0,"delta":{"content":"partial","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"file\"}"}}]}}]}
+
+`)
+				fmt.Fprintf(writer, "data: %s\n\ndata: [DONE]\n\n", test.terminal)
+			}))
+			backend, err := New(Config{
+				Provider: "openrouter", Model: "google/gemini-3.8-flash", BaseURL: server.URL,
+				HTTPClient: server.Client(), Authorizer: BearerToken("secret"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := backend.Complete(t.Context(), agent.ModelRequest{
+				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+			}, nil)
+			var providerErr *agent.ProviderError
+			if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
+				providerErr.Kind != test.wantKind || providerErr.Retryable != test.wantRetryable {
+				t.Fatalf("error/metadata = %v / %#v", err, providerErr)
+			}
+			if !strings.Contains(err.Error(), test.wantText) || strings.Contains(err.Error(), "unsupported completion reason") {
+				t.Fatalf("error = %v, want %q", err, test.wantText)
+			}
+			if providerErr.StatusCode != 0 || strings.Contains(err.Error(), "HTTP ") {
+				t.Fatalf("in-band error reported an HTTP failure: %v / %#v", err, providerErr)
+			}
+			if len(response.Items) != 0 || response.StopReason != "" {
+				t.Fatalf("failed generation returned a usable response: %#v", response)
+			}
+		})
+	}
+}
+
 // An uninterpretable completion reason must not pass for a finished answer. A
 // retry would only fetch the same uninterpretable value.
 func TestCompleteRejectsUnknownFinishReason(t *testing.T) {

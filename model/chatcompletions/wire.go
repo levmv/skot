@@ -211,9 +211,11 @@ func (usage wireUsage) modelUsage() agent.ModelUsage {
 }
 
 type streamChoice struct {
-	Index        int         `json:"index"`
-	Delta        streamDelta `json:"delta"`
-	FinishReason string      `json:"finish_reason"`
+	Index              int         `json:"index"`
+	Delta              streamDelta `json:"delta"`
+	FinishReason       string      `json:"finish_reason"`
+	NativeFinishReason string      `json:"native_finish_reason"`
+	Error              *apiError   `json:"error,omitzero"`
 }
 
 type streamDelta struct {
@@ -423,6 +425,15 @@ var finishReasons = map[string]string{
 
 func (backend *Backend) normalizeFinishReason(reason string) (string, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(reason))
+	// OpenRouter uses "error" for a failed generation, even when no error
+	// envelope accompanies it. Apply the ordinary in-band retry policy.
+	if trimmed == "error" {
+		return "", modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
+			Provider: backend.provider,
+			Model:    backend.model,
+			Message:  `generation ended with finish_reason "error"`,
+		})
+	}
 	normalized, known := finishReasons[trimmed]
 	if !known {
 		return "", modelhttp.UnsupportedCompletionReasonError(backend.provider, reason)

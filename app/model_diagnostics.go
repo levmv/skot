@@ -30,6 +30,11 @@ func providerFailureHasIndependentExplanation(err error) bool {
 	if !ok {
 		return false
 	}
+	// Retrying these failures does not require changing the request protocol.
+	// This includes explicit in-band generation errors with no more specific kind.
+	if providerErr.Retryable {
+		return true
+	}
 	switch providerErr.Kind {
 	case agent.ProviderErrorAuthentication, agent.ProviderErrorPermission, agent.ProviderErrorSubscription, agent.ProviderErrorQuota,
 		agent.ProviderErrorRateLimit, agent.ProviderErrorRequestTooLarge, agent.ProviderErrorUnavailable:

@@ -180,6 +180,21 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			if choice.Index != 0 {
 				continue
 			}
+			if choice.Error != nil {
+				return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, choice.Error)
+			}
+			// Reject a failed generation before accepting its output or tool
+			// calls; a later usage chunk or size limit must not hide the error.
+			if choice.FinishReason != "" && choice.FinishReason != "null" {
+				normalized, err := backend.normalizeFinishReason(choice.FinishReason)
+				if err != nil {
+					if native := strings.TrimSpace(choice.NativeFinishReason); native != "" {
+						err = fmt.Errorf("%w (native_finish_reason %q)", err, native)
+					}
+					return agent.ModelResponse{}, err
+				}
+				stopReason = normalized
+			}
 			if choice.Delta.ReasoningContent != "" {
 				reasoning.WriteString(choice.Delta.ReasoningContent)
 				emitModelEvent(emit, agent.EventReasoningSummaryDelta, choice.Delta.ReasoningContent)
@@ -191,20 +206,11 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			if err := calls.merge(choice.Delta.ToolCalls); err != nil {
 				return agent.ModelResponse{}, fmt.Errorf("decode %s tool calls: %w", backend.provider, err)
 			}
-			if choice.FinishReason != "" && choice.FinishReason != "null" {
-				stopReason = choice.FinishReason
-			}
 		}
 	}
 
 	if limited {
 		stopReason = agent.StopReasonOutputLimit
-	} else {
-		normalized, err := backend.normalizeFinishReason(stopReason)
-		if err != nil {
-			return agent.ModelResponse{}, err
-		}
-		stopReason = normalized
 	}
 	items := make([]agent.Item, 0, 2+len(calls.calls))
 	if reasoning.Len() != 0 {

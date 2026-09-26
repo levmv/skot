@@ -24,7 +24,7 @@ until they are restarted:
 sk update
 ```
 
-Or build from a checkout with Go 1.27 or later:
+Or build from a checkout:
 
 ```sh
 cd skot

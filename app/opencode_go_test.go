@@ -55,6 +55,25 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 			},
 		},
 		{
+			name: "chat completions default thinking replay", uri: "opencode-go/mimo-v2.6-pro",
+			path: "/zen/go/v1/chat/completions", protocol: modelAPIChatCompletions,
+			request:             openCodeGoReplayRequest(),
+			wantReplayReasoning: "tool reasoningplain reasoning",
+			checkReplay:         true,
+			writeBody: func(writer io.Writer) {
+				fmt.Fprint(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			},
+			checkBody: func(t *testing.T, body map[string]jsontext.Value) {
+				t.Helper()
+				if _, exists := body["reasoning_effort"]; exists {
+					t.Error("MiMo request contains unsupported reasoning_effort")
+				}
+				if _, exists := body["thinking"]; exists {
+					t.Error("MiMo request overrides default thinking")
+				}
+			},
+		},
+		{
 			name: "chat completions current-turn replay", uri: "opencode-go/kimi-k3", effort: "max",
 			path: "/zen/go/v1/chat/completions", protocol: modelAPIChatCompletions,
 			request:     openCodeGoReplayRequest(),
@@ -132,6 +151,9 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				}
 				if got := request.Header.Get("X-Session-ID"); got != test.request.SessionID {
 					t.Errorf("session header = %q, want %q", got, test.request.SessionID)
+				}
+				if got := request.Header.Get("x-opencode-session"); got != test.request.SessionID {
+					t.Errorf("OpenCode session header = %q, want %q", got, test.request.SessionID)
 				}
 				if got := request.Header.Get("User-Agent"); got != "Skot" {
 					t.Errorf("user agent = %q", got)

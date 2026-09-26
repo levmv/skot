@@ -34,7 +34,7 @@ func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T
 	if len(models) < len(wantPrefix) || !slices.Equal(models[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("models = %#v", models)
 	}
-	for _, required := range []string{DefaultModelURI, "opencode-go/deepseek-flash", "openrouter/free"} {
+	for _, required := range []string{DefaultModelURI, "opencode-go/deepseek-v4.1-flash", "openrouter/free"} {
 		if !slices.Contains(models, required) {
 			t.Fatalf("catalog model %q is missing from %#v", required, models)
 		}

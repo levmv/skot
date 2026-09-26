@@ -155,25 +155,35 @@ type resolvedModelRoute struct {
 }
 
 var modelCatalog = []modelSpec{
+	// Subscription limits and efforts follow Codex model metadata, including
+	// max_context_window, rather than the public OpenAI API catalog.
 	{
 		URI: "openai-codex/gpt-6-astra", Name: "ChatGPT · GPT 6 Astra", API: modelAPIResponses,
-		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
+	{
+		URI: "openai-codex/gpt-6-sol", Name: "ChatGPT · GPT 6 Sol", API: modelAPIResponses,
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
+	{
+		URI: "openai-codex/gpt-6-luna", Name: "ChatGPT · GPT 6 Luna", API: modelAPIResponses,
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 	},
 	{
 		URI: "openai-codex/gpt-5.6-sol", Name: "ChatGPT · GPT 5.6 Sol", API: modelAPIResponses,
-		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
 	},
 	{
 		URI: "openai-codex/gpt-5.6-terra", Name: "ChatGPT · GPT 5.6 Terra", API: modelAPIResponses,
-		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
 	},
 	{
 		URI: "openai-codex/gpt-5.6-luna", Name: "ChatGPT · GPT 5.6 Luna", API: modelAPIResponses,
-		ContextWindow: 922_000, ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 	},
 	{
 		URI: "openai-codex/gpt-5.5", Name: "ChatGPT · GPT 5.5", API: modelAPIResponses,
-		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
+		ContextWindow: 272_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
 	},
 	// Native Flash exposes off/low/high/max. The thinking switch expresses off;
 	// enabled requests pair it with reasoning_effort.
@@ -210,6 +220,14 @@ var modelCatalog = []modelSpec{
 	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest"},
 	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest"},
 	{URI: "openrouter/~google/gemini-pro-latest", Name: "Gemini Pro Latest"},
+	// Protocols: https://opencode.ai/docs/go/#endpoints
+	// Limits and effort vocabularies: https://models.dev/api.json (opencode-go).
+	{
+		URI: "opencode-go/gpt-6-luna", Name: "OpenCode Go · GPT 6 Luna", API: modelAPIResponses,
+		ContextWindow:    922_000,
+		ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+		ResponsesTraits:  &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto},
+	},
 	{
 		URI: "opencode-go/gpt-5.6-luna", Name: "OpenCode Go · GPT 5.6 Luna", API: modelAPIResponses,
 		ContextWindow:    922_000,
@@ -217,7 +235,7 @@ var modelCatalog = []modelSpec{
 		ResponsesTraits:  &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto},
 	},
 	{
-		URI: "opencode-go/deepseek-flash", Name: "OpenCode Go · DeepSeek V4.1 Flash", ContextWindow: 1_000_000,
+		URI: "opencode-go/deepseek-v4.1-flash", Name: "OpenCode Go · DeepSeek V4.1 Flash", ContextWindow: 1_000_000,
 		ReasoningEfforts: []string{"", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
@@ -268,8 +286,18 @@ var modelCatalog = []modelSpec{
 		},
 	},
 	{
+		URI: "opencode-go/grok-4.7", Name: "OpenCode Go · Grok 4.7", API: modelAPIResponses,
+		ContextWindow: 500_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
+		ResponsesTraits: &responsemodel.RouteTraits{},
+	},
+	{
 		URI: "opencode-go/grok-4.6", Name: "OpenCode Go · Grok 4.6", API: modelAPIResponses,
 		ContextWindow: 500_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
+		ResponsesTraits: &responsemodel.RouteTraits{},
+	},
+	{
+		URI: "opencode-go/muse-spark-1.3-contributor", Name: "OpenCode Go · Muse Spark 1.3 Contributor", API: modelAPIResponses,
+		ContextWindow: 1_048_576, ReasoningEfforts: []string{"", "minimal", "low", "medium", "high", "xhigh"},
 		ResponsesTraits: &responsemodel.RouteTraits{},
 	},
 	{
@@ -316,12 +344,35 @@ var modelCatalog = []modelSpec{
 		ChatTraits:            &chatcompletions.RouteTraits{},
 	},
 	{
-		URI: "opencode-go/mimo-v2.5", Name: "OpenCode Go · MiMo V2.5", ContextWindow: 1_000_000,
+		URI: "opencode-go/longcat-2.5-preview-free", Name: "OpenCode Go · LongCat 2.5 Preview Free", ContextWindow: 1_000_000,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+	},
+	// MiMo thinks by default and expects reasoning_content back across turns.
+	// https://mimo.mi.com/docs/en-US/usage-guide/passing-back-reasoning_content
+	{
+		URI: "opencode-go/mimo-v2.6-flash", Name: "OpenCode Go · MiMo V2.6 Flash", ContextWindow: 1_048_576,
+		ReasoningEfforts: []string{""},
+		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
+	},
+	{
+		URI: "opencode-go/mimo-v2.6-pro", Name: "OpenCode Go · MiMo V2.6 Pro", ContextWindow: 1_048_576,
+		ReasoningEfforts: []string{""},
+		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
+	},
+	{
+		URI: "opencode-go/mimo-v2.5", Name: "OpenCode Go · MiMo V2.5", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{""},
+		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
 	},
 	{
 		URI: "opencode-go/mimo-v2.5-pro", Name: "OpenCode Go · MiMo V2.5 Pro", ContextWindow: 1_048_576,
-		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		ReasoningEfforts: []string{""},
+		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
+	},
+	{
+		URI: "opencode-go/space-bunny-free", Name: "OpenCode Go · Space Bunny Free", ContextWindow: 524_288,
+		ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
+		ChatTraits:       &chatcompletions.RouteTraits{ReasoningEffort: chatcompletions.ReasoningEffortTopLevel},
 	},
 	{
 		URI: "opencode-go/hy4-preview", Name: "OpenCode Go · Hy4 preview", ContextWindow: 1_024_000,
@@ -332,7 +383,7 @@ var modelCatalog = []modelSpec{
 		},
 	},
 	{
-		URI: "opencode-go/hy3", Name: "OpenCode Go · Hy3", ContextWindow: 256_000,
+		URI: "opencode-go/hy3", Name: "OpenCode Go · Hy3", ContextWindow: 192_000,
 		ReasoningEfforts: []string{"", "none", "low", "high"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
@@ -552,12 +603,15 @@ func defaultModelSpec(provider string) modelSpec {
 
 func catalogModelSpec(uri string) (modelSpec, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(uri))
-	// DeepSeek serves these retired model IDs with V4.1 Flash. Preserve saved
-	// selections while applying the current model's image and reasoning support.
-	// https://api-docs.deepseek.com/quick_start/pricing/
 	switch normalized {
 	case "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-flash-vision-exp":
+		// DeepSeek serves these retired model IDs with V4.1 Flash. Preserve saved
+		// selections while applying the current model's image and reasoning support.
+		// https://api-docs.deepseek.com/quick_start/pricing/
 		normalized = "deepseek/deepseek-flash"
+	case "opencode-go/deepseek-flash":
+		// Go still accepts the original ID used by saved selections.
+		normalized = "opencode-go/deepseek-v4.1-flash"
 	}
 	for _, spec := range modelCatalog {
 		if normalized == strings.ToLower(spec.URI) {

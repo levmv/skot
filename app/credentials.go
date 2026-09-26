@@ -56,6 +56,7 @@ func (authorizer storedBearerAuthorizer) Authorize(_ context.Context, request *h
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
+	setProviderSessionHeader(request, authorizer.provider)
 	return nil
 }
 
@@ -69,7 +70,18 @@ func (authorizer storedAPIKeyAuthorizer) Authorize(_ context.Context, request *h
 	if token != "" {
 		request.Header.Set("x-api-key", token)
 	}
+	setProviderSessionHeader(request, authorizer.provider)
 	return nil
+}
+
+func setProviderSessionHeader(request *http.Request, provider string) {
+	// OpenCode uses this header for routing and prompt caching across all APIs.
+	// https://opencode.ai/docs/go/#supported-clients
+	if provider == "opencode-go" {
+		if sessionID := request.Header.Get("X-Session-ID"); sessionID != "" {
+			request.Header.Set("x-opencode-session", sessionID)
+		}
+	}
 }
 
 func storedRequestCredential(store *state.Store, provider, modelURI string, allowMissing bool) (string, error) {

@@ -42,7 +42,7 @@ func exitCodeFor(err error) int {
 	if errors.Is(err, context.Canceled) {
 		return exitInterrupted
 	}
-	if errors.Is(err, agent.ErrInvalidRequest) || errors.Is(err, agent.ErrRunIncomplete) || errors.Is(err, agent.ErrToolFatal) {
+	if errors.Is(err, agent.ErrInvalidRequest) || errors.Is(err, agent.ErrRunIncomplete) {
 		return exitConfig
 	}
 	if errors.Is(err, agent.ErrProviderFailure) {

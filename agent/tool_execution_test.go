@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -101,90 +100,6 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 	}
 	if len(committed) != 2 || committed[0].Content.Text() != "first" || committed[1].Content.Text() != "second failed" {
 		t.Fatalf("committed results = %#v", committed)
-	}
-}
-
-func TestFatalToolFailureIsJournaledBeforeRunFails(t *testing.T) {
-	journal := &memoryJournal{}
-	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "configured", RawArguments: `{}`}}}}, nil
-		},
-	}}
-	tool := Tool{
-		Spec: ToolSpec{Name: "configured", InputSchema: jsontext.Value(`{"type":"object"}`)},
-		Run: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{}, fmt.Errorf("%w: executable disappeared", ErrToolFatal)
-		},
-	}
-	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
-	result, err := runtime.Run(context.Background(), "run it", nil)
-	if !errors.Is(err, ErrToolFatal) || result.Status != RunFailed {
-		t.Fatalf("result = %#v, error = %v", result, err)
-	}
-	records := journal.snapshot()
-	var resultSequence, finishSequence uint64
-	for _, record := range records {
-		switch record.Kind {
-		case RecordToolResult:
-			payload, decodeErr := record.decode[ToolResultRecord]()
-			if decodeErr != nil {
-				t.Fatal(decodeErr)
-			}
-			if !payload.Result.Error || !strings.Contains(payload.Result.Content.Text(), "executable disappeared") {
-				t.Fatalf("tool result = %#v", payload.Result)
-			}
-			resultSequence = record.Sequence
-		case RecordRunFinished:
-			payload, decodeErr := record.decode[RunFinishedRecord]()
-			if decodeErr != nil {
-				t.Fatal(decodeErr)
-			}
-			if payload.Status != RunFailed {
-				t.Fatalf("run finish = %#v", payload)
-			}
-			finishSequence = record.Sequence
-		}
-	}
-	if resultSequence == 0 || finishSequence <= resultSequence {
-		t.Fatalf("fatal result was not committed before finish: result=%d finish=%d", resultSequence, finishSequence)
-	}
-}
-
-func TestFatalParallelToolFailureSettlesSiblingCalls(t *testing.T) {
-	journal := &memoryJournal{}
-	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "configured", RawArguments: `{}`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "slow", RawArguments: `{}`}},
-			}}, nil
-		},
-	}}
-	configured := Tool{
-		Spec: ToolSpec{Name: "configured", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
-		Run: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{}, fmt.Errorf("%w: executable disappeared", ErrToolFatal)
-		},
-	}
-	slow := Tool{
-		Spec: ToolSpec{Name: "slow", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
-		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
-			<-ctx.Done()
-			return ToolOutput{}, ctx.Err()
-		},
-	}
-	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{configured, slow}})
-	result, err := runtime.Run(context.Background(), "run both", nil)
-	if !errors.Is(err, ErrToolFatal) || result.Status != RunFailed {
-		t.Fatalf("result = %#v, error = %v", result, err)
-	}
-	state, replayErr := Replay(journal.snapshot())
-	if replayErr != nil {
-		t.Fatal(replayErr)
-	}
-	if len(state.PendingTools) != 0 || len(state.ActiveRuns) != 0 || countRecordKind(journal.snapshot(), RecordToolResult) != 2 {
-		t.Fatalf("unsettled fatal group: pending=%#v active=%#v", state.PendingTools, state.ActiveRuns)
 	}
 }
 

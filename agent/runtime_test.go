@@ -1794,31 +1794,49 @@ func (journal *failingJournal) Append(ctx context.Context, pending PendingRecord
 }
 
 func TestRuntimeJournalFailureLeavesRecoverableUnfinishedRun(t *testing.T) {
-	journal := &failingJournal{
-		memoryJournal: &memoryJournal{},
-		failKind:      RecordModelResponse,
-		remaining:     1,
-	}
-	runtime := newTestRuntime(t, Config{
-		Journal: journal,
-		Backend: &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "not committed"}}}, nil
-		}}},
-	})
-	result, err := runtime.Run(context.Background(), "first", nil)
-	if err == nil || result.RunID == "" || !strings.Contains(err.Error(), "injected journal failure") {
-		t.Fatalf("failed run = %#v, %v", result, err)
-	}
-	if _, err := runtime.Run(context.Background(), "second", nil); err == nil ||
-		!strings.Contains(err.Error(), "restart Skot") || !strings.Contains(err.Error(), "/clear") {
-		t.Fatalf("unfinished-run guidance = %v", err)
-	}
-	if _, _, err := Reconcile(context.Background(), journal); err != nil {
-		t.Fatal(err)
-	}
-	state, err := Replay(journal.snapshot())
-	if err != nil || len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 {
-		t.Fatalf("reconciled state = %#v, %v", state, err)
+	for _, kind := range []RecordKind{RecordModelResponse, RecordToolResult} {
+		t.Run(string(kind), func(t *testing.T) {
+			journal := &failingJournal{
+				memoryJournal: &memoryJournal{},
+				failKind:      kind,
+				remaining:     1,
+			}
+			toolCalls := 0
+			tool := testRuntimeTool("work")
+			tool.Run = func(context.Context, string) (ToolOutput, error) {
+				toolCalls++
+				return ToolOutput{Content: TextContent("done")}, nil
+			}
+			model := &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				return ModelResponse{Items: []Item{
+					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "work", RawArguments: `{}`}},
+					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "work", RawArguments: `{}`}},
+				}}, nil
+			}}}
+			runtime := newTestRuntime(t, Config{Journal: journal, Backend: model, Tools: []Tool{tool}})
+			result, err := runtime.Run(context.Background(), "first", nil)
+			if err == nil || result.RunID == "" || !strings.Contains(err.Error(), "injected journal failure") {
+				t.Fatalf("failed run = %#v, %v", result, err)
+			}
+			wantCalls := 0
+			if kind == RecordToolResult {
+				wantCalls = 1
+			}
+			if toolCalls != wantCalls || model.next != 1 {
+				t.Fatalf("calls after journal failure: tools=%d, model=%d", toolCalls, model.next)
+			}
+			if _, err := runtime.Run(context.Background(), "second", nil); err == nil ||
+				!strings.Contains(err.Error(), "restart Skot") || !strings.Contains(err.Error(), "/clear") {
+				t.Fatalf("unfinished-run guidance = %v", err)
+			}
+			if _, _, err := Reconcile(context.Background(), journal); err != nil {
+				t.Fatal(err)
+			}
+			state, err := Replay(journal.snapshot())
+			if err != nil || len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 {
+				t.Fatalf("reconciled state = %#v, %v", state, err)
+			}
+		})
 	}
 }
 

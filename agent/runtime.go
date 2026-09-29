@@ -520,9 +520,6 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (r
 			return runtime.finish(ctx, live, emit, runID, "", RunCancelled, ctx.Err())
 		}
 		if toolErr != nil {
-			if errors.Is(toolErr, ErrToolFatal) {
-				return runtime.finish(ctx, live, emit, runID, "", RunFailed, toolErr)
-			}
 			return RunResult{RunID: runID}, toolErr
 		}
 	}
@@ -1167,7 +1164,9 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 	return runtime.recordCurrentEffectiveConfigurationAndApply(ctx, reducer)
 }
 
-func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call ToolCall) (ToolResult, bool, error) {
+// Tool failures are results the model can act on. Only cancellation interrupts
+// execution here; journal failures are handled when committing the result.
+func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call ToolCall) (ToolResult, bool) {
 	tool, exists := runtime.toolByName[call.Name]
 	if !exists {
 		names := make([]string, 0, len(runtime.tools))
@@ -1179,11 +1178,11 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 		if len(names) != 0 {
 			message += "; available tools: " + strings.Join(names, ", ")
 		}
-		return ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Error: true}, false, nil
+		return ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Error: true}, false
 	}
 	output, err := tool.Run(WithToolSessionID(ctx, sessionID), call.RawArguments)
 	if ctx.Err() != nil {
-		return ToolResult{}, true, nil
+		return ToolResult{}, true
 	}
 	details, detailErr := runtime.sanitizeToolDetails(output.Details)
 	if detailErr != nil {
@@ -1202,13 +1201,9 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 		} else {
 			message += "\nerror: " + err.Error()
 		}
-		result := ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Details: details, Error: true}
-		if errors.Is(err, ErrToolFatal) {
-			return result, false, err
-		}
-		return result, false, nil
+		return ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Details: details, Error: true}, false
 	}
-	return ToolResult{CallID: call.ID, Content: runtime.sanitizeContent(content), Details: details}, false, nil
+	return ToolResult{CallID: call.ID, Content: runtime.sanitizeContent(content), Details: details}, false
 }
 
 func (runtime *Runtime) finish(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error) (RunResult, error) {

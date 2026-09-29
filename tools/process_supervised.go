@@ -444,8 +444,15 @@ func (manager *ProcessManager) deriveAbandoned(job *processJob, reason string) {
 
 func abandonedReasonWithWorkerLog(jobDir, reason string) string {
 	reason = strings.TrimSpace(reason)
-	diagnostic, _ := readDurableTail(filepath.Join(jobDir, jobWorkerLogFile), jobWorkerDiagnosticTailSize)
-	diagnosticText := strings.Join(strings.Fields(string(diagnostic)), " ")
+	diagnostic := readDurableTail(filepath.Join(jobDir, jobWorkerLogFile), jobWorkerDiagnosticTailSize)
+	if diagnostic.readErr != nil {
+		detail := fmt.Sprintf("read worker log: %v", diagnostic.readErr)
+		if reason == "" {
+			return detail
+		}
+		return reason + "; " + detail
+	}
+	diagnosticText := strings.Join(strings.Fields(string(diagnostic.data)), " ")
 	if diagnosticText == "" {
 		return reason
 	}
@@ -491,26 +498,41 @@ func removeSettledJobState(job *processJob) (bool, error) {
 	return true, nil
 }
 
-func (manager *ProcessManager) durableJobOutput(job *processJob, limit int) ([]byte, bool) {
-	stdout, stdoutTruncated := readDurableTail(filepath.Join(job.jobDir, jobStdoutFile), limit)
-	_, discarded := manager.durableJobStats(job)
-	stdoutTruncated = stdoutTruncated || discarded > 0
-	if !job.snapshot().separateStderr {
-		return stdout, stdoutTruncated
+func (manager *ProcessManager) durableJobOutput(job *processJob, limit int) processOutput {
+	state := job.snapshot()
+	read := func(name, stream string) processOutput {
+		output := readDurableTail(filepath.Join(job.jobDir, name), limit)
+		// A worker may not have created its logs yet, or may have failed before
+		// creating them. Missing logs in those states do not establish output loss.
+		if errors.Is(output.readErr, os.ErrNotExist) && (state.status == ProcessRunning || state.status == ProcessNotStarted || state.status == ProcessAbandoned) {
+			return processOutput{}
+		}
+		if output.readErr != nil {
+			output.readErr = fmt.Errorf("read %s log: %w", stream, output.readErr)
+		}
+		return output
 	}
-	stderr, stderrTruncated := readDurableTail(filepath.Join(job.jobDir, jobStderrFile), limit)
-	return combineStreams(stdout, stderr, stdoutTruncated, stderrTruncated)
+	stdout := read(jobStdoutFile, "stdout")
+	_, discarded := manager.durableJobStats(job)
+	stdout.truncated = stdout.truncated || discarded > 0
+	if !state.separateStderr {
+		return stdout
+	}
+	return combineStreams(stdout, read(jobStderrFile, "stderr"))
 }
 
-func readDurableTail(path string, limit int) ([]byte, bool) {
+func readDurableTail(path string, limit int) processOutput {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, false
+		return processOutput{readErr: err}
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, false
+		return processOutput{readErr: err}
+	}
+	if !info.Mode().IsRegular() {
+		return processOutput{readErr: fmt.Errorf("%s is not a regular log file", path)}
 	}
 	start := int64(0)
 	if limit > 0 && info.Size() > int64(limit) {
@@ -518,16 +540,17 @@ func readDurableTail(path string, limit int) ([]byte, bool) {
 	}
 	data := make([]byte, int(info.Size()-start))
 	if len(data) > 0 {
-		read, readErr := file.ReadAt(data, start)
-		if readErr != nil && readErr != io.EOF {
-			return nil, false
+		var read int
+		read, err = file.ReadAt(data, start)
+		if err == io.EOF {
+			err = nil
 		}
 		data = data[:read]
 	}
 	if !utf8.Valid(data) {
 		data = []byte(strings.ToValidUTF8(string(data), "�"))
 	}
-	return data, start > 0
+	return processOutput{data: data, truncated: start > 0, readErr: err}
 }
 
 func (manager *ProcessManager) durableJobStats(job *processJob) (stored, discarded int64) {

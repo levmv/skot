@@ -27,11 +27,6 @@ var (
 	// ErrModelUnavailable reports that a runtime knows its selected model but has
 	// no executable backend for it.
 	ErrModelUnavailable = errors.New("model unavailable")
-	// ErrToolFatal marks an execution failure the model cannot repair by
-	// changing tool arguments, such as a configured executable disappearing
-	// after startup validation. Its tool result is journaled before the run
-	// stops.
-	ErrToolFatal = errors.New("fatal tool execution failure")
 )
 
 type modelUnavailableError struct{ model string }

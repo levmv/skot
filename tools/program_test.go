@@ -5,14 +5,17 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
+	"github.com/levmv/skot/internal/session"
 )
 
 func TestLoadProgramToolsTreatsMissingAsEmptyAndRejectsUnknownFields(t *testing.T) {
@@ -110,6 +113,25 @@ func TestProgramToolGetsObjectOnStdinKeepsStderrSeparateAndAppliesEnvironmentOve
 	}
 }
 
+func TestProgramWorkdirErrorIdentifiesConfiguredPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "build"), []byte("a file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newProcessManagerForTest(t, root, t.TempDir())
+	resolved, err := manager.ResolveProgramTools([]ProgramTool{{
+		Name: "build_tool", Description: "build", Command: []string{"sh", "-c", "exit 0"}, Workdir: "build/work",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolved[0].Tool.Run(context.Background(), `{}`)
+	if !errors.Is(err, syscall.ENOTDIR) || !strings.Contains(err.Error(), "build_tool") ||
+		!strings.Contains(err.Error(), "configured workdir") || !strings.Contains(err.Error(), "build/work") {
+		t.Fatalf("workdir error lost configuration context or cause: %v", err)
+	}
+}
+
 func TestProgramForegroundReturnsMoreThanTheBashPreview(t *testing.T) {
 	manager := processManagerForTest(t)
 	declaration := normalizedProgramTool(t, ProgramTool{
@@ -151,7 +173,7 @@ func TestProgramBackgroundAutoStripsItsSyntheticArgumentAndUsesJobTool(t *testin
 	job := manager.get(id)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		content, _ := manager.jobOutput(job, 1024)
+		content := manager.jobOutput(job, 1024).data
 		if strings.Contains(string(content), `{"query":"<p>&</p>"}`) {
 			if strings.Contains(string(content), "background") {
 				t.Fatalf("synthetic argument reached program: %q", content)
@@ -200,7 +222,7 @@ func TestProgramYieldPreservesForegroundJoinObligation(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("yielded program did not finish")
 	}
-	content, _ := manager.jobOutput(job, 1024)
+	content := manager.jobOutput(job, 1024).data
 	if !strings.Contains(string(content), "finished") {
 		t.Fatalf("job output = %q", content)
 	}
@@ -275,32 +297,109 @@ func TestDetachedProgramSurvivesManagerCloseAndCanBeReattached(t *testing.T) {
 	}
 }
 
-func TestResolvedProgramDisappearingIsFatal(t *testing.T) {
-	root := t.TempDir()
-	script := filepath.Join(root, "vanishing")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Close() })
-	declaration := normalizedProgramTool(t, ProgramTool{Name: "vanishing", Description: "vanishes", Command: []string{"./vanishing"}})
-	resolved, err := manager.ResolveProgramTools([]ProgramTool{declaration})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(script); err != nil {
-		t.Fatal(err)
-	}
-	_, err = resolved[0].Tool.Run(context.Background(), `{}`)
-	if !errors.Is(err, agent.ErrToolFatal) {
-		t.Fatalf("error = %v", err)
+func TestProgramLaunchFailureAllowsOtherCallsAndSessionReplay(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parallel=%t", parallel), func(t *testing.T) {
+			root := t.TempDir()
+			script := filepath.Join(root, "vanishing")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := NewProcessManager(root, t.TempDir(), t.TempDir(), ScopeMachine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = manager.Close() })
+			declaration := normalizedProgramTool(t, ProgramTool{
+				Name: "vanishing", Description: "vanishes", Command: []string{"./vanishing"}, ParallelSafe: parallel,
+			})
+			resolved, err := manager.ResolveProgramTools([]ProgramTool{declaration})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(script); err != nil {
+				t.Fatal(err)
+			}
+			journalPath := filepath.Join(t.TempDir(), "session.jsonl")
+			journal, err := session.Open(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = journal.Close() })
+			calls := 0
+			model := programTestModel(func(request agent.ModelRequest) (agent.ModelResponse, error) {
+				calls++
+				if calls == 1 {
+					return agent.ModelResponse{Items: []agent.Item{
+						{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "vanishing", RawArguments: `{}`}},
+						{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "peer", RawArguments: `{}`}},
+						{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "later", RawArguments: `{}`}},
+					}}, nil
+				}
+				var results []*agent.ToolResult
+				for _, item := range request.Items {
+					if item.ToolResult != nil {
+						results = append(results, item.ToolResult)
+					}
+				}
+				if calls != 2 || len(results) != 3 || !results[0].Error || !strings.Contains(results[0].Content.Text(), "vanishing") ||
+					results[1].Error || results[1].Content.Text() != "peer completed" ||
+					results[2].Error || results[2].Content.Text() != "later completed" {
+					t.Fatalf("model calls/results = %d / %#v", calls, results)
+				}
+				return agent.ModelResponse{Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "done"}}}, nil
+			})
+			runtime, err := agent.New(agent.Config{
+				Model:   agent.ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 128_000},
+				Backend: model, Journal: journal, SessionID: "session-program-failure", Workspace: root,
+				Tools: []agent.Tool{
+					resolved[0].Tool,
+					{
+						Spec: agent.ToolSpec{Name: "peer", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
+						Run: func(ctx context.Context, _ string) (agent.ToolOutput, error) {
+							return agent.ToolOutput{Content: agent.TextContent("peer completed")}, ctx.Err()
+						},
+					},
+					{
+						Spec: agent.ToolSpec{Name: "later", InputSchema: jsontext.Value(`{"type":"object"}`)},
+						Run: func(ctx context.Context, _ string) (agent.ToolOutput, error) {
+							return agent.ToolOutput{Content: agent.TextContent("later completed")}, ctx.Err()
+						},
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runtime.Run(context.Background(), "run tools", nil)
+			if err != nil || result.Status != agent.RunCompleted || result.Answer != "done" {
+				t.Fatalf("run = %#v, %v", result, err)
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := session.Open(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+			state, _, err := agent.Reconcile(context.Background(), reopened)
+			if err != nil || len(state.PendingTools) != 0 || len(state.ActiveRuns) != 0 {
+				t.Fatalf("reconciled state = %#v, %v", state, err)
+			}
+		})
 	}
 }
 
-func TestSupervisedForegroundProgramThatNeverStartsIsFatal(t *testing.T) {
+type programTestModel func(agent.ModelRequest) (agent.ModelResponse, error)
+
+func (model programTestModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+	return model(request)
+}
+
+func (programTestModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+
+func TestSupervisedForegroundProgramReportsLaunchFailure(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "vanishing-supervised")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
@@ -319,7 +418,7 @@ func TestSupervisedForegroundProgramThatNeverStartsIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = resolved[0].Tool.Run(agent.WithToolSessionID(context.Background(), "session-vanishing"), `{}`)
-	if !errors.Is(err, agent.ErrToolFatal) {
+	if err == nil {
 		t.Fatalf("error = %v", err)
 	}
 	if strings.Contains(err.Error(), "exit status 125") || !strings.Contains(err.Error(), "vanishing-supervised") {

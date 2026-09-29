@@ -4,15 +4,12 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/levmv/skot/agent"
 )
 
 func TestLinuxSandboxDoesNotGrantSharedTemp(t *testing.T) {
@@ -23,7 +20,7 @@ func TestLinuxSandboxDoesNotGrantSharedTemp(t *testing.T) {
 	}
 }
 
-func TestSandboxedProgramDisappearingAfterPreflightIsFatal(t *testing.T) {
+func TestSandboxedProgramDisappearingAfterPreflightReportsLaunchFailure(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "vanishing")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
@@ -43,7 +40,7 @@ func TestSandboxedProgramDisappearingAfterPreflightIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	output, err := resolved[0].Tool.Run(context.Background(), `{}`)
-	if !errors.Is(err, agent.ErrToolFatal) || !strings.Contains(output.Content.Text(), "status: failed") {
+	if err == nil || !strings.Contains(err.Error(), "vanishing") || !strings.Contains(output.Content.Text(), "status: failed") {
 		t.Fatalf("output/error = %q / %v", output.Content.Text(), err)
 	}
 }

@@ -1,9 +1,6 @@
 package agent
 
-import (
-	"context"
-	"errors"
-)
+import "context"
 
 // Keep one anomalous model response from turning ParallelSafe into unbounded
 // process-wide fan-out. The limit is per run; unsafe and unknown tools remain
@@ -13,7 +10,6 @@ const maxParallelToolCalls = 4
 type toolExecution struct {
 	result    ToolResult
 	cancelled bool
-	fatal     error
 }
 
 func (runtime *Runtime) executeToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []ToolCall) (bool, error) {
@@ -50,14 +46,14 @@ func (runtime *Runtime) toolCallParallelSafe(call ToolCall) bool {
 
 func (runtime *Runtime) executeSerialToolCall(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call ToolCall) (bool, error) {
 	emitEvent(emit, Event{Kind: EventToolStarted, RunID: runID, Call: cloneToolCallPointer(&call)})
-	result, cancelled, fatal := runtime.executeTool(ctx, live.state.SessionID, call)
+	result, cancelled := runtime.executeTool(ctx, live.state.SessionID, call)
 	if cancelled {
 		return true, nil
 	}
 	if err := runtime.commitToolResult(ctx, live, emit, runID, call, result); err != nil {
 		return false, err
 	}
-	return false, fatal
+	return false, nil
 }
 
 func (runtime *Runtime) executeParallelToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []ToolCall) (bool, error) {
@@ -78,8 +74,8 @@ func (runtime *Runtime) executeParallelToolCalls(ctx context.Context, live *stat
 				outcome <- toolExecution{cancelled: true}
 				return
 			}
-			result, cancelled, fatal := runtime.executeTool(groupCtx, live.state.SessionID, call)
-			outcome <- toolExecution{result: result, cancelled: cancelled, fatal: fatal}
+			result, cancelled := runtime.executeTool(groupCtx, live.state.SessionID, call)
+			outcome <- toolExecution{result: result, cancelled: cancelled}
 		}()
 	}
 
@@ -94,25 +90,6 @@ func (runtime *Runtime) executeParallelToolCalls(ctx context.Context, live *stat
 			cancel()
 			waitForToolExecutions(outcomes[index+1:])
 			return false, err
-		}
-		if execution.fatal != nil {
-			cancel()
-			fatal := execution.fatal
-			for remaining := index + 1; remaining < len(outcomes); remaining++ {
-				next := <-outcomes[remaining]
-				if next.cancelled {
-					next.result = ToolResult{
-						CallID:  calls[remaining].ID,
-						Content: TextContent("tool execution cancelled after a fatal failure in the same parallel group"),
-						Error:   true,
-					}
-				}
-				if err := runtime.commitToolResult(ctx, live, emit, runID, calls[remaining], next.result); err != nil {
-					return false, errors.Join(fatal, err)
-				}
-				fatal = errors.Join(fatal, next.fatal)
-			}
-			return false, fatal
 		}
 	}
 	return false, nil

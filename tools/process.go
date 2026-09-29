@@ -193,10 +193,14 @@ type jobArgs struct {
 }
 
 type jobResultOptions struct {
-	output        []byte
-	includeOutput bool
-	managed       bool
-	truncated     bool
+	outputLimit int
+	managed     bool
+}
+
+type processOutput struct {
+	data      []byte
+	truncated bool
+	readErr   error
 }
 
 // NewProcessManager builds a standalone manager. Use
@@ -386,7 +390,7 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 			}
 			workdir, display, info, err := workdirPolicy.resolveExistingPath(args.Workdir, enforceProtection)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("prepare workdir %q: %w", filepath.Clean(args.Workdir), err)
 			}
 			if !info.IsDir() {
 				return "", fmt.Errorf("workdir %s is not a directory", display)
@@ -425,7 +429,6 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 	case <-job.done:
 		return manager.completedForegroundResult(job)
 	case <-timer.C:
-		output, truncated := manager.jobOutput(job, defaultCommandPreview)
 		job.mu.Lock()
 		job.joinRequired = true
 		job.mu.Unlock()
@@ -434,7 +437,7 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 			return manager.completedForegroundResult(job)
 		default:
 		}
-		return manager.result(job, jobResultOptions{output: output, includeOutput: true, managed: true, truncated: truncated})
+		return manager.result(job, jobResultOptions{outputLimit: defaultCommandPreview, managed: true})
 	case <-ctx.Done():
 		_, _ = manager.stop(context.Background(), job.id, "tool call cancelled")
 		manager.forget(job)
@@ -443,11 +446,10 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 }
 
 func (manager *ProcessManager) completedForegroundResult(job *processJob) (agent.ToolOutput, error) {
-	output, truncated := manager.jobOutput(job, defaultCommandPreview)
 	if !job.snapshot().supervised {
 		manager.forget(job)
 	}
-	return manager.result(job, jobResultOptions{output: output, includeOutput: true, truncated: truncated})
+	return manager.result(job, jobResultOptions{outputLimit: defaultCommandPreview})
 }
 
 func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolOutput, error) {
@@ -474,26 +476,24 @@ func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolO
 	if job == nil || job.sessionID != sessionID {
 		return agent.ToolOutput{}, fmt.Errorf("job %q not found", args.JobID)
 	}
-	if action == "output" {
-		content, truncated := manager.jobOutput(job, maxJobReadBytes)
-		return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
-	}
-	if action == "wait" {
+	outputLimit := maxJobReadBytes
+	switch action {
+	case "wait":
 		if args.TimeoutSeconds < 0 || args.TimeoutSeconds > int(maxBashTimeout/time.Second) {
 			return agent.ToolOutput{}, fmt.Errorf("timeout must be between 1 and %d seconds", int(maxBashTimeout/time.Second))
 		}
 		if err := waitForJob(ctx, job, args.TimeoutSeconds); err != nil {
 			return agent.ToolOutput{}, err
 		}
-		content, truncated := manager.jobOutput(job, maxJobReadBytes)
-		return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
+	case "stop":
+		stopped, err := manager.stop(ctx, job.id, "stopped by job tool")
+		if err != nil {
+			return agent.ToolOutput{}, err
+		}
+		job = stopped
+		outputLimit = defaultCommandPreview
 	}
-	job, err := manager.stop(ctx, job.id, "stopped by job tool")
-	if err != nil {
-		return agent.ToolOutput{}, err
-	}
-	content, truncated := manager.jobOutput(job, defaultCommandPreview)
-	return manager.result(job, jobResultOptions{output: content, includeOutput: true, managed: true, truncated: truncated})
+	return manager.result(job, jobResultOptions{outputLimit: outputLimit, managed: true})
 }
 
 func waitForJob(ctx context.Context, job *processJob, timeoutSeconds int) error {
@@ -710,7 +710,7 @@ func (manager *ProcessManager) Status(jobID string) (agent.ProcessResult, bool) 
 	if job.snapshot().supervised {
 		_ = manager.refreshSupervisedJob(job)
 	}
-	return manager.processResult(job, true), true
+	return manager.processResult(job, job.snapshot(), true), true
 }
 
 func (manager *ProcessManager) StatusDetails(jobID string) ([]agent.Detail, bool) {
@@ -1083,50 +1083,64 @@ func (manager *ProcessManager) closeJobs(jobs []*processJob, reason string, forg
 }
 
 func (manager *ProcessManager) result(job *processJob, options jobResultOptions) (agent.ToolOutput, error) {
-	meta := manager.processResult(job, options.managed)
+	var output processOutput
+	if options.outputLimit > 0 {
+		output = manager.jobOutput(job, options.outputLimit)
+	}
+	state := job.snapshot()
+	// A later output read can recover. Keep read errors on this result without
+	// changing the job's status or its recorded output storage errors.
+	if output.readErr != nil {
+		if state.outputError != "" {
+			state.outputError += "; "
+		}
+		state.outputError += output.readErr.Error()
+	}
+	meta := manager.processResult(job, state, options.managed)
 	detail, err := agent.NewDetail(agent.ProcessResultDetailKind, meta)
 	if err != nil {
 		return agent.ToolOutput{}, fmt.Errorf("encode process result: %w", err)
 	}
 	return agent.ToolOutput{
-		Content: agent.TextContent(manager.formatJob(job, options.output, options.includeOutput, options.managed, options.truncated)),
+		Content: agent.TextContent(formatJob(job.id, state, output, options)),
 		Details: []agent.Detail{detail},
 	}, nil
 }
 
-func (manager *ProcessManager) jobOutput(job *processJob, limit int) ([]byte, bool) {
+func (manager *ProcessManager) jobOutput(job *processJob, limit int) processOutput {
 	state := job.snapshot()
 	if state.supervised {
 		return manager.durableJobOutput(job, limit)
 	}
-	stdout, stdoutTruncated := job.log.snapshot(limit)
+	stdout := job.log.snapshot(limit)
 	if job.errLog == nil {
-		return stdout, stdoutTruncated
+		return stdout
 	}
-	stderr, stderrTruncated := job.errLog.snapshot(limit)
-	return combineStreams(stdout, stderr, stdoutTruncated, stderrTruncated)
+	return combineStreams(stdout, job.errLog.snapshot(limit))
 }
 
-func combineStreams(stdout, stderr []byte, stdoutTruncated, stderrTruncated bool) ([]byte, bool) {
-	if len(stderr) == 0 {
-		return stdout, stdoutTruncated || stderrTruncated
+func combineStreams(stdout, stderr processOutput) processOutput {
+	stdout.truncated = stdout.truncated || stderr.truncated
+	stdout.readErr = errors.Join(stdout.readErr, stderr.readErr)
+	if len(stderr.data) == 0 {
+		return stdout
 	}
 	var output bytes.Buffer
-	output.Grow(len(stdout) + len(stderr) + 10)
-	output.Write(stdout)
-	if len(stdout) > 0 && stdout[len(stdout)-1] != '\n' {
+	output.Grow(len(stdout.data) + len(stderr.data) + 10)
+	output.Write(stdout.data)
+	if len(stdout.data) > 0 && stdout.data[len(stdout.data)-1] != '\n' {
 		output.WriteByte('\n')
 	}
 	output.WriteString("stderr:\n")
-	output.Write(stderr)
-	return output.Bytes(), stdoutTruncated || stderrTruncated
+	output.Write(stderr.data)
+	stdout.data = output.Bytes()
+	return stdout
 }
 
-func (manager *ProcessManager) formatJob(job *processJob, output []byte, includeOutput, managed, truncated bool) string {
-	state := job.snapshot()
+func formatJob(jobID string, state jobState, output processOutput, options jobResultOptions) string {
 	var text strings.Builder
-	if managed {
-		fmt.Fprintf(&text, "job_id: %s\n", job.id)
+	if options.managed {
+		fmt.Fprintf(&text, "job_id: %s\n", jobID)
 	}
 	fmt.Fprintf(&text, "status: %s\n", state.status)
 	if state.exitCode != nil {
@@ -1141,27 +1155,26 @@ func (manager *ProcessManager) formatJob(job *processJob, output []byte, include
 	if state.managedProcesses > 1 {
 		fmt.Fprintf(&text, "managed_processes: %d\n", state.managedProcesses)
 	}
-	if truncated {
+	if output.truncated {
 		text.WriteString("truncated: true\n")
 	}
 	if state.status == ProcessRunning {
 		if state.detached {
 			text.WriteString("detached: true\n")
 		}
-		text.WriteString("continue: job(action=\"wait\"|\"output\"|\"stop\", job_id=\"" + job.id + "\")\n")
+		text.WriteString("continue: job(action=\"wait\"|\"output\"|\"stop\", job_id=\"" + jobID + "\")\n")
 	}
-	if includeOutput {
+	if options.outputLimit > 0 {
 		text.WriteByte('\n')
-		text.Write(output)
-		if len(output) > 0 && output[len(output)-1] != '\n' {
+		text.Write(output.data)
+		if len(output.data) > 0 && output.data[len(output.data)-1] != '\n' {
 			text.WriteByte('\n')
 		}
 	}
 	return text.String()
 }
 
-func (manager *ProcessManager) processResult(job *processJob, managed bool) agent.ProcessResult {
-	state := job.snapshot()
+func (manager *ProcessManager) processResult(job *processJob, state jobState, managed bool) agent.ProcessResult {
 	result := agent.ProcessResult{
 		Status:           state.status,
 		Scope:            string(state.scope),
@@ -1186,8 +1199,8 @@ func (manager *ProcessManager) processResult(job *processJob, managed bool) agen
 		}
 	}
 	if result.Status != ProcessRunning && result.Status != ProcessCompleted && result.OutputBytes > 0 {
-		tail, _ := manager.jobOutput(job, processFailureTailSize)
-		result.FailureTail = strings.TrimSpace(string(tail))
+		tail := manager.jobOutput(job, processFailureTailSize)
+		result.FailureTail = strings.TrimSpace(string(tail.data))
 	}
 	return result
 }
@@ -1229,7 +1242,7 @@ func (buffer *jobBuffer) Write(data []byte) (int, error) {
 	return original, nil
 }
 
-func (buffer *jobBuffer) snapshot(limit int) ([]byte, bool) {
+func (buffer *jobBuffer) snapshot(limit int) processOutput {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	read := len(buffer.data)
@@ -1248,7 +1261,7 @@ func (buffer *jobBuffer) snapshot(limit int) ([]byte, bool) {
 	if !utf8.Valid(data) {
 		data = []byte(strings.ToValidUTF8(string(data), "�"))
 	}
-	return data, read < len(buffer.data) || buffer.discarded > 0
+	return processOutput{data: data, truncated: read < len(buffer.data) || buffer.discarded > 0}
 }
 
 func (buffer *jobBuffer) stats() (stored, discarded int64) {

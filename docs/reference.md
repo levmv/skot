@@ -515,6 +515,6 @@ publish the breakdown leave it at zero.
 | ---: | --- |
 | `0` | Success. |
 | `1` | Other application or runtime failure. |
-| `2` | Invalid input or configuration, incomplete model result, or fatal tool failure. Read the diagnostic before rerunning. |
+| `2` | Invalid input or configuration, or incomplete model result. Read the diagnostic before rerunning. |
 | `3` | Provider failure. Read the diagnostic to decide whether to retry. |
 | `130` | Interrupted or cancelled. |

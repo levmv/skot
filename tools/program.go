@@ -430,22 +430,22 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 			prepare: func(policy *filesystemPolicy) (string, error) {
 				workdir, display, info, err := policy.workspaceOnly().resolveExistingPath(declaration.Workdir, true)
 				if err != nil {
-					return "", err
+					return "", fmt.Errorf("prepare configured workdir %q: %w", filepath.Clean(declaration.Workdir), err)
 				}
 				if !info.IsDir() {
-					return "", fmt.Errorf("workdir %s is not a directory", display)
+					return "", fmt.Errorf("configured workdir %q is not a directory", display)
 				}
 				return workdir, nil
 			},
 			build: func(policy *filesystemPolicy, workdir string) (*exec.Cmd, error) {
 				if policy.protection.contains(program) {
-					return nil, errors.New("program is protected")
+					return nil, fmt.Errorf("configured program %q is protected", program)
 				}
 				return sandboxedProgramCommand(program, declaration.Command, workdir, policy.processBoundary(manager.currentToolHome()), declaration.Env)
 			},
 		})
 		if err != nil {
-			return agent.ToolOutput{}, fmt.Errorf("%w: %s: %w", agent.ErrToolFatal, declaration.Name, err)
+			return agent.ToolOutput{}, fmt.Errorf("%s: %w", declaration.Name, err)
 		}
 		if background {
 			return manager.result(job, jobResultOptions{managed: true})
@@ -469,8 +469,7 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 				return manager.completedProgramResult(job, declaration.Name)
 			default:
 			}
-			output, truncated := manager.jobOutput(job, defaultCommandPreview)
-			return manager.result(job, jobResultOptions{output: output, includeOutput: true, managed: true, truncated: truncated})
+			return manager.result(job, jobResultOptions{outputLimit: defaultCommandPreview, managed: true})
 		case <-ctx.Done():
 			_, _ = manager.stop(context.Background(), job.id, "tool call cancelled")
 			manager.forget(job)
@@ -481,13 +480,12 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 
 func (manager *ProcessManager) completedProgramResult(job *processJob, name string) (agent.ToolOutput, error) {
 	launchFailure := manager.programLaunchFailure(job)
-	content, truncated := manager.jobOutput(job, maxJobReadBytes)
 	if !job.snapshot().supervised {
 		manager.forget(job)
 	}
-	output, err := manager.result(job, jobResultOptions{output: content, includeOutput: true, truncated: truncated})
+	output, err := manager.result(job, jobResultOptions{outputLimit: maxJobReadBytes})
 	if launchFailure != "" {
-		err = errors.Join(err, fmt.Errorf("%w: %s: %s", agent.ErrToolFatal, name, launchFailure))
+		err = errors.Join(err, fmt.Errorf("%s: %s", name, launchFailure))
 	}
 	return output, err
 }
@@ -500,15 +498,19 @@ func (manager *ProcessManager) programLaunchFailure(job *processJob) string {
 	if state.scope == "" || state.exitCode == nil || *state.exitCode != 126 {
 		return ""
 	}
-	var stderr []byte
+	var stderr processOutput
 	if state.supervised {
-		stderr, _ = readDurableTail(filepath.Join(job.jobDir, jobStderrFile), processFailureTailSize)
+		stderr = readDurableTail(filepath.Join(job.jobDir, jobStderrFile), processFailureTailSize)
+		if stderr.readErr != nil {
+			// The ordinary output read reports this separately from launch errors.
+			return ""
+		}
 	} else if job.errLog != nil {
-		stderr, _ = job.errLog.snapshot(processFailureTailSize)
+		stderr = job.errLog.snapshot(processFailureTailSize)
 	} else {
 		return ""
 	}
-	message := strings.TrimSpace(string(stderr))
+	message := strings.TrimSpace(string(stderr.data))
 	for _, prefix := range []string{
 		"filesystem boundary:", "filesystem boundary exec ",
 		"sandbox-exec:",

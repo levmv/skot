@@ -57,7 +57,7 @@ func benchmarkProcessLifecycle(b *testing.B, supervised bool, command string) {
 				b.Fatal(err)
 			}
 		}
-		_, _ = manager.jobOutput(job, defaultCommandPreview)
+		_ = manager.jobOutput(job, defaultCommandPreview)
 		if supervised {
 			manager.MarkCompletionDelivered(job.id)
 			removed, err := removeSettledJobState(job)

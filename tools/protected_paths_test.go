@@ -2,14 +2,12 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
 )
 
@@ -112,7 +110,7 @@ func TestConfiguredProgramProtectionDoesNotDependOnScope(t *testing.T) {
 	}
 }
 
-func TestConfiguredProgramRetargetedIntoProtectedPathIsFatal(t *testing.T) {
+func TestConfiguredProgramRetargetedIntoProtectedPathIsRejected(t *testing.T) {
 	root, state, private := t.TempDir(), t.TempDir(), t.TempDir()
 	program := filepath.Join(root, "program")
 	privateProgram := filepath.Join(private, "program")
@@ -143,7 +141,7 @@ func TestConfiguredProgramRetargetedIntoProtectedPathIsFatal(t *testing.T) {
 	if err := os.Symlink(privateProgram, program); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := resolved[0].Tool.Run(context.Background(), `{}`); !errors.Is(err, agent.ErrToolFatal) {
+	if _, err := resolved[0].Tool.Run(context.Background(), `{}`); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("retargeted protected program error = %v", err)
 	}
 }

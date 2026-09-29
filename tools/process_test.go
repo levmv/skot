@@ -270,7 +270,7 @@ func TestModelProcessesDoNotShareSupervisorSession(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("supervised process did not finish")
 	}
-	background, _ := manager.jobOutput(job, defaultCommandPreview)
+	background := manager.jobOutput(job, defaultCommandPreview).data
 	assertIsolatedProcessSession(t, string(background), parentSID)
 
 	user, err := manager.RunShell(context.Background(), command)
@@ -384,7 +384,7 @@ func TestBackgroundJobCanBeReadAndStopped(t *testing.T) {
 		job := manager.get(id)
 		deadline := time.Now().Add(3 * time.Second)
 		for {
-			content, _ := manager.jobOutput(job, 32)
+			content := manager.jobOutput(job, 32).data
 			if strings.Contains(string(content), "ready") {
 				break
 			}
@@ -607,7 +607,7 @@ func TestCleanCloseStopsNonDetachedWorkerAndKeepsTerminalState(t *testing.T) {
 	job := first.get(id)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		output, _ := first.jobOutput(job, 32)
+		output := first.jobOutput(job, 32).data
 		if strings.Contains(string(output), "ready") {
 			break
 		}
@@ -781,6 +781,13 @@ func TestWorkerLogCapturesEarlyLaunchFailureAndExplainsAbandonedJob(t *testing.T
 	reason := abandonedReasonWithWorkerLog(jobDir, "worker disappeared without a terminal result")
 	if !strings.Contains(reason, "worker.log: job worker: decode launch specification") {
 		t.Fatalf("abandoned reason = %q", reason)
+	}
+	if err := os.Remove(filepath.Join(jobDir, jobWorkerLogFile)); err != nil {
+		t.Fatal(err)
+	}
+	reason = abandonedReasonWithWorkerLog(jobDir, "worker disappeared without a terminal result")
+	if !strings.Contains(reason, "worker disappeared") || !strings.Contains(reason, "read worker log:") || !strings.Contains(reason, jobWorkerLogFile) {
+		t.Fatalf("missing worker diagnostic was hidden: %q", reason)
 	}
 }
 
@@ -1238,7 +1245,7 @@ func TestAttachSessionKeepsDeliveredOutputForAlreadyLoadedSession(t *testing.T) 
 	if err := manager.AttachSession(sessionID); err != nil {
 		t.Fatal(err)
 	}
-	output, _ := manager.jobOutput(job, 1024)
+	output := manager.jobOutput(job, 1024).data
 	if string(output) != "retained" {
 		t.Fatalf("output after repeated attach = %q", output)
 	}
@@ -1255,29 +1262,29 @@ func TestJobBufferKeepsNewestBytesAcrossWrites(t *testing.T) {
 	if _, err := buffer.Write([]byte("89ab")); err != nil {
 		t.Fatal(err)
 	}
-	data, truncated := buffer.snapshot(32)
+	output := buffer.snapshot(32)
 	stored, discarded := buffer.stats()
-	if string(data) != "456789ab" || !truncated || stored != 8 || discarded != 4 {
-		t.Fatalf("logical tail = %q, truncated=%t, stored=%d, discarded=%d", data, truncated, stored, discarded)
+	if string(output.data) != "456789ab" || !output.truncated || stored != 8 || discarded != 4 {
+		t.Fatalf("logical tail = %q, truncated=%t, stored=%d, discarded=%d", output.data, output.truncated, stored, discarded)
 	}
 
 	if _, err := buffer.Write([]byte("cdefg")); err != nil {
 		t.Fatal(err)
 	}
-	data, truncated = buffer.snapshot(32)
+	output = buffer.snapshot(32)
 	stored, discarded = buffer.stats()
-	if string(data) != "9abcdefg" || !truncated || stored != 8 || discarded != 9 {
-		t.Fatalf("wrapped tail = %q, truncated=%t, stored=%d, discarded=%d", data, truncated, stored, discarded)
+	if string(output.data) != "9abcdefg" || !output.truncated || stored != 8 || discarded != 9 {
+		t.Fatalf("wrapped tail = %q, truncated=%t, stored=%d, discarded=%d", output.data, output.truncated, stored, discarded)
 	}
-	if short, shortTruncated := buffer.snapshot(3); string(short) != "efg" || !shortTruncated {
-		t.Fatalf("short wrapped tail = %q, truncated=%t", short, shortTruncated)
+	if short := buffer.snapshot(3); string(short.data) != "efg" || !short.truncated {
+		t.Fatalf("short wrapped tail = %q, truncated=%t", short.data, short.truncated)
 	}
 
 	if _, err := buffer.Write([]byte("abcdefghijkl")); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := buffer.snapshot(32); string(data) != "efghijkl" {
-		t.Fatalf("oversized write tail = %q", data)
+	if output := buffer.snapshot(32); string(output.data) != "efghijkl" {
+		t.Fatalf("oversized write tail = %q", output.data)
 	}
 }
 
@@ -1336,9 +1343,13 @@ func TestDurableTailCompactionPublishesWholeSnapshots(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range 2_000 {
-			data, _ := readDurableTail(path, 64)
-			if len(data) != 0 && !bytes.Equal(data, bytes.Repeat([]byte{'x'}, len(data))) {
-				invalid <- data
+			output := readDurableTail(path, 64)
+			if output.readErr != nil {
+				t.Errorf("read durable tail: %v", output.readErr)
+				return
+			}
+			if len(output.data) != 0 && !bytes.Equal(output.data, bytes.Repeat([]byte{'x'}, len(output.data))) {
+				invalid <- output.data
 				return
 			}
 		}
@@ -1357,9 +1368,12 @@ func TestDurableTailCompactionPublishesWholeSnapshots(t *testing.T) {
 		t.Fatalf("reader observed partial compaction: %q", data)
 	default:
 	}
-	data, truncated := readDurableTail(path, 64)
-	if len(data) != 64 || truncated || !bytes.Equal(data, bytes.Repeat([]byte{'x'}, 64)) {
-		t.Fatalf("final durable tail = %d bytes, truncated=%t", len(data), truncated)
+	output := readDurableTail(path, 64)
+	if output.readErr != nil {
+		t.Fatal(output.readErr)
+	}
+	if len(output.data) != 64 || output.truncated || !bytes.Equal(output.data, bytes.Repeat([]byte{'x'}, 64)) {
+		t.Fatalf("final durable tail = %d bytes, truncated=%t", len(output.data), output.truncated)
 	}
 }
 
@@ -1379,9 +1393,12 @@ func TestDurableTailCompactionThresholdIsIndependentFromTailLimit(t *testing.T) 
 	if info.Size() != 1024 {
 		t.Fatalf("live file compacted at tail limit: size=%d", info.Size())
 	}
-	live, truncated := readDurableTail(path, 64)
-	if len(live) != 64 || !truncated {
-		t.Fatalf("live tail: bytes=%d truncated=%t", len(live), truncated)
+	live := readDurableTail(path, 64)
+	if live.readErr != nil {
+		t.Fatal(live.readErr)
+	}
+	if len(live.data) != 64 || !live.truncated {
+		t.Fatalf("live tail: bytes=%d truncated=%t", len(live.data), live.truncated)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
@@ -1473,6 +1490,72 @@ func TestSupervisedOutputStorageFailureDoesNotChangePayloadResult(t *testing.T) 
 	}
 	if meta.OutputBytes != 0 || meta.DiscardedBytes < 4096 {
 		t.Fatalf("degraded output accounting = %#v", meta)
+	}
+}
+
+func TestSupervisedOutputReadFailurePreservesResultAndOtherStream(t *testing.T) {
+	for _, test := range []struct {
+		name, file, stream, retained string
+		replaceWithDirectory         bool
+	}{
+		{name: "missing-stdout", file: jobStdoutFile, stream: "stdout", retained: "stderr marker"},
+		{name: "missing-stderr", file: jobStderrFile, stream: "stderr", retained: "stdout marker"},
+		{name: "unreadable-stdout", file: jobStdoutFile, stream: "stdout", retained: "stderr marker", replaceWithDirectory: true},
+		{name: "unreadable-stderr", file: jobStderrFile, stream: "stderr", retained: "stdout marker", replaceWithDirectory: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := processManagerForTest(t)
+			resolved, err := manager.ResolveProgramTools([]ProgramTool{{
+				Name: "writer", Description: "write both streams", Background: BackgroundAlways,
+				Command: []string{"sh", "-c", "printf 'stdout marker\\n'; printf 'stderr marker\\n' >&2"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			started, err := resolved[0].Tool.Run(context.Background(), `{}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := jobIDFromText(t, started.Content.Text())
+			job := manager.get(id)
+			select {
+			case <-job.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("output job did not finish")
+			}
+			logPath := filepath.Join(job.jobDir, test.file)
+			saved := logPath + ".saved"
+			if err := os.Rename(logPath, saved); err != nil {
+				t.Fatal(err)
+			}
+			if test.replaceWithDirectory {
+				if err := os.Mkdir(logPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			output := runProcessResult(t, manager.job, jobArgs{Action: "output", JobID: id})
+			meta := processResultForTest(t, output)
+			if meta.Status != ProcessCompleted || meta.ExitCode == nil || *meta.ExitCode != 0 {
+				t.Fatalf("output read failure changed process result: %#v", meta)
+			}
+			if !strings.Contains(meta.OutputError, "read "+test.stream+" log:") || !strings.Contains(meta.OutputError, test.file) ||
+				!strings.Contains(output.Content.Text(), "output_error: "+meta.OutputError) || !strings.Contains(output.Content.Text(), test.retained) {
+				t.Fatalf("missing output diagnostic or retained stream: %#v / %q", meta, output.Content.Text())
+			}
+			if test.replaceWithDirectory {
+				if err := os.Remove(logPath); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Rename(saved, logPath); err != nil {
+				t.Fatal(err)
+			}
+			output = runProcessResult(t, manager.job, jobArgs{Action: "output", JobID: id})
+			if meta := processResultForTest(t, output); meta.OutputError != "" ||
+				!strings.Contains(output.Content.Text(), "stdout marker") || !strings.Contains(output.Content.Text(), "stderr marker") {
+				t.Fatalf("output did not recover after log restoration: %#v / %q", meta, output.Content.Text())
+			}
+		})
 	}
 }
 

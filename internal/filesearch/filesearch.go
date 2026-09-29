@@ -79,6 +79,14 @@ func (s *Searcher) Root() string {
 	return s.root
 }
 
+// WithExclude returns an independent searcher with the same root and ignore
+// mode and a replacement exclusion predicate, which must be concurrency-safe.
+func (s *Searcher) WithExclude(exclude func(absolutePath string) bool) *Searcher {
+	copy := *s
+	copy.exclude = exclude
+	return &copy
+}
+
 func (s *Searcher) excluded(path string) bool {
 	return s != nil && s.exclude != nil && s.exclude(path)
 }

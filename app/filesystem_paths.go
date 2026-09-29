@@ -192,11 +192,11 @@ func (application *Application) RemoveAddedDirectory(ctx context.Context, path s
 	application.filesystemMu.Lock()
 	defer application.filesystemMu.Unlock()
 
-	resolved, err := workspacetools.ResolvePolicyPath(application.config.root, path)
+	added, protected := application.rememberedPathLists()
+	resolved, err := resolvePathRemoval(application.config.root, path, added, application.config.invocationAddedPaths)
 	if err != nil {
 		return err
 	}
-	added, protected := application.rememberedPathLists()
 	next, removed := removePolicyPath(added, resolved)
 	if !removed {
 		effective, _ := application.FilesystemPaths()
@@ -234,17 +234,30 @@ func (application *Application) UnprotectPath(ctx context.Context, path string) 
 	application.filesystemMu.Lock()
 	defer application.filesystemMu.Unlock()
 
-	resolved, err := workspacetools.ResolvePolicyPath(application.config.root, path)
+	added, protected := application.rememberedPathLists()
+	resolved, err := resolvePathRemoval(application.config.root, path, protected,
+		application.config.invocationProtectedPaths, application.config.settingsProtectedPaths)
 	if err != nil {
 		return err
 	}
-	added, protected := application.rememberedPathLists()
 	next, removed := removePolicyPath(protected, resolved)
 	if !removed {
 		_, effective := application.FilesystemPaths()
 		return refuseRemoval(effective, resolved, "protected path", "-protect-path")
 	}
 	return application.applyWorkspaceFilesystemPaths(ctx, added, next)
+}
+
+// An existing entry identifies the user's selection even when its filesystem
+// path now resolves elsewhere. Only resolve inputs which do not name an entry,
+// preserving relative paths and aliases supplied directly by callers.
+func resolvePathRemoval(root, path string, layers ...[]string) (string, error) {
+	for _, paths := range layers {
+		if slices.Contains(paths, path) {
+			return path, nil
+		}
+	}
+	return workspacetools.ResolvePolicyPath(root, path)
 }
 
 // rememberedPathLists copies the added and protected paths this workspace

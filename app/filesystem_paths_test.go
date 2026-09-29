@@ -151,8 +151,38 @@ func TestProtectedPathAppliesLiveAndUnprotectRestoresAccess(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
 	secret := filepath.Join(root, ".env")
 	writeTestFile(t, secret)
+	writeTestFile(t, filepath.Join(root, "ordinary.txt"))
 	application := openFilesystemPathsTestApplication(t, Config{Home: home, Root: root})
 
+	assertSearchVisibility := func(visible bool) {
+		t.Helper()
+		searched := 0
+		for _, tool := range application.config.tools {
+			var arguments string
+			switch tool.Spec.Name {
+			case "grep":
+				arguments = `{"pattern":"content","path":"."}`
+			case "glob":
+				arguments = `{"pattern":"*","path":"."}`
+			default:
+				continue
+			}
+			output, err := tool.Run(context.Background(), arguments)
+			if err != nil {
+				t.Fatalf("%s: %v", tool.Spec.Name, err)
+			}
+			text := output.Content.Text()
+			if strings.Contains(text, ".env") != visible || !strings.Contains(text, "ordinary.txt") {
+				t.Fatalf("%s with protected file visible=%t returned %q", tool.Spec.Name, visible, text)
+			}
+			searched++
+		}
+		if searched != 2 {
+			t.Fatalf("tested %d search tools, want grep and glob", searched)
+		}
+	}
+
+	assertSearchVisibility(true)
 	if err := readWithFileTool(t, application, secret); err != nil {
 		t.Fatalf("read before protecting = %v", err)
 	}
@@ -162,6 +192,7 @@ func TestProtectedPathAppliesLiveAndUnprotectRestoresAccess(t *testing.T) {
 	if err := readWithFileTool(t, application, secret); err == nil || !strings.Contains(err.Error(), "protected") {
 		t.Fatalf("read after protecting = %v", err)
 	}
+	assertSearchVisibility(false)
 	want := canonicalpath.Resolve(secret)
 	_, protected := application.FilesystemPaths()
 	if len(protected) != 1 || protected[0].Path != want || protected[0].Origin != FilesystemPathRemembered {
@@ -177,6 +208,7 @@ func TestProtectedPathAppliesLiveAndUnprotectRestoresAccess(t *testing.T) {
 	if err := readWithFileTool(t, application, secret); err != nil {
 		t.Fatalf("read after unprotecting = %v", err)
 	}
+	assertSearchVisibility(true)
 	if stored := rememberedFilesystemPaths(t, home, root); len(stored.ProtectedPaths) != 0 {
 		t.Fatalf("stored protected paths after unprotecting = %#v", stored.ProtectedPaths)
 	}
@@ -214,6 +246,67 @@ func TestProtectedPathsFromOtherLayersAreNotWeakenedFromASession(t *testing.T) {
 	}
 	if err := application.ProtectPath(context.Background(), filepath.Dir(root)); err == nil || !strings.Contains(err.Error(), "contains the workspace") {
 		t.Fatalf("protecting the workspace parent = %v", err)
+	}
+}
+
+func TestFilesystemPathRemovalUsesSelectedEntryAfterDirectoryChanges(t *testing.T) {
+	for _, kind := range []string{"added", "protected"} {
+		t.Run(kind, func(t *testing.T) {
+			home, root := t.TempDir(), t.TempDir()
+			parent := root
+			if kind == "added" {
+				parent = t.TempDir()
+			}
+			first, second := filepath.Join(parent, "first"), filepath.Join(parent, "second")
+			for _, directory := range []string{first, second} {
+				if err := os.Mkdir(directory, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			application := openFilesystemPathsTestApplication(t, Config{Home: home, Root: root})
+			add, remove := application.AddDirectory, application.RemoveAddedDirectory
+			if kind == "protected" {
+				add, remove = application.ProtectPath, application.UnprotectPath
+			}
+			for _, directory := range []string{first, second} {
+				if err := add(context.Background(), directory); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entries, protected := application.FilesystemPaths()
+			if kind == "protected" {
+				entries = protected
+			}
+			if len(entries) != 2 {
+				t.Fatalf("filesystem paths before removal = %#v", entries)
+			}
+			selected, retained := entries[0], entries[1]
+			if err := os.Rename(selected.Path, selected.Path+"-previous"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(retained.Path, selected.Path); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := remove(context.Background(), selected.Path); err != nil {
+				t.Fatal(err)
+			}
+			entries, protected = application.FilesystemPaths()
+			if kind == "protected" {
+				entries = protected
+			}
+			if !slices.Equal(entries, []FilesystemPath{retained}) {
+				t.Fatalf("filesystem paths after removal = %#v; want %#v", entries, retained)
+			}
+			settings := rememberedFilesystemPaths(t, home, root)
+			stored := settings.AddedPaths
+			if kind == "protected" {
+				stored = settings.ProtectedPaths
+			}
+			if !slices.Equal(stored, []string{retained.Path}) {
+				t.Fatalf("remembered paths after removal = %#v; want %q", stored, retained.Path)
+			}
+		})
 	}
 }
 

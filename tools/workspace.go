@@ -106,7 +106,7 @@ func newWorkspaceWithAccess(access *FilesystemAccess) (*workspace, error) {
 	if policy == nil {
 		return nil, errors.New("filesystem access is uninitialized")
 	}
-	searcher, err := filesearch.New(policy.workspace, filesearch.Options{Exclude: policy.protection.Protects})
+	searcher, err := filesearch.New(policy.workspace, filesearch.Options{})
 	if err != nil {
 		return nil, err
 	}

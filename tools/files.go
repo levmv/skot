@@ -305,8 +305,11 @@ func (workspace *workspace) planSearch(policy *filesystemPolicy, path string, di
 			}
 			queryPath = filepath.ToSlash(relative)
 		}
+		// Keep the call's policy snapshot for the entire traversal, just as for
+		// searches outside the workspace below.
 		return searchPlan{
-			searcher: workspace.searcher, queryPath: queryPath,
+			searcher:       workspace.searcher.WithExclude(policy.protection.Protects),
+			queryPath:      queryPath,
 			absoluteOutput: absoluteOutput,
 		}, nil
 	}

@@ -220,25 +220,14 @@ func NewProcessManagerWithAccess(access *FilesystemAccess, stateHome, toolHomeRo
 	if access == nil {
 		return nil, errors.New("filesystem access is nil")
 	}
-	policy := access.current.Load()
-	if policy == nil {
+	if access.current.Load() == nil {
 		return nil, errors.New("filesystem access is uninitialized")
 	}
 	stateHome = canonicalpath.Resolve(stateHome)
 	jobHome := filepath.Join(stateHome, "jobs")
-	toolHomeRoot = strings.TrimSpace(toolHomeRoot)
-	toolHome := ""
-	if toolHomeRoot != "" {
-		toolHomeRoot = canonicalpath.Resolve(toolHomeRoot)
-		toolHome = canonicalpath.Resolve(WorkspaceToolHome(toolHomeRoot, policy.workspace))
-		if err := policy.processBoundary(toolHome).ValidateLayout(); err != nil {
-			return nil, err
-		}
-	}
 	return &ProcessManager{
 		access:         access,
-		toolHome:       toolHome,
-		toolHomeRoot:   toolHomeRoot,
+		toolHomeRoot:   strings.TrimSpace(toolHomeRoot),
 		jobHome:        jobHome,
 		logLimit:       defaultCommandLogLimit,
 		bashYield:      defaultBashYield,
@@ -249,9 +238,9 @@ func NewProcessManagerWithAccess(access *FilesystemAccess, stateHome, toolHomeRo
 	}, nil
 }
 
-// ToolHome resolves the disposable workspace home without creating it. An
-// empty toolHomeRoot passed to the constructor selects the platform cache root
-// only when a process capability actually needs the path.
+// ToolHome resolves the disposable workspace home on first use and validates
+// it on every call without creating it. An empty toolHomeRoot passed to the
+// constructor selects the platform cache root.
 func (manager *ProcessManager) ToolHome() (string, error) {
 	policy := manager.access.snapshot()
 	return manager.resolveToolHome(policy)
@@ -268,10 +257,14 @@ func (manager *ProcessManager) resolveToolHome(policy *filesystemPolicy) (string
 			if err != nil {
 				return "", err
 			}
-			root = canonicalpath.Resolve(root)
-			manager.toolHomeRoot = root
 		}
-		manager.toolHome = canonicalpath.Resolve(WorkspaceToolHome(root, policy.workspace))
+		root = canonicalpath.Resolve(root)
+		// Keep the workspace entry itself: resolving it would turn a symlink
+		// into a different directory with a sandbox write grant.
+		manager.toolHome = WorkspaceToolHome(root, policy.workspace)
+	}
+	if err := privatefs.InspectDirectory(manager.toolHome, fmt.Sprintf("tool home %q", manager.toolHome)); err != nil {
+		return "", err
 	}
 	if err := policy.processBoundary(manager.toolHome).ValidateLayout(); err != nil {
 		return "", err

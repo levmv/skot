@@ -138,22 +138,100 @@ func TestBashReportsExitAndUsesIsolatedEnvironment(t *testing.T) {
 
 func TestProcessManagerCreatesPrivateToolTemp(t *testing.T) {
 	manager := processManagerForTest(t)
-	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
+	toolHome, err := manager.ToolHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(toolHome); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("tool home was not lazy: %v", err)
 	}
 	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(toolHome); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("scope switch created tool home: %v", err)
 	}
 	runProcessResult(t, manager.bash, bashArgs{Command: "true"})
-	info, err := os.Stat(WorkspaceToolTemp(manager.toolHome))
+	info, err := os.Stat(WorkspaceToolTemp(toolHome))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info.IsDir() || info.Mode().Perm() != 0o700 {
 		t.Fatalf("tool temp mode = %v", info.Mode())
+	}
+}
+
+func TestProcessManagerRejectsSymlinkedToolHome(t *testing.T) {
+	for _, mode := range []string{"explicit cache", "default cache"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			cacheRoot, err := DefaultToolHomeRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(cacheRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			workspace := canonicalpath.Resolve(t.TempDir())
+			toolHome := WorkspaceToolHome(cacheRoot, workspace)
+			if err := os.Symlink(t.TempDir(), toolHome); err != nil {
+				t.Fatal(err)
+			}
+			rootArgument := cacheRoot
+			if mode == "default cache" {
+				rootArgument = ""
+			}
+			manager, err := NewProcessManager(workspace, t.TempDir(), rootArgument, ScopeWorkspace)
+			if err != nil {
+				t.Fatalf("unused tool home blocked process manager: %v", err)
+			}
+			t.Cleanup(func() { _ = manager.Close() })
+			if _, err := manager.ToolHome(); err == nil || !strings.Contains(err.Error(), "tool home") {
+				t.Fatalf("symlinked tool home accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestProcessManagerRechecksToolHomeBeforeUse(t *testing.T) {
+	manager := processManagerForTest(t)
+	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
+		t.Fatal(err)
+	}
+	toolHome, err := manager.ToolHome()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(toolHome), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), toolHome); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ToolHome(); err == nil || !strings.Contains(err.Error(), "tool home") {
+		t.Fatalf("replaced tool home accepted: %v", err)
+	}
+	if _, err := manager.bash(context.Background(), `{"command":"true"}`); err == nil || !strings.Contains(err.Error(), "tool home") {
+		t.Fatalf("launch with replaced tool home accepted: %v", err)
+	}
+}
+
+func TestProcessManagerAllowsLinkedCacheRoot(t *testing.T) {
+	workspace, cacheRoot := t.TempDir(), t.TempDir()
+	linkedRoot := filepath.Join(t.TempDir(), "cache")
+	if err := os.Symlink(cacheRoot, linkedRoot); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewProcessManager(workspace, t.TempDir(), linkedRoot, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	toolHome, err := manager.ToolHome()
+	want := WorkspaceToolHome(canonicalpath.Resolve(cacheRoot), canonicalpath.Resolve(workspace))
+	if err != nil || toolHome != want {
+		t.Fatalf("tool home = %q, %v; want %q", toolHome, err, want)
 	}
 }
 
@@ -180,13 +258,14 @@ func TestUserShellDoesNotPrepareModelToolHome(t *testing.T) {
 	if err := setScopeAfter(manager, ScopeWorkspace, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(manager.toolHome); err != nil {
+	toolHome, err := manager.ToolHome()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.RunShell(context.Background(), "true"); err != nil {
 		t.Fatalf("ambient user shell depends on model tool home: %v", err)
 	}
-	if _, err := os.Stat(manager.toolHome); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(toolHome); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("user shell recreated model tool home: %v", err)
 	}
 }

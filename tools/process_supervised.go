@@ -260,7 +260,7 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		_ = closeControl()
 		return cleanup(fmt.Errorf("encode worker launch: %w", err))
 	}
-	executable, err := os.Executable()
+	executable, err := workerExecutable()
 	if err != nil {
 		_ = closeControl()
 		return cleanup(fmt.Errorf("resolve worker executable: %w", err))

@@ -37,6 +37,12 @@ func runSandboxChildIfRequested() bool {
 
 func sandboxBackend() string { return "landlock" }
 
+func workerExecutable() (string, error) {
+	// Reuse the running image even when an update replaces its installed path.
+	// The worker runs before the payload's filesystem boundary is installed.
+	return "/proc/self/exe", nil
+}
+
 func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
 	if err := validateScope(boundary.Scope); err != nil {
 		return nil, err

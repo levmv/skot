@@ -18,6 +18,8 @@ func runSandboxChildIfRequested() bool { return false }
 
 func sandboxBackend() string { return "seatbelt" }
 
+func workerExecutable() (string, error) { return os.Executable() }
+
 func sandboxedBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
 	return sandboxedProgramCommand("/bin/bash", []string{"/bin/bash", "-lc", command}, workdir, boundary, nil)
 }

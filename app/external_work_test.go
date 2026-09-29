@@ -42,8 +42,13 @@ func TestCommittedProcessToolResultSuppressesDuplicateCompletion(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if events := manager.PendingCompletionEvents("session-test"); len(events) != 1 {
+	events := work.PendingEvents("session-test")
+	if len(events) != 1 || len(events[0].Details) != 1 {
 		t.Fatalf("running tool result suppressed completion: %#v", events)
+	}
+	completed, ok := agent.ProcessResultFromDetail(events[0].Details[0])
+	if !ok || completed.Command != "sleep 0.05; printf done" || completed.JobID != running.JobID {
+		t.Fatalf("completion lost process identity: %#v, %v", completed, ok)
 	}
 	read, err := tools[1].Run(ctx, fmt.Sprintf(`{"action":"output","job_id":%q}`, running.JobID))
 	if err != nil {

@@ -108,7 +108,7 @@ func TestProgramToolGetsObjectOnStdinKeepsStderrSeparateAndAppliesEnvironmentOve
 		t.Fatalf("program inherited hidden Skot environment: %q", output.Content.Text())
 	}
 	result := processResultForTest(t, output)
-	if result.Status != ProcessFailed || result.ExitCode == nil || *result.ExitCode != 4 || result.JobID != "" || result.OutputBytes == 0 {
+	if result.Command != "probe" || result.Status != ProcessFailed || result.ExitCode == nil || *result.ExitCode != 4 || result.JobID != "" || result.OutputBytes == 0 {
 		t.Fatalf("result = %#v", result)
 	}
 }

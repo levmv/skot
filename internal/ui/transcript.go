@@ -24,11 +24,12 @@ const (
 )
 
 type screenBlock struct {
-	kind      screenBlockKind
-	text      string
-	attemptID string
-	duration  time.Duration
-	tool      *toolBlock
+	kind       screenBlockKind
+	text       string
+	attemptID  string
+	duration   time.Duration
+	tool       *toolBlock
+	completion *processResultMeta
 }
 
 type toolBlock struct {
@@ -106,7 +107,7 @@ func (m *screenModel) loadSessionHistory() error {
 			m.addBlock(screenBlockUser, item.Text)
 		case agent.ItemBoundaryText:
 			if strings.TrimSpace(item.Text) != "" {
-				m.addBlock(screenBlockSystem, item.Text)
+				m.addBoundaryEvent(item.Text, item.Details)
 			}
 		case agent.ItemAssistantText:
 			if strings.TrimSpace(item.Text) != "" {
@@ -248,11 +249,18 @@ func (transcript *transcriptState) markBlockDirty(index int) {
 }
 
 func (m *screenModel) addToolCall(call agent.ToolCall) {
-	m.transcript.addToolCallAt(call, time.Time{})
+	m.addToolCallAt(call, time.Time{})
 }
 
 func (m *screenModel) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
 	m.transcript.addToolCallAt(call, startedAt)
+	var args jobDisplayArgs
+	if call.Name != "job" || !decodeToolDisplayArgs(call.RawArguments, &args) || args.JobID == "" {
+		return
+	}
+	if command := m.resolveJobCommand(args.JobID); command != "" {
+		m.transcript.blocks[len(m.transcript.blocks)-1].text = describeJobCall(args, command)
+	}
 }
 
 func (transcript *transcriptState) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
@@ -333,6 +341,10 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 				tool.output = processOutputFromContent(result.Content.Text())
 				tool.elapsed = time.Duration(process.DurationMillis) * time.Millisecond
 				tool.failed = process.Status != agent.ProcessCompleted && process.Status != agent.ProcessRunning
+				var args jobDisplayArgs
+				if tool.name == "job" && process.Command != "" && decodeToolDisplayArgs(tool.rawArguments, &args) {
+					block.text = describeJobCall(args, process.Command)
+				}
 			}
 		}
 		if failed && !recognizedDetail && strings.TrimSpace(result.Content.Text()) != "" {
@@ -511,6 +523,9 @@ func (transcript *transcriptState) presented() {
 func (m screenModel) renderBlockLines(block screenBlock) []string {
 	switch block.kind {
 	case screenBlockSystem:
+		if block.completion != nil && m.displayProfile != DisplayFull {
+			return m.renderProcessCompletion(*block.completion)
+		}
 		return m.padded(m.wrappedMarked(" ", m.renderSystemText(block.text)))
 	case screenBlockScopeChange:
 		return m.padded(m.wrappedMarked(" ", m.renderScopeChangeText(block.text)))

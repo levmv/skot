@@ -272,6 +272,10 @@ func (reducer *stateReducer) applyBoundaryEvent(record Record) error {
 	}
 	payload.JobID = strings.TrimSpace(payload.JobID)
 	payload.Content = strings.TrimSpace(payload.Content)
+	payload.Details, err = normalizeDetails(payload.Details)
+	if err != nil {
+		return fmt.Errorf("invalid boundary event details at sequence %d: %w", record.Sequence, err)
+	}
 	_, active := reducer.active[payload.RunID]
 	if !active || payload.JobID == "" || payload.Content == "" {
 		return fmt.Errorf("invalid boundary event at sequence %d", record.Sequence)
@@ -284,9 +288,9 @@ func (reducer *stateReducer) applyBoundaryEvent(record Record) error {
 	if !exists {
 		return fmt.Errorf("boundary event has no user block at sequence %d", record.Sequence)
 	}
-	item := Item{Kind: ItemBoundaryText, Text: payload.Content}
+	item := Item{Kind: ItemBoundaryText, Text: payload.Content, Details: payload.Details}
 	state.Items = append(state.Items, item)
-	state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: item})
+	state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: cloneItem(item)})
 	state.Blocks[blockIndex].EndSequence = record.Sequence
 	state.DeliveredJobs[payload.JobID] = struct{}{}
 	state.DetachedJobs = removeJobID(state.DetachedJobs, payload.JobID)

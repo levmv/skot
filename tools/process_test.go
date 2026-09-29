@@ -569,9 +569,19 @@ func TestSupervisedCompletionAndDeliverySurviveManagerRestart(t *testing.T) {
 	if len(events) != 1 || events[0].JobID != id {
 		t.Fatalf("restored completion events = %#v", events)
 	}
+	if len(events[0].Details) != 1 {
+		t.Fatalf("restored completion details = %#v", events[0].Details)
+	}
+	completed, ok := agent.ProcessResultFromDetail(events[0].Details[0])
+	if !ok || completed.Command != "printf durable" || completed.JobID != id || completed.Status != ProcessCompleted {
+		t.Fatalf("restored completion process = %#v, %v", completed, ok)
+	}
 	output := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "output", JobID: id})
 	if !strings.Contains(output.Content.Text(), "durable") {
 		t.Fatalf("restored output = %q", output.Content.Text())
+	}
+	if result := processResultForTest(t, output); result.Command != "printf durable" {
+		t.Fatalf("restored process lost its command: %#v", result)
 	}
 	second.MarkCompletionDelivered(id)
 	if err := second.Close(); err != nil {
@@ -818,6 +828,9 @@ func TestSupervisedWorkerWritesItsFailureToJobLocalLog(t *testing.T) {
 	status, ok := manager.Status(job.id)
 	if !ok || status.Status != ProcessNotStarted {
 		t.Fatalf("launch failure status = %#v, %t", status, ok)
+	}
+	if status.Command != "missing-program" || !strings.Contains(status.Error, "start process:") {
+		t.Fatalf("launch failure lost its command or diagnostic: %#v", status)
 	}
 	diagnostic, err := os.ReadFile(filepath.Join(job.jobDir, jobWorkerLogFile))
 	if err != nil {

@@ -119,7 +119,7 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 
 func (runtime *Runtime) executeUserShell(ctx context.Context, callID, command string) (ToolResult, error) {
 	output, err := runtime.userShell(ctx, command)
-	details, detailErr := runtime.sanitizeToolDetails(output.Details)
+	details, detailErr := runtime.sanitizeOutputDetails(output.Details)
 	if detailErr != nil {
 		err = errors.Join(err, fmt.Errorf("invalid shell output: %w", detailErr))
 		details = nil

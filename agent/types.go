@@ -31,6 +31,8 @@ type Item struct {
 	Text         string         `json:"text,omitempty"`
 	ToolCall     *ToolCall      `json:"tool_call,omitzero"`
 	ToolResult   *ToolResult    `json:"tool_result,omitzero"`
+	// Details describe product-owned boundary events and stay out of model input.
+	Details []Detail `json:"details,omitempty"`
 }
 
 type ProviderContext struct {
@@ -114,6 +116,7 @@ type BoundaryEvent struct {
 	JobID      string
 	FinishedAt time.Time
 	Content    string
+	Details    []Detail
 }
 
 // ExternalWork connects asynchronous work to journaled model
@@ -256,6 +259,7 @@ type Event struct {
 	Text      string
 	Call      *ToolCall
 	Result    *ToolResult
+	Details   []Detail
 	Status    RunStatus
 	// ToolLimitReached reports that the run hit its model-to-tool iteration
 	// fuse. A completed run may still carry this diagnostic marker.
@@ -553,6 +557,7 @@ type BoundaryEventRecord struct {
 	JobID      string    `json:"job_id"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
 	Content    string    `json:"content"`
+	Details    []Detail  `json:"details,omitempty"`
 }
 
 type RunFinishedRecord struct {

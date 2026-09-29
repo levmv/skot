@@ -1100,7 +1100,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 		},
 		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			last := request.Items[len(request.Items)-1]
-			if last.ToolResult == nil || !last.ToolResult.Error || len(last.ToolResult.Details) != 0 || !strings.Contains(last.ToolResult.Content.Text(), "tool details exceed size limit") {
+			if last.ToolResult == nil || !last.ToolResult.Error || len(last.ToolResult.Details) != 0 || !strings.Contains(last.ToolResult.Content.Text(), "details exceed size limit") {
 				t.Fatalf("tool result after oversized redaction = %#v", last)
 			}
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "handled"}}}, nil

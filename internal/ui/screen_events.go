@@ -92,7 +92,10 @@ func (m *screenModel) applyAgentEvent(event agent.Event) {
 	case agent.EventQueuedInputDelivered:
 		m.finishModelRetryNotice()
 		m.addBlock(screenBlockUser, event.Text)
-	case agent.EventBoundaryDelivered, agent.EventContextCompacted, agent.EventToolResultsPruned:
+	case agent.EventBoundaryDelivered:
+		m.finishModelRetryNotice()
+		m.addBoundaryEvent(event.Text, event.Details)
+	case agent.EventContextCompacted, agent.EventToolResultsPruned:
 		m.finishModelRetryNotice()
 		m.addBlock(screenBlockSystem, event.Text)
 	case agent.EventStatus:

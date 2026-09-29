@@ -14,6 +14,20 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	completionAvailable := false
 	delivered := false
 	toolResultCommitted := false
+	detail, err := NewDetail(ProcessResultDetailKind, ProcessResult{JobID: "job-test", Command: "echo secret-value", Status: ProcessCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDetails := func(details []Detail) {
+		t.Helper()
+		if len(details) != 1 {
+			t.Fatalf("completion details = %#v", details)
+		}
+		process, ok := ProcessResultFromDetail(details[0])
+		if !ok || process.JobID != "job-test" || process.Command != "echo [REDACTED]" {
+			t.Fatalf("completion process = %#v, %v", process, ok)
+		}
+	}
 	var sourceSession string
 	var secondRequest ModelRequest
 	model := &scriptedModel{steps: []modelStep{
@@ -39,6 +53,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, Tools: []Tool{tool},
+		Sanitize: func(text string) string { return strings.ReplaceAll(text, "secret-value", "[REDACTED]") },
 		ExternalWork: externalWorkFuncs{pending: func(sessionID string) []BoundaryEvent {
 			sourceSession = sessionID
 			if !completionAvailable || delivered {
@@ -47,6 +62,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 			return []BoundaryEvent{{
 				JobID: "job-test", FinishedAt: finishedAt,
 				Content: "Background job job-test completed: status=completed, exit_code=0.",
+				Details: []Detail{detail},
 			}}
 		}, committed: func(jobID string) {
 			if jobID != "job-test" {
@@ -77,6 +93,9 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	for index, item := range secondRequest.Items {
 		if item.Kind == ItemBoundaryText {
 			boundaryIndex = index
+			if len(item.Details) != 0 {
+				t.Fatalf("presentation details reached the model: %#v", item.Details)
+			}
 			if !strings.Contains(item.Text, "job-test completed") {
 				t.Fatalf("boundary content = %q", item.Text)
 			}
@@ -97,6 +116,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	if payload.JobID != "job-test" || !payload.FinishedAt.Equal(finishedAt) || payload.RunID == "" {
 		t.Fatalf("boundary record = %#v", payload)
 	}
+	assertDetails(payload.Details)
 	state, err := Replay(records)
 	if err != nil {
 		t.Fatal(err)
@@ -117,9 +137,16 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	if len(state.Items) < 1 || state.Items[len(state.Items)-2].Kind != ItemBoundaryText {
 		t.Fatalf("replayed items = %#v", state.Items)
 	}
+	assertDetails(state.Items[len(state.Items)-2].Details)
+	state.Items[len(state.Items)-2].Details[0].Data[0] = '!'
+	verbatim := state.VerbatimItems()
+	assertDetails(verbatim[len(verbatim)-2].Details)
 	boundarySeen := false
 	for _, event := range events {
 		boundarySeen = boundarySeen || event.Kind == EventBoundaryDelivered && event.Sequence != 0 && strings.Contains(event.Text, "job-test completed")
+		if event.Kind == EventBoundaryDelivered {
+			assertDetails(event.Details)
+		}
 	}
 	if !boundarySeen {
 		t.Fatalf("live events = %#v", events)
@@ -130,6 +157,9 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		found := false
 		for _, item := range request.Items {
 			found = found || item.Kind == ItemBoundaryText && strings.Contains(item.Text, "job-test completed")
+			if len(item.Details) != 0 {
+				t.Fatalf("replayed presentation details reached the model: %#v", item.Details)
+			}
 		}
 		if !found {
 			t.Fatalf("replayed request lost boundary event: %#v", request.Items)

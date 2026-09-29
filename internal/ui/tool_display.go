@@ -17,6 +17,14 @@ type compactToolCall struct {
 	GroupItem string
 }
 
+type jobDisplayArgs struct {
+	Action         string `json:"action"`
+	JobID          string `json:"job_id"`
+	TimeoutSeconds int    `json:"timeout"`
+}
+
+const jobCommandPreviewLimit = 36
+
 func splitToolDisplay(text string) (name, arguments string) {
 	if index := strings.IndexAny(text, " \t"); index >= 0 {
 		return text[:index], text[index:]
@@ -124,22 +132,11 @@ func describeToolCall(name, rawArguments, root string) compactToolCall {
 		}
 		return compactToolCall{Text: text}
 	case "job":
-		var args struct {
-			Action         string `json:"action"`
-			JobID          string `json:"job_id"`
-			TimeoutSeconds int    `json:"timeout"`
-		}
+		var args jobDisplayArgs
 		if !decodeToolDisplayArgs(rawArguments, &args) {
 			return fallback
 		}
-		text := "job  " + compactSingleLine(args.Action, 32)
-		if strings.TrimSpace(args.JobID) != "" {
-			text += " " + compactSingleLine(args.JobID, 80)
-		}
-		if args.TimeoutSeconds > 0 {
-			text += fmt.Sprintf(" · timeout %ds", args.TimeoutSeconds)
-		}
-		return compactToolCall{Text: strings.TrimSpace(text)}
+		return compactToolCall{Text: describeJobCall(args, "")}
 	case "agent":
 		var args struct {
 			Action string   `json:"action"`
@@ -187,6 +184,19 @@ func describeToolCall(name, rawArguments, root string) compactToolCall {
 	default:
 		return fallback
 	}
+}
+
+func describeJobCall(args jobDisplayArgs, command string) string {
+	text := "job  " + compactSingleLine(args.Action, 32)
+	if strings.TrimSpace(command) != "" {
+		text += " · " + compactCommand(command, jobCommandPreviewLimit)
+	} else if strings.TrimSpace(args.JobID) != "" {
+		text += " " + compactSingleLine(args.JobID, 80)
+	}
+	if args.TimeoutSeconds > 0 {
+		text += fmt.Sprintf(" · timeout %ds", args.TimeoutSeconds)
+	}
+	return strings.TrimSpace(text)
 }
 
 func decodeToolDisplayArgs(raw string, target any) bool {

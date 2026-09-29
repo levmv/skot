@@ -375,7 +375,7 @@ func (runtime *Runtime) ToolStatus(id string) ([]Detail, bool) {
 	if !ok {
 		return nil, false
 	}
-	normalized, err := runtime.sanitizeToolDetails(details)
+	normalized, err := runtime.sanitizeOutputDetails(details)
 	if err != nil {
 		return nil, false
 	}
@@ -465,7 +465,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (r
 		}
 		boundary, boundaryErr := runtime.deliverBoundaryEvents(ctx, live, runID, live.state.SessionID)
 		for _, event := range boundary {
-			emitEvent(emit, Event{Sequence: event.Sequence, Kind: EventBoundaryDelivered, RunID: runID, Text: event.Content})
+			emitEvent(emit, Event{Sequence: event.Sequence, Kind: EventBoundaryDelivered, RunID: runID, Text: event.Content, Details: cloneDetails(event.Details)})
 		}
 		if boundaryErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, boundaryErr)
@@ -703,11 +703,17 @@ func (runtime *Runtime) deliverBoundaryEvents(ctx context.Context, reducer *stat
 			runtime.externalWork.EventCommitted(event.JobID)
 			continue
 		}
+		details, err := runtime.sanitizeOutputDetails(event.Details)
+		if err != nil {
+			return delivered, fmt.Errorf("invalid boundary event details: %w", err)
+		}
+		event.Details = details
 		record, err := appendRecordAndApply(ctx, runtime.journal, reducer, RecordBoundaryEvent, BoundaryEventRecord{
 			RunID:      runID,
 			JobID:      event.JobID,
 			FinishedAt: event.FinishedAt,
 			Content:    event.Content,
+			Details:    event.Details,
 		})
 		if err != nil {
 			return delivered, err
@@ -1082,10 +1088,9 @@ func projectOwnedModelItems(items []Item, providerContext ProviderContext) []Ite
 			}
 			item.ToolCall.ProviderReferences = references
 		}
+		// Model backends receive semantic content without presentation metadata.
+		item.Details = nil
 		if item.ToolResult != nil {
-			// Details are journaled product metadata for UI/JSON renderers. Model
-			// backends receive only semantic tool content and cannot accidentally
-			// couple prompts to presentation-specific payloads.
 			item.ToolResult.Details = nil
 		}
 		projected = append(projected, item)
@@ -1184,7 +1189,7 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 	if ctx.Err() != nil {
 		return ToolResult{}, true
 	}
-	details, detailErr := runtime.sanitizeToolDetails(output.Details)
+	details, detailErr := runtime.sanitizeOutputDetails(output.Details)
 	if detailErr != nil {
 		err = errors.Join(err, fmt.Errorf("invalid tool output: %w", detailErr))
 		details = nil
@@ -1275,6 +1280,7 @@ func (runtime *Runtime) sanitizeItems(items []Item) []Item {
 	sanitized := cloneItems(items)
 	for index := range sanitized {
 		sanitized[index].Text = runtime.sanitize(sanitized[index].Text)
+		sanitized[index].Details = runtime.sanitizeDetails(sanitized[index].Details)
 		// ProviderData is signed/encrypted opaque state. Mutating bytes would
 		// corrupt it, so cloning is the only sanitization operation applied.
 		if sanitized[index].ToolCall != nil {
@@ -1317,9 +1323,9 @@ func (runtime *Runtime) sanitizeDetails(details []Detail) []Detail {
 	return sanitized
 }
 
-// sanitizeToolDetails validates both sides of redaction. Replacing a short
+// sanitizeOutputDetails validates both sides of redaction. Replacing a short
 // secret can expand otherwise valid JSON beyond the durable details limit.
-func (runtime *Runtime) sanitizeToolDetails(details []Detail) ([]Detail, error) {
+func (runtime *Runtime) sanitizeOutputDetails(details []Detail) ([]Detail, error) {
 	normalized, err := normalizeDetails(details)
 	if err != nil {
 		return nil, err
@@ -1374,6 +1380,9 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 	for _, item := range response.Items {
 		item = cloneItem(item)
 		item.ResponseID = responseID
+		if len(item.Details) != 0 {
+			return ModelResponse{}, fmt.Errorf("%s item has product-owned details", item.Kind)
+		}
 		switch item.Kind {
 		case ItemAssistantText:
 			if len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
@@ -1426,6 +1435,9 @@ func acceptResponse(response ModelResponse, providerContext ProviderContext) (Mo
 }
 
 func normalizeAcceptedItem(item Item) (Item, error) {
+	if len(item.Details) != 0 {
+		return Item{}, fmt.Errorf("%s item has product-owned details", item.Kind)
+	}
 	switch item.Kind {
 	case ItemAssistantText:
 		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
@@ -1513,8 +1525,12 @@ func cloneItemForProjection(item Item, includeDetails bool) Item {
 	item.ProviderData = cloneProviderData(item.ProviderData)
 	item.ToolCall = cloneToolCallPointer(item.ToolCall)
 	if includeDetails {
+		item.Details = cloneDetails(item.Details)
 		item.ToolResult = cloneToolResult(item.ToolResult)
-	} else if item.ToolResult != nil {
+		return item
+	}
+	item.Details = nil
+	if item.ToolResult != nil {
 		result := *item.ToolResult
 		result.Content = cloneContentForProjection(item.ToolResult.Content)
 		result.Details = nil

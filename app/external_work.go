@@ -70,14 +70,7 @@ func (work processExternalWork) Status(id string) ([]agent.Detail, bool) {
 }
 
 func (work processExternalWork) PendingEvents(sessionID string) []agent.BoundaryEvent {
-	completions := work.processes.PendingCompletionEvents(sessionID)
-	events := make([]agent.BoundaryEvent, 0, len(completions))
-	for _, completion := range completions {
-		events = append(events, agent.BoundaryEvent{
-			JobID: completion.JobID, FinishedAt: completion.FinishedAt, Content: completion.Content,
-		})
-	}
-	return events
+	return work.processes.PendingCompletionEvents(sessionID)
 }
 
 func (work processExternalWork) EventCommitted(jobID string) {

@@ -23,7 +23,7 @@ func TestNormalizeDetailsRejectsInvalidAndOversizedData(t *testing.T) {
 	if _, err := normalizeDetails([]Detail{{Kind: "broken", Data: jsontext.Value(`{`)}}); err == nil {
 		t.Fatal("invalid JSON was accepted")
 	}
-	oversized := jsontext.Value(`"` + strings.Repeat("x", maxToolDetailsBytes) + `"`)
+	oversized := jsontext.Value(`"` + strings.Repeat("x", maxDetailsBytes) + `"`)
 	if _, err := normalizeDetails([]Detail{{Kind: "large", Data: oversized}}); err == nil {
 		t.Fatal("oversized detail was accepted")
 	}
@@ -58,10 +58,11 @@ func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 					Details: []Detail{{Kind: "inspection", Data: jsontext.Value(`{"value":1}`)}},
 				},
 			}},
+			{Item: Item{Kind: ItemBoundaryText, Text: "job completed", Details: []Detail{{Kind: "inspection", Data: jsontext.Value(`{"value":2}`)}}}},
 		}},
 	}}
 	items := state.verbatimModelItems()
-	if len(items) != 1 || items[0].ToolResult == nil || len(items[0].ToolResult.Details) != 0 {
+	if len(items) != 2 || items[0].ToolResult == nil || len(items[0].ToolResult.Details) != 0 || len(items[1].Details) != 0 {
 		t.Fatalf("model items = %#v", items)
 	}
 	items[0].ToolResult.Content = TextContent("mutated")
@@ -69,8 +70,12 @@ func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 		t.Fatal("model projection aliases replay state")
 	}
 	productItems := state.VerbatimItems()
-	if len(productItems[0].ToolResult.Details) != 1 {
+	if len(productItems[0].ToolResult.Details) != 1 || len(productItems[1].Details) != 1 {
 		t.Fatalf("product details were discarded: %#v", productItems)
+	}
+	productItems[1].Details[0].Data[9] = '3'
+	if string(state.Blocks[0].Entries[1].Item.Details[0].Data) != `{"value":2}` {
+		t.Fatal("product projection aliases boundary details")
 	}
 }
 

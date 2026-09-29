@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const maxToolDetailsBytes = 256 * 1024
+const maxDetailsBytes = 256 * 1024
 
 const (
 	FileChangeDetailKind    = "file_change"
@@ -53,7 +53,9 @@ type FileDiffLine struct {
 
 type ProcessResult struct {
 	JobID            string `json:"job_id,omitempty"`
+	Command          string `json:"command,omitempty"`
 	Status           string `json:"status"`
+	Error            string `json:"error,omitempty"`
 	Scope            string `json:"scope,omitempty"`
 	ExitCode         *int   `json:"exit_code,omitzero"`
 	DurationMillis   int64  `json:"duration_ms"`
@@ -66,7 +68,7 @@ type ProcessResult struct {
 	Detached         bool   `json:"detached,omitzero"`
 }
 
-// NewDetail encodes one durable, kind-discriminated tool-result payload.
+// NewDetail encodes one durable, kind-discriminated presentation payload.
 func NewDetail(kind string, value any) (Detail, error) {
 	kind = strings.TrimSpace(kind)
 	if kind == "" {
@@ -118,8 +120,8 @@ func normalizeDetails(details []Detail) ([]Detail, error) {
 			return nil, fmt.Errorf("detail %d (%s) is not valid JSON", index, detail.Kind)
 		}
 		total += len(detail.Kind) + len(detail.Data)
-		if total > maxToolDetailsBytes {
-			return nil, errors.New("tool details exceed size limit")
+		if total > maxDetailsBytes {
+			return nil, errors.New("details exceed size limit")
 		}
 		normalized[index] = Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
 	}

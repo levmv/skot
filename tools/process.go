@@ -56,12 +56,6 @@ const (
 	processOriginUser
 )
 
-type CompletionEvent struct {
-	JobID      string
-	FinishedAt time.Time
-	Content    string
-}
-
 type ProcessManager struct {
 	access                 *FilesystemAccess
 	toolHome               string
@@ -728,10 +722,10 @@ func (manager *ProcessManager) StatusDetails(jobID string) ([]agent.Detail, bool
 // PendingCompletionEvents reports jobs already registered with the manager.
 // Application lifecycle code attaches a durable session before exposing its
 // runtime; callers adopting jobs directly must call AttachSession first.
-func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []CompletionEvent {
+func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []agent.BoundaryEvent {
 	sessionID = strings.TrimSpace(sessionID)
 	jobs := manager.sessionJobs(sessionID)
-	var events []CompletionEvent
+	var events []agent.BoundaryEvent
 	for _, job := range jobs {
 		state := job.snapshot()
 		if state.supervised {
@@ -741,7 +735,8 @@ func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []Compl
 		if state.status == ProcessRunning || state.completionSeen {
 			continue
 		}
-		content := fmt.Sprintf("Background job %s completed: status=%s", job.id, state.status)
+		result := manager.processResult(job, state, true)
+		content := fmt.Sprintf("Background job %s (%q) completed: status=%s", job.id, result.Command, state.status)
 		if state.exitCode != nil {
 			content += fmt.Sprintf(", exit_code=%d", *state.exitCode)
 		}
@@ -752,7 +747,12 @@ func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []Compl
 			content += ", output_error=" + state.outputError
 		}
 		content += ". Inspect output with job(action=\"output\", job_id=\"" + job.id + "\")."
-		events = append(events, CompletionEvent{JobID: job.id, FinishedAt: state.finishedAt, Content: content})
+		event := agent.BoundaryEvent{JobID: job.id, FinishedAt: state.finishedAt, Content: content}
+		// Preserve the text notice even if its presentation details cannot be encoded.
+		if detail, err := agent.NewDetail(agent.ProcessResultDetailKind, result); err == nil {
+			event.Details = []agent.Detail{detail}
+		}
+		events = append(events, event)
 	}
 	return events
 }
@@ -1176,7 +1176,9 @@ func formatJob(jobID string, state jobState, output processOutput, options jobRe
 
 func (manager *ProcessManager) processResult(job *processJob, state jobState, managed bool) agent.ProcessResult {
 	result := agent.ProcessResult{
+		Command:          summarizeCommand(job.command),
 		Status:           state.status,
+		Error:            state.errText,
 		Scope:            string(state.scope),
 		ExitCode:         state.exitCode,
 		DurationMillis:   jobDuration(state.startedAt, state.finishedAt).Milliseconds(),

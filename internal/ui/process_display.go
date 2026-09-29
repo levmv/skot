@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,7 +20,14 @@ const (
 func (m screenModel) renderProcessResultLines(block screenBlock) []string {
 	tool := block.tool
 	result := *tool.process
-	lines := m.renderToolSummaryLines(m.toolMarker(tool.failed), block.text, processStatusText(result))
+	status := processStatusText(result)
+	if m.displayProfile == DisplayFull && result.JobID != "" {
+		if status != "" {
+			status += " · "
+		}
+		status += result.JobID
+	}
+	lines := m.renderToolSummaryLines(m.toolMarker(tool.failed), block.text, status)
 	output := tool.output
 	userOwned := tool.shell != nil || result.UserInitiated
 	_, _, outputIndent, _ := toolCommandPrefix(block.text)
@@ -108,9 +116,6 @@ func processStatusText(result processResultMeta) string {
 	}
 	if result.Status == agent.ProcessRunning {
 		parts = append(parts, "running")
-		if result.JobID != "" {
-			parts = append(parts, result.JobID)
-		}
 		return strings.Join(parts, " · ")
 	}
 	switch result.Status {
@@ -142,6 +147,79 @@ func processStatusText(result processResultMeta) string {
 		parts = append(parts, fmt.Sprintf("%s discarded", formatByteCount(result.DiscardedBytes)))
 	}
 	return strings.Join(parts, " · ")
+}
+
+func (m screenModel) resolveJobCommand(jobID string) string {
+	if command := m.transcript.jobCommand(jobID); command != "" {
+		return command
+	}
+	details, ok := m.agent.ToolStatus(jobID)
+	if !ok {
+		return ""
+	}
+	for _, detail := range details {
+		if process, ok := agent.ProcessResultFromDetail(detail); ok && process.JobID == jobID {
+			return process.Command
+		}
+	}
+	return ""
+}
+
+func (transcript transcriptState) jobCommand(jobID string) string {
+	for _, block := range slices.Backward(transcript.blocks) {
+		if block.completion != nil && block.completion.JobID == jobID && block.completion.Command != "" {
+			return block.completion.Command
+		}
+		tool := block.tool
+		if tool == nil || tool.process == nil || tool.process.JobID != jobID {
+			continue
+		}
+		if tool.process.Command != "" {
+			return tool.process.Command
+		}
+		// Older results have no command metadata. Recover it from their launch.
+		if tool.name == "bash" {
+			var args struct {
+				Command string `json:"command"`
+			}
+			if decodeToolDisplayArgs(tool.rawArguments, &args) && args.Command != "" {
+				return args.Command
+			}
+		} else if tool.name != "job" && tool.name != "" {
+			return tool.name
+		}
+	}
+	return ""
+}
+
+func (m *screenModel) addBoundaryEvent(text string, details []agent.Detail) {
+	block := screenBlock{kind: screenBlockSystem, text: sanitizeTerminalText(text)}
+	for _, detail := range details {
+		if process, ok := agent.ProcessResultFromDetail(detail); ok {
+			block.completion = &process
+			break
+		}
+	}
+	m.appendBlock(block)
+}
+
+func (m screenModel) renderProcessCompletion(result processResultMeta) []string {
+	command := compactCommand(result.Command, jobCommandPreviewLimit)
+	if command == "" {
+		command = compactSingleLine(result.JobID, 80)
+	}
+	status := processStatusText(result)
+	if result.Status == agent.ProcessCompleted {
+		status = strings.TrimSuffix("completed · "+status, " · ")
+	}
+	failed := result.Status != agent.ProcessCompleted && result.Status != agent.ProcessRunning
+	lines := m.renderToolSummaryLines(m.toolMarker(failed), "job  "+command, status)
+	for _, diagnostic := range []string{result.Error, result.OutputError} {
+		if diagnostic != "" {
+			lines = append(lines, m.renderFullProcessOutput(diagnostic, processOutputIndentWidth)...)
+		}
+	}
+	return m.padded(lines)
 }
 
 func (m *screenModel) refreshProcessResults() bool {
@@ -235,6 +313,9 @@ func (transcript transcriptState) blockAboveViewport(index, viewportTop int, vie
 
 func (transcript transcriptState) processCompletionRepresented(jobID string) bool {
 	for _, block := range transcript.blocks {
+		if block.completion != nil && block.completion.JobID == jobID {
+			return true
+		}
 		if block.tool != nil && block.tool.process != nil && block.tool.process.JobID == jobID && block.tool.process.Status != agent.ProcessRunning {
 			return true
 		}

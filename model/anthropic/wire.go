@@ -77,13 +77,15 @@ type streamEvent struct {
 	Message      *streamMessage     `json:"message,omitzero"`
 	ContentBlock streamContentBlock `json:"content_block"`
 	Delta        streamDelta        `json:"delta"`
-	Usage        wireUsage          `json:"usage"`
+	Usage        jsontext.Value     `json:"usage"`
 	Error        *apiError          `json:"error,omitzero"`
 }
 
 type streamMessage struct {
-	StopReason *string   `json:"stop_reason,omitzero"`
-	Usage      wireUsage `json:"usage"`
+	ID         string         `json:"id"`
+	Model      string         `json:"model"`
+	StopReason *string        `json:"stop_reason,omitzero"`
+	Usage      jsontext.Value `json:"usage"`
 }
 
 type streamContentBlock struct {
@@ -104,40 +106,6 @@ type streamDelta struct {
 	Signature   string `json:"signature,omitempty"`
 	PartialJSON string `json:"partial_json,omitempty"`
 	StopReason  string `json:"stop_reason,omitempty"`
-}
-
-type wireUsage struct {
-	InputTokens              *int `json:"input_tokens,omitzero"`
-	OutputTokens             *int `json:"output_tokens,omitzero"`
-	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitzero"`
-	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitzero"`
-}
-
-type usageAccumulator struct {
-	input, output, cacheRead, cacheCreation int
-}
-
-func (usage *usageAccumulator) merge(value wireUsage) {
-	if value.InputTokens != nil {
-		usage.input = *value.InputTokens
-	}
-	if value.OutputTokens != nil {
-		usage.output = *value.OutputTokens
-	}
-	if value.CacheReadInputTokens != nil {
-		usage.cacheRead = *value.CacheReadInputTokens
-	}
-	if value.CacheCreationInputTokens != nil {
-		usage.cacheCreation = *value.CacheCreationInputTokens
-	}
-}
-
-func (usage usageAccumulator) modelUsage() agent.ModelUsage {
-	input := usage.input + usage.cacheRead + usage.cacheCreation
-	return agent.ModelUsage{
-		InputTokens: input, CachedInputTokens: usage.cacheRead,
-		OutputTokens: usage.output, TotalTokens: input + usage.output,
-	}
 }
 
 type streamBlock struct {

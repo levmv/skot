@@ -42,12 +42,14 @@ type State struct {
 	ToolPruning      *ToolResultsPrunedRecord
 	ToolPruningCount int
 	ImageDelivery    ImageDeliveryObservedRecord
-	Usage            ModelUsage
-	ActiveRuns       []string
-	PendingTools     []PendingTool
-	DeliveredJobs    map[string]struct{}
-	DetachedJobs     []string
-	LastSequence     uint64
+	// Usage sums accepted model responses and committed compactions.
+	// Use Runtime.Usage or ReplayUsage for accounting across every attempt.
+	Usage         ModelUsage
+	ActiveRuns    []string
+	PendingTools  []PendingTool
+	DeliveredJobs map[string]struct{}
+	DetachedJobs  []string
+	LastSequence  uint64
 	// lastRequiredSequence advances only for records which participate in the
 	// semantic session projection. Auxiliary diagnostics leave it unchanged.
 	lastRequiredSequence uint64

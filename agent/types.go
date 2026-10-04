@@ -177,6 +177,10 @@ type ModelResponse struct {
 	Items      []Item
 	Usage      ModelUsage
 	StopReason string
+	// UsageDetails remains meaningful even when Complete returns an error.
+	UsageDetails ModelUsageDetails
+	// attemptID correlates the accepted response with runtime accounting.
+	attemptID string
 }
 
 const StopReasonOutputLimit = "output_limit"
@@ -186,22 +190,25 @@ type ModelUsage struct {
 	// CachedInputTokens is the cached subset of InputTokens, not additional
 	// input.
 	CachedInputTokens int `json:"cached_input_tokens,omitzero"`
-	OutputTokens      int `json:"output_tokens,omitzero"`
+	// CacheWriteInputTokens is another subset of InputTokens.
+	CacheWriteInputTokens int `json:"cache_write_input_tokens,omitzero"`
+	OutputTokens          int `json:"output_tokens,omitzero"`
 	// ReasoningTokens is the reported reasoning subset of OutputTokens, not an
 	// additional token count.
 	ReasoningTokens int `json:"reasoning_tokens,omitzero"`
-	// TotalTokens counts InputTokens plus OutputTokens. Adapters must preserve
-	// that invariant when mapping provider usage.
+	// TotalTokens counts InputTokens plus OutputTokens when both are known.
+	// Partial usage can lack a total; inspect ModelUsageDetails for presence.
 	TotalTokens int `json:"total_tokens,omitzero"`
 }
 
 func (usage ModelUsage) Add(other ModelUsage) ModelUsage {
 	return ModelUsage{
-		InputTokens:       usage.InputTokens + other.InputTokens,
-		CachedInputTokens: usage.CachedInputTokens + other.CachedInputTokens,
-		OutputTokens:      usage.OutputTokens + other.OutputTokens,
-		ReasoningTokens:   usage.ReasoningTokens + other.ReasoningTokens,
-		TotalTokens:       usage.TotalTokens + other.TotalTokens,
+		InputTokens:           usage.InputTokens + other.InputTokens,
+		CachedInputTokens:     usage.CachedInputTokens + other.CachedInputTokens,
+		CacheWriteInputTokens: usage.CacheWriteInputTokens + other.CacheWriteInputTokens,
+		OutputTokens:          usage.OutputTokens + other.OutputTokens,
+		ReasoningTokens:       usage.ReasoningTokens + other.ReasoningTokens,
+		TotalTokens:           usage.TotalTokens + other.TotalTokens,
 	}
 }
 
@@ -356,7 +363,9 @@ const (
 
 	// RecordModelAttemptFailed is observational: it preserves diagnostics for
 	// one failed provider call without affecting the replayed session state.
-	RecordModelAttemptFailed RecordKind = "aux/model_attempt_failed"
+	RecordModelAttemptFailed   RecordKind = "aux/model_attempt_failed"
+	RecordModelAttemptStarted  RecordKind = "aux/model_attempt_started"
+	RecordModelAttemptFinished RecordKind = "aux/model_attempt_finished"
 )
 
 type Record struct {
@@ -378,10 +387,11 @@ const (
 	ModelRequestCompaction ModelRequestPurpose = "compaction"
 )
 
-// ModelAttemptFailedRecord preserves one failed provider call, including calls
-// recovered by a later retry. ProviderError is absent for failures without
-// structured provider metadata.
-type ModelAttemptFailedRecord struct {
+// ModelAttemptRecord describes a provider call. Attempts with the same RequestID
+// are retries of one logical request; AttemptID identifies each individual call.
+// Usage is independent of the outcome: a failed call can have final usage.
+type ModelAttemptRecord struct {
+	AttemptID      string                     `json:"attempt_id,omitempty"`
 	RequestID      string                     `json:"request_id"`
 	RunID          string                     `json:"run_id,omitempty"`
 	Purpose        ModelRequestPurpose        `json:"purpose"`
@@ -390,10 +400,15 @@ type ModelAttemptFailedRecord struct {
 	Provider       string                     `json:"provider,omitempty"`
 	Model          string                     `json:"model"`
 	ProviderEpoch  string                     `json:"provider_epoch,omitempty"`
-	Error          string                     `json:"error"`
+	Error          string                     `json:"error,omitempty"`
 	ErrorTruncated bool                       `json:"error_truncated,omitzero"`
 	ProviderError  *ModelAttemptProviderError `json:"provider_error,omitzero"`
+	Outcome        ModelAttemptOutcome        `json:"outcome,omitempty"`
+	Usage          ModelUsageDetails          `json:"usage,omitzero"`
 }
+
+// ModelAttemptFailedRecord is the payload of a failed-attempt diagnostic record.
+type ModelAttemptFailedRecord = ModelAttemptRecord
 
 type ModelAttemptProviderError struct {
 	StatusCode int               `json:"status_code,omitzero"`
@@ -522,6 +537,8 @@ type RunInputAddedRecord struct {
 }
 
 type ModelResponseRecord struct {
+	// Optional correlation for accounting; semantic replay never depends on it.
+	AttemptID  string     `json:"attempt_id,omitempty"`
 	RunID      string     `json:"run_id"`
 	Backend    string     `json:"backend"`
 	Model      string     `json:"model"`
@@ -572,6 +589,7 @@ type RunFinishedRecord struct {
 }
 
 type ContextCompactedRecord struct {
+	AttemptID              string     `json:"attempt_id,omitempty"`
 	CoveredThroughSequence uint64     `json:"covered_through_sequence"`
 	FirstVerbatimSequence  uint64     `json:"first_verbatim_sequence"`
 	Summary                string     `json:"summary"`

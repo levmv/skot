@@ -105,11 +105,11 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		t.Fatalf("second request items = %#v", secondRequest.Items)
 	}
 	records := journal.snapshot()
-	assertRecordKinds(t, records,
+	assertSemanticRecordKinds(t, records,
 		RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded,
 		RecordModelResponse, RecordToolResult, RecordBoundaryEvent, RecordModelResponse, RecordRunFinished,
 	)
-	payload, err := records[7].decode[BoundaryEventRecord]()
+	payload, err := firstRecordOfKind(t, records, RecordBoundaryEvent).decode[BoundaryEventRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestRuntimeWaitsForRequiredJobsBeforeAcceptingFinalResponse(t *testing.T) {
 	if result.Answer != "final answer" || waits != 2 || !delivered {
 		t.Fatalf("result/waits/delivered = %#v/%d/%v", result, waits, delivered)
 	}
-	assertRecordKinds(t, journal.snapshot(),
+	assertSemanticRecordKinds(t, journal.snapshot(),
 		RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded,
 		RecordModelResponse, RecordBoundaryEvent, RecordModelResponse, RecordRunFinished,
 	)

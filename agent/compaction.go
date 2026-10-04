@@ -105,7 +105,7 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, spec run
 	if strings.TrimSpace(summary) == "" {
 		return ContextCompactedRecord{}, Record{}, errors.New("compaction model returned an empty summary")
 	}
-	return commitCompaction(ctx, runtime.journal, plan, summary, response.Usage)
+	return commitCompaction(ctx, runtime.journal, plan, summary, response.Usage, response.attemptID)
 }
 
 // compactionRequest preserves the ordinary request prefix through the selected
@@ -280,7 +280,7 @@ func (runtime *Runtime) projectedTailTokens(state State, spec runRequestSpec, fi
 
 // commitCompaction appends a rolling summary only if the journal still has the
 // exact state for which the plan was constructed.
-func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan, summary string, usage ModelUsage) (ContextCompactedRecord, Record, error) {
+func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan, summary string, usage ModelUsage, attemptID string) (ContextCompactedRecord, Record, error) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return ContextCompactedRecord{}, Record{}, errors.New("compaction summary is empty")
@@ -300,6 +300,7 @@ func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan,
 		return ContextCompactedRecord{}, Record{}, errors.New("session changed while compaction summary was being prepared")
 	}
 	payload := ContextCompactedRecord{
+		AttemptID:              attemptID,
 		CoveredThroughSequence: plan.CoveredThroughSequence,
 		FirstVerbatimSequence:  plan.FirstVerbatimSequence,
 		Summary:                summary,

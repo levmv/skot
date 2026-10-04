@@ -314,6 +314,17 @@ func (application *Application) State(ctx context.Context) (agent.State, error) 
 	return runtime.State(ctx)
 }
 
+// Usage returns this session's model consumption, including failed attempts and
+// compaction. Pass zero for all history or a previous report's LastSequence.
+// See [agent.Runtime.Usage] for polling and cancellation behavior.
+func (application *Application) Usage(ctx context.Context, afterSequence uint64) (agent.UsageReport, error) {
+	runtime, err := application.requireRuntime()
+	if err != nil {
+		return agent.UsageReport{}, err
+	}
+	return runtime.Usage(ctx, afterSequence)
+}
+
 func (application *Application) QueueInput(input string) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {

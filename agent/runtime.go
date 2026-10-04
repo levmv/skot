@@ -656,6 +656,7 @@ func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *state
 		}
 	}
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordModelResponse, ModelResponseRecord{
+		AttemptID:  response.attemptID,
 		RunID:      runID,
 		Backend:    live.state.Selection.Backend,
 		Model:      live.state.Selection.Model,
@@ -849,44 +850,50 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 	defer cancel()
 	request.StreamIdleTimeout = runtime.requestPolicy.StreamIdleTimeout
 	var lastErr error
-	requestID := ""
+	requestID, err := newID("request")
+	if err != nil {
+		return ModelResponse{}, err
+	}
 	for attempt := 1; runtime.attemptAllowed(attempt); attempt++ {
-		attemptID := ""
-		if emit != nil {
-			var err error
-			attemptID, err = newID("attempt")
-			if err != nil {
-				return ModelResponse{}, err
+		if err := requestCtx.Err(); err != nil {
+			if ctx.Err() == nil {
+				err = MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
 			}
-			emitEvent(emit, Event{Kind: EventModelAttemptStarted, RunID: runID, AttemptID: attemptID})
+			return ModelResponse{}, err
 		}
-		response, err := runtime.backend.Complete(requestCtx, request, func(event ModelStreamEvent) {
-			switch event.Kind {
-			case EventTextDelta, EventReasoningSummaryDelta:
-				emitEvent(emit, Event{Kind: event.Kind, RunID: runID, AttemptID: attemptID, Text: runtime.sanitize(event.Text)})
-			}
-		})
-		if err == nil {
-			return runtime.sanitizeModelResponse(response), nil
+		attemptID, err := newID("attempt")
+		if err != nil {
+			return ModelResponse{}, err
+		}
+		payload := runtime.modelAttemptRecord(requestID, attemptID, runID, request.ProviderEpoch, attempt)
+		if _, err := appendRecord(requestCtx, runtime.journal, RecordModelAttemptStarted, payload); err != nil {
+			return ModelResponse{}, err
+		}
+		emitEvent(emit, Event{Kind: EventModelAttemptStarted, RunID: runID, AttemptID: attemptID})
+		var response ModelResponse
+		if err = requestCtx.Err(); err == nil {
+			response, err = runtime.backend.Complete(requestCtx, request, func(event ModelStreamEvent) {
+				switch event.Kind {
+				case EventTextDelta, EventReasoningSummaryDelta:
+					emitEvent(emit, Event{Kind: event.Kind, RunID: runID, AttemptID: attemptID, Text: runtime.sanitize(event.Text)})
+				}
+			})
 		}
 		if errors.Is(requestCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 			err = MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
+		} else if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		response.attemptID = attemptID
+		response.UsageDetails = normalizeUsage(response.UsageDetails, response.Usage)
+		response.Usage = response.UsageDetails.Tokens.Known()
+		if journalErr := runtime.finishModelAttempt(context.WithoutCancel(ctx), payload, response.UsageDetails, err); journalErr != nil {
+			return ModelResponse{}, errors.Join(err, journalErr)
+		}
+		if err == nil {
+			return runtime.sanitizeModelResponse(response), nil
 		}
 		lastErr = sanitizeError(err, runtime.sanitize)
-		if ctx.Err() == nil {
-			if requestID == "" {
-				var idErr error
-				requestID, idErr = newID("request")
-				if idErr != nil {
-					return ModelResponse{}, errors.Join(lastErr, idErr)
-				}
-			}
-			if journalErr := runtime.recordModelAttemptFailure(
-				context.WithoutCancel(ctx), requestID, runID, request.ProviderEpoch, attempt, lastErr,
-			); journalErr != nil {
-				return ModelResponse{}, errors.Join(lastErr, journalErr)
-			}
-		}
 		emitEvent(emit, Event{Kind: EventModelAttemptDiscarded, RunID: runID, AttemptID: attemptID, Text: lastErr.Error()})
 		if ctx.Err() != nil || errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrModelRequestTooLarge) ||
 			errors.Is(err, ErrModelRequestBudget) || !runtime.retryable(err) || !runtime.attemptAllowed(attempt+1) {
@@ -909,36 +916,43 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 	return ModelResponse{}, lastErr
 }
 
-func (runtime *Runtime) recordModelAttemptFailure(
-	ctx context.Context,
-	requestID, runID, providerEpoch string,
-	attempt int,
-	cause error,
-) error {
+func (runtime *Runtime) modelAttemptRecord(requestID, attemptID, runID, providerEpoch string, attempt int) ModelAttemptRecord {
 	purpose := ModelRequestRun
 	if runID == "" {
 		purpose = ModelRequestCompaction
 	}
-	errorText, errorTruncated := boundedModelAttemptText(cause.Error(), maxModelAttemptErrorBytes)
 	backend, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.BackendID), maxModelAttemptFieldBytes)
 	provider, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Provider), maxModelAttemptFieldBytes)
 	model, _ := boundedModelAttemptText(runtime.sanitize(runtime.modelInfo.Model), maxModelAttemptFieldBytes)
-	payload := ModelAttemptFailedRecord{
-		RequestID: requestID, RunID: runID, Purpose: purpose, Attempt: attempt,
+	return ModelAttemptRecord{
+		RequestID: requestID, AttemptID: attemptID, RunID: runID, Purpose: purpose, Attempt: attempt,
 		Backend: backend, Provider: provider, Model: model, ProviderEpoch: providerEpoch,
-		Error: errorText, ErrorTruncated: errorTruncated,
+		Outcome: ModelAttemptStarted, Usage: ModelUsageDetails{Status: UsageUnavailable},
+	}
+}
+
+func (runtime *Runtime) finishModelAttempt(ctx context.Context, payload ModelAttemptRecord, usage ModelUsageDetails, cause error) error {
+	payload.Usage = usage
+	payload.Outcome = ModelAttemptCompleted
+	kind := RecordModelAttemptFinished
+	if cause != nil {
+		kind, payload.Outcome = RecordModelAttemptFailed, ModelAttemptFailed
+		if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+			payload.Outcome = ModelAttemptCancelled
+		}
+		payload.Error, payload.ErrorTruncated = boundedModelAttemptText(runtime.sanitize(cause.Error()), maxModelAttemptErrorBytes)
 	}
 	if providerErr, ok := errors.AsType[*ProviderError](cause); ok {
-		kind, _ := boundedModelAttemptText(runtime.sanitize(string(providerErr.Kind)), maxModelAttemptFieldBytes)
+		errorKind, _ := boundedModelAttemptText(runtime.sanitize(string(providerErr.Kind)), maxModelAttemptFieldBytes)
 		code, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Code), maxModelAttemptFieldBytes)
 		errorType, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Type), maxModelAttemptFieldBytes)
 		payload.ProviderError = &ModelAttemptProviderError{
-			StatusCode: providerErr.StatusCode, Kind: ProviderErrorKind(kind),
+			StatusCode: providerErr.StatusCode, Kind: ProviderErrorKind(errorKind),
 			Code: code, Type: errorType, Retryable: providerErr.Retryable,
 			RetryAfter: durationSnapshot(providerErr.RetryAfter),
 		}
 	}
-	_, err := appendRecord(ctx, runtime.journal, RecordModelAttemptFailed, payload)
+	_, err := appendRecord(ctx, runtime.journal, kind, payload)
 	return err
 }
 

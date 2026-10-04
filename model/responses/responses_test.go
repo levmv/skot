@@ -375,7 +375,6 @@ func TestParseResponsePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 					jsontext.Value(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\":\"first\"}"}`),
 					jsontext.Value(`{"type":"function_call","id":"fc_2","call_id":"call_2","name":"read","arguments":"{\"path\":\"unfinished"}`),
 				},
-				Usage: &responseUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
 			})
 			if test.status == "completed" {
 				if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
@@ -387,7 +386,7 @@ func TestParseResponsePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "partial"}}) ||
-				response.StopReason != test.details.Reason || response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
+				response.StopReason != test.details.Reason {
 				t.Fatalf("incomplete response = %#v", response)
 			}
 		})

@@ -99,6 +99,8 @@ func New(config Config) (*Backend, error) {
 }
 
 func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
+	var usage modelhttp.UsageAccumulator
+	defer usage.Attach(&result)
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
@@ -125,6 +127,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, fmt.Errorf("%s chat completion: %w", backend.provider, err)
 	}
 	defer response.Body.Close()
+	usage.SetRequestID(response.Header)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "API", response)
 	}
@@ -133,7 +136,6 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	defer stream.Close()
 	var text, reasoning strings.Builder
 	var calls toolCallAccumulator
-	var usage agent.ModelUsage
 	var stopReason string
 	completionBytes := 0
 	limited := false
@@ -167,11 +169,26 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		if err := json.Unmarshal(payload, &chunk); err != nil {
 			return agent.ModelResponse{}, fmt.Errorf("decode %s stream chunk: %w", backend.provider, err)
 		}
+		if chunk.ID != "" {
+			usage.Details.ResponseID = chunk.ID
+		}
+		if chunk.Model != "" {
+			usage.Details.Model = chunk.Model
+		}
+		if chunk.Provider != "" {
+			usage.Details.Provider = chunk.Provider
+		}
+		finalUsage := len(chunk.Choices) == 0
+		for _, choice := range chunk.Choices {
+			if choice.Index == 0 && choice.FinishReason != "" && choice.FinishReason != "null" {
+				finalUsage = true
+			}
+		}
+		if err := usage.Observe(chunk.Usage, "chat_completions", backend.provider, finalUsage); err != nil {
+			return agent.ModelResponse{}, err
+		}
 		if chunk.Error != nil {
 			return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, chunk.Error)
-		}
-		if chunk.Usage != nil {
-			usage = chunk.Usage.modelUsage()
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 {
@@ -242,7 +259,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if len(items) == 0 && !agent.IsIncompleteStopReason(stopReason) {
 		return agent.ModelResponse{}, errors.New("chat completion returned no output items")
 	}
-	return agent.ModelResponse{Items: items, Usage: usage, StopReason: stopReason}, nil
+	return agent.ModelResponse{Items: items, StopReason: stopReason}, nil
 }
 
 func emitModelEvent(emit func(agent.ModelStreamEvent), kind agent.EventKind, text string) {

@@ -104,6 +104,8 @@ func (backend *Backend) callReferenceKind() string {
 }
 
 func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
+	var usage modelhttp.UsageAccumulator
+	defer usage.Attach(&result)
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
@@ -135,6 +137,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, fmt.Errorf("%s Responses request: %w", backend.provider, err)
 	}
 	defer response.Body.Close()
+	usage.SetRequestID(response.Header)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Responses API", response)
 	}
@@ -159,6 +162,21 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		var event streamEvent
 		if err := json.Unmarshal(payload, &event); err != nil {
 			return agent.ModelResponse{}, fmt.Errorf("decode %s Responses stream event: %w", backend.provider, err)
+		}
+		if event.Response != nil {
+			if event.Response.ID != "" {
+				usage.Details.ResponseID = event.Response.ID
+			}
+			if event.Response.Model != "" {
+				usage.Details.Model = event.Response.Model
+			}
+			if event.Response.Provider != "" {
+				usage.Details.Provider = event.Response.Provider
+			}
+			terminal := event.Type == "response.completed" || event.Type == "response.incomplete" || event.Type == "response.done" || event.Type == "response.failed"
+			if err := usage.Observe(event.Response.Usage, "responses", backend.provider, terminal); err != nil {
+				return agent.ModelResponse{}, err
+			}
 		}
 		switch event.Type {
 		case "response.output_item.done":

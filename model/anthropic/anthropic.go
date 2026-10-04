@@ -126,6 +126,8 @@ func (backend *Backend) backendID() string {
 func BackendID(provider string) string { return "anthropic_messages." + strings.TrimSpace(provider) }
 
 func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
+	var usage modelhttp.UsageAccumulator
+	defer usage.Attach(&result)
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
 		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
@@ -157,6 +159,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages request: %w", backend.provider, err)
 	}
 	defer response.Body.Close()
+	usage.SetRequestID(response.Header)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Anthropic Messages API", response)
 	}
@@ -164,7 +167,6 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
 	defer stream.Close()
 	blocks := make(map[int]*streamBlock)
-	var usage usageAccumulator
 	var stopReason string
 	completionBytes := 0
 	limited := false
@@ -190,10 +192,22 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		if err := json.Unmarshal(payload, &event); err != nil {
 			return agent.ModelResponse{}, fmt.Errorf("decode %s Anthropic Messages stream event: %w", backend.provider, err)
 		}
+		finalUsage := event.Type == "message_delta" && event.Delta.StopReason != ""
+		if err := usage.Observe(event.Usage, "anthropic_messages", backend.provider, finalUsage); err != nil {
+			return agent.ModelResponse{}, err
+		}
 		switch event.Type {
 		case "message_start":
 			if event.Message != nil {
-				usage.merge(event.Message.Usage)
+				if event.Message.ID != "" {
+					usage.Details.ResponseID = event.Message.ID
+				}
+				if event.Message.Model != "" {
+					usage.Details.Model = event.Message.Model
+				}
+				if err := usage.Observe(event.Message.Usage, "anthropic_messages", backend.provider, false); err != nil {
+					return agent.ModelResponse{}, err
+				}
 				if event.Message.StopReason != nil {
 					stopReason = *event.Message.StopReason
 				}
@@ -248,7 +262,6 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			if event.Delta.StopReason != "" {
 				stopReason = event.Delta.StopReason
 			}
-			usage.merge(event.Usage)
 		case "message_stop":
 			terminal = true
 		case "error":
@@ -278,7 +291,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	if len(items) == 0 && !agent.IsIncompleteStopReason(stopReason) {
 		return agent.ModelResponse{}, errors.New("messages response returned no output items")
 	}
-	return agent.ModelResponse{Items: items, Usage: usage.modelUsage(), StopReason: stopReason}, nil
+	return agent.ModelResponse{Items: items, StopReason: stopReason}, nil
 }
 
 // stopReasons is the closed set of Anthropic Messages stop reasons Skot

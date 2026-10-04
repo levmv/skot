@@ -228,13 +228,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 func runOneShot(ctx context.Context, application *app.Application, config cliConfig, prompt string, stdout, stderr io.Writer) error {
 	measureUsage := config.verbose || config.jsonOutput
-	var usageBefore agent.ModelUsage
+	var usageBefore uint64
 	if measureUsage {
 		state, err := application.State(ctx)
 		if err != nil {
 			return fmt.Errorf("read usage before run: %w", err)
 		}
-		usageBefore = state.Usage
+		usageBefore = state.LastSequence
 	}
 	var observer *runEventObserver
 	var emit agent.EmitFunc
@@ -247,14 +247,16 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 	result, runErr := application.Run(ctx, prompt, emit)
 	durationMillis := time.Since(startedAt).Milliseconds()
 	var usage agent.ModelUsage
-	if measureUsage && (runErr == nil || result.RunID != "") {
-		state, err := application.State(context.WithoutCancel(ctx))
+	var accounting *agent.UsageReport
+	if measureUsage {
+		report, err := application.Usage(context.WithoutCancel(ctx), usageBefore)
 		if err != nil {
 			return errors.Join(runErr, fmt.Errorf("read usage after run: %w", err))
 		}
-		usage = subtractUsage(state.Usage, usageBefore)
+		usage = report.Usage
+		accounting = &report
 	}
-	if config.jsonOutput && (runErr == nil || result.RunID != "" || result.Answer != "") {
+	if config.jsonOutput && (runErr == nil || result.RunID != "" || result.Answer != "" || len(accounting.Attempts) != 0) {
 		reasoningEffort := application.CurrentReasoningEffort()
 		if reasoningEffort == "" {
 			reasoningEffort = "default"
@@ -266,6 +268,7 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 			ToolSet:          application.CurrentToolSet(),
 			SystemPromptMode: systemPromptMode(config.systemPrompt, config.systemPromptExplicit),
 			ModelAttempts:    int(observer.modelAttempts.Load()),
+			Accounting:       accounting,
 		}
 		if err := writeJSONResult(stdout, result, usage, application.SessionID(), metadata, runErr); err != nil {
 			return errors.Join(runErr, fmt.Errorf("write JSON result: %w", err))
@@ -275,9 +278,9 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 			return errors.Join(runErr, fmt.Errorf("write answer: %w", err))
 		}
 	}
-	if config.verbose && !config.jsonOutput && runErr == nil {
-		fmt.Fprintf(stderr, "[usage: prompt=%d cached=%d completion=%d reasoning=%d total=%d]\n",
-			usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.TotalTokens)
+	if config.verbose && !config.jsonOutput && accounting != nil {
+		fmt.Fprintf(stderr, "[usage: prompt=%d cached=%d cache_write=%d completion=%d reasoning=%d total=%d complete=%t]\n",
+			usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.TotalTokens, accounting.Complete)
 	}
 	autoRetained := !sessionWasResumable && application.SessionID() != ""
 	if config.saveSession || len(result.DetachedJobs) != 0 || autoRetained {
@@ -303,16 +306,6 @@ func writeResumeHint(output io.Writer, id string) {
 		return
 	}
 	fmt.Fprintf(output, "Resume with: sk resume %s\n", id)
-}
-
-func subtractUsage(total, previous agent.ModelUsage) agent.ModelUsage {
-	return agent.ModelUsage{
-		InputTokens:       max(0, total.InputTokens-previous.InputTokens),
-		CachedInputTokens: max(0, total.CachedInputTokens-previous.CachedInputTokens),
-		OutputTokens:      max(0, total.OutputTokens-previous.OutputTokens),
-		ReasoningTokens:   max(0, total.ReasoningTokens-previous.ReasoningTokens),
-		TotalTokens:       max(0, total.TotalTokens-previous.TotalTokens),
-	}
 }
 
 func parseInvocation(args []string, explicitPrompt bool) cliInvocation {

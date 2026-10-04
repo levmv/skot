@@ -30,7 +30,11 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 	if called != "printf hello" || result.CallID == "" || result.Error {
 		t.Fatalf("called=%q result=%#v", called, result)
 	}
-	assertRecordKinds(t, journal.snapshot(),
+	usage, err := runtime.Usage(t.Context(), 0)
+	if err != nil || !usage.Complete || len(usage.Attempts) != 0 || usage.LegacyResponses != 0 || usage.Usage != (ModelUsage{}) {
+		t.Fatalf("shell command counted as a model request: %#v, %v", usage, err)
+	}
+	assertSemanticRecordKinds(t, journal.snapshot(),
 		RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded,
 		RecordModelResponse, RecordToolResult, RecordRunFinished,
 	)

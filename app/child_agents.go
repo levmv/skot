@@ -650,11 +650,12 @@ func publishNewChild(child *childAgent) error {
 
 func subtractModelUsage(total, previous agent.ModelUsage) agent.ModelUsage {
 	return agent.ModelUsage{
-		InputTokens:       max(0, total.InputTokens-previous.InputTokens),
-		CachedInputTokens: max(0, total.CachedInputTokens-previous.CachedInputTokens),
-		OutputTokens:      max(0, total.OutputTokens-previous.OutputTokens),
-		ReasoningTokens:   max(0, total.ReasoningTokens-previous.ReasoningTokens),
-		TotalTokens:       max(0, total.TotalTokens-previous.TotalTokens),
+		InputTokens:           max(0, total.InputTokens-previous.InputTokens),
+		CachedInputTokens:     max(0, total.CachedInputTokens-previous.CachedInputTokens),
+		CacheWriteInputTokens: max(0, total.CacheWriteInputTokens-previous.CacheWriteInputTokens),
+		OutputTokens:          max(0, total.OutputTokens-previous.OutputTokens),
+		ReasoningTokens:       max(0, total.ReasoningTokens-previous.ReasoningTokens),
+		TotalTokens:           max(0, total.TotalTokens-previous.TotalTokens),
 	}
 }
 

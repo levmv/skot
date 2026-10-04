@@ -84,7 +84,8 @@ func (reducer *stateReducer) applyRecord(record Record) error {
 	default:
 		if isAuxiliaryRecordKind(record.Kind) {
 			// Auxiliary records are semantic leaves: ignoring one may change only
-			// LastSequence, and no required record may reference or depend on it.
+			// LastSequence. Optional correlation IDs never make semantic replay
+			// depend on the presence or contents of an auxiliary record.
 			return nil
 		}
 		return fmt.Errorf("unknown record kind %q at sequence %d", record.Kind, record.Sequence)

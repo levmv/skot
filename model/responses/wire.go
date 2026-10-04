@@ -164,48 +164,18 @@ type responseReasoningInput struct {
 }
 
 type wireResponse struct {
+	Model             string            `json:"model"`
+	Provider          string            `json:"provider"`
 	ID                string            `json:"id"`
 	Status            string            `json:"status"`
 	Output            []jsontext.Value  `json:"output"`
-	Usage             *responseUsage    `json:"usage,omitzero"`
+	Usage             jsontext.Value    `json:"usage,omitzero"`
 	Error             *apiError         `json:"error,omitzero"`
 	IncompleteDetails *incompleteDetail `json:"incomplete_details,omitzero"`
 }
 
 type incompleteDetail struct {
 	Reason string `json:"reason"`
-}
-
-type responseUsage struct {
-	InputTokens        int                 `json:"input_tokens"`
-	InputTokenDetails  *inputTokenDetails  `json:"input_tokens_details,omitzero"`
-	OutputTokens       int                 `json:"output_tokens"`
-	OutputTokenDetails *outputTokenDetails `json:"output_tokens_details,omitzero"`
-	TotalTokens        int                 `json:"total_tokens"`
-}
-
-type inputTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-type outputTokenDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens"`
-}
-
-func (usage responseUsage) modelUsage() agent.ModelUsage {
-	cached := 0
-	if usage.InputTokenDetails != nil {
-		cached = usage.InputTokenDetails.CachedTokens
-	}
-	reasoning := 0
-	if usage.OutputTokenDetails != nil {
-		reasoning = usage.OutputTokenDetails.ReasoningTokens
-	}
-	return agent.ModelUsage{
-		InputTokens: usage.InputTokens, CachedInputTokens: cached,
-		OutputTokens: usage.OutputTokens, ReasoningTokens: reasoning,
-		TotalTokens: usage.TotalTokens,
-	}
 }
 
 type streamEvent struct {
@@ -513,12 +483,8 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 			return agent.ModelResponse{}, fmt.Errorf("%s response contains unsupported output item %q", backend.provider, output.Type)
 		}
 	}
-	usage := agent.ModelUsage{}
-	if response.Usage != nil {
-		usage = response.Usage.modelUsage()
-	}
 	if len(items) == 0 && response.Status != "incomplete" {
 		return agent.ModelResponse{}, fmt.Errorf("%s response returned no output items", backend.provider)
 	}
-	return agent.ModelResponse{Items: items, Usage: usage, StopReason: stopReason}, nil
+	return agent.ModelResponse{Items: items, StopReason: stopReason}, nil
 }

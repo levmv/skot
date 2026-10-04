@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"strings"
 
@@ -14,24 +16,26 @@ const jsonResultVersion = 1
 // product run rather than one provider response: a run may span retries, tool
 // calls, compaction, and multiple model responses.
 type jsonResult struct {
-	Version          int              `json:"version"`
-	Reply            string           `json:"reply"`
-	Usage            agent.ModelUsage `json:"usage"`
-	Status           agent.RunStatus  `json:"status"`
-	DurationMillis   int64            `json:"duration_ms"`
-	Model            string           `json:"model"`
-	ReasoningEffort  string           `json:"reasoning_effort"`
-	ToolSet          string           `json:"tool_set"`
-	SystemPromptMode string           `json:"system_prompt"`
-	ModelAttempts    int              `json:"model_attempts"`
-	RunID            string           `json:"run_id,omitempty"`
-	SessionID        string           `json:"session_id,omitempty"`
-	ToolLimitReached bool             `json:"tool_limit_reached,omitzero"`
-	DetachedJobs     []string         `json:"detached_jobs,omitempty"`
-	Error            string           `json:"error,omitempty"`
+	Version          int                `json:"version"`
+	Reply            string             `json:"reply"`
+	Usage            agent.ModelUsage   `json:"usage"`
+	Accounting       *agent.UsageReport `json:"accounting,omitzero"`
+	Status           agent.RunStatus    `json:"status"`
+	DurationMillis   int64              `json:"duration_ms"`
+	Model            string             `json:"model"`
+	ReasoningEffort  string             `json:"reasoning_effort"`
+	ToolSet          string             `json:"tool_set"`
+	SystemPromptMode string             `json:"system_prompt"`
+	ModelAttempts    int                `json:"model_attempts"`
+	RunID            string             `json:"run_id,omitempty"`
+	SessionID        string             `json:"session_id,omitempty"`
+	ToolLimitReached bool               `json:"tool_limit_reached,omitzero"`
+	DetachedJobs     []string           `json:"detached_jobs,omitempty"`
+	Error            string             `json:"error,omitempty"`
 }
 
 type jsonRunMetadata struct {
+	Accounting       *agent.UsageReport
 	DurationMillis   int64
 	Model            string
 	ReasoningEffort  string
@@ -43,6 +47,7 @@ type jsonRunMetadata struct {
 func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsage, sessionID string, metadata jsonRunMetadata, runErr error) error {
 	result := jsonResult{
 		Version:          jsonResultVersion,
+		Accounting:       metadata.Accounting,
 		Reply:            run.Answer,
 		Usage:            usage,
 		Status:           run.Status,
@@ -58,6 +63,12 @@ func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsa
 		DetachedJobs:     append([]string(nil), run.DetachedJobs...),
 	}
 	if runErr != nil {
+		if result.Status == "" {
+			result.Status = agent.RunFailed
+			if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
+				result.Status = agent.RunCancelled
+			}
+		}
 		// Errors joined outside the runtime can contain raw filesystem bytes.
 		result.Error = strings.ToValidUTF8(runErr.Error(), "�")
 	}

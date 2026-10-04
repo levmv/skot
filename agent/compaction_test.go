@@ -37,7 +37,7 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 	if !itemsContainText(request.Items, "old question") || !itemsContainText(request.Items, "old answer") || itemsContainText(request.Items, "recent question") {
 		t.Fatalf("compaction items = %#v", request.Items)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, plan, "Objective: continue recent work. Old answer was recorded.", ModelUsage{}); err != nil {
+	if _, _, err := commitCompaction(context.Background(), journal, plan, "Objective: continue recent work. Old answer was recorded.", ModelUsage{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	state, err = Replay(journal.snapshot())
@@ -265,8 +265,8 @@ func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T
 					{Kind: ItemAssistantText, Text: "Objective: preserve the recent work."},
 					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}},
 				},
-				Usage:      ModelUsage{InputTokens: 30, OutputTokens: 8, TotalTokens: 38},
-				StopReason: "tool_calls",
+				UsageDetails: finalUsageForTest(30, 8),
+				StopReason:   "tool_calls",
 			}, nil
 		},
 	}}
@@ -278,12 +278,19 @@ func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T
 		t.Fatal(err)
 	}
 
+	records := journal.snapshot()
+	checkpoint := records[len(records)-1].Sequence
 	compaction, err := runtime.Compact(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if compaction.Summary != "Objective: preserve the recent work." || compaction.Usage.TotalTokens != 38 {
 		t.Fatalf("compaction = %#v", compaction)
+	}
+	report, err := runtime.Usage(t.Context(), checkpoint)
+	if err != nil || !report.Complete || len(report.Attempts) != 1 || report.Usage != compaction.Usage || report.LegacyResponses != 0 ||
+		report.Attempts[0].Purpose != ModelRequestCompaction || report.Attempts[0].RunID != "" || report.Attempts[0].AttemptID != compaction.AttemptID {
+		t.Fatalf("compaction usage = %#v, %v", report, err)
 	}
 	state, err := Replay(journal.snapshot())
 	if err != nil {
@@ -298,15 +305,16 @@ func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T
 	}
 }
 
-func TestRuntimeCompactRejectsIncompleteSummaryWithoutJournalRecord(t *testing.T) {
+func TestRuntimeCompactRejectsIncompleteSummary(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
 		func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
 			return ModelResponse{
-				Items:      []Item{{Kind: ItemAssistantText, Text: "truncated summary"}},
-				StopReason: "length",
+				Items:        []Item{{Kind: ItemAssistantText, Text: "truncated summary"}},
+				StopReason:   "length",
+				UsageDetails: finalUsageForTest(30, 8),
 			}, nil
 		},
 	}}
@@ -317,12 +325,17 @@ func TestRuntimeCompactRejectsIncompleteSummaryWithoutJournalRecord(t *testing.T
 	if _, err := runtime.Run(context.Background(), "recent question", nil); err != nil {
 		t.Fatal(err)
 	}
-	recordCount := len(journal.snapshot())
+	records := journal.snapshot()
+	checkpoint := records[len(records)-1].Sequence
 	if _, err := runtime.Compact(context.Background()); err == nil || !strings.Contains(err.Error(), "incomplete summary") {
 		t.Fatalf("compaction error = %v", err)
 	}
-	if records := journal.snapshot(); len(records) != recordCount || countRecordKind(records, RecordContextCompacted) != 0 {
+	if records := journal.snapshot(); countRecordKind(records, RecordContextCompacted) != 0 {
 		t.Fatalf("incomplete summary reached journal: %#v", records)
+	}
+	report, err := runtime.Usage(t.Context(), checkpoint)
+	if err != nil || !report.Complete || report.Usage.TotalTokens != 38 || len(report.Attempts) != 1 || report.Attempts[0].Purpose != ModelRequestCompaction {
+		t.Fatalf("discarded compaction usage = %#v, %v", report, err)
 	}
 }
 
@@ -656,7 +669,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, first, "summary one", ModelUsage{}); err != nil {
+	if _, _, err := commitCompaction(context.Background(), journal, first, "summary one", ModelUsage{}, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -681,7 +694,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	if second.CoveredThroughSequence <= first.CoveredThroughSequence || second.FirstVerbatimSequence <= first.FirstVerbatimSequence {
 		t.Fatalf("boundaries did not advance: first=%#v second=%#v", first, second)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, second, "summary two", ModelUsage{}); err != nil {
+	if _, _, err := commitCompaction(context.Background(), journal, second, "summary two", ModelUsage{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	state, err = Replay(journal.snapshot())
@@ -785,7 +798,7 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	if _, err := runtime.Run(context.Background(), "three", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, plan, "stale summary", ModelUsage{}); err == nil || !strings.Contains(err.Error(), "session changed") {
+	if _, _, err := commitCompaction(context.Background(), journal, plan, "stale summary", ModelUsage{}, ""); err == nil || !strings.Contains(err.Error(), "session changed") {
 		t.Fatalf("stale commit error = %v", err)
 	}
 

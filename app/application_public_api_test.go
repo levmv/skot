@@ -130,6 +130,7 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 	}
 
 	states := make([]agent.State, childCount)
+	usageReports := make([]agent.UsageReport, childCount)
 	sessionIDs := make(map[string]struct{}, childCount)
 	for index, child := range children {
 		state, err := child.State(context.Background())
@@ -137,6 +138,10 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 			t.Fatalf("state child %d: %v", index, err)
 		}
 		states[index] = state
+		usageReports[index], err = child.Usage(t.Context(), 0)
+		if err != nil || !usageReports[index].Complete || len(usageReports[index].Attempts) != 1 || usageReports[index].Usage != state.Usage {
+			t.Fatalf("child %d accounting = %#v, %v", index, usageReports[index], err)
+		}
 		if state.SessionID == "" || len(state.Blocks) != 1 || state.Blocks[0].Status != agent.RunCompleted {
 			t.Fatalf("child %d state = %#v", index, state)
 		}
@@ -191,6 +196,10 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 	}
 
 	for index := 1; index < childCount; index++ {
+		usageReports[index], err = children[index].Usage(t.Context(), 0)
+		if err != nil || len(usageReports[index].Attempts) != 2 || usageReports[index].Complete != (index == 2) {
+			t.Fatalf("child %d accounting after second run = %#v, %v", index, usageReports[index], err)
+		}
 		if err := children[index].Close(); err != nil {
 			t.Fatalf("close child %d: %v", index, err)
 		}
@@ -201,9 +210,19 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 			t.Fatalf("reopen child %d: %v", index, err)
 		}
 		replayed, stateErr := reopened.State(context.Background())
+		replayedUsage, usageErr := reopened.Usage(t.Context(), 0)
 		closeErr := reopened.Close()
 		if stateErr != nil || closeErr != nil {
 			t.Fatalf("replay child %d through Application: %v", index, errors.Join(stateErr, closeErr))
+		}
+		if usageErr != nil || replayedUsage.Usage != usageReports[index].Usage || replayedUsage.Complete != usageReports[index].Complete ||
+			len(replayedUsage.Attempts) != len(usageReports[index].Attempts) {
+			t.Fatalf("replayed child %d accounting = %#v, %v", index, replayedUsage, usageErr)
+		}
+		for attemptIndex, attempt := range replayedUsage.Attempts {
+			if attempt.AttemptID != usageReports[index].Attempts[attemptIndex].AttemptID {
+				t.Fatalf("child %d attempt identity changed after reopening", index)
+			}
 		}
 		wantBlocks := 1
 		if index > 0 {

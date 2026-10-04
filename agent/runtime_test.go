@@ -43,7 +43,7 @@ func TestRuntimeDirectResponse(t *testing.T) {
 	if result.Answer != "hello" || result.Status != RunCompleted || result.RunID == "" {
 		t.Fatalf("result = %#v", result)
 	}
-	assertRecordKinds(t, journal.snapshot(), RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordRunFinished)
+	assertSemanticRecordKinds(t, journal.snapshot(), RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordRunFinished)
 	state, err := Replay(journal.snapshot())
 	if err != nil {
 		t.Fatal(err)
@@ -565,8 +565,8 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 		t.Fatal("tool from an incomplete response was executed")
 	}
 	records := journal.snapshot()
-	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordRunFinished)
-	response, err := records[5].decode[ModelResponseRecord]()
+	assertSemanticRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordRunFinished)
+	response, err := firstRecordOfKind(t, records, RecordModelResponse).decode[ModelResponseRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +608,7 @@ func TestRuntimePersistsEmptyRefusalAsIncomplete(t *testing.T) {
 		t.Fatalf("result/error = %#v / %v", result, err)
 	}
 	records := journal.snapshot()
-	response, err := records[5].decode[ModelResponseRecord]()
+	response, err := firstRecordOfKind(t, records, RecordModelResponse).decode[ModelResponseRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1241,8 +1241,8 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 		t.Fatalf("result=%#v executed=%d", result, executed)
 	}
 	records := journal.snapshot()
-	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordModelResponse, RecordRunFinished)
-	response, err := records[5].decode[ModelResponseRecord]()
+	assertSemanticRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordModelResponse, RecordRunFinished)
+	response, err := firstRecordOfKind(t, records, RecordModelResponse).decode[ModelResponseRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1253,7 +1253,7 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 	if len(call.ProviderReferences) != 1 || call.ProviderReferences[0].Backend != response.Backend || call.ProviderReferences[0].Epoch != response.Epoch {
 		t.Fatalf("provider references = %#v, response = %#v", call.ProviderReferences, response)
 	}
-	toolResult, err := records[6].decode[ToolResultRecord]()
+	toolResult, err := firstRecordOfKind(t, records, RecordToolResult).decode[ToolResultRecord]()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1538,7 +1538,7 @@ func TestRuntimeCancellationIsDurable(t *testing.T) {
 		t.Fatalf("result=%#v err=%v", result, runErr)
 	}
 	records := journal.snapshot()
-	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordRunFinished)
+	assertSemanticRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordSessionConfigured, RecordRunStarted, RecordRunInputAdded, RecordRunFinished)
 	finished, err := records[len(records)-1].decode[RunFinishedRecord]()
 	if err != nil {
 		t.Fatal(err)
@@ -1641,7 +1641,7 @@ func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T)
 		t.Fatalf("run error = %v", runErr)
 	}
 	records := journal.snapshot()
-	assertRecordKinds(t, records,
+	assertSemanticRecordKinds(t, records,
 		RecordSessionStarted, RecordModelSelected, RecordSessionConfigured,
 		RecordRunStarted, RecordRunInputAdded, RecordModelResponse,
 		RecordToolResult, RecordRunFinished,
@@ -1701,7 +1701,7 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordRunFinished)
+	assertSemanticRecordKinds(t, records, RecordSessionStarted, RecordModelSelected, RecordRunStarted, RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordRunFinished)
 	result, err := records[5].decode[ToolResultRecord]()
 	if err != nil {
 		t.Fatal(err)
@@ -1898,8 +1898,15 @@ func mustAppend(t *testing.T, journal Journal, kind RecordKind, payload any) {
 	}
 }
 
-func assertRecordKinds(t *testing.T, records []Record, kinds ...RecordKind) {
+func assertSemanticRecordKinds(t *testing.T, records []Record, kinds ...RecordKind) {
 	t.Helper()
+	var semantic []Record
+	for _, record := range records {
+		if !isAuxiliaryRecordKind(record.Kind) {
+			semantic = append(semantic, record)
+		}
+	}
+	records = semantic
 	if len(records) != len(kinds) {
 		t.Fatalf("record count = %d, want %d: %#v", len(records), len(kinds), records)
 	}
@@ -1908,6 +1915,17 @@ func assertRecordKinds(t *testing.T, records []Record, kinds ...RecordKind) {
 			t.Fatalf("record %d kind = %q, want %q", index, records[index].Kind, kind)
 		}
 	}
+}
+
+func firstRecordOfKind(t *testing.T, records []Record, kind RecordKind) Record {
+	t.Helper()
+	for _, record := range records {
+		if record.Kind == kind {
+			return record
+		}
+	}
+	t.Fatalf("no record of kind %q", kind)
+	return Record{}
 }
 
 func countRecordKind(records []Record, kind RecordKind) int {

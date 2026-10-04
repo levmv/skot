@@ -117,7 +117,7 @@ func TestRunVerbosePrintsRunUsage(t *testing.T) {
 		}
 		// The reasoning share is part of completion, not an extra cost; a route
 		// which reports it must carry it through to the run summary.
-		if !strings.Contains(stderr.String(), "[usage: prompt=12 cached=4 completion=5 reasoning=3 total=17]\n") {
+		if !strings.Contains(stderr.String(), "[usage: prompt=12 cached=4 cache_write=0 completion=5 reasoning=3 total=17 complete=true]\n") {
 			t.Fatalf("%s stderr = %q", prompt, stderr.String())
 		}
 	}
@@ -146,7 +146,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 		t.Fatalf("decode JSON wire object: %v; output=%q", err, stdout.String())
 	}
 	wantKeys := []string{
-		"version", "reply", "usage", "status", "duration_ms", "model",
+		"version", "reply", "usage", "accounting", "status", "duration_ms", "model",
 		"reasoning_effort", "tool_set", "system_prompt", "model_attempts", "run_id", "session_id",
 	}
 	if len(wire) != len(wantKeys) {
@@ -188,6 +188,10 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	if result.Usage.InputTokens != 12 || result.Usage.CachedInputTokens != 4 ||
 		result.Usage.OutputTokens != 5 || result.Usage.ReasoningTokens != 3 || result.Usage.TotalTokens != 17 {
 		t.Fatalf("JSON usage = %#v", result.Usage)
+	}
+	if result.Accounting == nil || !result.Accounting.Complete || result.Accounting.Usage != result.Usage || len(result.Accounting.Attempts) != 1 ||
+		result.Accounting.Attempts[0].RunID != result.RunID || result.Accounting.Attempts[0].Usage.Status != agent.UsageFinal {
+		t.Fatalf("JSON accounting = %#v", result.Accounting)
 	}
 }
 

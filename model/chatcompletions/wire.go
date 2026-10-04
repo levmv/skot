@@ -168,46 +168,12 @@ type wireFunctionCall struct {
 }
 
 type streamChunk struct {
-	Choices []streamChoice `json:"choices"`
-	Usage   *wireUsage     `json:"usage,omitzero"`
-	Error   *apiError      `json:"error,omitzero"`
-}
-
-type wireUsage struct {
-	PromptTokens            int                     `json:"prompt_tokens"`
-	CompletionTokens        int                     `json:"completion_tokens"`
-	TotalTokens             int                     `json:"total_tokens"`
-	PromptCacheHitTokens    *int                    `json:"prompt_cache_hit_tokens,omitzero"`
-	PromptTokensDetails     *promptTokenDetails     `json:"prompt_tokens_details,omitzero"`
-	CompletionTokensDetails *completionTokenDetails `json:"completion_tokens_details,omitzero"`
-}
-
-type promptTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-type completionTokenDetails struct {
-	ReasoningTokens int `json:"reasoning_tokens"`
-}
-
-func (usage wireUsage) modelUsage() agent.ModelUsage {
-	cached := 0
-	if usage.PromptCacheHitTokens != nil {
-		cached = *usage.PromptCacheHitTokens
-	} else if usage.PromptTokensDetails != nil {
-		cached = usage.PromptTokensDetails.CachedTokens
-	}
-	reasoning := 0
-	if usage.CompletionTokensDetails != nil {
-		reasoning = usage.CompletionTokensDetails.ReasoningTokens
-	}
-	return agent.ModelUsage{
-		InputTokens:       usage.PromptTokens,
-		CachedInputTokens: cached,
-		OutputTokens:      usage.CompletionTokens,
-		ReasoningTokens:   reasoning,
-		TotalTokens:       usage.TotalTokens,
-	}
+	ID       string         `json:"id"`
+	Model    string         `json:"model"`
+	Provider string         `json:"provider"`
+	Choices  []streamChoice `json:"choices"`
+	Usage    jsontext.Value `json:"usage,omitzero"`
+	Error    *apiError      `json:"error,omitzero"`
 }
 
 type streamChoice struct {

@@ -473,7 +473,8 @@ streams, and repeated tool calls.
 
 `-json` writes one JSON object to stdout with the answer, total token usage,
 and completion status for the run. It covers the whole task, including retries
-and tool calls. The `version` field identifies the output format.
+and tool calls. The `version` field identifies the output format. For example
+(the detailed `accounting` field is omitted here):
 
 ```json
 {
@@ -503,11 +504,34 @@ The stable fields are `version`, `reply`, `usage`, `status`,
 `model_attempts`. `system_prompt` is `default`, `custom`, or `none`. Depending
 on how the run ends, the object may also
 contain `run_id`, `session_id`, `tool_limit_reached`, `detached_jobs`,
-and `error`.
+and `error`. A run also includes `accounting`, described below.
 
-`usage.reasoning_tokens` is a reported subset of
-`usage.output_tokens`, not an additional token count. Providers that do not
-publish the breakdown leave it at zero.
+### Token usage and provider costs
+
+`usage` adds the known counters from every model attempt in this invocation,
+including retries, failed or cancelled calls, and compaction. Cached reads
+(`cached_input_tokens`) and cache writes (`cache_write_input_tokens`) are
+subsets of `input_tokens`; `reasoning_tokens` is a subset of `output_tokens`.
+Do not add these breakdowns to the input or output totals again. Child-agent
+sessions have their own accounting.
+
+`accounting.complete` is true when every attempt has final input and output
+counts. A false value means the totals may be incomplete, for example after an
+interrupted stream or when reading an older session. Optional cache, reasoning,
+and cost details can still be absent even when the input and output are known.
+
+For a breakdown, read `accounting.attempts`. Each attempt's `usage.status` is
+`unavailable`, `partial`, or `final`; in `usage.tokens`, an absent field is
+unknown and an explicit `0` is known zero. A failed call can have final usage,
+and a successful answer can have no usage at all. Provider request identifiers
+are included when available.
+
+`usage.costs` within each attempt contains provider-reported amounts as decimal
+strings. For requests paid with OpenRouter credits, use `account_charge` for
+billing. Only BYOK requests can additionally include `upstream_inference`, the
+provider-side inference cost in USD, which may be an estimate. Skot keeps these
+amounts separate.
+Missing cost is unknown, not free. Skot does not estimate charges from tariffs.
 
 ### Exit codes
 

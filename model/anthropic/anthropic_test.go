@@ -130,7 +130,7 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 	t.Run("response", func(t *testing.T) {
 		// Messages says tool_use; the agent sees the normalized reason.
 		if response.StopReason != "tool_calls" || response.Usage != (agent.ModelUsage{
-			InputTokens: 19, CachedInputTokens: 4, OutputTokens: 9, TotalTokens: 28,
+			InputTokens: 19, CachedInputTokens: 4, CacheWriteInputTokens: 3, OutputTokens: 9, TotalTokens: 28,
 		}) {
 			t.Fatalf("stop/usage = %q/%#v", response.StopReason, response.Usage)
 		}

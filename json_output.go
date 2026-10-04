@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json/v2"
 	"io"
+	"strings"
 
 	"github.com/levmv/skot/agent"
 )
@@ -57,7 +58,8 @@ func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsa
 		DetachedJobs:     append([]string(nil), run.DetachedJobs...),
 	}
 	if runErr != nil {
-		result.Error = runErr.Error()
+		// Errors joined outside the runtime can contain raw filesystem bytes.
+		result.Error = strings.ToValidUTF8(runErr.Error(), "�")
 	}
 	encoded, err := json.Marshal(result, json.Deterministic(true))
 	if err != nil {

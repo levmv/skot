@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/levmv/skot/agent"
 )
@@ -123,7 +124,7 @@ func formatDirectoryEntry(directory string, entry os.DirEntry) (string, error) {
 }
 
 func displayPath(path string) string {
-	if path == "" || strings.IndexFunc(path, func(value rune) bool {
+	if path == "" || !utf8.ValidString(path) || strings.IndexFunc(path, func(value rune) bool {
 		return unicode.IsSpace(value) || unicode.IsControl(value) || value == '"' || value == '\\'
 	}) >= 0 {
 		return strconv.Quote(path)

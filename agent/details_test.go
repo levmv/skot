@@ -20,6 +20,9 @@ func TestNormalizeDetailsClonesValidatedJSON(t *testing.T) {
 }
 
 func TestNormalizeDetailsRejectsInvalidAndOversizedData(t *testing.T) {
+	if _, err := normalizeDetails([]Detail{{Kind: "kind-\xff", Data: jsontext.Value(`{}`)}}); err == nil {
+		t.Fatal("invalid UTF-8 kind was accepted")
+	}
 	if _, err := normalizeDetails([]Detail{{Kind: "broken", Data: jsontext.Value(`{`)}}); err == nil {
 		t.Fatal("invalid JSON was accepted")
 	}

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/levmv/skot/agent"
@@ -82,6 +83,34 @@ func TestReadAndLSReturnBoundedStructuredText(t *testing.T) {
 	if !strings.Contains(list, "dir\tdocs/") || !strings.Contains(list, "symlink\tcurrent -> docs") ||
 		!strings.Contains(list, "file\t\"two words.txt\"") {
 		t.Fatalf("ls result = %q", list)
+	}
+}
+
+func TestWorkspaceToolsEscapeInvalidUTF8Filenames(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "invalid-\xff.txt"), []byte("needle\n"), 0o644); err != nil {
+		if errors.Is(err, syscall.EILSEQ) || errors.Is(err, syscall.EINVAL) {
+			t.Skipf("filesystem does not support invalid UTF-8 filenames: %v", err)
+		}
+		t.Fatal(err)
+	}
+	tools, _, err := NewWorkspaceTools(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, arguments, want string
+	}{
+		{name: "ls", arguments: `{}`, want: "file\t" + `"invalid-\xff.txt"`},
+		{name: "grep", arguments: `{"pattern":"needle"}`, want: `"./invalid-\xff.txt":1:needle`},
+		{name: "glob", arguments: `{"pattern":"*.txt"}`, want: `"./invalid-\xff.txt"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := mustRunTool(t, tools, test.name, test.arguments)
+			if !strings.Contains(output, test.want) {
+				t.Fatalf("output = %q, want %q", output, test.want)
+			}
+		})
 	}
 }
 

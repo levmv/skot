@@ -191,6 +191,65 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 	}
 }
 
+func TestRunJSONReportsInvalidUTF8ProviderErrorAndFinishesJournal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte("proxy error \xff"))
+	}))
+	defer server.Close()
+	clearMainWebCredentials(t)
+	journalPath := filepath.Join(t.TempDir(), "session.jsonl")
+	var stdout bytes.Buffer
+	err := run(t.Context(), []string{
+		"-model", "deepseek/test-model", "-base-url", server.URL,
+		"-home", t.TempDir(), "-root", t.TempDir(), "-journal", journalPath, "-json", "task",
+	}, bytes.NewReader(nil), &stdout, io.Discard)
+	if !errors.Is(err, agent.ErrProviderFailure) || exitCodeFor(err) != exitProvider {
+		t.Fatalf("provider error/code = %v/%d", err, exitCodeFor(err))
+	}
+	var result jsonResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("JSON result = %q: %v", stdout.String(), err)
+	}
+	if result.Status != agent.RunFailed || result.RunID == "" || !strings.Contains(result.Error, "proxy error �") {
+		t.Fatalf("failed JSON result = %#v", result)
+	}
+	journal, err := session.Open(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	records, err := journal.Records(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := agent.Replay(records)
+	if err != nil || len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 || records[len(records)-1].Kind != agent.RecordRunFinished {
+		t.Fatalf("failed run journal = %#v, %v", state, err)
+	}
+	var finished agent.RunFinishedRecord
+	if err := json.Unmarshal(records[len(records)-1].Data, &finished); err != nil || finished.Error != result.Error {
+		t.Fatalf("finished run = %#v, %v; JSON error = %q", finished, err, result.Error)
+	}
+}
+
+func TestWriteJSONResultReportsFilesystemError(t *testing.T) {
+	var stdout bytes.Buffer
+	run := agent.RunResult{RunID: "run_test", Status: agent.RunFailed}
+	runErr := &os.PathError{Op: "write", Path: "session-\xff.jsonl", Err: os.ErrPermission}
+	if err := writeJSONResult(&stdout, run, agent.ModelUsage{}, "", jsonRunMetadata{}, runErr); err != nil {
+		t.Fatal(err)
+	}
+	var result jsonResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("JSON result = %q: %v", stdout.String(), err)
+	}
+	if result.Status != run.Status || result.RunID != run.RunID ||
+		result.Error != "write session-�.jsonl: "+os.ErrPermission.Error() {
+		t.Fatalf("failed JSON result = %#v", result)
+	}
+}
+
 func TestRunJSONOmitsEphemeralSessionAndReportsIncompleteRun(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")

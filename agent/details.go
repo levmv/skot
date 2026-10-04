@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxDetailsBytes = 256 * 1024
@@ -74,6 +75,9 @@ func NewDetail(kind string, value any) (Detail, error) {
 	if kind == "" {
 		return Detail{}, errors.New("detail kind is required")
 	}
+	if !utf8.ValidString(kind) {
+		return Detail{}, errors.New("detail kind must be valid UTF-8")
+	}
 	data, err := json.Marshal(value, json.Deterministic(true))
 	if err != nil {
 		return Detail{}, fmt.Errorf("encode %s detail: %w", kind, err)
@@ -115,6 +119,9 @@ func normalizeDetails(details []Detail) ([]Detail, error) {
 		detail.Kind = strings.TrimSpace(detail.Kind)
 		if detail.Kind == "" {
 			return nil, fmt.Errorf("detail %d has no kind", index)
+		}
+		if !utf8.ValidString(detail.Kind) {
+			return nil, fmt.Errorf("detail %d kind must be valid UTF-8", index)
 		}
 		if len(detail.Data) == 0 || !detail.Data.IsValid() {
 			return nil, fmt.Errorf("detail %d (%s) is not valid JSON", index, detail.Kind)

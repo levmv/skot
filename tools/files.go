@@ -325,17 +325,12 @@ func (workspace *workspace) planSearch(policy *filesystemPolicy, path string, di
 }
 
 func (plan searchPlan) display(path string) string {
-	if !plan.absoluteOutput {
-		return formatSearchPath(path, plan.queryPath)
+	if plan.absoluteOutput {
+		path = filepath.ToSlash(filepath.Join(plan.searcher.Root(), filepath.FromSlash(path)))
+	} else if plan.queryPath == "." {
+		path = "./" + path
 	}
-	return filepath.ToSlash(filepath.Join(plan.searcher.Root(), filepath.FromSlash(path)))
-}
-
-func formatSearchPath(path, queryPath string) string {
-	if queryPath == "." {
-		return "./" + path
-	}
-	return path
+	return displayPath(path)
 }
 
 func (workspace *workspace) edit(ctx context.Context, raw string) (agent.ToolOutput, error) {

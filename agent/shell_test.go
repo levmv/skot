@@ -67,18 +67,18 @@ func TestPrivateShellDoesNotTouchJournal(t *testing.T) {
 	}
 }
 
-func TestShellRedactsKnownSecretFromResultAndDurableJournal(t *testing.T) {
+func TestShellSanitizesResultAndDurableJournal(t *testing.T) {
 	const secret = "shell-secret-token"
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{
 		Backend: &scriptedModel{}, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		UserShell: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent("value=" + secret)}, nil
+			return ToolOutput{Content: TextContent("value=\xff" + secret)}, nil
 		},
 	})
 	result, err := runtime.RunShell(context.Background(), "printf "+secret)
-	if err != nil || strings.Contains(result.Content.Text(), secret) {
+	if err != nil || result.Content.Text() != "value=�[REDACTED]" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	raw, err := json.Marshal(journal.snapshot())

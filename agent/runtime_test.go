@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestRuntimeDirectResponse(t *testing.T) {
@@ -989,16 +990,17 @@ func TestRuntimeRequestBudgetBoundsOneHungAttempt(t *testing.T) {
 
 func TestRuntimeDoesNotRetryNonRetryableProviderFailure(t *testing.T) {
 	attempts := 0
+	cause := errors.New("payment required \xff")
 	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
 		attempts++
-		return ModelResponse{}, &ProviderError{Cause: MarkProviderFailure(errors.New("payment required")), StatusCode: 402}
+		return ModelResponse{}, &ProviderError{Cause: MarkProviderFailure(cause), StatusCode: 402}
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: -1, RetryBudget: time.Second, BaseDelay: time.Millisecond},
 	})
 	_, err := runtime.Run(context.Background(), "task", nil)
-	if !errors.Is(err, ErrProviderFailure) || attempts != 1 {
+	if !errors.Is(err, ErrProviderFailure) || !errors.Is(err, cause) || err.Error() != "payment required �" || attempts != 1 {
 		t.Fatalf("error/attempts = %v / %d", err, attempts)
 	}
 }
@@ -1031,16 +1033,16 @@ func TestRuntimeHonorsProviderRetryAfter(t *testing.T) {
 	}
 }
 
-func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
+func TestRuntimeSanitizesTextBeforeJournalToolsAndModel(t *testing.T) {
 	const secret = "top-secret-token"
 	journal := &memoryJournal{}
 	var toolArguments string
 	model := &scriptedModel{steps: []modelStep{
 		func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
-			if strings.Contains(request.Instructions, secret) || len(request.Items) != 1 || strings.Contains(request.Items[0].Text, secret) {
-				t.Fatalf("secret reached first request: %#v", request)
+			if request.Instructions != "instructions � [REDACTED]" || len(request.Items) != 1 || request.Items[0].Text != "input � [REDACTED]" {
+				t.Fatalf("unsanitized first request: %#v", request)
 			}
-			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "stream " + secret})
+			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "stream \xff " + secret})
 			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{
 				ID: "provider-call", Name: "read", RawArguments: `{"token":"` + secret + `"}`,
 			}}}}, nil
@@ -1050,37 +1052,37 @@ func TestRuntimeRedactsKnownSecretsBeforeJournalToolsAndModel(t *testing.T) {
 				if item.ToolCall != nil && strings.Contains(item.ToolCall.RawArguments, secret) {
 					t.Fatalf("secret reached replayed tool call: %#v", item)
 				}
-				if item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), secret) {
-					t.Fatalf("secret reached tool result: %#v", item)
+				if item.ToolResult != nil && item.ToolResult.Content.Text() != "output � [REDACTED]" {
+					t.Fatalf("unsanitized tool result: %#v", item)
 				}
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "answer " + secret}}}, nil
+			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "answer \xff " + secret}}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Backend: model, Journal: journal, Instructions: "instructions " + secret,
+		Backend: model, Journal: journal, Instructions: "instructions \xff " + secret,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		Tools: []Tool{{
 			Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 				toolArguments = arguments
-				return ToolOutput{Content: TextContent("output " + secret), Details: []Detail{{
+				return ToolOutput{Content: TextContent("output \xff " + secret), Details: []Detail{{
 					Kind: "test", Data: jsontext.Value(`{"failure_tail":"` + secret + `"}`),
 				}}}, nil
 			},
 		}},
 	})
 	var events []Event
-	result, err := runtime.Run(context.Background(), "input "+secret, func(event Event) { events = append(events, event) })
+	result, err := runtime.Run(context.Background(), "input \xff "+secret, func(event Event) { events = append(events, event) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Answer != "answer [REDACTED]" || strings.Contains(toolArguments, secret) {
+	if result.Answer != "answer � [REDACTED]" || strings.Contains(toolArguments, secret) {
 		t.Fatalf("result/tool arguments = %#v / %q", result, toolArguments)
 	}
 	for _, event := range events {
-		if strings.Contains(event.Text, secret) || event.Result != nil && strings.Contains(event.Result.Content.Text(), secret) {
-			t.Fatalf("secret reached event: %#v", event)
+		if strings.Contains(event.Text, secret) || !utf8.ValidString(event.Text) || event.Result != nil && event.Result.Content.Text() != "output � [REDACTED]" {
+			t.Fatalf("unsanitized event: %#v", event)
 		}
 	}
 	raw, err := json.Marshal(journal.snapshot())

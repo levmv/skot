@@ -151,9 +151,13 @@ func New(config Config) (*Runtime, error) {
 		return nil, err
 	}
 	instructions := strings.TrimSpace(config.Instructions)
-	sanitize := config.Sanitize
-	if sanitize == nil {
-		sanitize = func(text string) string { return text }
+	// Redact original bytes before repairing UTF-8 so secrets still match.
+	redact := config.Sanitize
+	sanitize := func(text string) string {
+		if redact != nil {
+			text = redact(text)
+		}
+		return strings.ToValidUTF8(text, "�")
 	}
 	instructions = sanitize(instructions)
 	programTools, err := normalizeProgramToolSnapshots(config.Metadata.ProgramTools, sanitize)

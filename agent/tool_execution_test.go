@@ -32,7 +32,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 				}
 			}
 			if len(results) != 2 || results[0].Content.Text() != "first" || results[0].Error ||
-				results[1].Content.Text() != "second failed" || !results[1].Error {
+				results[1].Content.Text() != "second failed �" || !results[1].Error {
 				t.Fatalf("model tool results = %#v", results)
 			}
 			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
@@ -52,7 +52,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 			<-release[name]
 			finished <- name
 			if name == "second" {
-				return ToolOutput{}, errors.New("second failed")
+				return ToolOutput{}, errors.New("second failed \xff")
 			}
 			return ToolOutput{Content: TextContent(name)}, nil
 		},
@@ -98,7 +98,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 		}
 		committed = append(committed, payload.Result)
 	}
-	if len(committed) != 2 || committed[0].Content.Text() != "first" || committed[1].Content.Text() != "second failed" {
+	if len(committed) != 2 || committed[0].Content.Text() != "first" || committed[1].Content.Text() != "second failed �" {
 		t.Fatalf("committed results = %#v", committed)
 	}
 }

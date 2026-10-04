@@ -101,10 +101,7 @@ func New(config Config) (*Backend, error) {
 	if maxTokens == 0 {
 		maxTokens = defaultMaxTokens
 	}
-	client := config.HTTPClient
-	if client == nil {
-		client = modelhttp.DefaultClient()
-	}
+	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Backend{
 		provider: provider, model: model, apiModel: apiModel, maxTokens: maxTokens,
 		promptCache:            config.PromptCache,

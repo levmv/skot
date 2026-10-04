@@ -1,10 +1,65 @@
 package modelhttp
 
 import (
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestDefaultClientKeepsRedirectedRequestsWithinTheirOrigin(t *testing.T) {
+	for _, test := range []struct {
+		name, location string
+		status, calls  int
+	}{
+		{name: "relative path", location: "/target", status: 307, calls: 2},
+		{name: "same origin", location: "https://api.example.test/target", status: 308, calls: 2},
+		{name: "default port", location: "https://api.example.test:443/target", status: 307, calls: 2},
+		{name: "other host", location: "https://other.example.test/target", status: 307, calls: 1},
+		{name: "subdomain", location: "https://child.api.example.test/target", status: 308, calls: 1},
+		{name: "other port", location: "https://api.example.test:8443/target", status: 307, calls: 1},
+		{name: "other scheme", location: "http://api.example.test/target", status: 307, calls: 1},
+		{name: "POST becomes GET 301", location: "/target", status: 301, calls: 1},
+		{name: "POST becomes GET 302", location: "/target", status: 302, calls: 1},
+		{name: "POST becomes GET 303", location: "/target", status: 303, calls: 1},
+		{name: "redirect loop", location: "/messages", status: 307, calls: 10},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			client := DefaultClient()
+			client.Transport = modelHTTPRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.Body != nil {
+					_ = request.Body.Close()
+				}
+				status := test.status
+				if request.URL.Path == "/target" {
+					status = http.StatusOK
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{"Location": {test.location}}, Body: io.NopCloser(strings.NewReader("response")), Request: request}, nil
+			})
+			request, err := http.NewRequest(http.MethodPost, "https://api.example.test/messages", strings.NewReader("body"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if calls != test.calls {
+				t.Fatalf("requests = %d, want %d", calls, test.calls)
+			}
+		})
+	}
+}
+
+type modelHTTPRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function modelHTTPRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
 
 func TestMarshalRequestJSONAvoidsHTMLEscapingAndTrailingNewline(t *testing.T) {
 	body, err := MarshalRequestJSON(struct {

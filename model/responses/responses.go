@@ -77,10 +77,7 @@ func New(config Config) (*Backend, error) {
 	if config.Authorizer == nil {
 		return nil, agent.MarkInvalidRequest(errors.New("authorizer is required"))
 	}
-	client := config.HTTPClient
-	if client == nil {
-		client = modelhttp.DefaultClient()
-	}
+	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Backend{
 		provider: provider, model: model, apiModel: apiModel,
 		reasoningEffort: reasoningEffort, traits: config.Traits,

@@ -47,15 +47,63 @@ func PublicEndpoint(value string) string {
 	return parsed.String()
 }
 
-// DefaultClient preserves normal Go transport behavior while allowing long
-// model generations after the response headers arrive.
+// DefaultClient allows long generations and follows only same-origin
+// redirects that preserve the request method and body.
 func DefaultClient() *http.Client {
+	client := &http.Client{CheckRedirect: checkModelRedirect}
 	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
 		cloned := transport.Clone()
 		cloned.ResponseHeaderTimeout = 5 * time.Minute
-		return &http.Client{Transport: cloned}
+		client.Transport = cloned
 	}
-	return &http.Client{}
+	return client
+}
+
+// ModelClient applies the model redirect policy without mutating a supplied
+// client or relaxing its own redirect restrictions.
+func ModelClient(client *http.Client) *http.Client {
+	if client == nil {
+		return DefaultClient()
+	}
+	cloned := *client
+	redirect := client.CheckRedirect
+	cloned.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if err := checkModelRedirect(request, via); err != nil {
+			return err
+		}
+		if redirect != nil {
+			if err := redirect(request, via); err != nil {
+				return err
+			}
+		}
+		// The caller's hook may have changed the target or method.
+		return checkModelRedirect(request, via)
+	}
+	return &cloned
+}
+
+func checkModelRedirect(request *http.Request, via []*http.Request) error {
+	if len(via) == 0 || len(via) >= 10 {
+		return http.ErrUseLastResponse
+	}
+	original := via[0]
+	if request.Method != original.Method ||
+		!strings.EqualFold(request.URL.Scheme, original.URL.Scheme) ||
+		!strings.EqualFold(request.URL.Hostname(), original.URL.Hostname()) ||
+		originPort(request.URL) != originPort(original.URL) {
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
+
+func originPort(endpoint *url.URL) string {
+	if port := endpoint.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(endpoint.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // ParseRetryAfter accepts the delay-seconds and HTTP-date forms defined for

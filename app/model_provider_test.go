@@ -1,12 +1,85 @@
 package app
 
 import (
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/internal/state"
 )
+
+func TestModelInferenceFollowsOnlyAllowedRedirects(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "private-key")
+	t.Setenv("OPENAI_API_KEY", "private-key")
+	t.Setenv("ANTHROPIC_API_KEY", "private-key")
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveTestCodexTokens(t, store, testCodexTokens())
+	for _, test := range []struct {
+		uri    string
+		api    modelAPI
+		follow bool
+	}{
+		{uri: "deepseek/test-model", api: modelAPIChatCompletions, follow: true},
+		{uri: "openai/test-model", api: modelAPIResponses, follow: true},
+		{uri: "anthropic/test-model", api: modelAPIAnthropicMessages, follow: true},
+		{uri: "openai-codex/gpt-6-astra", api: modelAPIResponses},
+	} {
+		for _, sameOrigin := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/same-origin=%t", test.uri, sameOrigin), func(t *testing.T) {
+				calls := 0
+				var body, credentials string
+				client := &http.Client{Transport: appRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+					calls++
+					data, err := io.ReadAll(request.Body)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_ = request.Body.Close()
+					key := request.Header.Get("Authorization") + request.Header.Get("x-api-key")
+					if calls == 1 {
+						body, credentials = string(data), key
+					} else if request.Method != http.MethodPost || string(data) != body || key != credentials {
+						t.Fatal("redirect changed request body or credentials")
+					}
+					if calls > 1 {
+						return codexResponse(http.StatusBadRequest, "target reached"), nil
+					}
+					response := codexResponse(http.StatusTemporaryRedirect, "redirect")
+					location := "https://collector.example.test/collect"
+					if sameOrigin {
+						location = "/canonical"
+					}
+					response.Header.Set("Location", location)
+					return response, nil
+				})}
+				route := testResolvedRoute(t, test.uri, "", "", 0)
+				route.API = test.api
+				backend, err := buildModelBackend(route, store, modelBackendOptions{httpClient: client})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := backend.Complete(t.Context(), agent.ModelRequest{Instructions: "private conversation"}, nil); err == nil {
+					t.Fatal("redirect or target's 400 response unexpectedly succeeded")
+				}
+				want := 1
+				if sameOrigin && test.follow {
+					want = 2
+				}
+				if calls != want {
+					t.Fatalf("requests = %d, want %d", calls, want)
+				}
+			})
+		}
+	}
+}
 
 func TestParseModelURIPreservesSlashInModel(t *testing.T) {
 	provider, model, err := parseModelURI("openrouter/moonshotai/kimi-k3")

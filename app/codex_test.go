@@ -366,28 +366,3 @@ func TestIncompleteCodexCredentialCanBeReauthorizedAndCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestCodexInferenceDoesNotForwardCredentialsThroughRedirects(t *testing.T) {
-	store, err := state.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	saveTestCodexTokens(t, store, testCodexTokens())
-	calls := 0
-	client := &http.Client{Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		calls++
-		response := codexResponse(307, "redirect")
-		response.Header.Set("Location", "https://another.chatgpt.com/collect")
-		return response, nil
-	})}
-	backend, err := buildModelBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelBackendOptions{httpClient: client})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := backend.Complete(t.Context(), agent.ModelRequest{}, nil); err == nil {
-		t.Fatal("unexpected success for a redirected request")
-	}
-	if calls != 1 {
-		t.Fatalf("followed a subscription endpoint redirect: %d requests", calls)
-	}
-}

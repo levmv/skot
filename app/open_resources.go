@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/session"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -55,7 +55,7 @@ func openInitialSession(config Config, home, root string, memory bool) (openedSe
 			opened.journal, err = session.OpenManaged(home, opened.id)
 			opened.managed = err == nil
 		} else {
-			err = agent.MarkInvalidRequest(err)
+			err = model.MarkInvalidRequest(err)
 		}
 	case config.Interactive || config.SaveSession:
 		opened.journal, opened.id, err = session.Create(home)

@@ -8,9 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
+	modelapi "github.com/levmv/skot/model"
 )
 
-func processDetailForTest(t *testing.T, result agent.ProcessResult) agent.Detail {
+func processDetailForTest(t *testing.T, result agent.ProcessResult) modelapi.Detail {
 	t.Helper()
 	detail, err := agent.NewDetail(agent.ProcessResultDetailKind, result)
 	if err != nil {
@@ -53,7 +54,7 @@ func TestSubmitStartsShellMaintenance(t *testing.T) {
 }
 
 func TestPrivateShellUsesPrivateRuntimeMethod(t *testing.T) {
-	fake := &fakeAgent{shellResult: agent.ToolResult{Content: agent.TextContent("private")}}
+	fake := &fakeAgent{shellResult: modelapi.ToolResult{Content: modelapi.TextContent("private")}}
 	message := runShellCmd(context.Background(), fake, "printf private", true)()
 	done, ok := message.(shellDoneMsg)
 	if !ok || done.err != nil || fake.shellCommand != "printf private" || !fake.shellPrivate {
@@ -69,9 +70,9 @@ func TestShellResultRendersStatusAndOutput(t *testing.T) {
 	}
 	zero := 0
 	result.ExitCode = &zero
-	model.finishShell(agent.ToolResult{
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\nhello\n"),
-		Details: []agent.Detail{processDetailForTest(t, result)},
+	model.finishShell(modelapi.ToolResult{
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\nhello\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, result)},
 	}, nil, model.operation.startedAt.Add(1250*time.Millisecond))
 
 	if model.operation.kind != operationNone {
@@ -104,16 +105,16 @@ func TestProcessStatusReportsManagedGroupSize(t *testing.T) {
 
 func TestModelBashResultUsesProcessPresentation(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	call := agent.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"go test ./..."}`}
+	call := modelapi.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"go test ./..."}`}
 	model.addToolCallAt(call, time.Now())
 	zero := 0
 	result := agent.ProcessResult{
 		Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 20, OutputBytes: 2,
 	}
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "call",
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\nok\n"),
-		Details: []agent.Detail{processDetailForTest(t, result)},
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\nok\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, result)},
 	})
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]
 	if block.tool == nil || block.tool.shell != nil || block.tool.process == nil || block.tool.process.UserInitiated {
@@ -130,14 +131,14 @@ func TestModelBashResultUsesProcessPresentation(t *testing.T) {
 
 func TestModelProcessOutputUsesBoundedHeadAndTailPreview(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	call := agent.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"verbose"}`}
+	call := modelapi.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"verbose"}`}
 	model.addToolCallAt(call, time.Now())
 	zero := 0
 	outputLines := []string{"line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8", "line 9", "line 10"}
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "call",
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\n" + strings.Join(outputLines, "\n") + "\n"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\n" + strings.Join(outputLines, "\n") + "\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessCompleted, ExitCode: &zero, OutputBytes: 71,
 		})},
 	})
@@ -177,9 +178,9 @@ func TestUserShellKeepsCompleteOutput(t *testing.T) {
 	model.startShell("verbose", false)
 	zero := 0
 	outputLines := []string{"line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8"}
-	model.finishShell(agent.ToolResult{
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\n" + strings.Join(outputLines, "\n") + "\n"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+	model.finishShell(modelapi.ToolResult{
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\n" + strings.Join(outputLines, "\n") + "\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessCompleted, ExitCode: &zero, OutputBytes: 55, UserInitiated: true,
 		})},
 	}, nil, model.operation.startedAt.Add(time.Millisecond))
@@ -191,12 +192,12 @@ func TestUserShellKeepsCompleteOutput(t *testing.T) {
 
 func TestFailedModelProcessFallsBackToFailureTail(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	model.addToolCallAt(agent.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"fail"}`}, time.Now())
+	model.addToolCallAt(modelapi.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"fail"}`}, time.Now())
 	exit := 1
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "call",
-		Content: agent.TextContent("status: failed\nexit_code: 1\n"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+		Content: modelapi.TextContent("status: failed\nexit_code: 1\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessFailed, ExitCode: &exit, FailureTail: "useful failure\nlast line",
 		})},
 	})
@@ -212,7 +213,7 @@ func TestManagedBashStatusRefreshesFromRuntime(t *testing.T) {
 	completed := agent.ProcessResult{
 		JobID: "job-1", Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 2500, OutputBytes: 3,
 	}
-	fake := &fakeAgent{status: []agent.Detail{processDetailForTest(t, completed)}, statusFound: true}
+	fake := &fakeAgent{status: []modelapi.Detail{processDetailForTest(t, completed)}, statusFound: true}
 	model := testScreenModel(t, fake)
 	model.appendBlock(screenBlock{
 		kind: screenBlockTool, text: "$ sleep 2", tool: &toolBlock{done: true, process: &running},
@@ -230,7 +231,7 @@ func TestManagedBashCompletionAppendsAfterBlockEnteredScrollback(t *testing.T) {
 	completed := agent.ProcessResult{
 		JobID: "job-1", Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 3000,
 	}
-	fake := &fakeAgent{status: []agent.Detail{processDetailForTest(t, completed)}, statusFound: true}
+	fake := &fakeAgent{status: []modelapi.Detail{processDetailForTest(t, completed)}, statusFound: true}
 	model := testScreenModel(t, fake)
 	model.appendBlock(screenBlock{kind: screenBlockTool, text: "$ sleep 2", tool: &toolBlock{done: true, process: &running}})
 	for range 20 {
@@ -258,12 +259,12 @@ func TestRecordedShellHistoryCollapsesSyntheticItems(t *testing.T) {
 	result := agent.ProcessResult{
 		Status: agent.ProcessCompleted, ExitCode: &zero, DurationMillis: 10, OutputBytes: 2, UserInitiated: true,
 	}
-	fake := &fakeAgent{state: agent.State{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "!printf hi"},
-		{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"printf hi"}`}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{
-			CallID: "call", Content: agent.TextContent("status: completed\nexit_code: 0\n\nhi\n"),
-			Details: []agent.Detail{processDetailForTest(t, result)},
+	fake := &fakeAgent{state: agent.State{Items: []modelapi.Item{
+		{Kind: modelapi.ItemUserText, Text: "!printf hi"},
+		{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{ID: "call", Name: "bash", RawArguments: `{"command":"printf hi"}`}},
+		{Kind: modelapi.ItemToolResult, ToolResult: &modelapi.ToolResult{
+			CallID: "call", Content: modelapi.TextContent("status: completed\nexit_code: 0\n\nhi\n"),
+			Details: []modelapi.Detail{processDetailForTest(t, result)},
 		}},
 	}}}
 	model := testScreenModel(t, fake)

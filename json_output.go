@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 const jsonResultVersion = 1
@@ -18,7 +19,7 @@ const jsonResultVersion = 1
 type jsonResult struct {
 	Version          int                `json:"version"`
 	Reply            string             `json:"reply"`
-	Usage            agent.ModelUsage   `json:"usage"`
+	Usage            model.TokenCounts  `json:"usage"`
 	Accounting       *agent.UsageReport `json:"accounting,omitzero"`
 	Status           agent.RunStatus    `json:"status"`
 	DurationMillis   int64              `json:"duration_ms"`
@@ -44,7 +45,7 @@ type jsonRunMetadata struct {
 	ModelAttempts    int
 }
 
-func writeJSONResult(output io.Writer, run agent.RunResult, usage agent.ModelUsage, sessionID string, metadata jsonRunMetadata, runErr error) error {
+func writeJSONResult(output io.Writer, run agent.RunResult, usage model.TokenCounts, sessionID string, metadata jsonRunMetadata, runErr error) error {
 	result := jsonResult{
 		Version:          jsonResultVersion,
 		Accounting:       metadata.Accounting,

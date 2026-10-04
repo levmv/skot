@@ -3,14 +3,16 @@ package agent
 import (
 	"context"
 	"fmt"
+
+	"github.com/levmv/skot/model"
 )
 
 // runtimeConfiguration stays fixed through a model response and its tool calls.
 // A pending copy takes effect at the next request boundary. Scope remains live
 // and is read when applying the selection.
 type runtimeConfiguration struct {
-	backend      Backend
-	modelInfo    ModelInfo
+	backend      model.Backend
+	modelInfo    model.Info
 	tools        []Tool
 	toolByName   map[string]Tool
 	toolSet      string
@@ -79,21 +81,15 @@ func (runtime *Runtime) applyPendingConfigurationLocked(ctx context.Context, liv
 
 func (runtime *Runtime) applyConfigurationLocked(ctx context.Context, live *stateReducer, configuration runtimeConfiguration) error {
 	modelInfo := configuration.modelInfo
-	if live.state.SessionID != "" && !selectionMatchesModel(live.state.Selection, modelInfo) {
-		epoch, err := newID("epoch")
+	if live.state.SessionID != "" {
+		selection, err := runtime.replayContextForModel(live.state.Selection, modelInfo)
 		if err != nil {
 			return err
 		}
-		selection := ModelSelectedRecord{
-			Backend:               modelInfo.BackendID,
-			Provider:              modelInfo.Provider,
-			Model:                 modelInfo.Model,
-			ReasoningEffort:       modelInfo.ReasoningEffort,
-			ProviderStateContract: modelInfo.ProviderStateContract,
-			Epoch:                 epoch,
-		}
-		if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordModelSelected, selection); err != nil {
-			return err
+		if selection.Epoch != live.state.Selection.Epoch {
+			if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordModelSelected, selection); err != nil {
+				return err
+			}
 		}
 	}
 	snapshot := runtime.effectiveConfigSnapshotWithProgramToolsLocked(modelInfo, configuration.tools,
@@ -105,4 +101,11 @@ func (runtime *Runtime) applyConfigurationLocked(ctx context.Context, live *stat
 	runtime.pendingConfig = nil
 	runtime.publishSessionStatus(live.state)
 	return nil
+}
+
+func (runtime *Runtime) replayContextForModel(current model.ReplayContext, info model.Info) (model.ReplayContext, error) {
+	// Compare and persist the same diagnostic endpoint as the configuration
+	// snapshot. Provider credentials belong to the backend, not this identity.
+	info.Endpoint = runtime.sanitize(info.Endpoint)
+	return current.ForModel(info)
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -86,14 +88,13 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, spec run
 	if err != nil {
 		return ContextCompactedRecord{}, Record{}, fmt.Errorf("summarize context: %w", sanitizeError(err, runtime.sanitize))
 	}
-	response = runtime.sanitizeModelResponse(response)
-	if IsIncompleteStopReason(response.StopReason) {
+	if model.IsIncompleteStopReason(response.StopReason) {
 		return ContextCompactedRecord{}, Record{}, fmt.Errorf("compaction model returned an incomplete summary: stop reason %s", response.StopReason)
 	}
 	for _, item := range response.Items {
 		switch item.Kind {
-		case ItemAssistantText, ItemReasoning:
-		case ItemToolCall:
+		case model.ItemAssistantText, model.ItemReasoning:
+		case model.ItemToolCall:
 			// Tool schemas preserve the ordinary cached prefix, but compaction
 			// never executes calls. Keep a usable text summary if the model also
 			// emitted a call; a call-only response still fails as empty below.
@@ -105,24 +106,24 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, spec run
 	if strings.TrimSpace(summary) == "" {
 		return ContextCompactedRecord{}, Record{}, errors.New("compaction model returned an empty summary")
 	}
-	return commitCompaction(ctx, runtime.journal, plan, summary, response.Usage, response.attemptID)
+	return commitCompaction(ctx, runtime.journal, plan, summary, response.Usage.Tokens.Known(), response.attemptID)
 }
 
 // compactionRequest preserves the ordinary request prefix through the selected
 // history and appends the compaction directive as its only new user message.
 // Prefix-caching routes can therefore reuse the work already done for the
 // session instead of receiving a separately serialized transcript.
-func (runtime *Runtime) compactionRequest(state State, spec runRequestSpec, plan compactionPlan) (ModelRequest, error) {
+func (runtime *Runtime) compactionRequest(state State, spec runRequestSpec, plan compactionPlan) (model.Request, error) {
 	targetEnd := blockIndexAtSequence(state.Blocks, plan.FirstVerbatimSequence)
 	if targetEnd < 0 {
-		return ModelRequest{}, errors.New("compaction boundary is missing from replayed blocks")
+		return model.Request{}, errors.New("compaction boundary is missing from replayed blocks")
 	}
 	prefix := state
 	prefix.Blocks = prefix.Blocks[:targetEnd]
 	prompt := compactionPrompt(state.Configured.ModelContext.CompactionInstructions, plan.RuntimeFacts)
 	request, err := runtime.modelRequestForRun(prefix, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
 	if err != nil {
-		return ModelRequest{}, err
+		return model.Request{}, err
 	}
 	if runtime.effectiveImageDelivery(prefix.ImageDelivery.Status) == ImageDeliveryUnknown {
 		// Compaction is maintenance, not a route capability probe. After a model
@@ -280,7 +281,7 @@ func (runtime *Runtime) projectedTailTokens(state State, spec runRequestSpec, fi
 
 // commitCompaction appends a rolling summary only if the journal still has the
 // exact state for which the plan was constructed.
-func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan, summary string, usage ModelUsage, attemptID string) (ContextCompactedRecord, Record, error) {
+func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan, summary string, usage model.TokenCounts, attemptID string) (ContextCompactedRecord, Record, error) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return ContextCompactedRecord{}, Record{}, errors.New("compaction summary is empty")

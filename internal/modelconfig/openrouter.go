@@ -1,4 +1,4 @@
-package app
+package modelconfig
 
 import (
 	"context"
@@ -12,17 +12,17 @@ import (
 	"time"
 )
 
-const openRouterModelsURL = "https://openrouter.ai/api/v1"
+const OpenRouterModelsURL = "https://openrouter.ai/api/v1"
 
-var openRouterMetadataClient = &http.Client{Timeout: 2 * time.Second}
+var OpenRouterMetadataClient = &http.Client{Timeout: 2 * time.Second}
 
-type modelContextLookup func(context.Context, string) (int, error)
+type ContextWindowLookup func(context.Context, string) (int, error)
 
-func openRouterContextWindow(ctx context.Context, modelID string) (int, error) {
-	return fetchOpenRouterContextWindow(ctx, openRouterMetadataClient, openRouterModelsURL, modelID)
+func OpenRouterContextWindow(ctx context.Context, modelID string) (int, error) {
+	return FetchOpenRouterContextWindow(ctx, OpenRouterMetadataClient, OpenRouterModelsURL, modelID)
 }
 
-func fetchOpenRouterContextWindow(ctx context.Context, client *http.Client, baseURL, modelID string) (int, error) {
+func FetchOpenRouterContextWindow(ctx context.Context, client *http.Client, baseURL, modelID string) (int, error) {
 	parts := strings.Split(strings.TrimSpace(modelID), "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return 0, fmt.Errorf("invalid OpenRouter model ID %q", modelID)

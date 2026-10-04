@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestFileChangeDetailRendersFocusedDiff(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	model.addToolCall(agent.ToolCall{ID: "call-1", Name: "edit", RawArguments: `{"path":"note.txt"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "call-1", Name: "edit", RawArguments: `{"path":"note.txt"}`})
 	change := agent.FileChange{
 		Type: agent.FileChangeDetailKind, Path: "note.txt", Operation: "edited",
 		Additions: 1, Deletions: 1, TotalHunks: 1,
@@ -27,7 +28,7 @@ func TestFileChangeDetailRendersFocusedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.finishTool(agent.ToolResult{CallID: "call-1", Details: []agent.Detail{detail}})
+	model.finishTool(modelapi.ToolResult{CallID: "call-1", Details: []modelapi.Detail{detail}})
 
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]
 	if block.tool == nil || block.tool.fileChange == nil || block.text != "edited  note.txt" {
@@ -100,8 +101,8 @@ func TestFileChangeWrapUsesHangingContentIndent(t *testing.T) {
 
 func TestCompletedToolShowsElapsedTimeOnlyWhenItIsWorthNoticing(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	model.addToolCallAt(agent.ToolCall{ID: "call-1", Name: "read", RawArguments: `{"path":"main.go"}`}, time.Now().Add(-1500*time.Millisecond))
-	model.finishTool(agent.ToolResult{CallID: "call-1"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "call-1", Name: "read", RawArguments: `{"path":"main.go"}`}, time.Now().Add(-1500*time.Millisecond))
+	model.finishTool(modelapi.ToolResult{CallID: "call-1"})
 
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]
 	if block.tool == nil || !block.tool.done || block.tool.elapsed < time.Second {
@@ -111,8 +112,8 @@ func TestCompletedToolShowsElapsedTimeOnlyWhenItIsWorthNoticing(t *testing.T) {
 		t.Fatalf("rendered tool timing = %q", rendered)
 	}
 
-	model.addToolCallAt(agent.ToolCall{ID: "call-2", Name: "read", RawArguments: `{"path":"internal/other.go"}`}, time.Now())
-	model.finishTool(agent.ToolResult{CallID: "call-2"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "call-2", Name: "read", RawArguments: `{"path":"internal/other.go"}`}, time.Now())
+	model.finishTool(modelapi.ToolResult{CallID: "call-2"})
 	quick := strings.Join(model.renderBlockLines(model.transcript.blocks[len(model.transcript.blocks)-1]), "\n")
 	if strings.ContainsAny(quick, "0123456789") {
 		t.Fatalf("instant read reported a duration: %q", quick)

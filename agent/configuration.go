@@ -8,14 +8,16 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/levmv/skot/model"
 )
 
-func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo ModelInfo, tools []Tool, toolSet string, scope ScopeSnapshot) EffectiveConfigSnapshot {
+func (runtime *Runtime) effectiveConfigSnapshotLocked(modelInfo model.Info, tools []Tool, toolSet string, scope ScopeSnapshot) EffectiveConfigSnapshot {
 	return runtime.effectiveConfigSnapshotWithProgramToolsLocked(modelInfo, tools, toolSet, scope, runtime.programTools)
 }
 
-func (runtime *Runtime) effectiveConfigSnapshotWithProgramToolsLocked(modelInfo ModelInfo, tools []Tool, toolSet string, scope ScopeSnapshot, programTools []ProgramToolSnapshot) EffectiveConfigSnapshot {
-	toolSpecs := make([]ToolSpec, 0, len(tools))
+func (runtime *Runtime) effectiveConfigSnapshotWithProgramToolsLocked(modelInfo model.Info, tools []Tool, toolSet string, scope ScopeSnapshot, programTools []ProgramToolSnapshot) EffectiveConfigSnapshot {
+	toolSpecs := make([]model.ToolSpec, 0, len(tools))
 	for _, tool := range tools {
 		toolSpecs = append(toolSpecs, cloneToolSpec(tool.Spec))
 	}
@@ -149,7 +151,7 @@ func validateEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) error {
 	if snapshot.RuntimePolicy.MaxRequestBytes < 0 || snapshot.RuntimePolicy.MaxCompletionBytes < 0 {
 		return errors.New("configured model byte limits cannot be negative")
 	}
-	tools, err := NormalizeToolSpecs(snapshot.ModelContext.Tools)
+	tools, err := model.NormalizeToolSpecs(snapshot.ModelContext.Tools)
 	if err != nil {
 		return fmt.Errorf("configured model tools: %w", err)
 	}
@@ -211,7 +213,7 @@ func cloneEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) EffectiveCon
 		modified := *snapshot.Environment.Build.Modified
 		cloned.Environment.Build.Modified = &modified
 	}
-	cloned.ModelContext.Tools = make([]ToolSpec, len(snapshot.ModelContext.Tools))
+	cloned.ModelContext.Tools = make([]model.ToolSpec, len(snapshot.ModelContext.Tools))
 	for index, tool := range snapshot.ModelContext.Tools {
 		cloned.ModelContext.Tools[index] = cloneToolSpec(tool)
 	}
@@ -226,13 +228,13 @@ func cloneEffectiveConfigSnapshot(snapshot EffectiveConfigSnapshot) EffectiveCon
 	return cloned
 }
 
-func cloneToolSpec(spec ToolSpec) ToolSpec {
+func cloneToolSpec(spec model.ToolSpec) model.ToolSpec {
 	spec.InputSchema = spec.InputSchema.Clone()
 	return spec
 }
 
-func cloneToolSpecs(specs []ToolSpec) []ToolSpec {
-	cloned := make([]ToolSpec, len(specs))
+func cloneToolSpecs(specs []model.ToolSpec) []model.ToolSpec {
+	cloned := make([]model.ToolSpec, len(specs))
 	for index, spec := range specs {
 		cloned[index] = cloneToolSpec(spec)
 	}

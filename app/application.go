@@ -9,14 +9,11 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
-	productlimits "github.com/levmv/skot/internal/limits"
-	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
-	"github.com/levmv/skot/model/anthropic"
-	"github.com/levmv/skot/model/chatcompletions"
-	responsemodel "github.com/levmv/skot/model/responses"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -60,9 +57,9 @@ type applicationConfig struct {
 	invocationProtectedPaths []string
 	settingsProtectedPaths   []string
 	baseURL                  string
-	modelAPI                 modelAPI
+	modelAPI                 modelconfig.API
 	contextWindow            int
-	metadataLookup           modelContextLookup
+	metadataLookup           modelconfig.ContextWindowLookup
 	retryBudget              time.Duration
 	streamIdleTimeout        time.Duration
 	maxToolIterations        int
@@ -133,43 +130,43 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 		return err
 	}
 	if contextWindow < 0 {
-		return agent.MarkInvalidRequest(errors.New("model context window cannot be negative"))
+		return model.MarkInvalidRequest(errors.New("model context window cannot be negative"))
 	}
 	// A protocol supplied for this switch is user input and must be rejected
 	// when it is not one Skot implements; a protocol remembered by another
 	// build is tolerated and simply stops applying.
-	if _, err := parseModelAPI(api); err != nil {
-		return agent.MarkInvalidRequest(err)
+	if _, err := modelconfig.ParseAPI(api); err != nil {
+		return model.MarkInvalidRequest(err)
 	}
-	selectionAPI := string(selectionModelAPI(uri, api))
+	selectionAPI := string(modelconfig.SelectionAPI(uri, api))
 	selectionContextWindow := 0
 	if application.config.contextWindow == 0 {
-		selectionContextWindow = selectionModelContextWindow(uri, contextWindow)
+		selectionContextWindow = modelconfig.SelectionContextWindow(uri, contextWindow)
 	}
-	overrides := modelRouteOverrides{
+	overrides := modelconfig.Overrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
-	}.withSelection(uri, selectionAPI, selectionContextWindow)
-	route, err := resolveModelRoute(uri, effort, overrides, modelRouteEnrichment{})
+	}.WithSelection(uri, selectionAPI, selectionContextWindow)
+	route, err := modelconfig.Resolve(uri, effort, overrides, modelconfig.Enrichment{})
 	if err != nil {
-		return agent.MarkInvalidRequest(err)
+		return model.MarkInvalidRequest(err)
 	}
 	activated := false
-	_, declared := catalogModelSpec(uri)
+	_, declared := modelconfig.CatalogSpec(uri)
 	if requireContext && contextWindow == 0 && !declared && route.ContextWindowEstimated {
-		route, err = activateModelRoute(ctx, uri, effort, overrides,
-			savedModelContextFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
+		route, err = modelconfig.Activate(ctx, uri, effort, overrides,
+			savedContextWindowFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
 		if err != nil {
-			return agent.MarkInvalidRequest(err)
+			return model.MarkInvalidRequest(err)
 		}
 		activated = true
 		if route.ContextWindowEstimated {
-			return agent.MarkInvalidRequest(&ModelContextWindowRequiredError{URI: uri})
+			return model.MarkInvalidRequest(&model.ContextWindowRequiredError{URI: uri})
 		}
 	}
 	currentModel := runtime.CurrentModel()
 	currentEffort := runtime.CurrentReasoningEffort()
 	currentInfo := runtime.CurrentModelInfo()
-	sameProtocol := selectionAPI == "" || modelAPIFromBackendID(currentInfo.BackendID) == route.API
+	sameProtocol := selectionAPI == "" || modelconfig.APIFromBackendID(currentInfo.BackendID) == route.API
 	sameContext := (selectionContextWindow == 0 && !activated) || currentInfo.ContextWindow == route.ContextWindow
 	if strings.EqualFold(route.URI, currentModel) && route.ReasoningEffort == currentEffort && sameProtocol && sameContext {
 		return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
@@ -177,17 +174,17 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 		})
 	}
 	if !activated {
-		route, err = activateModelRoute(ctx, uri, effort, overrides,
-			savedModelContextFromInfo(currentInfo), application.config.metadataLookup)
+		route, err = modelconfig.Activate(ctx, uri, effort, overrides,
+			savedContextWindowFromInfo(currentInfo), application.config.metadataLookup)
 		if err != nil {
-			return agent.MarkInvalidRequest(err)
+			return model.MarkInvalidRequest(err)
 		}
 	}
-	modelInfo, err := modelInfoForRoute(route)
+	modelInfo, err := modelconfig.Info(route)
 	if err != nil {
-		return agent.MarkInvalidRequest(err)
+		return model.MarkInvalidRequest(err)
 	}
-	backend, err := buildModelBackend(route, application.config.settings, modelBackendOptions{requireCredential: true, masker: application.config.masker})
+	backend, err := modelconfig.BuildBackend(route, application.config.settings, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, Masker: application.config.masker})
 	if err != nil {
 		return err
 	}
@@ -273,7 +270,7 @@ func (application *Application) persistInteractivePreference(setting string, per
 }
 
 func (application *Application) ModelChoices() []ModelChoice {
-	overrides := modelRouteOverrides{
+	overrides := modelconfig.Overrides{
 		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
 	}
 	runtime := application.runtimeOrNil()
@@ -284,10 +281,10 @@ func (application *Application) ModelChoices() []ModelChoice {
 	current := runtime.CurrentModel()
 	// The live session already proves which protocol the current route speaks,
 	// so it stays selectable even when no stored selection describes it.
-	choices := modelChoices(application.config.interactive, current, string(modelAPIFromBackendID(info.BackendID)), overrides)
+	choices := modelChoices(application.config.interactive, current, string(modelconfig.APIFromBackendID(info.BackendID)), overrides)
 	for index := range choices {
 		if strings.EqualFold(choices[index].URI, current) {
-			if protocol := modelAPIFromBackendID(info.BackendID); protocol != "" {
+			if protocol := modelconfig.APIFromBackendID(info.BackendID); protocol != "" {
 				choices[index].Protocol = string(protocol)
 			}
 			choices[index].ContextWindow = info.ContextWindow
@@ -357,23 +354,23 @@ func (application *Application) QueuedInputs() []string {
 	return runtime.QueuedInputs()
 }
 
-func (application *Application) RunShell(ctx context.Context, command string) (agent.ToolResult, error) {
+func (application *Application) RunShell(ctx context.Context, command string) (model.ToolResult, error) {
 	runtime, err := application.requireRuntime()
 	if err != nil {
-		return agent.ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	return runtime.RunShell(ctx, command)
 }
 
-func (application *Application) RunPrivateShell(ctx context.Context, command string) (agent.ToolResult, error) {
+func (application *Application) RunPrivateShell(ctx context.Context, command string) (model.ToolResult, error) {
 	runtime, err := application.requireRuntime()
 	if err != nil {
-		return agent.ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	return runtime.RunPrivateShell(ctx, command)
 }
 
-func (application *Application) ToolStatus(id string) ([]agent.Detail, bool) {
+func (application *Application) ToolStatus(id string) ([]model.Detail, bool) {
 	runtime := application.runtimeOrNil()
 	if runtime == nil {
 		return nil, false
@@ -456,93 +453,6 @@ func (application *Application) CurrentScope() string {
 	application.mu.RLock()
 	defer application.mu.RUnlock()
 	return string(application.state.security.Scope)
-}
-
-func modelInfoForRoute(route resolvedModelRoute) (agent.ModelInfo, error) {
-	var backendID string
-	switch route.API {
-	case modelAPIChatCompletions:
-		backendID = chatcompletions.BackendID(route.Provider)
-	case modelAPIResponses:
-		backendID = responsemodel.BackendID(route.Provider)
-	case modelAPIAnthropicMessages:
-		backendID = anthropic.BackendID(route.Provider)
-	default:
-		return agent.ModelInfo{}, fmt.Errorf("unsupported model API %q", route.API)
-	}
-	return agent.ModelInfo{
-		BackendID: backendID, Provider: route.Provider, Model: route.Model,
-		ReasoningEffort: route.ReasoningEffort, ProviderStateContract: route.ProviderStateContract,
-		ImageInputUnsupported: route.ImageInputUnsupported,
-		ContextWindow:         route.ContextWindow, ContextWindowEstimated: route.ContextWindowEstimated,
-		MaxRequestBytes: productlimits.MaxModelRequestBytes, MaxCompletionBytes: productlimits.MaxModelCompletionBytes,
-		Endpoint: modelhttp.PublicEndpoint(route.BaseURL),
-	}, nil
-}
-
-func buildModelBackend(route resolvedModelRoute, credentials *state.Store, options modelBackendOptions) (agent.Backend, error) {
-	if !implementedModelAPI(route.API) {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
-	}
-	if options.requireCredential && !route.CustomEndpoint && !route.Credentialless {
-		token, _, err := credentialForProvider(credentials, route.Provider)
-		if err != nil {
-			return nil, err
-		}
-		if token == "" {
-			return nil, agent.MarkInvalidRequest(missingProviderCredentialError(route.Provider, route.URI))
-		}
-	}
-	var authorizer modelhttp.Authorizer = storedBearerAuthorizer{
-		store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
-	}
-	if route.Provider == "openai-codex" {
-		if route.CustomEndpoint || route.API != modelAPIResponses {
-			return nil, agent.MarkInvalidRequest(errors.New("openai-codex requires the ChatGPT Codex endpoint and Responses API"))
-		}
-		authorizer = codexAuthorizer{store: credentials, modelURI: route.URI, client: options.httpClient, masker: options.masker}
-		options.httpClient = codexHTTPClient(options.httpClient)
-	}
-	if route.Credentialless {
-		// Ollama ignores the token, while OpenAI-compatible clients conventionally
-		// send a non-empty placeholder.
-		authorizer = modelhttp.BearerToken(route.Provider)
-	}
-	var backend agent.Backend
-	var err error
-	switch route.API {
-	case modelAPIChatCompletions:
-		backend, err = chatcompletions.New(chatcompletions.Config{
-			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
-			ReasoningEffort: route.ReasoningEffort, Traits: route.ChatTraits,
-			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
-		})
-	case modelAPIResponses:
-		backend, err = responsemodel.New(responsemodel.Config{
-			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
-			ReasoningEffort: route.ReasoningEffort, Traits: route.ResponsesTraits,
-			BaseURL: route.BaseURL, HTTPClient: options.httpClient, Authorizer: authorizer, Header: route.Header,
-		})
-	case modelAPIAnthropicMessages:
-		var apiKeyAuthorizer modelhttp.Authorizer = storedAPIKeyAuthorizer{
-			store: credentials, provider: route.Provider, modelURI: route.URI, allowMissing: route.CustomEndpoint,
-		}
-		if route.Credentialless {
-			apiKeyAuthorizer = anthropic.APIKey(route.Provider)
-		}
-		backend, err = anthropic.New(anthropic.Config{
-			Provider: route.Provider, Model: route.Model, APIModel: route.APIModel,
-			MaxTokens: route.MaxOutputTokens, PromptCache: route.PromptCache,
-			DropMismatchedThinking: route.DropMismatchedThinking,
-			BaseURL:                route.BaseURL, HTTPClient: options.httpClient, Authorizer: apiKeyAuthorizer, Header: route.Header,
-		})
-	default:
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
-	}
-	if err != nil {
-		return nil, fmt.Errorf("initialize model: %w", err)
-	}
-	return addRouteDiagnostics(backend, route), nil
 }
 
 func (application *Application) ProviderStatuses() ([]ProviderStatus, error) {
@@ -696,7 +606,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		return errors.New("current session runtime is unavailable")
 	}
 	currentRuntimeID := currentRuntime.CurrentSessionID()
-	var knownModel *agent.ModelInfo
+	var knownModel *model.Info
 	if resumedState != nil {
 		if modelInfo, ok := restoredModelInfo(*resumedState, modelURI); ok {
 			knownModel = &modelInfo
@@ -748,9 +658,9 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	if current := application.runtimeOrNil(); current != nil {
 		info := current.CurrentModelInfo()
 		if modelInfoMatchesURI(info, modelURI) {
-			selectionAPI = string(modelAPIFromBackendID(info.BackendID))
+			selectionAPI = string(modelconfig.APIFromBackendID(info.BackendID))
 			if !info.ContextWindowEstimated {
-				selectionContextWindow = selectionModelContextWindow(modelURI, info.ContextWindow)
+				selectionContextWindow = modelconfig.SelectionContextWindow(modelURI, info.ContextWindow)
 			}
 		}
 	}

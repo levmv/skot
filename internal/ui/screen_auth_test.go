@@ -7,7 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"github.com/levmv/skot/app"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestMissingStartupCredentialOpensLoginPicker(t *testing.T) {
@@ -474,7 +474,7 @@ func TestModelPickerKeepsUnavailableRoutesInDetails(t *testing.T) {
 func TestModelPickerAsksForProtocolOnlyWhenTheRouteNeedsOne(t *testing.T) {
 	fake := &fakeAgent{
 		model:    "deepseek/model",
-		modelErr: &app.ModelAPIRequiredError{URI: "opencode-go/ox-alpha-free"},
+		modelErr: &modelapi.APIRequiredError{URI: "opencode-go/ox-alpha-free"},
 		modelChoices: []ModelChoice{
 			{URI: "deepseek/model"},
 			{URI: "opencode-go/minimax-m3", Protocol: "anthropic_messages"},
@@ -514,7 +514,7 @@ func TestModelPickerAsksForProtocolOnlyWhenTheRouteNeedsOne(t *testing.T) {
 func TestModelProtocolChoiceCancelsIntoTheTypedForm(t *testing.T) {
 	fake := &fakeAgent{
 		model:     "deepseek/model",
-		modelErr:  &app.ModelAPIRequiredError{URI: "opencode-go/ox-alpha-free"},
+		modelErr:  &modelapi.APIRequiredError{URI: "opencode-go/ox-alpha-free"},
 		providers: []ProviderStatus{{Name: "opencode-go", Source: "auth store"}},
 	}
 	model := testScreenModel(t, fake)

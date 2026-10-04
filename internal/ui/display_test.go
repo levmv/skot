@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/levmv/skot/agent"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestCompactDisplayGroupsContiguousModelTools(t *testing.T) {
@@ -20,20 +21,20 @@ func TestCompactDisplayGroupsContiguousModelTools(t *testing.T) {
 	model.displayProfile = DisplayCompact
 
 	startedAt := time.Now().Add(-3 * time.Second)
-	model.addToolCallAt(agent.ToolCall{ID: "bash", Name: "bash", RawArguments: `{"command":"go test ./..."}`}, startedAt)
+	model.addToolCallAt(modelapi.ToolCall{ID: "bash", Name: "bash", RawArguments: `{"command":"go test ./..."}`}, startedAt)
 	zero := 0
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "bash",
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\nnoisy output\n"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\nnoisy output\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessCompleted, ExitCode: &zero,
 		})},
 	})
-	model.addToolCallAt(agent.ToolCall{ID: "read-a", Name: "read", RawArguments: `{"path":"internal/a.go"}`}, startedAt.Add(time.Second))
-	model.finishTool(agent.ToolResult{CallID: "read-a"})
-	model.addToolCallAt(agent.ToolCall{ID: "read-b", Name: "read", RawArguments: `{"path":"internal/b.go"}`}, startedAt.Add(2*time.Second))
-	model.finishTool(agent.ToolResult{CallID: "read-b"})
-	model.addToolCallAt(agent.ToolCall{ID: "edit", Name: "edit", RawArguments: `{"path":"main.go"}`}, startedAt.Add(2*time.Second))
+	model.addToolCallAt(modelapi.ToolCall{ID: "read-a", Name: "read", RawArguments: `{"path":"internal/a.go"}`}, startedAt.Add(time.Second))
+	model.finishTool(modelapi.ToolResult{CallID: "read-a"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "read-b", Name: "read", RawArguments: `{"path":"internal/b.go"}`}, startedAt.Add(2*time.Second))
+	model.finishTool(modelapi.ToolResult{CallID: "read-b"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "edit", Name: "edit", RawArguments: `{"path":"main.go"}`}, startedAt.Add(2*time.Second))
 	change := agent.FileChange{
 		Path: "main.go", Operation: "edited", Additions: 1,
 		Hunks: []agent.FileDiffHunk{{Lines: []agent.FileDiffLine{{Kind: "add", NewLine: 1, Text: "new line"}}}},
@@ -42,7 +43,7 @@ func TestCompactDisplayGroupsContiguousModelTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.finishTool(agent.ToolResult{CallID: "edit", Details: []agent.Detail{detail}})
+	model.finishTool(modelapi.ToolResult{CallID: "edit", Details: []modelapi.Detail{detail}})
 	model.refreshTranscript()
 
 	live := strings.Join(model.transcript.lines, "\n")
@@ -71,8 +72,8 @@ func TestCompactDisplayGroupsContiguousModelTools(t *testing.T) {
 
 	// Work after commentary starts a fresh visible tail, which is committed by
 	// the next assistant text independently of the earlier summary.
-	model.addToolCallAt(agent.ToolCall{ID: "grep", Name: "grep", RawArguments: `{"pattern":"TODO"}`}, time.Now().Add(-1500*time.Millisecond))
-	model.finishTool(agent.ToolResult{CallID: "grep"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "grep", Name: "grep", RawArguments: `{"pattern":"TODO"}`}, time.Now().Add(-1500*time.Millisecond))
+	model.finishTool(modelapi.ToolResult{CallID: "grep"})
 	model.refreshTranscript()
 	if live = strings.Join(model.transcript.lines, "\n"); !strings.Contains(live, `grep  "TODO"`) {
 		t.Fatalf("new live tail = %q", live)
@@ -95,11 +96,11 @@ func TestCompactDisplayFoldsOldestLiveToolsToFitViewport(t *testing.T) {
 
 	for number := 1; number <= 7; number++ {
 		id := fmt.Sprintf("bash-%d", number)
-		model.addToolCall(agent.ToolCall{
+		model.addToolCall(modelapi.ToolCall{
 			ID: id, Name: "bash",
 			RawArguments: fmt.Sprintf(`{"command":"tool-%d"}`, number),
 		})
-		model.finishTool(agent.ToolResult{CallID: id})
+		model.finishTool(modelapi.ToolResult{CallID: id})
 		model.refreshTranscript()
 	}
 
@@ -183,11 +184,11 @@ func TestCompactRollingFoldDoesNotClearScrollback(t *testing.T) {
 	}
 	for number := 1; number <= 8; number++ {
 		id := fmt.Sprintf("bash-%d", number)
-		model.addToolCall(agent.ToolCall{
+		model.addToolCall(modelapi.ToolCall{
 			ID: id, Name: "bash",
 			RawArguments: fmt.Sprintf(`{"command":"tool-%d"}`, number),
 		})
-		model.finishTool(agent.ToolResult{CallID: id})
+		model.finishTool(modelapi.ToolResult{CallID: id})
 		render(id)
 	}
 	model.transcript.appendAssistant("answer", "Done.")
@@ -208,11 +209,11 @@ func TestCompactSettledToolsReserveRowsForStreamingAnswer(t *testing.T) {
 	model.addBlock(screenBlockUser, "Question")
 	for number := 1; number <= 8; number++ {
 		id := fmt.Sprintf("bash-%d", number)
-		model.addToolCall(agent.ToolCall{
+		model.addToolCall(modelapi.ToolCall{
 			ID: id, Name: "bash",
 			RawArguments: fmt.Sprintf(`{"command":"tool-%d"}`, number),
 		})
-		model.finishTool(agent.ToolResult{CallID: id})
+		model.finishTool(modelapi.ToolResult{CallID: id})
 	}
 	model.refreshTranscript()
 	before := model.inlineFrame()
@@ -275,11 +276,11 @@ func TestCompactDisplayKeepsFoldedReadStableWhenNewCallArrives(t *testing.T) {
 	folded := false
 	for number := 1; number <= 12; number++ {
 		id := fmt.Sprintf("read-%02d", number)
-		model.addToolCall(agent.ToolCall{
+		model.addToolCall(modelapi.ToolCall{
 			ID: id, Name: "read",
 			RawArguments: fmt.Sprintf(`{"path":"internal/file-%02d.go"}`, number),
 		})
-		model.finishTool(agent.ToolResult{CallID: id})
+		model.finishTool(modelapi.ToolResult{CallID: id})
 		model.refreshTranscript()
 		if strings.Contains(strings.Join(model.transcript.lines, "\n"), "Used ") {
 			folded = true
@@ -290,8 +291,8 @@ func TestCompactDisplayKeepsFoldedReadStableWhenNewCallArrives(t *testing.T) {
 		t.Fatalf("read group did not fold: %q", model.transcript.lines)
 	}
 
-	model.addToolCall(agent.ToolCall{ID: "read-new", Name: "read", RawArguments: `{"path":"internal/new.go"}`})
-	model.finishTool(agent.ToolResult{CallID: "read-new"})
+	model.addToolCall(modelapi.ToolCall{ID: "read-new", Name: "read", RawArguments: `{"path":"internal/new.go"}`})
+	model.finishTool(modelapi.ToolResult{CallID: "read-new"})
 	model.refreshTranscript()
 	rendered := strings.Join(model.transcript.lines, "\n")
 	if !strings.Contains(rendered, "Used ") || strings.Contains(rendered, "file-01.go") || !strings.Contains(rendered, "new.go") {
@@ -304,9 +305,9 @@ func TestCompactDisplayExpandsRunningAndFailedTools(t *testing.T) {
 	model.clearTranscript()
 	model.displayProfile = DisplayCompact
 	startedAt := time.Now().Add(-2 * time.Second)
-	model.addToolCallAt(agent.ToolCall{ID: "running", Name: "bash", RawArguments: `{"command":"make check"}`}, startedAt)
-	model.addToolCallAt(agent.ToolCall{ID: "failed", Name: "grep", RawArguments: `{"pattern":"needle"}`}, startedAt.Add(time.Second))
-	model.finishTool(agent.ToolResult{CallID: "failed", Content: agent.TextContent("permission denied"), Error: true})
+	model.addToolCallAt(modelapi.ToolCall{ID: "running", Name: "bash", RawArguments: `{"command":"make check"}`}, startedAt)
+	model.addToolCallAt(modelapi.ToolCall{ID: "failed", Name: "grep", RawArguments: `{"pattern":"needle"}`}, startedAt.Add(time.Second))
+	model.finishTool(modelapi.ToolResult{CallID: "failed", Content: modelapi.TextContent("permission denied"), Error: true})
 	model.transcript.appendAssistant("answer", "Continuing.")
 	model.refreshTranscript()
 
@@ -324,17 +325,17 @@ func TestCompactDisplayShortensLiveBashAndDiffs(t *testing.T) {
 	model.displayProfile = DisplayCompact
 
 	longArgument := strings.Repeat("long-argument ", 20)
-	model.addToolCall(agent.ToolCall{ID: "bash", Name: "bash", RawArguments: `{"command":"run ` + longArgument + `"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "bash", Name: "bash", RawArguments: `{"command":"run ` + longArgument + `"}`})
 	zero := 0
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "bash",
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\nfirst output line\nsecond output line\n"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\nfirst output line\nsecond output line\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessCompleted, ExitCode: &zero,
 		})},
 	})
 
-	model.addToolCall(agent.ToolCall{ID: "edit", Name: "edit", RawArguments: `{"path":"large.go"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "edit", Name: "edit", RawArguments: `{"path":"large.go"}`})
 	var diffLines []agent.FileDiffLine
 	for line := 1; line <= 20; line++ {
 		diffLines = append(diffLines, agent.FileDiffLine{Kind: "add", NewLine: line, Text: fmt.Sprintf("diff-line-%02d", line)})
@@ -347,7 +348,7 @@ func TestCompactDisplayShortensLiveBashAndDiffs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.finishTool(agent.ToolResult{CallID: "edit", Details: []agent.Detail{detail}})
+	model.finishTool(modelapi.ToolResult{CallID: "edit", Details: []modelapi.Detail{detail}})
 	model.refreshTranscript()
 
 	live := strings.Join(model.transcript.lines, "\n")
@@ -363,12 +364,12 @@ func TestCompactDisplayHidesSuccessfulOutputFromProcessBackedTools(t *testing.T)
 	model := testScreenModel(t, &fakeAgent{})
 	model.clearTranscript()
 	model.displayProfile = DisplayCompact
-	model.addToolCall(agent.ToolCall{ID: "program", Name: "custom_program", RawArguments: `{}`})
+	model.addToolCall(modelapi.ToolCall{ID: "program", Name: "custom_program", RawArguments: `{}`})
 	zero := 0
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "program",
-		Content: agent.TextContent("status: completed\nexit_code: 0\n\nnoisy program output\n"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+		Content: modelapi.TextContent("status: completed\nexit_code: 0\n\nnoisy program output\n"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessCompleted, ExitCode: &zero,
 		})},
 	})
@@ -385,11 +386,11 @@ func TestCompactDisplaySettlesToolTailAtConversationBoundaries(t *testing.T) {
 	model.clearTranscript()
 	model.displayProfile = DisplayCompact
 
-	model.addToolCallAt(agent.ToolCall{ID: "read", Name: "read", RawArguments: `{"path":"before-status.go"}`}, time.Now().Add(-time.Second))
-	model.finishTool(agent.ToolResult{CallID: "read"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "read", Name: "read", RawArguments: `{"path":"before-status.go"}`}, time.Now().Add(-time.Second))
+	model.finishTool(modelapi.ToolResult{CallID: "read"})
 	model.addBlock(screenBlockSystem, "context compacted")
-	model.addToolCallAt(agent.ToolCall{ID: "grep", Name: "grep", RawArguments: `{"pattern":"needle"}`}, time.Now().Add(-time.Second))
-	model.finishTool(agent.ToolResult{CallID: "grep"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "grep", Name: "grep", RawArguments: `{"pattern":"needle"}`}, time.Now().Add(-time.Second))
+	model.finishTool(modelapi.ToolResult{CallID: "grep"})
 	model.addBlock(screenBlockUser, "queued follow-up")
 	model.refreshTranscript()
 
@@ -408,8 +409,8 @@ func TestCompactDisplayKeepsToolsSettledAfterDiscardedText(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.clearTranscript()
 	model.displayProfile = DisplayCompact
-	model.addToolCallAt(agent.ToolCall{ID: "read", Name: "read", RawArguments: `{"path":"answer.go"}`}, time.Now().Add(-time.Second))
-	model.finishTool(agent.ToolResult{CallID: "read"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "read", Name: "read", RawArguments: `{"path":"answer.go"}`}, time.Now().Add(-time.Second))
+	model.finishTool(modelapi.ToolResult{CallID: "read"})
 	model.transcript.appendAssistant("attempt", "partial answer")
 	if !model.transcript.discardAttempt("attempt") {
 		t.Fatal("visible partial response was not discarded")
@@ -427,7 +428,7 @@ func TestCompactDisplayKeepsLiveBashToOneLineOnNarrowScreen(t *testing.T) {
 	model.clearTranscript()
 	model.displayProfile = DisplayCompact
 	model.resize(18, 20)
-	model.addToolCall(agent.ToolCall{
+	model.addToolCall(modelapi.ToolCall{
 		ID: "bash", Name: "bash",
 		RawArguments: `{"command":"printf one two three four five six seven eight"}`,
 	})
@@ -438,10 +439,10 @@ func TestCompactDisplayKeepsLiveBashToOneLineOnNarrowScreen(t *testing.T) {
 	}
 
 	zero := 0
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "bash",
-		Content: agent.TextContent("status: completed\n\noutput"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{
+		Content: modelapi.TextContent("status: completed\n\noutput"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{
 			Status: agent.ProcessCompleted, ExitCode: &zero, OutputBytes: 112,
 		})},
 	})
@@ -526,18 +527,18 @@ func TestFullDisplayKeepsIndividualCallsArgumentsAndResults(t *testing.T) {
 	model.clearTranscript()
 	model.displayProfile = DisplayDetailed
 
-	model.addToolCall(agent.ToolCall{ID: "read-a", Name: "read", RawArguments: `{"path":"internal/a.go","offset":10}`})
-	model.finishTool(agent.ToolResult{CallID: "read-a", Content: agent.TextContent("first saved result")})
-	model.addToolCall(agent.ToolCall{ID: "read-b", Name: "read", RawArguments: `{"path":"internal/b.go","limit":25}`})
-	model.finishTool(agent.ToolResult{CallID: "read-b", Content: agent.TextContent("second saved result")})
+	model.addToolCall(modelapi.ToolCall{ID: "read-a", Name: "read", RawArguments: `{"path":"internal/a.go","offset":10}`})
+	model.finishTool(modelapi.ToolResult{CallID: "read-a", Content: modelapi.TextContent("first saved result")})
+	model.addToolCall(modelapi.ToolCall{ID: "read-b", Name: "read", RawArguments: `{"path":"internal/b.go","limit":25}`})
+	model.finishTool(modelapi.ToolResult{CallID: "read-b", Content: modelapi.TextContent("second saved result")})
 
 	longArgument := strings.Repeat("argument-", 30)
-	model.addToolCall(agent.ToolCall{ID: "program", Name: "custom_program", RawArguments: `{"value":"` + longArgument + `"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "program", Name: "custom_program", RawArguments: `{"value":"` + longArgument + `"}`})
 	zero := 0
-	model.finishTool(agent.ToolResult{
+	model.finishTool(modelapi.ToolResult{
 		CallID:  "program",
-		Content: agent.TextContent("status: completed\n\nline-1\nline-2\nline-3\nline-4\nline-5\nline-6\nline-7\nline-8"),
-		Details: []agent.Detail{processDetailForTest(t, agent.ProcessResult{Status: agent.ProcessCompleted, ExitCode: &zero})},
+		Content: modelapi.TextContent("status: completed\n\nline-1\nline-2\nline-3\nline-4\nline-5\nline-6\nline-7\nline-8"),
+		Details: []modelapi.Detail{processDetailForTest(t, agent.ProcessResult{Status: agent.ProcessCompleted, ExitCode: &zero})},
 	})
 	model.refreshTranscript()
 	detailed := strings.Join(model.transcript.lines, "\n")
@@ -576,8 +577,8 @@ func TestDisplayCommandSwitchesLiveProfile(t *testing.T) {
 	model := testScreenModel(t, fake)
 	model.clearTranscript()
 	model.keymap = newDefaultKeyMapFor("linux")
-	model.addToolCall(agent.ToolCall{ID: "read", Name: "read", RawArguments: `{"path":"internal/command.go"}`})
-	model.finishTool(agent.ToolResult{CallID: "read"})
+	model.addToolCall(modelapi.ToolCall{ID: "read", Name: "read", RawArguments: `{"path":"internal/command.go"}`})
+	model.finishTool(modelapi.ToolResult{CallID: "read"})
 	model.addBlock(screenBlockAssistant, "Done.")
 	model.refreshTranscript()
 	if rendered := strings.Join(model.transcript.lines, "\n"); !strings.Contains(rendered, "internal/command.go") {

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/levmv/skot/app"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func (m *screenModel) openModelPicker() {
@@ -327,11 +327,11 @@ func (m *screenModel) switchModel(selection modelSelection) {
 		// A route whose gateway serves several protocols needs one fact Skot
 		// does not have. Asking for it here keeps the answer attached to the
 		// selection being made instead of to the whole process.
-		if selection.api == "" && app.IsModelAPIRequired(switchErr) {
+		if selection.api == "" && modelapi.IsAPIRequired(switchErr) {
 			m.askModelAPI(selection)
 			return
 		}
-		if app.IsModelContextWindowRequired(switchErr) {
+		if modelapi.IsContextWindowRequired(switchErr) {
 			m.askModelContextWindow(selection)
 			return
 		}

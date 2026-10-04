@@ -1,4 +1,4 @@
-package agent
+package model
 
 import (
 	"encoding/json/jsontext"

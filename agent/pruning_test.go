@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testing.T) {
@@ -15,11 +17,11 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	tool := seedCompletedToolResultHistory(t, journal, largeResult, "inspect a large result")
 
 	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 32 * 1024},
-		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 32 * 1024},
+		steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			var result string
 			for _, item := range request.Items {
-				if item.Kind == ItemToolResult && item.ToolResult != nil {
+				if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil {
 					result = item.ToolResult.Content.Text()
 					break
 				}
@@ -27,7 +29,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 			if !strings.HasPrefix(result, "BEGIN\n") || !strings.HasSuffix(result, "\nEND") || !strings.Contains(result, "bytes omitted from old tool result") {
 				t.Fatalf("provider tool result = %q", result)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
 		}},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -51,7 +53,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	assertAuthoritativeEvents(t, events, journal.snapshot())
 	var rawResult string
 	for _, item := range state.Items {
-		if item.Kind == ItemToolResult && item.ToolResult != nil {
+		if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil {
 			rawResult = item.ToolResult.Content.Text()
 			break
 		}
@@ -61,7 +63,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	}
 	var projectedResult string
 	for _, item := range state.VerbatimItems() {
-		if item.Kind == ItemToolResult && item.ToolResult != nil {
+		if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil {
 			projectedResult = item.ToolResult.Content.Text()
 			break
 		}
@@ -90,29 +92,29 @@ func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
 
 	attempts := 0
 	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test"},
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test"},
 		steps: []modelStep{
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				attempts++
 				for _, item := range request.Items {
-					if item.Kind == ItemToolResult && item.ToolResult != nil && item.ToolResult.Content.Text() == largeResult {
-						return ModelResponse{}, &ProviderError{
-							Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
+					if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil && item.ToolResult.Content.Text() == largeResult {
+						return modelapi.Response{}, &modelapi.ProviderError{
+							Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge,
 						}
 					}
 				}
 				t.Fatalf("first request did not contain the full tool result: %#v", request.Items)
-				return ModelResponse{}, nil
+				return modelapi.Response{}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				attempts++
 				for _, item := range request.Items {
-					if item.Kind == ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "bytes omitted from old tool result") {
-						return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
+					if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "bytes omitted from old tool result") {
+						return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
 					}
 				}
 				t.Fatalf("retry did not contain the pruned tool result: %#v", request.Items)
-				return ModelResponse{}, nil
+				return modelapi.Response{}, nil
 			},
 		},
 	}
@@ -139,21 +141,21 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 
 	mainAttempts, summaryAttempts := 0, 0
 	runtime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		Backend: modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if isCompactionRequest(request) {
 				summaryAttempts++
 				t.Fatal("unexpected compaction request after decisive pruning")
 			}
 			mainAttempts++
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge,
 			}
 		}),
 		Journal: journal,
 		Tools:   []Tool{tool},
 	})
 	result, err := runtime.Run(context.Background(), "new question", nil)
-	if result.Status != RunFailed || !errors.Is(err, ErrModelRequestTooLarge) || !errors.Is(err, errCompactionNotNeeded) ||
+	if result.Status != RunFailed || !errors.Is(err, modelapi.ErrModelRequestTooLarge) || !errors.Is(err, errCompactionNotNeeded) ||
 		mainAttempts != 2 || summaryAttempts != 0 {
 		t.Fatalf("result/error/attempts = %#v / %v / %d/%d", result, err, mainAttempts, summaryAttempts)
 	}
@@ -170,20 +172,20 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 }
 
 func seedCompletedToolResultHistory(t *testing.T, journal *memoryJournal, content, firstInput string) Tool {
-	return seedCompletedToolContentHistory(t, journal, TextContent(content), firstInput)
+	return seedCompletedToolContentHistory(t, journal, modelapi.TextContent(content), firstInput)
 }
 
-func seedCompletedToolContentHistory(t *testing.T, journal *memoryJournal, content Content, firstInput string) Tool {
+func seedCompletedToolContentHistory(t *testing.T, journal *memoryJournal, content modelapi.Content, firstInput string) Tool {
 	t.Helper()
 	tool := Tool{
-		Spec: ToolSpec{Name: "large_output", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "large_output", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{Content: content}, nil
 		},
 	}
 	seedModel := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "large_output", RawArguments: `{}`}}}}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "large_output", RawArguments: `{}`}}}}, nil
 		},
 		directModelResponse("old tool work complete"),
 		directModelResponse("recent answer"),
@@ -202,10 +204,10 @@ func TestImagePruningChangesOnlyTheModelProjection(t *testing.T) {
 	journal := &memoryJournal{}
 	beforeText := "BEGIN" + strings.Repeat("a", 100)
 	afterText := strings.Repeat("b", 100) + "END"
-	seedCompletedToolContentHistory(t, journal, Content{
-		{Kind: ContentPartText, Text: beforeText},
-		{Kind: ContentPartImage, Image: &ImageContent{MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5}},
-		{Kind: ContentPartText, Text: afterText},
+	seedCompletedToolContentHistory(t, journal, modelapi.Content{
+		{Kind: modelapi.ContentPartText, Text: beforeText},
+		{Kind: modelapi.ContentPartImage, Image: &modelapi.ImageContent{MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5}},
+		{Kind: modelapi.ContentPartText, Text: afterText},
 	}, "inspect an image")
 	state, err := Replay(journal.snapshot())
 	if err != nil {
@@ -221,15 +223,15 @@ func TestImagePruningChangesOnlyTheModelProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var stored, projected Content
+	var stored, projected modelapi.Content
 	for _, item := range state.Items {
-		if item.Kind == ItemToolResult && item.ToolResult != nil {
+		if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil {
 			stored = item.ToolResult.Content
 			break
 		}
 	}
 	for _, item := range state.VerbatimItems() {
-		if item.Kind == ItemToolResult && item.ToolResult != nil {
+		if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil {
 			projected = item.ToolResult.Content
 			break
 		}
@@ -249,15 +251,15 @@ func TestImagePruningChangesOnlyTheModelProjection(t *testing.T) {
 
 func TestPruneToolResultKeepsUTF8HeadAndTail(t *testing.T) {
 	content := "начало-" + strings.Repeat("界", 200) + "-конец"
-	pruned := pruneToolResult(TextContent(content), 11, 10).Text()
+	pruned := pruneToolResult(modelapi.TextContent(content), 11, 10).Text()
 	if !strings.HasPrefix(pruned, "начал") || !strings.HasSuffix(pruned, "конец") || !strings.Contains(pruned, "bytes omitted") || !utf8.ValidString(pruned) {
 		t.Fatalf("pruned content = %q", pruned)
 	}
-	if expanded := pruneToolResult(TextContent(strings.Repeat("x", 101)), 50, 50).Text(); len(expanded) != 101 {
+	if expanded := pruneToolResult(modelapi.TextContent(strings.Repeat("x", 101)), 50, 50).Text(); len(expanded) != 101 {
 		t.Fatalf("small result expanded to %d bytes", len(expanded))
 	}
 	moderate := "HEAD" + strings.Repeat("x", 6*1024) + "TAIL"
-	moderatePruned := pruneToolResult(TextContent(moderate), defaultPrunedToolHeadBytes, defaultPrunedToolTailBytes).Text()
+	moderatePruned := pruneToolResult(modelapi.TextContent(moderate), defaultPrunedToolHeadBytes, defaultPrunedToolTailBytes).Text()
 	if len(moderatePruned) >= len(moderate) || !strings.HasPrefix(moderatePruned, "HEAD") || !strings.HasSuffix(moderatePruned, "TAIL") {
 		t.Fatalf("moderate result was not usefully pruned: %d -> %d bytes", len(moderate), len(moderatePruned))
 	}

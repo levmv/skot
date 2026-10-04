@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/levmv/skot/model"
 )
 
 func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
@@ -17,7 +19,7 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 		Journal: journal,
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
 			called = command
-			return ToolOutput{Content: TextContent("status: completed\n\nhello\n"), Details: []Detail{{
+			return ToolOutput{Content: model.TextContent("status: completed\n\nhello\n"), Details: []model.Detail{{
 				Kind: "process_result", Data: jsontext.Value(`{"status":"completed"}`),
 			}}}, nil
 		},
@@ -31,7 +33,7 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 		t.Fatalf("called=%q result=%#v", called, result)
 	}
 	usage, err := runtime.Usage(t.Context(), 0)
-	if err != nil || !usage.Complete || len(usage.Attempts) != 0 || usage.LegacyResponses != 0 || usage.Usage != (ModelUsage{}) {
+	if err != nil || !usage.Complete || len(usage.Attempts) != 0 || usage.LegacyResponses != 0 || usage.Usage != (model.TokenCounts{}) {
 		t.Fatalf("shell command counted as a model request: %#v, %v", usage, err)
 	}
 	assertSemanticRecordKinds(t, journal.snapshot(),
@@ -42,9 +44,9 @@ func TestDurableShellRecordsSyntheticTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Items) != 3 || state.Items[0].Kind != ItemUserText || state.Items[0].Text != "!printf hello" ||
-		state.Items[1].Kind != ItemToolCall || state.Items[1].ToolCall.Name != "bash" ||
-		state.Items[2].Kind != ItemToolResult || state.Items[2].ToolResult.CallID != state.Items[1].ToolCall.ID {
+	if len(state.Items) != 3 || state.Items[0].Kind != model.ItemUserText || state.Items[0].Text != "!printf hello" ||
+		state.Items[1].Kind != model.ItemToolCall || state.Items[1].ToolCall.Name != "bash" ||
+		state.Items[2].Kind != model.ItemToolResult || state.Items[2].ToolResult.CallID != state.Items[1].ToolCall.ID {
 		t.Fatalf("synthetic shell items = %#v", state.Items)
 	}
 	if len(state.Items[2].ToolResult.Details) != 1 {
@@ -58,7 +60,7 @@ func TestPrivateShellDoesNotTouchJournal(t *testing.T) {
 		Backend: &scriptedModel{},
 		Journal: journal,
 		UserShell: func(_ context.Context, command string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent(command)}, nil
+			return ToolOutput{Content: model.TextContent(command)}, nil
 		},
 	})
 
@@ -78,7 +80,7 @@ func TestShellSanitizesResultAndDurableJournal(t *testing.T) {
 		Backend: &scriptedModel{}, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		UserShell: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent("value=\xff" + secret)}, nil
+			return ToolOutput{Content: model.TextContent("value=\xff" + secret)}, nil
 		},
 	})
 	result, err := runtime.RunShell(context.Background(), "printf "+secret)

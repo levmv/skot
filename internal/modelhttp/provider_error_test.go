@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestDecodeProviderErrorFallbacks(t *testing.T) {
@@ -42,17 +42,17 @@ func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.
 	tests := []struct {
 		name      string
 		status    int
-		wantKind  agent.ProviderErrorKind
+		wantKind  model.ProviderErrorKind
 		wantText  string
 		retryable bool
 	}{
-		{name: "invalid credential", status: http.StatusUnauthorized, wantKind: agent.ProviderErrorAuthentication, wantText: "rejected the credential"},
-		{name: "quota exhausted", status: http.StatusPaymentRequired, wantKind: agent.ProviderErrorQuota, wantText: "quota is exhausted"},
-		{name: "access denied", status: http.StatusForbidden, wantKind: agent.ProviderErrorPermission, wantText: "denied access"},
-		{name: "temporary rate limit", status: http.StatusTooManyRequests, wantKind: agent.ProviderErrorRateLimit, wantText: "temporarily rate limited", retryable: true},
-		{name: "bad request", status: http.StatusBadRequest, wantKind: agent.ProviderErrorRequest, wantText: "rejected the request"},
-		{name: "request too large", status: http.StatusRequestEntityTooLarge, wantKind: agent.ProviderErrorRequestTooLarge, wantText: "rejected the oversized request"},
-		{name: "service failure", status: http.StatusBadGateway, wantKind: agent.ProviderErrorUnavailable, wantText: "temporarily unavailable", retryable: true},
+		{name: "invalid credential", status: http.StatusUnauthorized, wantKind: model.ProviderErrorAuthentication, wantText: "rejected the credential"},
+		{name: "quota exhausted", status: http.StatusPaymentRequired, wantKind: model.ProviderErrorQuota, wantText: "quota is exhausted"},
+		{name: "access denied", status: http.StatusForbidden, wantKind: model.ProviderErrorPermission, wantText: "denied access"},
+		{name: "temporary rate limit", status: http.StatusTooManyRequests, wantKind: model.ProviderErrorRateLimit, wantText: "temporarily rate limited", retryable: true},
+		{name: "bad request", status: http.StatusBadRequest, wantKind: model.ProviderErrorRequest, wantText: "rejected the request"},
+		{name: "request too large", status: http.StatusRequestEntityTooLarge, wantKind: model.ProviderErrorRequestTooLarge, wantText: "rejected the oversized request"},
+		{name: "service failure", status: http.StatusBadGateway, wantKind: model.ProviderErrorUnavailable, wantText: "temporarily unavailable", retryable: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -61,11 +61,11 @@ func TestNewProviderErrorClassifiesCallerActionWithoutParsingMessage(t *testing.
 				Status: http.StatusText(test.status), Message: "opaque upstream prose",
 				Code: "ROUTE_CODE", RetryAfter: 3 * time.Second,
 			})
-			var providerErr *agent.ProviderError
-			if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) {
+			var providerErr *model.ProviderError
+			if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) {
 				t.Fatalf("error = %v", err)
 			}
-			if got := errors.Is(err, agent.ErrModelRequestTooLarge); got != (test.wantKind == agent.ProviderErrorRequestTooLarge) {
+			if got := errors.Is(err, model.ErrModelRequestTooLarge); got != (test.wantKind == model.ProviderErrorRequestTooLarge) {
 				t.Fatalf("request-too-large classification = %v", got)
 			}
 			if providerErr.Kind != test.wantKind || providerErr.Code != "route_code" || providerErr.Type != "" ||
@@ -93,9 +93,9 @@ func TestStructuredContextLimitSignalsClassifyOversizedRequests(t *testing.T) {
 				Provider: "compatible", Model: "model", StatusCode: http.StatusBadRequest,
 				Code: test.code, Type: test.errorType, Message: "opaque provider detail",
 			})
-			var providerErr *agent.ProviderError
-			if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
-				providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Retryable {
+			var providerErr *model.ProviderError
+			if !errors.Is(err, model.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+				providerErr.Kind != model.ProviderErrorRequestTooLarge || providerErr.Retryable {
 				t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 			}
 		})
@@ -111,8 +111,8 @@ func TestStatuslessInvalidRequestSignalIsNonRetryable(t *testing.T) {
 		details.Model = "model"
 		details.Message = "opaque provider detail"
 		err := NewProviderError(details)
-		var providerErr *agent.ProviderError
-		if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRequest || providerErr.Retryable {
+		var providerErr *model.ProviderError
+		if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorRequest || providerErr.Retryable {
 			t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 		}
 	}
@@ -123,9 +123,9 @@ func TestAnthropicGenericBadRequestDoesNotGuessContextOverflow(t *testing.T) {
 		Provider: "anthropic", StatusCode: http.StatusBadRequest,
 		Type: "invalid_request_error", Message: "provider prose says the prompt is too long",
 	})
-	var providerErr *agent.ProviderError
-	if errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
-		providerErr.Kind != agent.ProviderErrorRequest {
+	var providerErr *model.ProviderError
+	if errors.Is(err, model.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != model.ProviderErrorRequest {
 		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
 }
@@ -136,9 +136,9 @@ func TestDecodeProviderErrorUsesMetadataErrorType(t *testing.T) {
 		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"opaque detail","type":"invalid_request_error","code":"invalid_prompt","metadata":{"error_type":"context_length_exceeded"}}}`)),
 	}
 	err := DecodeProviderError("openrouter", "model", "API", response)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
-		providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Code != "invalid_prompt" ||
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != model.ProviderErrorRequestTooLarge || providerErr.Code != "invalid_prompt" ||
 		providerErr.Type != "context_length_exceeded" {
 		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
@@ -168,8 +168,8 @@ func TestDeepSeekStructuredQuotaSignalRefinesHTTP429(t *testing.T) {
 				Provider: "deepseek", Model: "deepseek-v4-flash", StatusCode: http.StatusTooManyRequests,
 				Code: test.code, Type: test.errorType, Message: "opaque provider detail",
 			})
-			var providerErr *agent.ProviderError
-			if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable ||
+			var providerErr *model.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorQuota || providerErr.Retryable ||
 				providerErr.Code != strings.ToLower(test.code) || providerErr.Type != strings.ToLower(test.errorType) {
 				t.Fatalf("metadata = %#v", providerErr)
 			}
@@ -182,8 +182,8 @@ func TestDeepSeekUnknownHTTP429SignalRemainsRetryableRateLimit(t *testing.T) {
 		Provider: "deepseek", Model: "deepseek-v4-flash", StatusCode: http.StatusTooManyRequests,
 		Code: "requests_too_fast", Type: "rate_limit_error", Message: "opaque provider detail",
 	})
-	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRateLimit || !providerErr.Retryable {
+	var providerErr *model.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorRateLimit || !providerErr.Retryable {
 		t.Fatalf("metadata = %#v", providerErr)
 	}
 }

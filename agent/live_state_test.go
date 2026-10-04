@@ -5,6 +5,8 @@ import (
 	"encoding/json/jsontext"
 	"reflect"
 	"testing"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
@@ -12,8 +14,8 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 	var runtime *Runtime
 	requestNumber := 0
 	model := configurationModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "projection", ContextWindow: 128_000},
-		complete: func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "projection", ContextWindow: 128_000},
+		complete: func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			replayed, err := Replay(journal.snapshot())
 			if err != nil {
 				t.Fatal(err)
@@ -27,17 +29,17 @@ func TestLiveRequestsEqualFullReplayProjection(t *testing.T) {
 			}
 			requestNumber++
 			if requestNumber == 1 {
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{
 					ID: "provider-call", Name: "echo", RawArguments: `{"text":"hello"}`,
 				}}}}, nil
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 		},
 	}
 	tool := Tool{
-		Spec: ToolSpec{Name: "echo", Description: "echo input", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "echo", Description: "echo input", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent(arguments)}, nil
+			return ToolOutput{Content: modelapi.TextContent(arguments)}, nil
 		},
 	}
 	boundaryCommitted := false

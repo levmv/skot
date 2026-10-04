@@ -1,4 +1,4 @@
-package app
+package modelconfig
 
 import (
 	"fmt"
@@ -6,24 +6,24 @@ import (
 	"strings"
 )
 
-const defaultReasoningEffort = ""
+const DefaultReasoningEffort = ""
 
-func reasoningEffortsForModel(uri string) []string {
-	route, err := resolveModelRoute(uri, "", modelRouteOverrides{}, modelRouteEnrichment{})
+func ReasoningEfforts(uri string) []string {
+	route, err := Resolve(uri, "", Overrides{}, Enrichment{})
 	if err != nil {
-		return []string{defaultReasoningEffort}
+		return []string{DefaultReasoningEffort}
 	}
 	return append([]string(nil), route.ReasoningEfforts...)
 }
 
-func normalizeReasoningEffort(uri, effort string) (string, error) {
-	return normalizeReasoningEffortForRoute(uri, effort, reasoningEffortsForModel(uri))
+func NormalizeReasoningEffort(uri, effort string) (string, error) {
+	return normalizeReasoningEffortForRoute(uri, effort, ReasoningEfforts(uri))
 }
 
 func normalizeReasoningEffortForRoute(uri, effort string, supported []string) (string, error) {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	if effort == "default" {
-		effort = defaultReasoningEffort
+		effort = DefaultReasoningEffort
 	}
 	if slices.Contains(supported, effort) {
 		return effort, nil

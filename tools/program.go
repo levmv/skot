@@ -18,6 +18,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -286,7 +287,7 @@ func DescribeProgramTools(declarations []ProgramTool) ([]ProgramToolDescriptor, 
 
 func programAgentTool(declaration ProgramTool, run func(context.Context, string) (agent.ToolOutput, error)) agent.Tool {
 	return agent.Tool{
-		Spec: agent.ToolSpec{
+		Spec: model.ToolSpec{
 			Name:         declaration.Name,
 			Description:  declaration.Description,
 			InputSchema:  slices.Clone(declaration.inputSchema),
@@ -376,7 +377,7 @@ func (manager *ProcessManager) resolveProgram(name string) (string, error) {
 }
 
 func validateProgramArguments(raw string) ([]byte, error) {
-	normalized, err := agent.NormalizeToolArguments(raw)
+	normalized, err := model.NormalizeToolArguments(raw)
 	return []byte(normalized), err
 }
 

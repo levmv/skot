@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestBuiltInToolSetsSelectExactOrderedTools(t *testing.T) {
@@ -161,7 +162,7 @@ func testCatalog(names ...string) []agent.Tool {
 	tools := make([]agent.Tool, 0, len(names))
 	for _, name := range names {
 		tools = append(tools, agent.Tool{
-			Spec: agent.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: model.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (agent.ToolOutput, error) { return agent.ToolOutput{}, nil },
 		})
 	}

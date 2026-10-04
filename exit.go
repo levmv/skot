@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 // Exit codes are an unattended contract. They describe the caller action:
@@ -42,10 +43,10 @@ func exitCodeFor(err error) int {
 	if errors.Is(err, context.Canceled) {
 		return exitInterrupted
 	}
-	if errors.Is(err, agent.ErrInvalidRequest) || errors.Is(err, agent.ErrRunIncomplete) {
+	if errors.Is(err, model.ErrInvalidRequest) || errors.Is(err, agent.ErrRunIncomplete) {
 		return exitConfig
 	}
-	if errors.Is(err, agent.ErrProviderFailure) {
+	if errors.Is(err, model.ErrProviderFailure) {
 		return exitProvider
 	}
 	return exitFailure

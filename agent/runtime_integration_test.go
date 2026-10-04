@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 // The in-memory adapters exercise a complete run and replay without involving
@@ -15,7 +16,7 @@ import (
 func TestRuntimeRunsWithJournalAndModelAdapters(t *testing.T) {
 	journal := &memoryJournal{}
 	runtime, err := agent.New(agent.Config{
-		Model:        agent.ModelInfo{BackendID: "example", Provider: "example", Model: "echo", ContextWindow: 128_000},
+		Model:        model.Info{BackendID: "example", Provider: "example", Model: "echo", ContextWindow: 128_000},
 		Backend:      echoModel{},
 		Journal:      journal,
 		Instructions: "Answer briefly.",
@@ -49,13 +50,13 @@ func TestRuntimeRunsWithJournalAndModelAdapters(t *testing.T) {
 
 type echoModel struct{}
 
-func (echoModel) Complete(_ context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+func (echoModel) Complete(_ context.Context, request model.Request, emit func(model.StreamEvent)) (model.Response, error) {
 	answer := "echo: " + request.Items[len(request.Items)-1].Text
 	if emit != nil {
-		emit(agent.ModelStreamEvent{Kind: agent.EventTextDelta, Text: answer})
+		emit(model.StreamEvent{Kind: model.EventTextDelta, Text: answer})
 	}
-	return agent.ModelResponse{
-		Items:      []agent.Item{{Kind: agent.ItemAssistantText, Text: answer}},
+	return model.Response{
+		Items:      []model.Item{{Kind: model.ItemAssistantText, Text: answer}},
 		StopReason: "stop",
 	}, nil
 }
@@ -99,4 +100,4 @@ func (journal *memoryJournal) snapshot() []agent.Record {
 	return records
 }
 
-func (echoModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (echoModel) ProjectModelItems(items []model.Item) []model.Item { return items }

@@ -7,11 +7,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
-func finalUsageForTest(input, output int) ModelUsageDetails {
+func finalUsageForTest(input, output int) modelapi.Usage {
 	total := input + output
-	return ModelUsageDetails{Status: UsageFinal, Tokens: ReportedTokens{
+	return modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{
 		InputTokens: &input, OutputTokens: &output, TotalTokens: &total,
 	}}
 }
@@ -19,7 +21,7 @@ func finalUsageForTest(input, output int) ModelUsageDetails {
 func TestRuntimeUsageIncludesFailedAttemptsWithoutDoubleCountingResponses(t *testing.T) {
 	journal := &memoryJournal{}
 	calls := 0
-	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		calls++
 		records := journal.snapshot()
 		if records[len(records)-1].Kind != RecordModelAttemptStarted {
@@ -28,11 +30,11 @@ func TestRuntimeUsageIncludesFailedAttemptsWithoutDoubleCountingResponses(t *tes
 		details := finalUsageForTest(10, calls)
 		details.RequestID = "req-1"
 		details.ResponseID = "gen-1"
-		details.Costs = []ReportedCost{{Kind: "account_charge", Amount: "0.000000000000012345678900", Currency: "USD"}}
+		details.Costs = []modelapi.ReportedCost{{Kind: "account_charge", Amount: "0.000000000000012345678900", Currency: "USD"}}
 		if calls == 1 {
-			return ModelResponse{UsageDetails: details}, MarkProviderFailure(errors.New("connection lost"))
+			return modelapi.Response{Usage: details}, modelapi.MarkProviderFailure(errors.New("connection lost"))
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, UsageDetails: details, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, Usage: details, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
@@ -46,7 +48,7 @@ func TestRuntimeUsageIncludesFailedAttemptsWithoutDoubleCountingResponses(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Complete || report.Usage != (ModelUsage{InputTokens: 20, OutputTokens: 3, TotalTokens: 23}) || len(report.Attempts) != 2 || report.LegacyResponses != 0 {
+	if !report.Complete || report.Usage != (modelapi.TokenCounts{InputTokens: 20, OutputTokens: 3, TotalTokens: 23}) || len(report.Attempts) != 2 || report.LegacyResponses != 0 {
 		t.Fatalf("report = %#v", report)
 	}
 	first, second := report.Attempts[0], report.Attempts[1]
@@ -85,14 +87,14 @@ func TestRuntimeUsageIncludesFailedAttemptsWithoutDoubleCountingResponses(t *tes
 }
 
 func TestRuntimeUsagePreservesCancelledReceiptsAndCheckpoint(t *testing.T) {
-	for _, status := range []UsageStatus{UsagePartial, UsageFinal} {
+	for _, status := range []modelapi.UsageStatus{modelapi.UsagePartial, modelapi.UsageFinal} {
 		t.Run(string(status), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			journal := &memoryJournal{}
 			var checkpoint uint64
 			var runtime *Runtime
-			model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				started, err := runtime.Usage(t.Context(), 0)
 				if err != nil || started.Complete || len(started.Attempts) != 1 || started.Attempts[0].Outcome != ModelAttemptStarted {
 					t.Fatalf("in-flight usage = %#v, %v", started, err)
@@ -101,14 +103,14 @@ func TestRuntimeUsagePreservesCancelledReceiptsAndCheckpoint(t *testing.T) {
 				cancel()
 				details := finalUsageForTest(10, 0)
 				details.Status = status
-				return ModelResponse{UsageDetails: details}, context.Canceled
+				return modelapi.Response{Usage: details}, context.Canceled
 			})
 			runtime = newTestRuntime(t, Config{Backend: model, Journal: journal})
 			if _, err := runtime.Run(ctx, "task", nil); !errors.Is(err, context.Canceled) {
 				t.Fatalf("run error = %v", err)
 			}
 			report, err := runtime.Usage(t.Context(), checkpoint)
-			if err != nil || len(report.Attempts) != 1 || report.Usage.InputTokens != 10 || report.Complete != (status == UsageFinal) {
+			if err != nil || len(report.Attempts) != 1 || report.Usage.InputTokens != 10 || report.Complete != (status == modelapi.UsageFinal) {
 				t.Fatalf("cancelled usage = %#v, %v", report, err)
 			}
 			attempt := report.Attempts[0]
@@ -116,7 +118,7 @@ func TestRuntimeUsagePreservesCancelledReceiptsAndCheckpoint(t *testing.T) {
 				t.Fatalf("cancelled attempt = %#v", attempt)
 			}
 			next, err := runtime.Usage(t.Context(), report.LastSequence)
-			if err != nil || len(next.Attempts) != 0 || next.Usage != (ModelUsage{}) {
+			if err != nil || len(next.Attempts) != 0 || next.Usage != (modelapi.TokenCounts{}) {
 				t.Fatalf("unchanged checkpoint = %#v, %v", next, err)
 			}
 		})
@@ -128,12 +130,12 @@ func TestRuntimeStopsRequestsWhenAttemptCannotBeJournaled(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			journal := &failingJournal{memoryJournal: &memoryJournal{}, failKind: kind, remaining: 1}
 			calls := 0
-			model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+			model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				calls++
 				if kind == RecordModelAttemptFailed {
-					return ModelResponse{UsageDetails: finalUsageForTest(10, 1)}, MarkProviderFailure(errors.New("connection lost"))
+					return modelapi.Response{Usage: finalUsageForTest(10, 1)}, modelapi.MarkProviderFailure(errors.New("connection lost"))
 				}
-				return ModelResponse{UsageDetails: finalUsageForTest(10, 1), Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+				return modelapi.Response{Usage: finalUsageForTest(10, 1), Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 			})
 			runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 			if _, err := runtime.Run(t.Context(), "task", nil); err == nil || !strings.Contains(err.Error(), "injected journal failure") {
@@ -148,7 +150,7 @@ func TestRuntimeStopsRequestsWhenAttemptCannotBeJournaled(t *testing.T) {
 			}
 			if wantCalls != 0 {
 				report, err := runtime.Usage(t.Context(), 0)
-				if err != nil || report.Complete || len(report.Attempts) != 1 || report.Attempts[0].FinishedSequence != 0 || report.Attempts[0].Usage.Status != UsageUnavailable {
+				if err != nil || report.Complete || len(report.Attempts) != 1 || report.Attempts[0].FinishedSequence != 0 || report.Attempts[0].Usage.Status != modelapi.UsageUnavailable {
 					t.Fatalf("unrecorded finish = %#v, %v", report, err)
 				}
 			}
@@ -158,13 +160,13 @@ func TestRuntimeStopsRequestsWhenAttemptCannotBeJournaled(t *testing.T) {
 
 func TestReplayUsageMarksLegacyHistoryIncomplete(t *testing.T) {
 	records := []Record{
-		recordForTest(t, 1, RecordModelResponse, ModelResponseRecord{Usage: ModelUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}}),
-		recordForTest(t, 2, RecordContextCompacted, ContextCompactedRecord{Usage: ModelUsage{InputTokens: 20, OutputTokens: 3, TotalTokens: 23}}),
+		recordForTest(t, 1, RecordModelResponse, ModelResponseRecord{Usage: modelapi.TokenCounts{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}}),
+		recordForTest(t, 2, RecordContextCompacted, ContextCompactedRecord{Usage: modelapi.TokenCounts{InputTokens: 20, OutputTokens: 3, TotalTokens: 23}}),
 		recordForTest(t, 3, RecordModelAttemptFailed, ModelAttemptFailedRecord{RequestID: "old", Error: "connection lost"}),
 	}
 	report, err := ReplayUsage(records, 0)
 	if err != nil || report.Complete || len(report.Attempts) != 0 || report.LegacyResponses != 2 || report.UntrackedAttempts != 1 ||
-		report.Usage != (ModelUsage{InputTokens: 30, OutputTokens: 5, TotalTokens: 35}) || report.LegacyUsage != report.Usage {
+		report.Usage != (modelapi.TokenCounts{InputTokens: 30, OutputTokens: 5, TotalTokens: 35}) || report.LegacyUsage != report.Usage {
 		t.Fatalf("legacy report = %#v, %v", report, err)
 	}
 }

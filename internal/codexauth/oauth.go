@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -192,7 +192,7 @@ func exchange(ctx context.Context, client *http.Client, form url.Values, previou
 	secureClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := secureClient.Do(request)
 	if err != nil {
-		return Tokens{}, agent.MarkProviderFailure(fmt.Errorf("OpenAI token request: %w", err))
+		return Tokens{}, model.MarkProviderFailure(fmt.Errorf("OpenAI token request: %w", err))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {

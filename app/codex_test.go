@@ -19,8 +19,10 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/codexauth"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
+	"github.com/levmv/skot/model"
 )
 
 func testCodexTokens() codexauth.Tokens {
@@ -30,7 +32,7 @@ func testCodexTokens() codexauth.Tokens {
 
 func saveTestCodexTokens(t *testing.T, store *state.Store, tokens codexauth.Tokens) {
 	t.Helper()
-	profile, err := codexProfile(tokens)
+	profile, err := modelconfig.CodexProfile(tokens)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func newCodexTestApp(t *testing.T) *Application {
 	}
 	t.Cleanup(func() { _ = journal.Close() })
 	runtime, err := newApplicationTestRuntime(agent.Config{
-		Model:   agent.ModelInfo{BackendID: "responses.openai-codex", Provider: codexauth.Provider, Model: "gpt-6-astra"},
+		Model:   model.Info{BackendID: "responses.openai-codex", Provider: codexauth.Provider, Model: "gpt-6-astra"},
 		Journal: journal,
 	})
 	if err != nil {
@@ -108,18 +110,18 @@ data: {"type":"response.completed","response":{"status":"completed","output":[],
 
 `), nil
 	})}
-	backend, err := buildModelBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "high", "", 0), store, modelBackendOptions{requireCredential: true, httpClient: client})
+	backend, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "high", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := backend.Complete(t.Context(), agent.ModelRequest{
-		SessionID: "session-1", Items: []agent.Item{{Kind: agent.ItemUserText, Text: "inspect README"}},
-		Tools: []agent.ToolSpec{{Name: "read", InputSchema: jsontext.Value(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)}},
+	result, err := backend.Complete(t.Context(), model.Request{
+		SessionID: "session-1", Items: []model.Item{{Kind: model.ItemUserText, Text: "inspect README"}},
+		Tools: []model.ToolSpec{{Name: "read", InputSchema: jsontext.Value(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.StopReason != "tool_calls" || len(result.Items) != 2 || result.Items[0].Kind != agent.ItemReasoning || len(result.Items[0].ProviderData) != 1 || result.Items[1].ToolCall == nil || result.Items[1].ToolCall.Name != "read" || result.Items[1].ToolCall.RawArguments != `{"path":"README.md"}` || result.Usage.CachedInputTokens != 4 || result.Usage.ReasoningTokens != 3 {
+	if result.StopReason != "tool_calls" || len(result.Items) != 2 || result.Items[0].Kind != model.ItemReasoning || len(result.Items[0].ProviderData) != 1 || result.Items[1].ToolCall == nil || result.Items[1].ToolCall.Name != "read" || result.Items[1].ToolCall.RawArguments != `{"path":"README.md"}` || result.Usage.Tokens.Known().CachedInputTokens != 4 || result.Usage.Tokens.Known().ReasoningTokens != 3 {
 		t.Fatalf("Codex response lost tool or reasoning state: %+v", result)
 	}
 }
@@ -131,36 +133,36 @@ func TestCodexNeverFallsBackToAPIKeyOrCustomEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	route := testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0)
-	if _, err := buildModelBackend(route, store, modelBackendOptions{requireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
+	if _, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
 		t.Fatalf("missing subscription error = %v", err)
 	}
-	backend, err := buildModelBackend(route, store, modelBackendOptions{})
+	backend, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.Complete(t.Context(), agent.ModelRequest{}, nil); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
+	if _, err := backend.Complete(t.Context(), model.Request{}, nil); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
 		t.Fatalf("missing request credential = %v", err)
 	}
 	if err := storeProviderCredential(t.Context(), store, codexauth.Provider, "key"); err == nil {
 		t.Fatal("accepted an API key as a subscription")
 	}
-	for _, override := range []modelRouteOverrides{{BaseURL: "https://gateway.example/v1"}, {API: modelAPIChatCompletions}, {API: modelAPIAnthropicMessages}} {
-		if _, err := resolveModelRoute(route.URI, "", override, modelRouteEnrichment{}); err == nil {
+	for _, override := range []modelconfig.Overrides{{BaseURL: "https://gateway.example/v1"}, {API: modelconfig.ChatCompletions}, {API: modelconfig.AnthropicMessages}} {
+		if _, err := modelconfig.Resolve(route.URI, "", override, modelconfig.Enrichment{}); err == nil {
 			t.Fatal("accepted an unsupported subscription override")
 		}
 	}
 	saveTestCodexTokens(t, store, testCodexTokens())
 	request, _ := http.NewRequest("POST", "https://gateway.example/responses", nil)
-	if err := (codexAuthorizer{store: store}).Authorize(t.Context(), request); err == nil || request.Header.Get("Authorization") != "" {
+	if err := (modelconfig.CodexAuthorizer{Store: store}).Authorize(t.Context(), request); err == nil || request.Header.Get("Authorization") != "" {
 		t.Fatal("sent ChatGPT credentials to an unrelated endpoint")
 	}
 	if err := deleteProviderCredential(t.Context(), store, codexauth.Provider); err != nil {
 		t.Fatal(err)
 	}
-	if _, source, err := credentialForProvider(store, codexauth.Provider); err != nil || source != "none" {
+	if _, source, err := modelconfig.CredentialForProvider(store, codexauth.Provider, true); err != nil || source != "none" {
 		t.Fatalf("logout status = %s, %v", source, err)
 	}
-	if token, _, _ := credentialForProvider(store, "openai"); token != "separately-billed-key" {
+	if token, _, _ := modelconfig.CredentialForProvider(store, "openai", true); token != "separately-billed-key" {
 		t.Fatal("subscription logout changed the API credential")
 	}
 }
@@ -204,7 +206,7 @@ func TestCodexRefreshIsSharedAcrossStoresAndMasksRotatedTokens(t *testing.T) {
 		}
 		group.Go(func() {
 			request, _ := http.NewRequest("POST", codexauth.BaseURL+"/responses", nil)
-			err := (codexAuthorizer{store: other, client: client, masker: masker}).Authorize(t.Context(), request)
+			err := (modelconfig.CodexAuthorizer{Store: other, Client: client, Masker: masker}).Authorize(t.Context(), request)
 			if err != nil {
 				t.Error(err)
 				return
@@ -218,7 +220,7 @@ func TestCodexRefreshIsSharedAcrossStoresAndMasksRotatedTokens(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("refresh calls = %d, want 1", calls.Load())
 	}
-	saved, err := storedCodexTokens(store)
+	saved, err := modelconfig.StoredCodexTokens(store)
 	if err != nil || saved.RefreshToken != refreshed.RefreshToken || saved.NeedsRefresh() {
 		t.Fatal("rotated credentials were not saved")
 	}
@@ -259,17 +261,17 @@ func TestCodexRefreshKeepsTemporaryFailuresRetryable(t *testing.T) {
 				response.Header.Set("Retry-After", "5")
 				return response, nil
 			})}
-			backend, err := buildModelBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelBackendOptions{httpClient: client})
+			backend, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = backend.Complete(t.Context(), agent.ModelRequest{}, nil)
+			_, err = backend.Complete(t.Context(), model.Request{}, nil)
 			retryable := status != http.StatusBadRequest
-			if err == nil || errors.Is(err, agent.ErrProviderFailure) != retryable || errors.Is(err, agent.ErrInvalidRequest) == retryable || strings.Contains(err.Error(), "private-token-details") {
+			if err == nil || errors.Is(err, model.ErrProviderFailure) != retryable || errors.Is(err, model.ErrInvalidRequest) == retryable || strings.Contains(err.Error(), "private-token-details") {
 				t.Fatalf("refresh error = %v, want retryable = %t", err, retryable)
 			}
 			if status != 0 && retryable {
-				details, ok := errors.AsType[*agent.ProviderError](err)
+				details, ok := errors.AsType[*model.ProviderError](err)
 				if !ok || !details.Retryable || details.RetryAfter != 5*time.Second {
 					t.Fatalf("lost token endpoint retry policy: %v", err)
 				}
@@ -286,9 +288,9 @@ func TestCodexUsageLimitsAreNotRetriedAsTemporaryRateLimits(t *testing.T) {
 	saveTestCodexTokens(t, store, testCodexTokens())
 	for _, test := range []struct {
 		signal string
-		kind   agent.ProviderErrorKind
+		kind   model.ProviderErrorKind
 	}{
-		{"usage_limit_reached", agent.ProviderErrorQuota}, {"usage_not_included", agent.ProviderErrorSubscription},
+		{"usage_limit_reached", model.ProviderErrorQuota}, {"usage_not_included", model.ProviderErrorSubscription},
 	} {
 		for _, transport := range []string{"HTTP", "response.done"} {
 			t.Run(test.signal+"/"+transport, func(t *testing.T) {
@@ -298,12 +300,12 @@ func TestCodexUsageLimitsAreNotRetriedAsTemporaryRateLimits(t *testing.T) {
 					}
 					return codexResponse(429, fmt.Sprintf(`{"error":{"type":%q,"message":"allowance unavailable"}}`, test.signal)), nil
 				})}
-				backend, err := buildModelBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelBackendOptions{httpClient: client})
+				backend, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = backend.Complete(t.Context(), agent.ModelRequest{}, nil)
-				classified, ok := errors.AsType[*agent.ProviderError](err)
+				_, err = backend.Complete(t.Context(), model.Request{}, nil)
+				classified, ok := errors.AsType[*model.ProviderError](err)
 				if !ok || classified.Kind != test.kind || classified.Retryable {
 					t.Fatalf("limit error = %v", err)
 				}

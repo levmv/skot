@@ -7,10 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/levmv/skot/agent"
-	productlimits "github.com/levmv/skot/internal/limits"
-	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/state"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestModelInferenceFollowsOnlyAllowedRedirects(t *testing.T) {
@@ -24,13 +23,13 @@ func TestModelInferenceFollowsOnlyAllowedRedirects(t *testing.T) {
 	saveTestCodexTokens(t, store, testCodexTokens())
 	for _, test := range []struct {
 		uri    string
-		api    modelAPI
+		api    modelconfig.API
 		follow bool
 	}{
-		{uri: "deepseek/test-model", api: modelAPIChatCompletions, follow: true},
-		{uri: "openai/test-model", api: modelAPIResponses, follow: true},
-		{uri: "anthropic/test-model", api: modelAPIAnthropicMessages, follow: true},
-		{uri: "openai-codex/gpt-6-astra", api: modelAPIResponses},
+		{uri: "deepseek/test-model", api: modelconfig.ChatCompletions, follow: true},
+		{uri: "openai/test-model", api: modelconfig.Responses, follow: true},
+		{uri: "anthropic/test-model", api: modelconfig.AnthropicMessages, follow: true},
+		{uri: "openai-codex/gpt-6-astra", api: modelconfig.Responses},
 	} {
 		for _, sameOrigin := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/same-origin=%t", test.uri, sameOrigin), func(t *testing.T) {
@@ -62,11 +61,11 @@ func TestModelInferenceFollowsOnlyAllowedRedirects(t *testing.T) {
 				})}
 				route := testResolvedRoute(t, test.uri, "", "", 0)
 				route.API = test.api
-				backend, err := buildModelBackend(route, store, modelBackendOptions{httpClient: client})
+				backend, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := backend.Complete(t.Context(), agent.ModelRequest{Instructions: "private conversation"}, nil); err == nil {
+				if _, err := backend.Complete(t.Context(), modelapi.Request{Instructions: "private conversation"}, nil); err == nil {
 					t.Fatal("redirect or target's 400 response unexpectedly succeeded")
 				}
 				want := 1
@@ -82,7 +81,7 @@ func TestModelInferenceFollowsOnlyAllowedRedirects(t *testing.T) {
 }
 
 func TestParseModelURIPreservesSlashInModel(t *testing.T) {
-	provider, model, err := parseModelURI("openrouter/moonshotai/kimi-k3")
+	provider, model, err := modelconfig.ParseURI("openrouter/moonshotai/kimi-k3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,78 +90,67 @@ func TestParseModelURIPreservesSlashInModel(t *testing.T) {
 	}
 }
 
-func TestOllamaProviderUsesLocalOpenAICompatibilityEndpoint(t *testing.T) {
-	spec, err := modelProviderSpec(" OLLAMA ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if spec.baseURL != "http://localhost:11434/v1" || !spec.credentialless || spec.defaultAPI != modelAPIChatCompletions {
-		t.Fatalf("Ollama provider = %#v", spec)
-	}
-}
-
 func TestModelAPIUsesProviderDefaultUnlessModelOverridesIt(t *testing.T) {
-	route, err := resolveModelRoute("deepseek/deepseek-v4-flash", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	route, err := modelconfig.Resolve("deepseek/deepseek-v4-flash", "", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.API != modelAPIChatCompletions {
+	if route.API != modelconfig.ChatCompletions {
 		t.Fatalf("default model API = %q", route.API)
 	}
-	overridden, err := resolveModelRoute("deepseek/deepseek-v4-flash", "", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{})
+	overridden, err := modelconfig.Resolve("deepseek/deepseek-v4-flash", "", modelconfig.Overrides{API: modelconfig.Responses}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if overridden.API != modelAPIResponses || overridden.Compatibility != modelCompatibilityUnverified {
+	if overridden.API != modelconfig.Responses || overridden.Compatibility != modelconfig.Unverified {
 		t.Fatalf("overridden route = %#v", overridden)
 	}
 }
 
 func TestMixedProtocolProviderDoesNotGuessUnknownModelAPI(t *testing.T) {
-	if _, err := resolveModelRoute("opencode-go/future-model", "", modelRouteOverrides{}, modelRouteEnrichment{}); err == nil ||
-		!strings.Contains(err.Error(), "not available in Skot's current model list") || !strings.Contains(err.Error(), "-model-api") {
+	if _, err := modelconfig.Resolve("opencode-go/future-model", "", modelconfig.Overrides{}, modelconfig.Enrichment{}); !modelapi.IsAPIRequired(err) {
 		t.Fatalf("unknown mixed-protocol route error = %v", err)
 	}
-	route, err := resolveModelRoute("opencode-go/future-model", "", modelRouteOverrides{API: modelAPIResponses}, modelRouteEnrichment{})
+	route, err := modelconfig.Resolve("opencode-go/future-model", "", modelconfig.Overrides{API: modelconfig.Responses}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.API != modelAPIResponses || route.Compatibility != modelCompatibilityUnverified {
+	if route.API != modelconfig.Responses || route.Compatibility != modelconfig.Unverified {
 		t.Fatalf("explicit mixed-protocol route = %#v", route)
 	}
-	if _, err := resolveModelRoute("opencode-go/future-model", "high", modelRouteOverrides{API: modelAPIAnthropicMessages}, modelRouteEnrichment{}); err == nil ||
+	if _, err := modelconfig.Resolve("opencode-go/future-model", "high", modelconfig.Overrides{API: modelconfig.AnthropicMessages}, modelconfig.Enrichment{}); err == nil ||
 		!strings.Contains(err.Error(), "reasoning effort") {
 		t.Fatalf("explicit Anthropic reasoning error = %v", err)
 	}
 }
 
 func TestModelCatalogInvariants(t *testing.T) {
-	for provider, spec := range modelProviderCatalog {
-		if spec.defaultAPI == "" || !knownModelAPI(spec.defaultAPI) {
-			t.Errorf("provider %q default API = %q", provider, spec.defaultAPI)
+	for provider, spec := range modelconfig.Providers {
+		if spec.DefaultAPI == "" || !modelconfig.KnownAPI(spec.DefaultAPI) {
+			t.Errorf("provider %q default API = %q", provider, spec.DefaultAPI)
 		}
 	}
-	seen := make(map[string]struct{}, len(modelCatalog))
-	for _, spec := range modelCatalog {
+	seen := make(map[string]struct{}, len(modelconfig.Catalog))
+	for _, spec := range modelconfig.Catalog {
 		if strings.TrimSpace(spec.Name) == "" {
 			t.Errorf("catalog URI %q has no display name", spec.URI)
 		}
-		provider, _, err := parseModelURI(spec.URI)
+		provider, _, err := modelconfig.ParseURI(spec.URI)
 		if err != nil {
 			t.Errorf("catalog URI %q: %v", spec.URI, err)
 			continue
 		}
-		if _, err := modelProviderSpec(provider); err != nil {
+		if _, err := modelconfig.Provider(provider); err != nil {
 			t.Errorf("catalog URI %q: %v", spec.URI, err)
 		}
-		if spec.API != "" && !knownModelAPI(spec.API) {
+		if spec.API != "" && !modelconfig.KnownAPI(spec.API) {
 			t.Errorf("catalog URI %q API = %q", spec.URI, spec.API)
 		}
-		if spec.MaxOutputTokens < 0 || (spec.MaxOutputTokens > 0 && spec.API != modelAPIAnthropicMessages) {
+		if spec.MaxOutputTokens < 0 || (spec.MaxOutputTokens > 0 && spec.API != modelconfig.AnthropicMessages) {
 			t.Errorf("catalog URI %q max output tokens/API = %d/%q", spec.URI, spec.MaxOutputTokens, spec.API)
 		}
 		switch spec.Compatibility {
-		case "", modelCompatibilitySupported, modelCompatibilityUnverified, modelCompatibilityUnsupported:
+		case "", modelconfig.Supported, modelconfig.Unverified, modelconfig.Unsupported:
 		default:
 			t.Errorf("catalog URI %q compatibility = %q", spec.URI, spec.Compatibility)
 		}
@@ -171,140 +159,124 @@ func TestModelCatalogInvariants(t *testing.T) {
 			t.Errorf("duplicate catalog URI %q", spec.URI)
 		}
 		seen[key] = struct{}{}
-		overrides := modelRouteOverrides{}
-		if spec.Compatibility == modelCompatibilityUnsupported {
+		overrides := modelconfig.Overrides{}
+		if spec.Compatibility == modelconfig.Unsupported {
 			overrides.API = spec.API
 			if overrides.API == "" {
-				providerSpec, providerErr := modelProviderSpec(provider)
+				providerSpec, providerErr := modelconfig.Provider(provider)
 				if providerErr != nil {
 					continue
 				}
-				overrides.API = providerSpec.defaultAPI
+				overrides.API = providerSpec.DefaultAPI
 			}
 		}
-		route, err := resolveModelRoute(spec.URI, "", overrides, modelRouteEnrichment{})
+		route, err := modelconfig.Resolve(spec.URI, "", overrides, modelconfig.Enrichment{})
 		if err != nil {
 			t.Errorf("resolve catalog URI %q: %v", spec.URI, err)
 			continue
 		}
-		if spec.Compatibility == modelCompatibilityUnsupported && route.Compatibility != modelCompatibilityUnverified {
+		if spec.Compatibility == modelconfig.Unsupported && route.Compatibility != modelconfig.Unverified {
 			t.Errorf("explicit override for unsupported catalog URI %q has compatibility %q", spec.URI, route.Compatibility)
 		}
-		if implementedModelAPI(route.API) {
-			_, err := buildModelBackend(route, nil, modelBackendOptions{})
+		if modelconfig.KnownAPI(route.API) {
+			_, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true})
 			if err != nil {
 				t.Errorf("build catalog URI %q: %v", spec.URI, err)
 			}
-			info, err := modelInfoForRoute(route)
-			if err != nil {
-				t.Errorf("describe catalog URI %q: %v", spec.URI, err)
-				continue
-			}
-			if info.BackendID != string(route.API)+"."+route.Provider || info.Provider != route.Provider ||
-				info.Model != route.Model || info.ReasoningEffort != route.ReasoningEffort ||
-				info.ProviderStateContract != route.ProviderStateContract || info.ContextWindow != route.ContextWindow ||
-				info.ContextWindowEstimated != route.ContextWindowEstimated ||
-				info.MaxRequestBytes != productlimits.MaxModelRequestBytes ||
-				info.MaxCompletionBytes != productlimits.MaxModelCompletionBytes ||
-				info.Endpoint != modelhttp.PublicEndpoint(route.BaseURL) {
-				t.Errorf("catalog URI %q model info = %#v, route = %#v", spec.URI, info, route)
-			}
+
 		}
 	}
 }
 
 func TestOpenCodeGoKnownAnthropicRouteDoesNotFallBackToChatCompletions(t *testing.T) {
-	route, err := resolveModelRoute("opencode-go/minimax-m3", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	route, err := modelconfig.Resolve("opencode-go/minimax-m3", "", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The subscription endpoint caches on its own, so Skot places no breakpoints
 	// of its own and leaves the protocol budget to it.
-	if route.API != modelAPIAnthropicMessages || route.Compatibility != modelCompatibilitySupported ||
+	if route.API != modelconfig.AnthropicMessages || route.Compatibility != modelconfig.Supported ||
 		route.ContextWindow != 1_000_000 || route.MaxOutputTokens != 131_072 || route.PromptCache ||
 		len(route.ReasoningEfforts) != 1 || route.ReasoningEfforts[0] != "" {
 		t.Fatalf("Anthropic route = %#v", route)
 	}
-	redundantOverride, err := resolveModelRoute("opencode-go/minimax-m3", "", modelRouteOverrides{
-		API: modelAPIAnthropicMessages,
-	}, modelRouteEnrichment{})
+	redundantOverride, err := modelconfig.Resolve("opencode-go/minimax-m3", "", modelconfig.Overrides{
+		API: modelconfig.AnthropicMessages,
+	}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redundantOverride.MaxOutputTokens != 131_072 || redundantOverride.Compatibility != modelCompatibilityUnverified {
+	if redundantOverride.MaxOutputTokens != 131_072 || redundantOverride.Compatibility != modelconfig.Unverified {
 		t.Fatalf("redundantly overridden Anthropic route = %#v", redundantOverride)
 	}
-	custom, err := resolveModelRoute("opencode-go/minimax-m3", "", modelRouteOverrides{
+	custom, err := modelconfig.Resolve("opencode-go/minimax-m3", "", modelconfig.Overrides{
 		BaseURL: "https://gateway.example/v1",
-	}, modelRouteEnrichment{})
+	}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.MaxOutputTokens != 0 || custom.ContextWindow != unknownModelContextWindow || !custom.ContextWindowEstimated {
+	if custom.MaxOutputTokens != 0 || custom.ContextWindow != modelconfig.FallbackContextWindow || !custom.ContextWindowEstimated {
 		t.Fatalf("custom Anthropic route = %#v", custom)
 	}
 }
 
 func TestAnthropicProviderRoutesThroughNativeMessages(t *testing.T) {
-	route, err := resolveModelRoute("anthropic/claude-opus-5", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	route, err := modelconfig.Resolve("anthropic/claude-opus-5", "", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.API != modelAPIAnthropicMessages || route.BaseURL != "https://api.anthropic.com/v1" ||
-		route.Compatibility != modelCompatibilitySupported || route.ContextWindow != 1_000_000 ||
+	if route.API != modelconfig.AnthropicMessages || route.BaseURL != "https://api.anthropic.com/v1" ||
+		route.Compatibility != modelconfig.Supported || route.ContextWindow != 1_000_000 ||
 		route.ContextWindowEstimated || route.MaxOutputTokens != 128_000 || !route.PromptCache {
 		t.Fatalf("Anthropic route = %#v", route)
 	}
 	// Undeclared models stay usable on the provider default protocol; only the
 	// reviewed route facts are withheld. Caching belongs to the endpoint rather
 	// than the model, so it survives.
-	undeclared, err := resolveModelRoute("anthropic/claude-unreleased", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	undeclared, err := modelconfig.Resolve("anthropic/claude-unreleased", "", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if undeclared.API != modelAPIAnthropicMessages || undeclared.Compatibility != modelCompatibilityUnverified ||
+	if undeclared.API != modelconfig.AnthropicMessages || undeclared.Compatibility != modelconfig.Unverified ||
 		undeclared.MaxOutputTokens != 0 || !undeclared.ContextWindowEstimated || !undeclared.PromptCache {
 		t.Fatalf("undeclared Anthropic route = %#v", undeclared)
 	}
-	custom, err := resolveModelRoute("anthropic/claude-opus-5", "", modelRouteOverrides{
+	custom, err := modelconfig.Resolve("anthropic/claude-opus-5", "", modelconfig.Overrides{
 		BaseURL: "https://gateway.example/v1",
-	}, modelRouteEnrichment{})
+	}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if custom.BaseURL != "https://gateway.example/v1" || custom.API != modelAPIAnthropicMessages ||
-		custom.MaxOutputTokens != 0 || custom.ContextWindow != unknownModelContextWindow ||
+	if custom.BaseURL != "https://gateway.example/v1" || custom.API != modelconfig.AnthropicMessages ||
+		custom.MaxOutputTokens != 0 || custom.ContextWindow != modelconfig.FallbackContextWindow ||
 		!custom.ContextWindowEstimated || custom.PromptCache {
 		t.Fatalf("custom Anthropic route = %#v", custom)
 	}
 }
 
 func TestSelectionProtocolResolvesUndeclaredRouteAndYieldsToDeclarations(t *testing.T) {
-	overrides := modelRouteOverrides{}.withSelection("opencode-go/future-model", "responses", 0)
-	route, err := resolveModelRoute("opencode-go/future-model", "", overrides, modelRouteEnrichment{})
+	overrides := modelconfig.Overrides{}.WithSelection("opencode-go/future-model", "responses", 0)
+	route, err := modelconfig.Resolve("opencode-go/future-model", "", overrides, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.API != modelAPIResponses || route.Compatibility != modelCompatibilityUnverified {
+	if route.API != modelconfig.Responses || route.Compatibility != modelconfig.Unverified {
 		t.Fatalf("selected route = %#v", route)
 	}
 	// A reviewed declaration owns the protocol of its route, so a protocol
 	// remembered while the route was undeclared must not survive it.
-	declared := modelRouteOverrides{}.withSelection("opencode-go/minimax-m3", "chat_completions", 0)
-	route, err = resolveModelRoute("opencode-go/minimax-m3", "", declared, modelRouteEnrichment{})
+	declared := modelconfig.Overrides{}.WithSelection("opencode-go/minimax-m3", "chat_completions", 0)
+	route, err = modelconfig.Resolve("opencode-go/minimax-m3", "", declared, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.API != modelAPIAnthropicMessages || route.Compatibility != modelCompatibilitySupported {
+	if route.API != modelconfig.AnthropicMessages || route.Compatibility != modelconfig.Supported {
 		t.Fatalf("declared route = %#v", route)
 	}
 	// The process-wide override stays the stronger instruction.
-	forced := modelRouteOverrides{API: modelAPIChatCompletions}.withSelection("opencode-go/future-model", "responses", 0)
-	route, err = resolveModelRoute("opencode-go/future-model", "", forced, modelRouteEnrichment{})
-	if err != nil || route.API != modelAPIChatCompletions {
+	forced := modelconfig.Overrides{API: modelconfig.ChatCompletions}.WithSelection("opencode-go/future-model", "responses", 0)
+	route, err = modelconfig.Resolve("opencode-go/future-model", "", forced, modelconfig.Enrichment{})
+	if err != nil || route.API != modelconfig.ChatCompletions {
 		t.Fatalf("forced route = %#v, err = %v", route, err)
-	}
-	if !IsModelAPIRequired(&ModelAPIRequiredError{URI: "opencode-go/future-model"}) {
-		t.Fatal("protocol-required error is not recognizable")
 	}
 }

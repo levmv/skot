@@ -9,8 +9,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/model"
 )
 
 func TestEventStreamFraming(t *testing.T) {
@@ -149,7 +149,7 @@ func testEventStreamReportsIdleTimeout(t *testing.T) {
 
 	stream := OpenEventStream(context.Background(), reader, 20*time.Millisecond)
 	defer stream.Close()
-	if _, err := stream.Next(); !errors.Is(err, agent.ErrModelStreamIdle) {
+	if _, err := stream.Next(); !errors.Is(err, model.ErrModelStreamIdle) {
 		t.Fatalf("error = %v, want idle timeout", err)
 	}
 }

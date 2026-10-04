@@ -8,9 +8,10 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/codexauth"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/state"
+	"github.com/levmv/skot/model"
 )
 
 func TestCredentialChangesCanCancelWhileAnotherProcessRefreshes(t *testing.T) {
@@ -58,7 +59,7 @@ func TestCredentialChangesCanCancelWhileAnotherProcessRefreshes(t *testing.T) {
 				if token, ok, err := store.APIKey("deepseek"); err != nil || !ok || token != "existing-key" {
 					t.Fatal("cancelled login changed the stored key")
 				}
-				if tokens, err := storedCodexTokens(store); err != nil || !tokens.Valid() {
+				if tokens, err := modelconfig.StoredCodexTokens(store); err != nil || !tokens.Valid() {
 					t.Fatal("cancelled logout removed the subscription")
 				}
 			})
@@ -76,7 +77,7 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	request, _ := http.NewRequest(http.MethodPost, "https://example.test", nil)
-	authorizer := storedBearerAuthorizer{store: store, provider: "openai", modelURI: "openai/test"}
+	authorizer := modelconfig.BearerAuthorizer{UseEnvironment: true, Store: store, Provider: "openai", ModelURI: "openai/test"}
 	if err := authorizer.Authorize(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 
 func TestOpenCodeGoCredentialUsesSubscriptionEnvironmentAndLoginURL(t *testing.T) {
 	t.Setenv("OPENCODE_API_KEY", "subscription-key")
-	token, source, err := credentialForProvider(nil, "opencode-go")
+	token, source, err := modelconfig.CredentialForProvider(nil, "opencode-go", true)
 	if err != nil || token != "subscription-key" || source != "environment override" {
 		t.Fatalf("credential = %q/%q, %v", token, source, err)
 	}
@@ -120,7 +121,7 @@ func TestOpenCodeGoCredentialUsesSubscriptionEnvironmentAndLoginURL(t *testing.T
 
 func TestAnthropicCredentialUsesNativeEnvironmentAndLoginURL(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "native-key")
-	token, source, err := credentialForProvider(nil, "Anthropic")
+	token, source, err := modelconfig.CredentialForProvider(nil, "Anthropic", true)
 	if err != nil || token != "native-key" || source != "environment override" {
 		t.Fatalf("credential = %q/%q, %v", token, source, err)
 	}
@@ -140,59 +141,25 @@ func TestAnthropicCredentialUsesNativeEnvironmentAndLoginURL(t *testing.T) {
 	t.Fatal("Anthropic credential status is missing")
 }
 
-func TestStoredAPIKeyAuthorizerUsesNativeMessagesHeader(t *testing.T) {
-	t.Setenv("OPENCODE_API_KEY", "subscription-key")
-	request, _ := http.NewRequest(http.MethodPost, "https://example.test/messages", nil)
-	authorizer := storedAPIKeyAuthorizer{provider: "opencode-go", modelURI: "opencode-go/minimax-m3"}
-	if err := authorizer.Authorize(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if got := request.Header.Get("x-api-key"); got != "subscription-key" {
-		t.Fatalf("x-api-key = %q", got)
-	}
-	if got := request.Header.Get("Authorization"); got != "" {
-		t.Fatalf("unexpected Authorization = %q", got)
-	}
-}
-
 func TestModelCanBeBuiltWithoutCredentialForInteractiveLogin(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("DEEPSEEK_API_KEY", "")
-	if _, err := buildModelBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelBackendOptions{}); err != nil {
+	if _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true}); err != nil {
 		t.Fatalf("interactive model build: %v", err)
 	}
-	if _, err := buildModelBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelBackendOptions{requireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login deepseek") || !errors.Is(err, agent.ErrInvalidRequest) {
+	if _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login deepseek") || !errors.Is(err, model.ErrInvalidRequest) {
 		t.Fatalf("one-shot missing credential error = %v", err)
 	}
-	if _, err := buildModelBackend(testResolvedRoute(t, "deepseek/test", "", "https://gateway.example/v1", 0), store, modelBackendOptions{requireCredential: true}); err != nil {
+	if _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "https://gateway.example/v1", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err != nil {
 		t.Fatalf("custom endpoint model build: %v", err)
 	}
 }
 
-func TestOllamaModelNeverRequiresStoredCredential(t *testing.T) {
-	store, err := state.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := testResolvedRoute(t, "ollama/qwen3:8b", "", "", 0)
-	_, err = buildModelBackend(route, store, modelBackendOptions{requireCredential: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := modelInfoForRoute(route)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Provider != "ollama" || info.Model != "qwen3:8b" || info.Endpoint != "http://localhost:11434/v1" || !info.ContextWindowEstimated {
-		t.Fatalf("Ollama model info = %#v", info)
-	}
-}
-
 func TestModelInfoUsesAutomaticContextUnlessOverridden(t *testing.T) {
-	automatic, err := modelInfoForRoute(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "", 0))
+	automatic, err := modelconfig.Info(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,59 +169,29 @@ func TestModelInfoUsesAutomaticContextUnlessOverridden(t *testing.T) {
 	if automatic.ProviderStateContract == "" {
 		t.Fatalf("automatic model info = %#v", automatic)
 	}
-	overridden, err := modelInfoForRoute(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 64_000))
+	overridden, err := modelconfig.Info(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 64_000))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := overridden.ContextWindow; got != 64_000 {
 		t.Fatalf("overridden context window = %d", got)
 	}
-	custom, err := modelInfoForRoute(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 0))
+	custom, err := modelconfig.Info(testResolvedRoute(t, "deepseek/deepseek-v4-flash", "", "https://gateway.example/v1", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := custom.ContextWindow; got != unknownModelContextWindow {
+	if got := custom.ContextWindow; got != modelconfig.FallbackContextWindow {
 		t.Fatalf("custom endpoint fallback window = %d", got)
 	}
 }
 
-func testResolvedRoute(t *testing.T, uri, effort, baseURL string, contextWindow int) resolvedModelRoute {
+func testResolvedRoute(t *testing.T, uri, effort, baseURL string, contextWindow int) modelconfig.Route {
 	t.Helper()
-	route, err := resolveModelRoute(uri, effort, modelRouteOverrides{BaseURL: baseURL, ContextWindow: contextWindow}, modelRouteEnrichment{})
+	route, err := modelconfig.Resolve(uri, effort, modelconfig.Overrides{BaseURL: baseURL, ContextWindow: contextWindow}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return route
-}
-
-func TestOptionalStoredAuthorizerSendsConfiguredKeyButAllowsNone(t *testing.T) {
-	store, err := state.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DEEPSEEK_API_KEY", "")
-	authorizer := storedBearerAuthorizer{
-		store:        store,
-		provider:     "deepseek",
-		modelURI:     "deepseek/test",
-		allowMissing: true,
-	}
-	request, _ := http.NewRequest(http.MethodPost, "https://gateway.example/v1", nil)
-	if err := authorizer.Authorize(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if got := request.Header.Get("Authorization"); got != "" {
-		t.Fatalf("authorization without key = %q", got)
-	}
-	if err := store.SetAPIKey(t.Context(), "deepseek", "proxy-key"); err != nil {
-		t.Fatal(err)
-	}
-	if err := authorizer.Authorize(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if got := request.Header.Get("Authorization"); got != "Bearer proxy-key" {
-		t.Fatalf("configured authorization = %q", got)
-	}
 }
 
 func TestProviderStatusesReportCredentialSource(t *testing.T) {

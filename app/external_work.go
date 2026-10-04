@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -20,7 +21,7 @@ type applicationExternalWork struct {
 	agents    *childSupervisor
 }
 
-func (work applicationExternalWork) Status(id string) ([]agent.Detail, bool) {
+func (work applicationExternalWork) Status(id string) ([]model.Detail, bool) {
 	if work.agents != nil {
 		if details, ok := work.agents.Status(id); ok {
 			return details, true
@@ -50,7 +51,7 @@ func (work applicationExternalWork) EventCommitted(id string) {
 	}
 }
 
-func (work applicationExternalWork) ToolResultCommitted(result agent.ToolResult) {
+func (work applicationExternalWork) ToolResultCommitted(result model.ToolResult) {
 	work.processes.ToolResultCommitted(result)
 	if work.agents != nil {
 		work.agents.ToolResultCommitted(result)
@@ -65,7 +66,7 @@ func (work applicationExternalWork) DetachedJobs(sessionID string) []string {
 	return work.processes.DetachedJobs(sessionID)
 }
 
-func (work processExternalWork) Status(id string) ([]agent.Detail, bool) {
+func (work processExternalWork) Status(id string) ([]model.Detail, bool) {
 	return work.processes.StatusDetails(id)
 }
 
@@ -77,7 +78,7 @@ func (work processExternalWork) EventCommitted(jobID string) {
 	work.processes.MarkCompletionDelivered(jobID)
 }
 
-func (work processExternalWork) ToolResultCommitted(result agent.ToolResult) {
+func (work processExternalWork) ToolResultCommitted(result model.ToolResult) {
 	for _, detail := range result.Details {
 		process, ok := agent.ProcessResultFromDetail(detail)
 		if ok && process.JobID != "" && process.Status != agent.ProcessRunning {

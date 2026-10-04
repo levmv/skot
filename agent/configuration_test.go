@@ -7,26 +7,28 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	journal := &memoryJournal{}
-	read := Tool{Spec: ToolSpec{
+	read := Tool{Spec: modelapi.ToolSpec{
 		Name: "read", Description: "read files", InputSchema: jsontext.Value(`{"type":"object"}`),
 	}, Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil }}
-	edit := Tool{Spec: ToolSpec{
+	edit := Tool{Spec: modelapi.ToolSpec{
 		Name: "edit", Description: "edit files", InputSchema: jsontext.Value(`{"type":"object"}`),
 	}, Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil }}
-	var requests []ModelRequest
+	var requests []modelapi.Request
 	model := configurationModel{
-		info: ModelInfo{
+		info: modelapi.Info{
 			BackendID: "test", Provider: "provider", Model: "alpha", ContextWindow: 64_000,
 			ContextWindowEstimated: true, Endpoint: "https://secret@example.test/v1?token=secret",
 			MaxRequestBytes: 1_000_000, MaxCompletionBytes: 100_000,
 		},
-		complete: func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		complete: func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			requests = append(requests, request)
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 		},
 	}
 	modified := false
@@ -109,7 +111,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 	}
 
 	next := configurationModel{
-		info:     ModelInfo{BackendID: "test", Provider: "provider", Model: "beta", ContextWindow: 128_000, Endpoint: "https://next.example/v1"},
+		info:     modelapi.Info{BackendID: "test", Provider: "provider", Model: "beta", ContextWindow: 128_000, Endpoint: "https://next.example/v1"},
 		complete: model.complete,
 	}
 	if err := runtime.SwitchModel(context.Background(), next.testModelInfo(), next); err != nil {
@@ -145,7 +147,7 @@ func TestRuntimeRecordsOnlyEffectiveConfigurationChanges(t *testing.T) {
 
 func TestRuntimeReplacesToolsAndProgramMetadataAtomically(t *testing.T) {
 	program := Tool{
-		Spec: ToolSpec{Name: "lookup", Description: "lookup", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "lookup", Description: "lookup", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	}
 	runtime := newTestRuntime(t, Config{
@@ -221,14 +223,16 @@ func TestScopeSnapshotKeepsEffectiveScopeJournalName(t *testing.T) {
 }
 
 type configurationModel struct {
-	info     ModelInfo
-	complete func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
+	info     modelapi.Info
+	complete func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error)
 }
 
-func (model configurationModel) testModelInfo() ModelInfo { return model.info }
+func (model configurationModel) testModelInfo() modelapi.Info { return model.info }
 
-func (model configurationModel) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+func (model configurationModel) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	return model.complete(ctx, request, emit)
 }
 
-func (model configurationModel) ProjectModelItems(items []Item) []Item { return items }
+func (model configurationModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
+	return items
+}

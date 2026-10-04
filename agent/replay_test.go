@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/levmv/skot/model"
 )
 
 func TestReplayRequiresSupportedJournalSchemaVersion(t *testing.T) {
@@ -89,7 +91,7 @@ func TestReplayRejectsNonIncreasingRecordSequence(t *testing.T) {
 func TestReplayRequiresExplicitModelProvider(t *testing.T) {
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
-		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "chat_completions.deepseek", Model: "model", Epoch: "epoch"}),
+		recordForTest(t, 2, RecordModelSelected, model.ReplayContext{Backend: "chat_completions.deepseek", Model: "model", Epoch: "epoch"}),
 	}
 	if _, err := Replay(records); err == nil || !strings.Contains(err.Error(), "invalid model selection") {
 		t.Fatalf("Replay() error = %v", err)
@@ -99,7 +101,7 @@ func TestReplayRequiresExplicitModelProvider(t *testing.T) {
 func TestReplayDoesNotCarryConfigurationAcrossModelSelections(t *testing.T) {
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
-		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "first", Provider: "first", Model: "model", Epoch: "epoch-first"}),
+		recordForTest(t, 2, RecordModelSelected, model.ReplayContext{Backend: "first", Provider: "first", Model: "model", Epoch: "epoch-first"}),
 		recordForTest(t, 3, RecordSessionConfigured, EffectiveConfigSnapshot{
 			ModelContext: ModelContextSnapshot{
 				CompactionInstructions: compactionInstructions,
@@ -109,7 +111,7 @@ func TestReplayDoesNotCarryConfigurationAcrossModelSelections(t *testing.T) {
 				ContextWindow: 64_000, MaxModelAttempts: 1, MaxToolIterations: DefaultMaxToolIterations,
 			},
 		}),
-		recordForTest(t, 4, RecordModelSelected, ModelSelectedRecord{Backend: "second", Provider: "second", Model: "model", Epoch: "epoch-second"}),
+		recordForTest(t, 4, RecordModelSelected, model.ReplayContext{Backend: "second", Provider: "second", Model: "model", Epoch: "epoch-second"}),
 	}
 	state, err := Replay(records)
 	if err != nil {
@@ -121,23 +123,23 @@ func TestReplayDoesNotCarryConfigurationAcrossModelSelections(t *testing.T) {
 }
 
 func TestReplayRemovesPendingToolCallsByIdentity(t *testing.T) {
-	toolCall := func(id string) Item {
-		return Item{
-			Kind: ItemToolCall, ResponseID: "response",
-			ToolCall: &ToolCall{ID: id, Name: "tool", RawArguments: `{}`},
+	toolCall := func(id string) model.Item {
+		return model.Item{
+			Kind: model.ItemToolCall, ResponseID: "response",
+			ToolCall: &model.ToolCall{ID: id, Name: "tool", RawArguments: `{}`},
 		}
 	}
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
-		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"}),
+		recordForTest(t, 2, RecordModelSelected, model.ReplayContext{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"}),
 		recordForTest(t, 3, RecordRunStarted, RunStartedRecord{RunID: "run"}),
 		recordForTest(t, 4, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "hello"}),
 		recordForTest(t, 5, RecordModelResponse, ModelResponseRecord{
 			RunID: "run", Backend: "test", Model: "model", Epoch: "epoch",
-			Items: []Item{toolCall("first"), toolCall("middle"), toolCall("last")},
+			Items: []model.Item{toolCall("first"), toolCall("middle"), toolCall("last")},
 		}),
-		recordForTest(t, 6, RecordToolResult, ToolResultRecord{RunID: "run", Result: ToolResult{CallID: "middle"}}),
-		recordForTest(t, 7, RecordToolResult, ToolResultRecord{RunID: "run", Result: ToolResult{CallID: "first"}}),
+		recordForTest(t, 6, RecordToolResult, ToolResultRecord{RunID: "run", Result: model.ToolResult{CallID: "middle"}}),
+		recordForTest(t, 7, RecordToolResult, ToolResultRecord{RunID: "run", Result: model.ToolResult{CallID: "first"}}),
 	}
 	state, err := Replay(records)
 	if err != nil {

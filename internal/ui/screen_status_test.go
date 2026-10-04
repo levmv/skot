@@ -10,6 +10,7 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/toolpolicy"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestFooterShowsOptionalWeeklyQuota(t *testing.T) {
@@ -243,7 +244,7 @@ func TestTurnTickRefreshesPublishedSessionStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.contextReport = agent.ContextReport{Window: 100_000, InputLimit: 80_000, TotalInputTokens: 40_000}
-	fake.state.Usage = agent.ModelUsage{InputTokens: 1_200, OutputTokens: 40, TotalTokens: 1_240}
+	fake.state.Usage = modelapi.TokenCounts{InputTokens: 1_200, OutputTokens: 40, TotalTokens: 1_240}
 	model.operation.kind = operationTurn
 	model, cmd := model.update(turnTickMsg{})
 	if cmd == nil {

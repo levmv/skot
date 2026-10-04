@@ -9,12 +9,14 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/levmv/skot/internal/modelconfig"
 )
 
 const codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
 
-func readCodexAccountQuota(ctx context.Context, authorizer codexAuthorizer) (AccountQuota, [sha256.Size]byte, error) {
-	tokens, err := authorizer.currentTokens(ctx)
+func readCodexAccountQuota(ctx context.Context, authorizer modelconfig.CodexAuthorizer) (AccountQuota, [sha256.Size]byte, error) {
+	tokens, err := authorizer.CurrentTokens(ctx)
 	if err != nil {
 		return AccountQuota{}, [sha256.Size]byte{}, err
 	}
@@ -23,14 +25,14 @@ func readCodexAccountQuota(ctx context.Context, authorizer codexAuthorizer) (Acc
 	if err != nil {
 		return AccountQuota{}, credential, err
 	}
-	setCodexAccountHeaders(request, tokens)
+	modelconfig.SetCodexAccountHeaders(request, tokens)
 	request.Header.Set("Accept", "application/json")
 	observed := time.Now()
-	client := authorizer.client
+	client := authorizer.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
-	response, err := codexHTTPClient(client).Do(request)
+	response, err := modelconfig.CodexHTTPClient(client).Do(request)
 	if err != nil {
 		return AccountQuota{}, credential, err
 	}

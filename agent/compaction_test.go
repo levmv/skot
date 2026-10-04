@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
@@ -37,7 +39,7 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 	if !itemsContainText(request.Items, "old question") || !itemsContainText(request.Items, "old answer") || itemsContainText(request.Items, "recent question") {
 		t.Fatalf("compaction items = %#v", request.Items)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, plan, "Objective: continue recent work. Old answer was recorded.", ModelUsage{}, ""); err != nil {
+	if _, _, err := commitCompaction(context.Background(), journal, plan, "Objective: continue recent work. Old answer was recorded.", modelapi.TokenCounts{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	state, err = Replay(journal.snapshot())
@@ -52,14 +54,14 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 		t.Fatalf("verbatim tail = %#v", verbatim)
 	}
 
-	thirdModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	thirdModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		if !strings.Contains(request.Summary, "continue recent work") {
 			t.Fatalf("summary = %q", request.Summary)
 		}
 		if len(request.Items) != 3 || request.Items[0].Text != "recent question" || request.Items[2].Text != "new question" {
 			t.Fatalf("projected request items = %#v", request.Items)
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "new answer"}}}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "new answer"}}}, nil
 	}}}
 	if _, err := newTestRuntime(t, Config{Backend: thirdModel, Journal: journal}).Run(context.Background(), "new question", nil); err != nil {
 		t.Fatal(err)
@@ -68,20 +70,20 @@ func TestCompactionIsAdditiveAndRuntimeUsesSummaryPlusTail(t *testing.T) {
 
 func TestCompactionDoesNotProbeImagesAfterModelSwitch(t *testing.T) {
 	journal := &memoryJournal{}
-	tool := seedCompletedToolContentHistory(t, journal, ImageToolContent("old image metadata", ImageContent{
+	tool := seedCompletedToolContentHistory(t, journal, modelapi.ImageToolContent("old image metadata", modelapi.ImageContent{
 		MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
 	}), "inspect an image")
 	runtime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, nil
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, nil
 		}),
 		Journal: journal,
 		Tools:   []Tool{tool},
 	})
-	nextBackend := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{}, nil
+	nextBackend := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{}, nil
 	})
-	if err := runtime.SwitchModel(context.Background(), ModelInfo{
+	if err := runtime.SwitchModel(context.Background(), modelapi.Info{
 		BackendID: "next", Provider: "next", Model: "next", ContextWindow: 64 * 1024,
 	}, nextBackend); err != nil {
 		t.Fatal(err)
@@ -112,10 +114,10 @@ func TestCompactionRetainsRecentTailByProjectedTokenBudget(t *testing.T) {
 	const blocks = 14
 	steps := make([]modelStep, blocks)
 	for index := range steps {
-		steps[index] = func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{
-				{Kind: ItemReasoning, Text: strings.Repeat("r", 28*1024)},
-				{Kind: ItemAssistantText, Text: "answer"},
+		steps[index] = func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemReasoning, Text: strings.Repeat("r", 28*1024)},
+				{Kind: modelapi.ItemAssistantText, Text: "answer"},
 			}, StopReason: "stop"}, nil
 		}
 	}
@@ -133,9 +135,9 @@ func TestCompactionRetainsRecentTailByProjectedTokenBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := newTestRuntime(t, Config{
-		Model: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 128 * 1024},
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, nil
+		Model: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 128 * 1024},
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, nil
 		}),
 		Journal: journal,
 	})
@@ -173,17 +175,17 @@ func TestCompactionVerbatimTokenBudgetHasAbsoluteBounds(t *testing.T) {
 
 func TestRuntimeCompactUsesTokenTailBeforeWindowPressure(t *testing.T) {
 	journal := &memoryJournal{}
-	var compactionRequest ModelRequest
+	var compactionRequest modelapi.Request
 	steps := make([]modelStep, 0, 5)
 	for range 4 {
 		steps = append(steps, directModelResponse("answer"))
 	}
-	steps = append(steps, func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	steps = append(steps, func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		compactionRequest = request
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "summary"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "summary"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 1_000_000},
+		Model: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 1_000_000},
 		Backend: &scriptedModel{
 			steps: steps,
 		},
@@ -238,7 +240,7 @@ func TestRuntimeCompactSkipsHistoryWithinTokenTail(t *testing.T) {
 func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T) {
 	journal := &memoryJournal{}
 	tool := Tool{
-		Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			return ToolOutput{}, nil
 		},
@@ -247,7 +249,7 @@ func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T
 	model := &scriptedModel{steps: []modelStep{
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if request.Instructions != "main instructions" {
 				t.Fatalf("compaction instructions = %q", request.Instructions)
 			}
@@ -260,13 +262,13 @@ func TestRuntimeCompactUsesCacheAlignedPrefixAndCommitsTailBoundary(t *testing.T
 			if itemsContainText(request.Items, "recent question") {
 				t.Fatalf("compaction request includes verbatim tail: %#v", request.Items)
 			}
-			return ModelResponse{
-				Items: []Item{
-					{Kind: ItemAssistantText, Text: "Objective: preserve the recent work."},
-					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}},
+			return modelapi.Response{
+				Items: []modelapi.Item{
+					{Kind: modelapi.ItemAssistantText, Text: "Objective: preserve the recent work."},
+					{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}},
 				},
-				UsageDetails: finalUsageForTest(30, 8),
-				StopReason:   "tool_calls",
+				Usage:      finalUsageForTest(30, 8),
+				StopReason: "tool_calls",
 			}, nil
 		},
 	}}
@@ -310,11 +312,11 @@ func TestRuntimeCompactRejectsIncompleteSummary(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
-		func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{
-				Items:        []Item{{Kind: ItemAssistantText, Text: "truncated summary"}},
-				StopReason:   "length",
-				UsageDetails: finalUsageForTest(30, 8),
+		func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{
+				Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "truncated summary"}},
+				StopReason: "length",
+				Usage:      finalUsageForTest(30, 8),
 			}, nil
 		},
 	}}
@@ -356,32 +358,32 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	}
 
 	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
-			func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if !isCompactionRequest(request) || len(request.Tools) != 0 {
 					t.Fatalf("automatic compaction request = %#v", request)
 				}
 				if !itemsContainText(request.Items, "old context") || itemsContainText(request.Items, "recent question") {
 					t.Fatalf("automatic compaction items = %#v", request.Items)
 				}
-				emit(ModelStreamEvent{Kind: EventReasoningSummaryDelta, Text: "internal reasoning"})
-				emit(ModelStreamEvent{Kind: EventTextDelta, Text: "Old work was summarized."})
-				return ModelResponse{
-					Items:      []Item{{Kind: ItemAssistantText, Text: "Old work was summarized."}},
-					Usage:      ModelUsage{InputTokens: 8_000, OutputTokens: 20, TotalTokens: 8_020},
+				emit(modelapi.StreamEvent{Kind: modelapi.EventReasoningSummaryDelta, Text: "internal reasoning"})
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "Old work was summarized."})
+				return modelapi.Response{
+					Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "Old work was summarized."}},
+					Usage:      modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(8_000), OutputTokens: new(20), TotalTokens: new(8_020)}},
 					StopReason: "stop",
 				}, nil
 			},
-			func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if request.Summary != "Old work was summarized." {
 					t.Fatalf("summary = %q", request.Summary)
 				}
 				if len(request.Items) != 3 || request.Items[0].Text != recentQuestion || request.Items[2].Text != "new question" {
 					t.Fatalf("post-compaction items = %#v", request.Items)
 				}
-				emit(ModelStreamEvent{Kind: EventTextDelta, Text: "final answer"})
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "final answer"})
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
 			},
 		},
 	}
@@ -435,8 +437,8 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 func TestRuntimePreflightUsesBoundedCacheAlignedCompactionRequests(t *testing.T) {
 	journal := &memoryJournal{}
 	seedRuntime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
 		}),
 		Journal: journal,
 	})
@@ -449,19 +451,19 @@ func TestRuntimePreflightUsesBoundedCacheAlignedCompactionRequests(t *testing.T)
 
 	compactions := 0
 	mainRequests := 0
-	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		if isCompactionRequest(request) {
 			compactions++
-			return ModelResponse{
-				Items:      []Item{{Kind: ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
+			return modelapi.Response{
+				Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
 				StopReason: "stop",
 			}, nil
 		}
 		mainRequests++
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "fits"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "fits"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
-		Model: ModelInfo{
+		Model: modelapi.Info{
 			BackendID: "test", Provider: "test", Model: "test", ContextWindow: 96 * 1024,
 		},
 		Backend: model,
@@ -486,8 +488,8 @@ func TestRuntimePreflightUsesBoundedCacheAlignedCompactionRequests(t *testing.T)
 func TestRuntimeCompactsUntilRequestTooLargeRecovers(t *testing.T) {
 	journal := &memoryJournal{}
 	seedRuntime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
 		}),
 		Journal: journal,
 	})
@@ -502,14 +504,14 @@ func TestRuntimeCompactsUntilRequestTooLargeRecovers(t *testing.T) {
 	compactions := 0
 	const requestLimit = 250 * 1024
 	var mainRequestSizes []int
-	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		if isCompactionRequest(request) {
 			compactions++
-			if len(request.Tools) != 0 || request.Items[len(request.Items)-1].Kind != ItemUserText {
+			if len(request.Tools) != 0 || request.Items[len(request.Items)-1].Kind != modelapi.ItemUserText {
 				t.Fatalf("compaction request = %#v", request)
 			}
-			return ModelResponse{
-				Items:      []Item{{Kind: ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
+			return modelapi.Response{
+				Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: fmt.Sprintf("summary %d", compactions)}},
 				StopReason: "stop",
 			}, nil
 		}
@@ -517,15 +519,15 @@ func TestRuntimeCompactsUntilRequestTooLargeRecovers(t *testing.T) {
 		requestSize := encodedTestModelRequestBytes(t, request)
 		mainRequestSizes = append(mainRequestSizes, requestSize)
 		if requestSize > requestLimit {
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(fmt.Errorf("payload is %d bytes, limit is %d", requestSize, requestLimit)),
-				Kind:  ProviderErrorRequestTooLarge,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(fmt.Errorf("payload is %d bytes, limit is %d", requestSize, requestLimit)),
+				Kind:  modelapi.ProviderErrorRequestTooLarge,
 			}
 		}
 		if request.Summary != fmt.Sprintf("summary %d", compactions) {
 			t.Fatalf("recovered request summary = %q after %d compactions", request.Summary, compactions)
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	var events []Event
@@ -567,16 +569,16 @@ func TestRuntimeStopsRequestTooLargeRecoveryWithoutCompactionBoundary(t *testing
 	journal := &memoryJournal{}
 	attempts := 0
 	runtime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			attempts++
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge, Retryable: true,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge, Retryable: true,
 			}
 		}),
 		Journal: journal, RequestPolicy: ModelRequestPolicy{MaxAttempts: 3},
 	})
 	result, err := runtime.Run(context.Background(), "only active block", nil)
-	if err == nil || result.Status != RunFailed || !errors.Is(err, ErrModelRequestTooLarge) || !strings.Contains(err.Error(), "payload too large") ||
+	if err == nil || result.Status != RunFailed || !errors.Is(err, modelapi.ErrModelRequestTooLarge) || !strings.Contains(err.Error(), "payload too large") ||
 		!strings.Contains(err.Error(), "automatic context reduction") {
 		t.Fatalf("result/error = %#v / %v", result, err)
 	}
@@ -590,15 +592,15 @@ func TestRuntimeStopsRequestTooLargeRecoveryWithoutCompactionBoundary(t *testing
 	}
 }
 
-func encodedTestModelRequestBytes(t *testing.T, request ModelRequest) int {
+func encodedTestModelRequestBytes(t *testing.T, request modelapi.Request) int {
 	t.Helper()
 	type encodableRequest struct {
 		SessionID         string
 		ProviderEpoch     string
 		Instructions      string
 		Summary           string
-		Items             []Item
-		Tools             []ToolSpec
+		Items             []modelapi.Item
+		Tools             []modelapi.ToolSpec
 		StreamIdleTimeout int64
 	}
 	body, err := json.Marshal(encodableRequest{
@@ -616,15 +618,15 @@ func encodedTestModelRequestBytes(t *testing.T, request ModelRequest) int {
 	return len(body)
 }
 
-func isCompactionRequest(request ModelRequest) bool {
+func isCompactionRequest(request modelapi.Request) bool {
 	if len(request.Items) == 0 {
 		return false
 	}
 	last := request.Items[len(request.Items)-1]
-	return last.Kind == ItemUserText && strings.HasSuffix(last.Text, compactionInstructions)
+	return last.Kind == modelapi.ItemUserText && strings.HasSuffix(last.Text, compactionInstructions)
 }
 
-func mustCompactionRequest(t *testing.T, runtime *Runtime, state State, spec runRequestSpec, plan compactionPlan) ModelRequest {
+func mustCompactionRequest(t *testing.T, runtime *Runtime, state State, spec runRequestSpec, plan compactionPlan) modelapi.Request {
 	t.Helper()
 	request, err := runtime.compactionRequest(state, spec, plan)
 	if err != nil {
@@ -633,7 +635,7 @@ func mustCompactionRequest(t *testing.T, runtime *Runtime, state State, spec run
 	return request
 }
 
-func itemsContainText(items []Item, text string) bool {
+func itemsContainText(items []modelapi.Item, text string) bool {
 	for _, item := range items {
 		if strings.Contains(item.Text, text) {
 			return true
@@ -669,7 +671,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, first, "summary one", ModelUsage{}, ""); err != nil {
+	if _, _, err := commitCompaction(context.Background(), journal, first, "summary one", modelapi.TokenCounts{}, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -694,7 +696,7 @@ func TestRollingCompactionAdvancesFromPreviousBoundary(t *testing.T) {
 	if second.CoveredThroughSequence <= first.CoveredThroughSequence || second.FirstVerbatimSequence <= first.FirstVerbatimSequence {
 		t.Fatalf("boundaries did not advance: first=%#v second=%#v", first, second)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, second, "summary two", ModelUsage{}, ""); err != nil {
+	if _, _, err := commitCompaction(context.Background(), journal, second, "summary two", modelapi.TokenCounts{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	state, err = Replay(journal.snapshot())
@@ -714,14 +716,14 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 	journal := &memoryJournal{}
 	providerID := jsontext.Value(`"provider_call"`)
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{
-				{Kind: ItemReasoning, Text: "provider-private reasoning", ProviderData: []ProviderData{{
+		func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemReasoning, Text: "provider-private reasoning", ProviderData: []modelapi.ProviderData{{
 					Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"opaque-secret"}`),
 				}}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{
 					Name: "echo", RawArguments: `{"text":"hello"}`,
-					ProviderReferences: []ProviderReference{{Kind: "call_id", Data: providerID}},
+					ProviderReferences: []modelapi.ProviderReference{{Kind: "call_id", Data: providerID}},
 				}},
 			}}, nil
 		},
@@ -729,9 +731,9 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 		directModelResponse("recent answer"),
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "echo", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "echo", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent("echo result: " + arguments + strings.Repeat("x", 132*1024))}, nil
+			return ToolOutput{Content: modelapi.TextContent("echo result: " + arguments + strings.Repeat("x", 132*1024))}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -750,15 +752,15 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := mustCompactionRequest(t, runtime, state, runRequestSpec{}, plan)
-	var reasoning, call, result *Item
+	var reasoning, call, result *modelapi.Item
 	for index := range request.Items {
 		item := &request.Items[index]
 		switch item.Kind {
-		case ItemReasoning:
+		case modelapi.ItemReasoning:
 			reasoning = item
-		case ItemToolCall:
+		case modelapi.ItemToolCall:
 			call = item
-		case ItemToolResult:
+		case modelapi.ItemToolResult:
 			result = item
 		}
 	}
@@ -798,18 +800,18 @@ func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
 	if _, err := runtime.Run(context.Background(), "three", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := commitCompaction(context.Background(), journal, plan, "stale summary", ModelUsage{}, ""); err == nil || !strings.Contains(err.Error(), "session changed") {
+	if _, _, err := commitCompaction(context.Background(), journal, plan, "stale summary", modelapi.TokenCounts{}, ""); err == nil || !strings.Contains(err.Error(), "session changed") {
 		t.Fatalf("stale commit error = %v", err)
 	}
 
 	unfinished := &memoryJournal{}
 	mustAppend(t, unfinished, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"})
-	mustAppend(t, unfinished, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch"})
+	mustAppend(t, unfinished, RecordModelSelected, modelapi.ReplayContext{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch"})
 	mustAppend(t, unfinished, RecordRunStarted, RunStartedRecord{RunID: "run"})
 	mustAppend(t, unfinished, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "unfinished"})
 	unfinishedRuntime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, nil
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, nil
 		}),
 		Journal: unfinished,
 	})
@@ -823,10 +825,10 @@ func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("summarizer temporarily unavailable")),
-				Kind:  ProviderErrorUnavailable, Retryable: true,
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("summarizer temporarily unavailable")),
+				Kind:  modelapi.ProviderErrorUnavailable, Retryable: true,
 			}
 		},
 		directModelResponse("summary"),
@@ -897,8 +899,8 @@ func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
 }
 
 func directModelResponse(text string) modelStep {
-	return func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: text}}}, nil
+	return func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: text}}}, nil
 	}
 }
 

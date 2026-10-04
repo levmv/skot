@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/levmv/skot/model"
 )
 
 type PendingTool struct {
 	RunID string
-	Call  ToolCall
+	Call  model.ToolCall
 }
 
 type ConversationBlock struct {
@@ -26,16 +28,16 @@ type ConversationBlock struct {
 type ConversationEntry struct {
 	Sequence uint64
 	Time     time.Time
-	Item     Item
+	Item     model.Item
 }
 
 type State struct {
 	SchemaVersion    int
 	SessionID        string
 	Workspace        string
-	Selection        ModelSelectedRecord
+	Selection        model.ReplayContext
 	Configured       *EffectiveConfigSnapshot
-	Items            []Item
+	Items            []model.Item
 	Blocks           []ConversationBlock
 	Compaction       *ContextCompactedRecord
 	CompactionCount  int
@@ -44,7 +46,7 @@ type State struct {
 	ImageDelivery    ImageDeliveryObservedRecord
 	// Usage sums accepted model responses and committed compactions.
 	// Use Runtime.Usage or ReplayUsage for accounting across every attempt.
-	Usage         ModelUsage
+	Usage         model.TokenCounts
 	ActiveRuns    []string
 	PendingTools  []PendingTool
 	DeliveredJobs map[string]struct{}
@@ -91,14 +93,14 @@ func boundaryPrecedesUnfinishedWork(state State, throughSequence uint64) bool {
 	return throughSequence < state.Blocks[first].StartSequence
 }
 
-func (state State) VerbatimItems() []Item {
+func (state State) VerbatimItems() []model.Item {
 	return state.verbatimItemsFromSequence(state.firstVerbatimSequence(), true)
 }
 
 // verbatimModelItems returns an owned projection source without product-only
 // details. Model requests and context estimates discard those details, so
 // copying potentially large JSON payloads here would be pure overhead.
-func (state State) verbatimModelItems() []Item {
+func (state State) verbatimModelItems() []model.Item {
 	return state.verbatimModelItemsFromSequence(state.firstVerbatimSequence())
 }
 
@@ -109,19 +111,19 @@ func (state State) firstVerbatimSequence() uint64 {
 	return 0
 }
 
-func (state State) verbatimModelItemsFromSequence(firstSequence uint64) []Item {
+func (state State) verbatimModelItemsFromSequence(firstSequence uint64) []model.Item {
 	return state.verbatimItemsFromSequence(firstSequence, false)
 }
 
-func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetails bool) []Item {
-	var items []Item
+func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetails bool) []model.Item {
+	var items []model.Item
 	for _, block := range state.Blocks {
 		if firstSequence != 0 && block.StartSequence < firstSequence {
 			continue
 		}
 		for _, entry := range block.Entries {
 			item := cloneItemForProjection(entry.Item, includeDetails)
-			if item.Kind == ItemToolResult && item.ToolResult != nil && state.ToolPruning != nil && entry.Sequence <= state.ToolPruning.ThroughSequence {
+			if item.Kind == model.ItemToolResult && item.ToolResult != nil && state.ToolPruning != nil && entry.Sequence <= state.ToolPruning.ThroughSequence {
 				item.ToolResult.Content = pruneToolResult(item.ToolResult.Content, state.ToolPruning.HeadBytes, state.ToolPruning.TailBytes)
 			}
 			items = append(items, item)
@@ -155,8 +157,8 @@ func validateCompactionBoundary(state State, payload ContextCompactedRecord, rec
 	return nil
 }
 
-func validateProviderOwnership(item Item, selection ModelSelectedRecord) error {
-	if item.Kind == ItemReasoning {
+func validateProviderOwnership(item model.Item, selection model.ReplayContext) error {
+	if item.Kind == model.ItemReasoning {
 		if item.ProviderContext == nil || item.ProviderContext.Backend != selection.Backend || item.ProviderContext.Epoch != selection.Epoch {
 			return fmt.Errorf("reasoning item does not belong to active provider epoch")
 		}
@@ -184,9 +186,9 @@ func Reconcile(ctx context.Context, journal Journal) (State, []Record, error) {
 	}
 	for len(reducer.state.PendingTools) != 0 {
 		pending := reducer.state.PendingTools[0]
-		result := ToolResult{
+		result := model.ToolResult{
 			CallID:  pending.Call.ID,
-			Content: TextContent(fmt.Sprintf("tool %s outcome is unknown after an interrupted session; the call was not replayed", pending.Call.Name)),
+			Content: model.TextContent(fmt.Sprintf("tool %s outcome is unknown after an interrupted session; the call was not replayed", pending.Call.Name)),
 			Error:   true,
 			Unknown: true,
 		}

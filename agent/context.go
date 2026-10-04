@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"unicode/utf8"
+
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -36,7 +38,7 @@ type ContextReport struct {
 // observers never have to replay the journal or assemble a partial view.
 type SessionStatus struct {
 	ContextReport ContextReport
-	Usage         ModelUsage
+	Usage         model.TokenCounts
 	ImageDelivery ImageDeliveryStatus
 }
 
@@ -160,7 +162,7 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 		}
 	}
 	if state.Compaction != nil {
-		report.SummaryTokens = estimateTextTokens(ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
+		report.SummaryTokens = estimateTextTokens(model.ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
 	}
 	items, boundary := runtime.projectedItemsForRequest(state, state.verbatimModelItems(), pendingInputs...)
 	report.HistoryTokens = estimateItemsTokens(items[:boundary])
@@ -175,15 +177,15 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 // projectedItemsForRequest projects pending input together with its history:
 // current-turn routes drop the previous turn's reasoning only after the next
 // user message has been appended.
-func (runtime *Runtime) projectedItemsForRequest(state State, items []Item, pendingInputs ...string) ([]Item, int) {
+func (runtime *Runtime) projectedItemsForRequest(state State, items []model.Item, pendingInputs ...string) ([]model.Item, int) {
 	pending := 0
 	for _, pendingInput := range pendingInputs {
 		if pendingInput != "" {
-			items = append(items, Item{Kind: ItemUserText, Text: pendingInput})
+			items = append(items, model.Item{Kind: model.ItemUserText, Text: pendingInput})
 			pending++
 		}
 	}
-	projected := runtime.projectModelItems(items, ProviderContext{
+	projected := runtime.projectModelItems(items, model.ProviderContext{
 		Backend: runtime.modelInfo.BackendID,
 		Epoch:   state.Selection.Epoch,
 	}, state.ImageDelivery.Status)
@@ -192,19 +194,19 @@ func (runtime *Runtime) projectedItemsForRequest(state State, items []Item, pend
 	return projected, boundary
 }
 
-func estimateItemsTokens(items []Item) int {
+func estimateItemsTokens(items []model.Item) int {
 	tokens := 0
 	for _, item := range items {
 		switch item.Kind {
-		case ItemUserText, ItemBoundaryText, ItemAssistantText, ItemReasoning:
+		case model.ItemUserText, model.ItemBoundaryText, model.ItemAssistantText, model.ItemReasoning:
 			// Opaque provider bytes count against the adapter's encoded request
 			// limit, but ciphertext size is not a defensible token estimate.
 			tokens += estimateTextTokens(item.Text) + perMessageTokens
-		case ItemToolCall:
+		case model.ItemToolCall:
 			if item.ToolCall != nil {
 				tokens += estimateTextTokens(item.ToolCall.Name) + estimateTextTokens(item.ToolCall.RawArguments) + perToolCallTokens
 			}
-		case ItemToolResult:
+		case model.ItemToolResult:
 			if item.ToolResult != nil {
 				tokens += estimateContentTokens(item.ToolResult.Content) + estimateTextTokens(item.ToolResult.CallID) + perToolResultTokens
 			}
@@ -213,13 +215,13 @@ func estimateItemsTokens(items []Item) int {
 	return tokens
 }
 
-func estimateContentTokens(content Content) int {
+func estimateContentTokens(content model.Content) int {
 	tokens := 0
 	for _, part := range content {
 		switch part.Kind {
-		case ContentPartText:
+		case model.ContentPartText:
 			tokens += estimateTextTokens(part.Text)
-		case ContentPartImage:
+		case model.ContentPartImage:
 			if part.Image != nil {
 				// Normalization bounds dimensions before content reaches this
 				// layer. The 28x28 grid is a stable provider-neutral geometry

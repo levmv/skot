@@ -18,9 +18,11 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
+	modelapi "github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -555,7 +557,7 @@ func TestOpenExistingJournalRestoresModelAndJobsButEmptyJournalUsesFreshDefaults
 	appendApplicationRecord(t, existing, agent.RecordSessionStarted, agent.SessionStartedRecord{
 		SchemaVersion: agent.JournalSchemaVersion, SessionID: sessionID, Workspace: root,
 	})
-	appendApplicationRecord(t, existing, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, existing, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "chat_completions", Provider: "ollama", Model: "saved", Epoch: "saved-epoch",
 	})
 	if err := existing.Close(); err != nil {
@@ -1060,7 +1062,7 @@ func TestOpenRejectsBackgroundProgramToolSetWithoutJob(t *testing.T) {
 		ToolSets: map[string][]string{"worker-only": {"worker"}},
 		Scope:    workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -1075,7 +1077,7 @@ func TestOpenRejectsBashToolSetWithoutJob(t *testing.T) {
 		ToolSets: map[string][]string{"shell-only": {"read", "bash"}},
 		Scope:    workspacetools.ScopeMachine, ScopeExplicit: true, Interactive: true,
 	})
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) || !strings.Contains(err.Error(), `not required tool "job"`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -1089,7 +1091,7 @@ func TestOpenValidatesCompleteCatalogBeforeToolSetFiltering(t *testing.T) {
 			return append(catalog, applicationTool("bash")), nil
 		},
 	})
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `duplicate tool "bash"`) {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) || !strings.Contains(err.Error(), `duplicate tool "bash"`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -1185,7 +1187,7 @@ func TestOpenRejectsNegativeModelRequestDurations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config.Home = t.TempDir()
 			config.Root = t.TempDir()
-			if _, err := Open(context.Background(), config); !errors.Is(err, agent.ErrInvalidRequest) {
+			if _, err := Open(context.Background(), config); !errors.Is(err, modelapi.ErrInvalidRequest) {
 				t.Fatalf("error = %v", err)
 			}
 		})
@@ -1322,7 +1324,7 @@ func TestApplicationBuildsAndPersistsSelectedModel(t *testing.T) {
 
 func TestApplicationBuildsAndPersistsUnknownModelContextWindow(t *testing.T) {
 	application, preferences, _ := newModelSwitchApplication(t)
-	if err := application.SwitchModelWithContextWindow(context.Background(), "deepseek/new-model", "high", "", 0); !IsModelContextWindowRequired(err) {
+	if err := application.SwitchModelWithContextWindow(context.Background(), "deepseek/new-model", "high", "", 0); !modelapi.IsContextWindowRequired(err) {
 		t.Fatalf("missing context error = %v", err)
 	}
 	if err := application.SwitchModelWithContextWindow(context.Background(), "deepseek/new-model", "high", "", 1_000_000); err != nil {
@@ -1565,14 +1567,14 @@ func TestApplicationListsAndResumesSessionWithRecordedModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: application.config.root})
-	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, source, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "chat_completions", Provider: "deepseek", Model: "resumed-model", ReasoningEffort: " HIGH ", Epoch: "epoch-resumed",
 	})
 	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "run-resumed"})
 	appendApplicationRecord(t, source, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "run-resumed", Text: "resume this task"})
 	appendApplicationRecord(t, source, agent.RecordModelResponse, agent.ModelResponseRecord{
 		RunID: "run-resumed", Backend: "chat_completions", Model: "resumed-model", Epoch: "epoch-resumed",
-		Items: []agent.Item{{Kind: agent.ItemAssistantText, ResponseID: "response-resumed", Text: "saved answer"}},
+		Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, ResponseID: "response-resumed", Text: "saved answer"}},
 	})
 	appendApplicationRecord(t, source, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "run-resumed", Status: agent.RunCompleted})
 	if err := source.Close(); err != nil {
@@ -1726,7 +1728,7 @@ func TestResumeDoesNotTreatDifferentUnknownModelAsSavedSelection(t *testing.T) {
 		Resume: true, ResumePrefix: session.ShortID(sourceID),
 		Scope: ScopeMachine, ScopeExplicit: true,
 	})
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), "not available in Skot's current model list") {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) || !modelapi.IsAPIRequired(err) {
 		t.Fatalf("different unknown model error = %v", err)
 	}
 }
@@ -1740,7 +1742,7 @@ func TestResumeDoesNotTreatInvalidEffortAsAnUnavailableModel(t *testing.T) {
 	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
 		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: root,
 	})
-	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, source, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "chat_completions.deepseek", Provider: "deepseek", Model: "deepseek-v4-flash", Epoch: "epoch-saved",
 	})
 	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "saved-run"})
@@ -1756,7 +1758,7 @@ func TestResumeDoesNotTreatInvalidEffortAsAnUnavailableModel(t *testing.T) {
 		Resume: true, ResumePrefix: session.ShortID(sourceID), Interactive: true,
 		Scope: ScopeMachine, ScopeExplicit: true,
 	})
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), "reasoning effort") {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) || !strings.Contains(err.Error(), "reasoning effort") {
 		t.Fatalf("invalid effort error = %v", err)
 	}
 }
@@ -1764,7 +1766,7 @@ func TestResumeDoesNotTreatInvalidEffortAsAnUnavailableModel(t *testing.T) {
 func TestSwitchModelRejectsAMistypedProtocol(t *testing.T) {
 	application, _ := newSessionApplication(t)
 	err := application.SwitchModel(context.Background(), "opencode-go/ox-alpha-free", "", "chat-completions")
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unsupported model API "chat-completions"`) {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) || !strings.Contains(err.Error(), `unsupported model API "chat-completions"`) {
 		t.Fatalf("mistyped protocol error = %v", err)
 	}
 	if application.CurrentModel() == "opencode-go/ox-alpha-free" {
@@ -1781,7 +1783,7 @@ func TestApplicationResumeRebuildsUndeclaredRouteFromItsRecordedProtocol(t *test
 	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
 		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: application.config.root,
 	})
-	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, source, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "anthropic_messages.opencode-go", Provider: "opencode-go", Model: "ox-alpha-free", Epoch: "epoch-typed",
 	})
 	appendApplicationRecord(t, source, agent.RecordSessionConfigured, agent.EffectiveConfigSnapshot{
@@ -1826,7 +1828,7 @@ func createUnavailableModelSession(t *testing.T, home, root string) string {
 	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
 		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: root,
 	})
-	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, source, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "legacy_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
 	})
 	appendApplicationRecord(t, source, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "saved-run"})
@@ -1848,11 +1850,11 @@ func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T
 	}))
 	defer server.Close()
 
-	originalProvider := modelProviderCatalog["openrouter"]
+	originalProvider := modelconfig.Providers["openrouter"]
 	provider := originalProvider
-	provider.baseURL = server.URL
-	modelProviderCatalog["openrouter"] = provider
-	t.Cleanup(func() { modelProviderCatalog["openrouter"] = originalProvider })
+	provider.BaseURL = server.URL
+	modelconfig.Providers["openrouter"] = provider
+	t.Cleanup(func() { modelconfig.Providers["openrouter"] = originalProvider })
 
 	application, _ := newSessionApplication(t)
 	if err := application.config.settings.SetAPIKey(t.Context(), "openrouter", "test-key"); err != nil {
@@ -1871,9 +1873,9 @@ func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T
 	appendApplicationRecord(t, source, agent.RecordSessionStarted, agent.SessionStartedRecord{
 		SchemaVersion: agent.JournalSchemaVersion, SessionID: sourceID, Workspace: application.config.root,
 	})
-	appendApplicationRecord(t, source, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, source, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "chat_completions.openrouter", Provider: "openrouter", Model: "~x-ai/grok-latest",
-		ProviderStateContract: defaultModelSpec("openrouter").ChatTraits.ProviderStateContract(), Epoch: "epoch-openrouter",
+		ProviderStateContract: testResolvedRoute(t, "openrouter/~x-ai/grok-latest", "", "", 0).ProviderStateContract, Epoch: "epoch-openrouter",
 	})
 	appendApplicationRecord(t, source, agent.RecordSessionConfigured, agent.EffectiveConfigSnapshot{
 		ModelContext:  agent.ModelContextSnapshot{CompactionInstructions: "compact", ToolLimitInstructions: "limit tools"},
@@ -1899,6 +1901,9 @@ func TestApplicationResumeUsesSavedOpenRouterContextWhenLookupFails(t *testing.T
 	}
 	if lookups != 1 || state.Configured == nil || state.Configured.RuntimePolicy.ContextWindow != 333_000 || state.Configured.RuntimePolicy.ContextWindowEstimated {
 		t.Fatalf("lookups/configuration = %d / %#v", lookups, state.Configured)
+	}
+	if state.Selection.Epoch != "epoch-openrouter" {
+		t.Fatal("restoring the same model discarded its provider context")
 	}
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
@@ -1953,7 +1958,7 @@ func TestOpenDoesNotTurnInternalRouteReviewStateIntoAStartupWarning(t *testing.T
 
 func TestApplicationModelChoicesKeepCurrentEffectiveContext(t *testing.T) {
 	runtime, err := newApplicationTestRuntime(agent.Config{
-		Model: agent.ModelInfo{
+		Model: modelapi.Info{
 			BackendID: "chat_completions.openrouter", Provider: "openrouter", Model: "~x-ai/grok-latest",
 			ContextWindow: 333_000,
 		},
@@ -2037,12 +2042,12 @@ func newSessionApplication(t *testing.T) (*Application, *session.Store) {
 		t.Fatal(err)
 	}
 	appendApplicationRecord(t, journal, agent.RecordSessionStarted, agent.SessionStartedRecord{SchemaVersion: agent.JournalSchemaVersion, SessionID: id, Workspace: root})
-	appendApplicationRecord(t, journal, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, journal, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "chat_completions", Provider: "deepseek", Model: "initial-model", Epoch: "epoch-initial",
 	})
 	model := applicationDeepseekModel{}
 	runtime, err := newApplicationTestRuntime(agent.Config{
-		Model:   agent.ModelInfo{BackendID: "chat_completions", Provider: "deepseek", Model: "initial-model"},
+		Model:   modelapi.Info{BackendID: "chat_completions", Provider: "deepseek", Model: "initial-model"},
 		Backend: model, Journal: journal, SessionID: id, Workspace: root,
 		Tools: selectedTools, UserShell: processes.RunShell,
 	})
@@ -2077,7 +2082,7 @@ type applicationTestModel struct{}
 
 func newApplicationTestRuntime(config agent.Config) (*agent.Runtime, error) {
 	if config.Model.BackendID == "" {
-		config.Model = agent.ModelInfo{BackendID: "test", Provider: "test", Model: "initial"}
+		config.Model = modelapi.Info{BackendID: "test", Provider: "test", Model: "initial"}
 	}
 	return agent.New(config)
 }
@@ -2087,7 +2092,7 @@ type toolSetCaptureModel struct {
 	want string
 }
 
-func (model toolSetCaptureModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+func (model toolSetCaptureModel) Complete(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	names := make([]string, 0, len(request.Tools))
 	for _, tool := range request.Tools {
 		names = append(names, tool.Name)
@@ -2095,12 +2100,12 @@ func (model toolSetCaptureModel) Complete(_ context.Context, request agent.Model
 	if got := strings.Join(names, ","); got != model.want {
 		model.t.Fatalf("tools = %q, want %q", got, model.want)
 	}
-	return agent.ModelResponse{Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "done"}}}, nil
+	return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 }
 
 func applicationTool(name string) agent.Tool {
 	return agent.Tool{
-		Spec: agent.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run:  func(context.Context, string) (agent.ToolOutput, error) { return agent.ToolOutput{}, nil },
 	}
 }
@@ -2133,18 +2138,22 @@ func (journal *applicationMemoryJournal) Records(context.Context) ([]agent.Recor
 	return append([]agent.Record(nil), journal.records...), nil
 }
 
-func (applicationTestModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	return agent.ModelResponse{}, errors.New("unused")
+func (applicationTestModel) Complete(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+	return modelapi.Response{}, errors.New("unused")
 }
 
 type applicationDeepseekModel struct{}
 
-func (applicationDeepseekModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	return agent.ModelResponse{}, errors.New("unused")
+func (applicationDeepseekModel) Complete(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+	return modelapi.Response{}, errors.New("unused")
 }
 
-func (model toolSetCaptureModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (model toolSetCaptureModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
+	return items
+}
 
-func (applicationTestModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (applicationTestModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item { return items }
 
-func (applicationDeepseekModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (applicationDeepseekModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
+	return items
+}

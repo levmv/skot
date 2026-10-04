@@ -106,21 +106,30 @@ type Store struct {
 }
 
 func Open(home string) (*Store, error) {
-	if err := inspectHome(home); err != nil {
+	store, err := OpenCredentials(home)
+	if err != nil {
 		return nil, err
 	}
-	store := &Store{dir: home, path: filepath.Join(home, "config.json"), authPath: filepath.Join(home, "auth.json")}
 	if err := privatefs.InspectRegularFile(store.path, "config file"); err != nil {
 		return nil, err
 	}
 	privatefs.TryRestrictPermissions(store.path)
+	if _, err := store.Settings(); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// OpenCredentials opens auth.json independently of application configuration.
+func OpenCredentials(home string) (*Store, error) {
+	if err := inspectHome(home); err != nil {
+		return nil, err
+	}
+	store := &Store{dir: home, path: filepath.Join(home, "config.json"), authPath: filepath.Join(home, "auth.json")}
 	if err := privatefs.InspectRegularFile(store.authPath, "credential store"); err != nil {
 		return nil, err
 	}
 	privatefs.TryRestrictPermissions(store.authPath)
-	if _, err := store.Settings(); err != nil {
-		return nil, err
-	}
 	if _, err := store.loadCredentials(); err != nil {
 		return nil, err
 	}

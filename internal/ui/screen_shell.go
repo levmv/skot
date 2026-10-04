@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func (m *screenModel) startShell(command string, private bool) tea.Cmd {
@@ -26,7 +27,7 @@ func (m *screenModel) startShell(command string, private bool) tea.Cmd {
 
 func runShellCmd(ctx context.Context, runtime ShellAgent, command string, private bool) tea.Cmd {
 	return func() tea.Msg {
-		var result agent.ToolResult
+		var result model.ToolResult
 		var err error
 		if private {
 			result, err = runtime.RunPrivateShell(ctx, command)
@@ -37,12 +38,12 @@ func runShellCmd(ctx context.Context, runtime ShellAgent, command string, privat
 	}
 }
 
-func (m *screenModel) finishShell(result agent.ToolResult, runErr error, finishedAt time.Time) {
+func (m *screenModel) finishShell(result model.ToolResult, runErr error, finishedAt time.Time) {
 	m.operation.clear()
 	m.transcript.finishShell(result, runErr, finishedAt)
 }
 
-func (transcript *transcriptState) finishShell(result agent.ToolResult, runErr error, finishedAt time.Time) {
+func (transcript *transcriptState) finishShell(result model.ToolResult, runErr error, finishedAt time.Time) {
 	for index := range slices.Backward(transcript.blocks) {
 		block := &transcript.blocks[index]
 		if block.kind != screenBlockTool || block.tool == nil || block.tool.shell == nil || block.tool.done {

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 // ModelRequestPolicy bounds one logical model request. MaxAttempts counts the
@@ -48,8 +50,8 @@ type Config struct {
 	// Model always identifies the selected model and its effective, secret-free
 	// configuration. Backend may be nil when a persisted selection remains
 	// inspectable but cannot be executed by the current application.
-	Model   ModelInfo
-	Backend Backend
+	Model   modelapi.Info
+	Backend modelapi.Backend
 
 	Journal       Journal
 	Tools         []Tool
@@ -115,7 +117,7 @@ type Runtime struct {
 // take ownership of Journal or ExternalWork. An unused Runtime may be discarded
 // without cleanup.
 func New(config Config) (*Runtime, error) {
-	modelInfo, err := normalizeModelInfo(config.Model)
+	modelInfo, err := modelapi.NormalizeInfo(config.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -228,11 +230,11 @@ func normalizeProgramToolSnapshots(input []ProgramToolSnapshot, sanitize func(st
 func normalizeTools(input []Tool) ([]Tool, map[string]Tool, error) {
 	tools := make([]Tool, len(input))
 	copy(tools, input)
-	specs := make([]ToolSpec, len(tools))
+	specs := make([]modelapi.ToolSpec, len(tools))
 	for index := range tools {
 		specs[index] = tools[index].Spec
 	}
-	normalizedSpecs, err := NormalizeToolSpecs(specs)
+	normalizedSpecs, err := modelapi.NormalizeToolSpecs(specs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -275,7 +277,7 @@ func (runtime *Runtime) CurrentReasoningEffort() string {
 
 // CurrentModelInfo returns the selected, secret-free model configuration. A
 // selection made during a turn takes effect at the next request boundary.
-func (runtime *Runtime) CurrentModelInfo() ModelInfo {
+func (runtime *Runtime) CurrentModelInfo() modelapi.Info {
 	runtime.configMu.RLock()
 	defer runtime.configMu.RUnlock()
 	return runtime.selectedConfigurationLocked().modelInfo
@@ -284,11 +286,11 @@ func (runtime *Runtime) CurrentModelInfo() ModelInfo {
 // SwitchModel applies a selection immediately when idle, or before the next
 // model request when a turn is active. The current response and its tools finish
 // with the configuration under which they were requested.
-func (runtime *Runtime) SwitchModel(ctx context.Context, modelInfo ModelInfo, backend Backend) error {
+func (runtime *Runtime) SwitchModel(ctx context.Context, modelInfo modelapi.Info, backend modelapi.Backend) error {
 	if backend == nil {
 		return errors.New("model backend is required")
 	}
-	modelInfo, err := normalizeModelInfo(modelInfo)
+	modelInfo, err := modelapi.NormalizeInfo(modelInfo)
 	if err != nil {
 		return err
 	}
@@ -298,38 +300,8 @@ func (runtime *Runtime) SwitchModel(ctx context.Context, modelInfo ModelInfo, ba
 	})
 }
 
-func normalizeModelInfo(modelInfo ModelInfo) (ModelInfo, error) {
-	modelInfo.BackendID = strings.TrimSpace(modelInfo.BackendID)
-	modelInfo.Provider = strings.TrimSpace(modelInfo.Provider)
-	modelInfo.Model = strings.TrimSpace(modelInfo.Model)
-	modelInfo.ReasoningEffort = strings.ToLower(strings.TrimSpace(modelInfo.ReasoningEffort))
-	modelInfo.ProviderStateContract = ProviderStateContract(strings.TrimSpace(string(modelInfo.ProviderStateContract)))
-	modelInfo.Endpoint = strings.TrimSpace(modelInfo.Endpoint)
-	if modelInfo.BackendID == "" || modelInfo.Provider == "" || modelInfo.Model == "" {
-		return ModelInfo{}, errors.New("model backend ID, provider, and model name are required")
-	}
-	if modelInfo.ContextWindow < 0 {
-		return ModelInfo{}, errors.New("model context window cannot be negative")
-	}
-	if modelInfo.MaxRequestBytes < 0 || modelInfo.MaxCompletionBytes < 0 {
-		return ModelInfo{}, errors.New("model byte limits cannot be negative")
-	}
-	if modelInfo.ContextWindowEstimated && modelInfo.ContextWindow == 0 {
-		return ModelInfo{}, errors.New("estimated model context window must be positive")
-	}
-	return modelInfo, nil
-}
-
-func modelURI(modelInfo ModelInfo) string {
+func modelURI(modelInfo modelapi.Info) string {
 	return modelInfo.Provider + "/" + modelInfo.Model
-}
-
-func selectionMatchesModel(selection ModelSelectedRecord, modelInfo ModelInfo) bool {
-	return selection.Backend == modelInfo.BackendID &&
-		selection.Provider == modelInfo.Provider &&
-		selection.Model == modelInfo.Model &&
-		selection.ReasoningEffort == modelInfo.ReasoningEffort &&
-		selection.ProviderStateContract == modelInfo.ProviderStateContract
 }
 
 // SetTools replaces the model-visible tool set at the next request boundary,
@@ -371,7 +343,7 @@ func (runtime *Runtime) setTools(ctx context.Context, input []Tool, toolSet stri
 	})
 }
 
-func (runtime *Runtime) ToolStatus(id string) ([]Detail, bool) {
+func (runtime *Runtime) ToolStatus(id string) ([]modelapi.Detail, bool) {
 	if runtime.externalWork == nil {
 		return nil, false
 	}
@@ -547,9 +519,9 @@ func (runtime *Runtime) settleCancelledToolCalls(ctx context.Context, live *stat
 		if pending == nil {
 			return nil
 		}
-		result := ToolResult{
+		result := modelapi.ToolResult{
 			CallID:  pending.Call.ID,
-			Content: TextContent(fmt.Sprintf("tool %s outcome is unknown because its run was cancelled; the call was not replayed", pending.Call.Name)),
+			Content: modelapi.TextContent(fmt.Sprintf("tool %s outcome is unknown because its run was cancelled; the call was not replayed", pending.Call.Name)),
 			Error:   true,
 			Unknown: true,
 		}
@@ -559,11 +531,11 @@ func (runtime *Runtime) settleCancelledToolCalls(ctx context.Context, live *stat
 	}
 }
 
-func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []ToolCall, iterations int) (RunResult, error) {
+func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []modelapi.ToolCall, iterations int) (RunResult, error) {
 	for _, call := range calls {
-		result := ToolResult{
+		result := modelapi.ToolResult{
 			CallID:  call.ID,
-			Content: TextContent(runtime.sanitize(fmt.Sprintf("tool %s error: tool iteration limit reached after %d iterations", call.Name, iterations))),
+			Content: modelapi.TextContent(runtime.sanitize(fmt.Sprintf("tool %s error: tool iteration limit reached after %d iterations", call.Name, iterations))),
 			Error:   true,
 		}
 		if err := runtime.commitRejectedToolResult(context.WithoutCancel(ctx), live, emit, runID, call, result); err != nil {
@@ -621,8 +593,13 @@ type responseCommitOptions struct {
 	errorContext   string
 }
 
+type attemptResponse struct {
+	modelapi.Response
+	attemptID string
+}
+
 type committedModelResponse struct {
-	response   ModelResponse
+	response   modelapi.Response
 	answer     string
 	incomplete bool
 }
@@ -634,26 +611,17 @@ type responseAcceptanceError struct {
 func (err *responseAcceptanceError) Error() string { return err.err.Error() }
 func (err *responseAcceptanceError) Unwrap() error { return err.err }
 
-func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *stateReducer, runID string, response ModelResponse, options responseCommitOptions) (committedModelResponse, error) {
-	incomplete := IsIncompleteStopReason(response.StopReason)
+func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *stateReducer, runID string, response attemptResponse, options responseCommitOptions) (committedModelResponse, error) {
+	incomplete := modelapi.IsIncompleteStopReason(response.StopReason)
 	if incomplete || options.stripToolCalls {
 		response.Items = partialResponseItems(response.Items)
 	}
-	var accepted ModelResponse
-	if incomplete && len(response.Items) == 0 {
-		accepted = ModelResponse{Usage: response.Usage, StopReason: response.StopReason}
-	} else {
-		var err error
-		accepted, err = acceptResponse(response, ProviderContext{
-			Backend: live.state.Selection.Backend,
-			Epoch:   live.state.Selection.Epoch,
-		})
-		if err != nil {
-			if options.errorContext != "" {
-				err = fmt.Errorf("%s: %w", options.errorContext, err)
-			}
-			return committedModelResponse{}, &responseAcceptanceError{err: err}
+	accepted, err := live.state.Selection.AcceptResponse(response.Response)
+	if err != nil {
+		if options.errorContext != "" {
+			err = fmt.Errorf("%s: %w", options.errorContext, err)
 		}
+		return committedModelResponse{}, &responseAcceptanceError{err: err}
 	}
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordModelResponse, ModelResponseRecord{
 		AttemptID:  response.attemptID,
@@ -662,7 +630,7 @@ func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *state
 		Model:      live.state.Selection.Model,
 		Epoch:      live.state.Selection.Epoch,
 		Items:      accepted.Items,
-		Usage:      accepted.Usage,
+		Usage:      accepted.Usage.Tokens.Known(),
 		StopReason: accepted.StopReason,
 	}); err != nil {
 		return committedModelResponse{}, err
@@ -672,11 +640,11 @@ func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *state
 	}, nil
 }
 
-func partialResponseItems(items []Item) []Item {
-	partial := make([]Item, 0, len(items))
+func partialResponseItems(items []modelapi.Item) []modelapi.Item {
+	partial := make([]modelapi.Item, 0, len(items))
 	for _, item := range items {
-		if item.Kind == ItemAssistantText || item.Kind == ItemReasoning {
-			partial = append(partial, cloneItem(item))
+		if item.Kind == modelapi.ItemAssistantText || item.Kind == modelapi.ItemReasoning {
+			partial = append(partial, item.Clone())
 		}
 	}
 	return partial
@@ -741,7 +709,7 @@ func (runtime *Runtime) syncExternalWorkCommits(state State) {
 	}
 	for _, item := range state.Items {
 		if item.ToolResult != nil {
-			runtime.externalWork.ToolResultCommitted(*cloneToolResult(item.ToolResult))
+			runtime.externalWork.ToolResultCommitted(*item.ToolResult.Clone())
 		}
 	}
 }
@@ -753,27 +721,27 @@ func (runtime *Runtime) completeRunRequest(
 	spec runRequestSpec,
 	report ContextReport,
 	emit EmitFunc,
-) (ModelResponse, error) {
+) (attemptResponse, error) {
 	for {
 		request, err := runtime.modelRequestForRun(live.state, spec)
 		if err != nil {
-			return ModelResponse{}, err
+			return attemptResponse{}, err
 		}
 		probeImages := live.state.ImageDelivery.Status == ImageDeliveryUnknown && modelRequestHasImages(request)
 		response, err := runtime.completeRequest(ctx, runID, request, emit)
 		if err == nil {
 			if probeImages {
 				if observeErr := runtime.observeImageDelivery(ctx, live, ImageDeliveryAccepted); observeErr != nil {
-					return ModelResponse{}, observeErr
+					return attemptResponse{}, observeErr
 				}
 			}
 			return response, nil
 		}
-		if ctx.Err() == nil && errors.Is(err, ErrModelRequestTooLarge) {
+		if ctx.Err() == nil && errors.Is(err, modelapi.ErrModelRequestTooLarge) {
 			var shrinkErr error
 			report, shrinkErr = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
 			if shrinkErr != nil {
-				return ModelResponse{}, errors.Join(
+				return attemptResponse{}, errors.Join(
 					err,
 					fmt.Errorf("automatic context reduction after oversized model request failed: %w", shrinkErr),
 				)
@@ -786,20 +754,20 @@ func (runtime *Runtime) completeRunRequest(
 			fallbackResponse, fallbackErr := runtime.completeRequest(ctx, runID, fallback, emit)
 			if fallbackErr == nil {
 				if observeErr := runtime.observeImageDelivery(ctx, live, ImageDeliveryRejected); observeErr != nil {
-					return ModelResponse{}, observeErr
+					return attemptResponse{}, observeErr
 				}
 				return fallbackResponse, nil
 			}
 			// The control changed only image delivery. If it also failed, it did
 			// not explain the original request rejection; preserve that error and
 			// leave the epoch unknown.
-			return ModelResponse{}, err
+			return attemptResponse{}, err
 		}
 		return response, err
 	}
 }
 
-func modelRequestHasImages(request ModelRequest) bool {
+func modelRequestHasImages(request modelapi.Request) bool {
 	for _, item := range request.Items {
 		if item.ToolResult != nil && item.ToolResult.Content.HasImage() {
 			return true
@@ -809,8 +777,8 @@ func modelRequestHasImages(request ModelRequest) bool {
 }
 
 func (runtime *Runtime) imageFreeControlAllowed(err error, report ContextReport) bool {
-	providerErr, ok := errors.AsType[*ProviderError](err)
-	if !ok || providerErr.Kind != ProviderErrorRequest || providerErr.Retryable {
+	providerErr, ok := errors.AsType[*modelapi.ProviderError](err)
+	if !ok || providerErr.Kind != modelapi.ProviderErrorRequest || providerErr.Retryable {
 		return false
 	}
 	// A successful smaller control is not evidence about image delivery when
@@ -819,7 +787,7 @@ func (runtime *Runtime) imageFreeControlAllowed(err error, report ContextReport)
 	return !runtime.modelInfo.ContextWindowEstimated && report.Window > 0 && report.InputLimit > 0 && report.TotalInputTokens <= report.InputLimit
 }
 
-func requestWithoutImages(request ModelRequest) ModelRequest {
+func requestWithoutImages(request modelapi.Request) modelapi.Request {
 	request.Items = cloneModelItemsForProjection(request.Items)
 	request.Items = omitImagesFromModelItems(request.Items)
 	return request
@@ -840,7 +808,7 @@ func (runtime *Runtime) observeImageDelivery(ctx context.Context, live *stateRed
 	return nil
 }
 
-func (runtime *Runtime) completeRequest(ctx context.Context, runID string, request ModelRequest, emit EmitFunc) (ModelResponse, error) {
+func (runtime *Runtime) completeRequest(ctx context.Context, runID string, request modelapi.Request, emit EmitFunc) (attemptResponse, error) {
 	startedAt := time.Now()
 	requestCtx := ctx
 	cancel := func() {}
@@ -852,50 +820,50 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 	var lastErr error
 	requestID, err := newID("request")
 	if err != nil {
-		return ModelResponse{}, err
+		return attemptResponse{}, err
 	}
 	for attempt := 1; runtime.attemptAllowed(attempt); attempt++ {
 		if err := requestCtx.Err(); err != nil {
 			if ctx.Err() == nil {
-				err = MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
+				err = modelapi.MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
 			}
-			return ModelResponse{}, err
+			return attemptResponse{}, err
 		}
 		attemptID, err := newID("attempt")
 		if err != nil {
-			return ModelResponse{}, err
+			return attemptResponse{}, err
 		}
 		payload := runtime.modelAttemptRecord(requestID, attemptID, runID, request.ProviderEpoch, attempt)
 		if _, err := appendRecord(requestCtx, runtime.journal, RecordModelAttemptStarted, payload); err != nil {
-			return ModelResponse{}, err
+			return attemptResponse{}, err
 		}
 		emitEvent(emit, Event{Kind: EventModelAttemptStarted, RunID: runID, AttemptID: attemptID})
-		var response ModelResponse
+		var response modelapi.Response
 		if err = requestCtx.Err(); err == nil {
-			response, err = runtime.backend.Complete(requestCtx, request, func(event ModelStreamEvent) {
+			response, err = runtime.backend.Complete(requestCtx, request, func(event modelapi.StreamEvent) {
 				switch event.Kind {
-				case EventTextDelta, EventReasoningSummaryDelta:
-					emitEvent(emit, Event{Kind: event.Kind, RunID: runID, AttemptID: attemptID, Text: runtime.sanitize(event.Text)})
+				case modelapi.EventTextDelta, modelapi.EventReasoningSummaryDelta:
+					emitEvent(emit, Event{Kind: EventKind(event.Kind), RunID: runID, AttemptID: attemptID, Text: runtime.sanitize(event.Text)})
 				}
 			})
 		}
 		if errors.Is(requestCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-			err = MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
+			err = modelapi.MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
 		} else if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		response.attemptID = attemptID
-		response.UsageDetails = normalizeUsage(response.UsageDetails, response.Usage)
-		response.Usage = response.UsageDetails.Tokens.Known()
-		if journalErr := runtime.finishModelAttempt(context.WithoutCancel(ctx), payload, response.UsageDetails, err); journalErr != nil {
-			return ModelResponse{}, errors.Join(err, journalErr)
+		if response.Usage.Status == "" {
+			response.Usage.Status = modelapi.UsageUnavailable
+		}
+		if journalErr := runtime.finishModelAttempt(context.WithoutCancel(ctx), payload, response.Usage, err); journalErr != nil {
+			return attemptResponse{}, errors.Join(err, journalErr)
 		}
 		if err == nil {
-			return runtime.sanitizeModelResponse(response), nil
+			return attemptResponse{Response: runtime.sanitizeModelResponse(response), attemptID: attemptID}, nil
 		}
 		lastErr = sanitizeError(err, runtime.sanitize)
 		emitEvent(emit, Event{Kind: EventModelAttemptDiscarded, RunID: runID, AttemptID: attemptID, Text: lastErr.Error()})
-		if ctx.Err() != nil || errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrModelRequestTooLarge) ||
+		if ctx.Err() != nil || errors.Is(err, modelapi.ErrInvalidRequest) || errors.Is(err, modelapi.ErrModelRequestTooLarge) ||
 			errors.Is(err, ErrModelRequestBudget) || !runtime.retryable(err) || !runtime.attemptAllowed(attempt+1) {
 			break
 		}
@@ -906,14 +874,14 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 		emitEvent(emit, Event{Kind: EventModelRetryScheduled, RunID: runID, AttemptID: attemptID, Text: "retrying in " + delay.Round(time.Millisecond).String()})
 		if err := waitForModelRetry(requestCtx, delay); err != nil {
 			if errors.Is(requestCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-				lastErr = MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
+				lastErr = modelapi.MarkProviderFailure(fmt.Errorf("%w after %s", ErrModelRequestBudget, runtime.requestPolicy.RetryBudget))
 			} else {
 				lastErr = err
 			}
 			break
 		}
 	}
-	return ModelResponse{}, lastErr
+	return attemptResponse{}, lastErr
 }
 
 func (runtime *Runtime) modelAttemptRecord(requestID, attemptID, runID, providerEpoch string, attempt int) ModelAttemptRecord {
@@ -927,11 +895,11 @@ func (runtime *Runtime) modelAttemptRecord(requestID, attemptID, runID, provider
 	return ModelAttemptRecord{
 		RequestID: requestID, AttemptID: attemptID, RunID: runID, Purpose: purpose, Attempt: attempt,
 		Backend: backend, Provider: provider, Model: model, ProviderEpoch: providerEpoch,
-		Outcome: ModelAttemptStarted, Usage: ModelUsageDetails{Status: UsageUnavailable},
+		Outcome: ModelAttemptStarted, Usage: modelapi.Usage{Status: modelapi.UsageUnavailable},
 	}
 }
 
-func (runtime *Runtime) finishModelAttempt(ctx context.Context, payload ModelAttemptRecord, usage ModelUsageDetails, cause error) error {
+func (runtime *Runtime) finishModelAttempt(ctx context.Context, payload ModelAttemptRecord, usage modelapi.Usage, cause error) error {
 	payload.Usage = usage
 	payload.Outcome = ModelAttemptCompleted
 	kind := RecordModelAttemptFinished
@@ -942,12 +910,12 @@ func (runtime *Runtime) finishModelAttempt(ctx context.Context, payload ModelAtt
 		}
 		payload.Error, payload.ErrorTruncated = boundedModelAttemptText(runtime.sanitize(cause.Error()), maxModelAttemptErrorBytes)
 	}
-	if providerErr, ok := errors.AsType[*ProviderError](cause); ok {
+	if providerErr, ok := errors.AsType[*modelapi.ProviderError](cause); ok {
 		errorKind, _ := boundedModelAttemptText(runtime.sanitize(string(providerErr.Kind)), maxModelAttemptFieldBytes)
 		code, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Code), maxModelAttemptFieldBytes)
 		errorType, _ := boundedModelAttemptText(runtime.sanitize(providerErr.Type), maxModelAttemptFieldBytes)
 		payload.ProviderError = &ModelAttemptProviderError{
-			StatusCode: providerErr.StatusCode, Kind: ProviderErrorKind(errorKind),
+			StatusCode: providerErr.StatusCode, Kind: modelapi.ProviderErrorKind(errorKind),
 			Code: code, Type: errorType, Retryable: providerErr.Retryable,
 			RetryAfter: durationSnapshot(providerErr.RetryAfter),
 		}
@@ -977,11 +945,11 @@ func (runtime *Runtime) attemptAllowed(attempt int) bool {
 }
 
 func (runtime *Runtime) retryable(err error) bool {
-	if providerErr, ok := errors.AsType[*ProviderError](err); ok {
+	if providerErr, ok := errors.AsType[*modelapi.ProviderError](err); ok {
 		return providerErr.Retryable
 	}
 	// Unclassified backend errors use the generic retryable default.
-	return !errors.Is(err, ErrInvalidRequest)
+	return !errors.Is(err, modelapi.ErrInvalidRequest)
 }
 
 func (runtime *Runtime) retryDelay(err error, attempt int) time.Duration {
@@ -1005,7 +973,7 @@ func (runtime *Runtime) retryDelay(err error, attempt int) time.Duration {
 			delay += extra
 		}
 	}
-	if providerErr, ok := errors.AsType[*ProviderError](err); ok && providerErr.RetryAfter > delay {
+	if providerErr, ok := errors.AsType[*modelapi.ProviderError](err); ok && providerErr.RetryAfter > delay {
 		return providerErr.RetryAfter
 	}
 	return delay
@@ -1025,9 +993,9 @@ func waitForModelRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (ModelRequest, error) {
+func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (modelapi.Request, error) {
 	if state.Configured == nil {
-		return ModelRequest{}, errors.New("session has no effective configuration")
+		return modelapi.Request{}, errors.New("session has no effective configuration")
 	}
 	summary := ""
 	if state.Compaction != nil {
@@ -1035,14 +1003,14 @@ func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (Mo
 	}
 	items := state.verbatimModelItems()
 	if spec.extraUserText != "" {
-		items = append(items, Item{Kind: ItemUserText, Text: spec.extraUserText})
+		items = append(items, modelapi.Item{Kind: modelapi.ItemUserText, Text: spec.extraUserText})
 	}
-	request := ModelRequest{
+	request := modelapi.Request{
 		SessionID:     state.SessionID,
 		ProviderEpoch: state.Selection.Epoch,
 		Instructions:  state.Configured.ModelContext.Instructions,
 		Summary:       summary,
-		Items: runtime.projectModelItems(items, ProviderContext{
+		Items: runtime.projectModelItems(items, modelapi.ProviderContext{
 			Backend: state.Selection.Backend,
 			Epoch:   state.Selection.Epoch,
 		}, state.ImageDelivery.Status),
@@ -1056,15 +1024,8 @@ func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (Mo
 // projectModelItems applies runtime ownership filtering, the adapter's replay
 // policy, and route-level image delivery. Requests and context estimates share
 // this complete projection.
-func (runtime *Runtime) projectModelItems(items []Item, providerContext ProviderContext, imageStatus ImageDeliveryStatus) []Item {
-	items = projectOwnedModelItems(items, providerContext)
-	if runtime.backend != nil {
-		items = runtime.backend.ProjectModelItems(items)
-	} else {
-		// Without the adapter's replay policy we retain extra reasoning items.
-		// That can only overestimate context use, and this Runtime cannot send a
-		// request until an executable backend is attached.
-	}
+func (runtime *Runtime) projectModelItems(items []modelapi.Item, providerContext modelapi.ProviderContext, imageStatus ImageDeliveryStatus) []modelapi.Item {
+	items = providerContext.ProjectItems(items, runtime.backend)
 	return projectImagesForDelivery(items, runtime.effectiveImageDelivery(imageStatus))
 }
 
@@ -1084,51 +1045,22 @@ func (runtime *Runtime) requireBackend() error {
 	if runtime.backend != nil {
 		return nil
 	}
-	return MarkInvalidRequest(modelUnavailableError{model: modelURI(runtime.modelInfo)})
+	return modelapi.MarkInvalidRequest(modelUnavailableError{model: modelURI(runtime.modelInfo)})
 }
 
-// projectOwnedModelItems consumes an already-owned item snapshot. Callers must
-// pass a disposable projection source (as the runtime does) or clone it first.
-func projectOwnedModelItems(items []Item, providerContext ProviderContext) []Item {
-	projected := items[:0]
-	for _, item := range items {
-		if item.Kind == ItemReasoning {
-			if item.ProviderContext == nil || item.ProviderContext.Backend != providerContext.Backend || item.ProviderContext.Epoch != providerContext.Epoch {
-				continue
-			}
-		}
-		if item.ToolCall != nil {
-			references := item.ToolCall.ProviderReferences[:0]
-			for _, reference := range item.ToolCall.ProviderReferences {
-				if reference.Backend == providerContext.Backend && reference.Epoch == providerContext.Epoch {
-					references = append(references, reference)
-				}
-			}
-			item.ToolCall.ProviderReferences = references
-		}
-		// Model backends receive semantic content without presentation metadata.
-		item.Details = nil
-		if item.ToolResult != nil {
-			item.ToolResult.Details = nil
-		}
-		projected = append(projected, item)
-	}
-	return projected
-}
-
-func projectImagesForDelivery(items []Item, status ImageDeliveryStatus) []Item {
+func projectImagesForDelivery(items []modelapi.Item, status ImageDeliveryStatus) []modelapi.Item {
 	if status != ImageDeliveryRejected {
 		return items
 	}
 	return omitImagesFromModelItems(items)
 }
 
-func omitImagesFromModelItems(items []Item) []Item {
+func omitImagesFromModelItems(items []modelapi.Item) []modelapi.Item {
 	for index := range items {
 		if items[index].ToolResult == nil || !items[index].ToolResult.Content.HasImage() {
 			continue
 		}
-		items[index].ToolResult.Content = items[index].ToolResult.Content.WithoutImages(func(image ImageContent) string {
+		items[index].ToolResult.Content = items[index].ToolResult.Content.WithoutImages(func(image modelapi.ImageContent) string {
 			return fmt.Sprintf("\n[image omitted from model request; %s, %dx%d]\n", image.MediaType, image.Width, image.Height)
 		})
 	}
@@ -1165,20 +1097,12 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 	if runtime.workspace != "" && state.Workspace != "" && state.Workspace != runtime.workspace {
 		return fmt.Errorf("session workspace is %q, not %q", state.Workspace, runtime.workspace)
 	}
-	if selectionMatchesModel(state.Selection, runtime.modelInfo) {
-		return runtime.recordCurrentEffectiveConfigurationAndApply(ctx, reducer)
-	}
-	epoch, err := newID("epoch")
+	selection, err := runtime.replayContextForModel(state.Selection, runtime.modelInfo)
 	if err != nil {
 		return err
 	}
-	selection := ModelSelectedRecord{
-		Backend:               runtime.modelInfo.BackendID,
-		Provider:              runtime.modelInfo.Provider,
-		Model:                 runtime.modelInfo.Model,
-		ReasoningEffort:       runtime.modelInfo.ReasoningEffort,
-		ProviderStateContract: runtime.modelInfo.ProviderStateContract,
-		Epoch:                 epoch,
+	if selection.Epoch == state.Selection.Epoch {
+		return runtime.recordCurrentEffectiveConfigurationAndApply(ctx, reducer)
 	}
 	_, err = appendRecordAndApply(ctx, runtime.journal, reducer, RecordModelSelected, selection)
 	if err != nil {
@@ -1189,7 +1113,7 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 
 // Tool failures are results the model can act on. Only cancellation interrupts
 // execution here; journal failures are handled when committing the result.
-func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call ToolCall) (ToolResult, bool) {
+func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call modelapi.ToolCall) (modelapi.ToolResult, bool) {
 	tool, exists := runtime.toolByName[call.Name]
 	if !exists {
 		names := make([]string, 0, len(runtime.tools))
@@ -1201,18 +1125,18 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 		if len(names) != 0 {
 			message += "; available tools: " + strings.Join(names, ", ")
 		}
-		return ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Error: true}, false
+		return modelapi.ToolResult{CallID: call.ID, Content: modelapi.TextContent(runtime.sanitize(message)), Error: true}, false
 	}
 	output, err := tool.Run(WithToolSessionID(ctx, sessionID), call.RawArguments)
 	if ctx.Err() != nil {
-		return ToolResult{}, true
+		return modelapi.ToolResult{}, true
 	}
 	details, detailErr := runtime.sanitizeOutputDetails(output.Details)
 	if detailErr != nil {
 		err = errors.Join(err, fmt.Errorf("invalid tool output: %w", detailErr))
 		details = nil
 	}
-	content, contentErr := normalizeContent(output.Content)
+	content, contentErr := modelapi.NormalizeContent(output.Content)
 	if contentErr != nil {
 		err = errors.Join(err, fmt.Errorf("invalid tool output: %w", contentErr))
 		content = nil
@@ -1224,9 +1148,9 @@ func (runtime *Runtime) executeTool(ctx context.Context, sessionID string, call 
 		} else {
 			message += "\nerror: " + err.Error()
 		}
-		return ToolResult{CallID: call.ID, Content: TextContent(runtime.sanitize(message)), Details: details, Error: true}, false
+		return modelapi.ToolResult{CallID: call.ID, Content: modelapi.TextContent(runtime.sanitize(message)), Details: details, Error: true}, false
 	}
-	return ToolResult{CallID: call.ID, Content: runtime.sanitizeContent(content), Details: details}, false
+	return modelapi.ToolResult{CallID: call.ID, Content: runtime.sanitizeContent(content), Details: details}, false
 }
 
 func (runtime *Runtime) finish(ctx context.Context, reducer *stateReducer, emit EmitFunc, runID, answer string, status RunStatus, cause error) (RunResult, error) {
@@ -1289,12 +1213,12 @@ func canonicalDetachedJobIDs(ids []string, sanitize func(string) string) []strin
 	return result
 }
 
-func (runtime *Runtime) sanitizeModelResponse(response ModelResponse) ModelResponse {
+func (runtime *Runtime) sanitizeModelResponse(response modelapi.Response) modelapi.Response {
 	response.Items = runtime.sanitizeItems(response.Items)
 	return response
 }
 
-func (runtime *Runtime) sanitizeItems(items []Item) []Item {
+func (runtime *Runtime) sanitizeItems(items []modelapi.Item) []modelapi.Item {
 	sanitized := cloneItems(items)
 	for index := range sanitized {
 		sanitized[index].Text = runtime.sanitize(sanitized[index].Text)
@@ -1312,20 +1236,20 @@ func (runtime *Runtime) sanitizeItems(items []Item) []Item {
 	return sanitized
 }
 
-func (runtime *Runtime) sanitizeContent(content Content) Content {
+func (runtime *Runtime) sanitizeContent(content modelapi.Content) modelapi.Content {
 	sanitized := content.Clone()
 	for index := range sanitized {
-		if sanitized[index].Kind == ContentPartText {
+		if sanitized[index].Kind == modelapi.ContentPartText {
 			sanitized[index].Text = runtime.sanitize(sanitized[index].Text)
 		}
 	}
 	return sanitized
 }
 
-func (runtime *Runtime) sanitizeDetails(details []Detail) []Detail {
-	sanitized := make([]Detail, len(details))
+func (runtime *Runtime) sanitizeDetails(details []modelapi.Detail) []modelapi.Detail {
+	sanitized := make([]modelapi.Detail, len(details))
 	for index, detail := range details {
-		sanitized[index] = Detail{Kind: detail.Kind}
+		sanitized[index] = modelapi.Detail{Kind: detail.Kind}
 		var value any
 		if err := json.Unmarshal(detail.Data, &value); err != nil {
 			sanitized[index].Data = detail.Data.Clone()
@@ -1343,7 +1267,7 @@ func (runtime *Runtime) sanitizeDetails(details []Detail) []Detail {
 
 // sanitizeOutputDetails validates both sides of redaction. Replacing a short
 // secret can expand otherwise valid JSON beyond the durable details limit.
-func (runtime *Runtime) sanitizeOutputDetails(details []Detail) ([]Detail, error) {
+func (runtime *Runtime) sanitizeOutputDetails(details []modelapi.Detail) ([]modelapi.Detail, error) {
 	normalized, err := normalizeDetails(details)
 	if err != nil {
 		return nil, err
@@ -1389,120 +1313,57 @@ func sanitizeError(err error, sanitize func(string) string) error {
 	return sanitizedError{text: safe, cause: err}
 }
 
-func acceptResponse(response ModelResponse, providerContext ProviderContext) (ModelResponse, error) {
-	accepted := ModelResponse{Usage: response.Usage, StopReason: response.StopReason, Items: make([]Item, 0, len(response.Items))}
-	responseID, err := newID("response")
-	if err != nil {
-		return ModelResponse{}, err
-	}
-	for _, item := range response.Items {
-		item = cloneItem(item)
-		item.ResponseID = responseID
-		if len(item.Details) != 0 {
-			return ModelResponse{}, fmt.Errorf("%s item has product-owned details", item.Kind)
-		}
-		switch item.Kind {
-		case ItemAssistantText:
-			if len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
-				return ModelResponse{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
-			}
-			item.ProviderContext = nil
-		case ItemReasoning:
-			if item.ToolCall != nil || item.ToolResult != nil {
-				return ModelResponse{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
-			}
-			item.ProviderData, err = normalizeProviderData(item.ProviderData)
-			if err != nil {
-				return ModelResponse{}, fmt.Errorf("invalid reasoning provider data: %w", err)
-			}
-			item.ProviderContext = &ProviderContext{Backend: providerContext.Backend, Epoch: providerContext.Epoch}
-		case ItemToolCall:
-			if len(item.ProviderData) != 0 || item.ToolCall == nil || strings.TrimSpace(item.ToolCall.Name) == "" {
-				return ModelResponse{}, errors.New("tool call name is required")
-			}
-			arguments, err := NormalizeToolArguments(item.ToolCall.RawArguments)
-			if err != nil {
-				return ModelResponse{}, fmt.Errorf("tool call %q: %w", strings.TrimSpace(item.ToolCall.Name), err)
-			}
-			for _, reference := range item.ToolCall.ProviderReferences {
-				if strings.TrimSpace(reference.Kind) == "" || !reference.Data.IsValid() {
-					return ModelResponse{}, errors.New("tool call provider reference is invalid")
-				}
-			}
-			for index := range item.ToolCall.ProviderReferences {
-				item.ToolCall.ProviderReferences[index].Backend = providerContext.Backend
-				item.ToolCall.ProviderReferences[index].Epoch = providerContext.Epoch
-			}
-			item.ProviderContext = nil
-			id, err := newID("call")
-			if err != nil {
-				return ModelResponse{}, err
-			}
-			item.ToolCall.ID = id
-			item.ToolCall.Name = strings.TrimSpace(item.ToolCall.Name)
-			item.ToolCall.RawArguments = arguments
-		default:
-			return ModelResponse{}, fmt.Errorf("model returned unsupported item kind %q", item.Kind)
-		}
-		accepted.Items = append(accepted.Items, item)
-	}
-	if len(accepted.Items) == 0 {
-		return ModelResponse{}, errors.New("model returned no items")
-	}
-	return accepted, nil
-}
-
-func normalizeAcceptedItem(item Item) (Item, error) {
+func normalizeAcceptedItem(item modelapi.Item) (modelapi.Item, error) {
 	if len(item.Details) != 0 {
-		return Item{}, fmt.Errorf("%s item has product-owned details", item.Kind)
+		return modelapi.Item{}, fmt.Errorf("%s item has product-owned details", item.Kind)
 	}
 	switch item.Kind {
-	case ItemAssistantText:
+	case modelapi.ItemAssistantText:
 		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {
-			return Item{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
+			return modelapi.Item{}, fmt.Errorf("%s item has unrelated payload", item.Kind)
 		}
 		if item.ProviderContext != nil {
-			return Item{}, errors.New("assistant text item has provider context")
+			return modelapi.Item{}, errors.New("assistant text item has provider context")
 		}
-	case ItemReasoning:
+	case modelapi.ItemReasoning:
 		if item.ResponseID == "" || item.ProviderContext == nil || item.ProviderContext.Backend == "" || item.ProviderContext.Epoch == "" || item.ToolCall != nil || item.ToolResult != nil {
-			return Item{}, errors.New("reasoning item requires provider context")
+			return modelapi.Item{}, errors.New("reasoning item requires provider context")
 		}
-		if err := validateProviderData(item.ProviderData); err != nil {
-			return Item{}, fmt.Errorf("reasoning item has invalid provider data: %w", err)
+		if err := modelapi.ValidateProviderData(item.ProviderData); err != nil {
+			return modelapi.Item{}, fmt.Errorf("reasoning item has invalid provider data: %w", err)
 		}
-	case ItemToolCall:
+	case modelapi.ItemToolCall:
 		if item.ResponseID == "" || len(item.ProviderData) != 0 || item.ToolCall == nil || item.ToolCall.ID == "" || strings.TrimSpace(item.ToolCall.Name) == "" {
-			return Item{}, errors.New("accepted tool call requires ID and name")
+			return modelapi.Item{}, errors.New("accepted tool call requires ID and name")
 		}
-		arguments, err := NormalizeToolArguments(item.ToolCall.RawArguments)
+		arguments, err := modelapi.NormalizeToolArguments(item.ToolCall.RawArguments)
 		if err != nil {
-			return Item{}, fmt.Errorf("accepted tool call has invalid arguments: %w", err)
+			return modelapi.Item{}, fmt.Errorf("accepted tool call has invalid arguments: %w", err)
 		}
-		call := cloneToolCall(*item.ToolCall)
+		call := item.ToolCall.Clone()
 		call.Name = strings.TrimSpace(call.Name)
 		call.RawArguments = arguments
 		item.ToolCall = &call
 	default:
-		return Item{}, fmt.Errorf("unsupported accepted item kind %q", item.Kind)
+		return modelapi.Item{}, fmt.Errorf("unsupported accepted item kind %q", item.Kind)
 	}
 	return item, nil
 }
 
-func responseToolCalls(items []Item) []ToolCall {
-	var calls []ToolCall
+func responseToolCalls(items []modelapi.Item) []modelapi.ToolCall {
+	var calls []modelapi.ToolCall
 	for _, item := range items {
-		if item.Kind == ItemToolCall && item.ToolCall != nil {
-			calls = append(calls, cloneToolCall(*item.ToolCall))
+		if item.Kind == modelapi.ItemToolCall && item.ToolCall != nil {
+			calls = append(calls, item.ToolCall.Clone())
 		}
 	}
 	return calls
 }
 
-func responseText(items []Item) string {
+func responseText(items []modelapi.Item) string {
 	var parts []string
 	for _, item := range items {
-		if item.Kind == ItemAssistantText && strings.TrimSpace(item.Text) != "" {
+		if item.Kind == modelapi.ItemAssistantText && strings.TrimSpace(item.Text) != "" {
 			parts = append(parts, strings.TrimSpace(item.Text))
 		}
 	}
@@ -1523,30 +1384,27 @@ func emitEvent(emit EmitFunc, event Event) {
 	}
 }
 
-func cloneItems(items []Item) []Item {
-	out := make([]Item, len(items))
+func cloneItems(items []modelapi.Item) []modelapi.Item {
+	out := make([]modelapi.Item, len(items))
 	for index, item := range items {
-		out[index] = cloneItem(item)
+		out[index] = item.Clone()
 	}
 	return out
 }
 
-func cloneItem(item Item) Item {
-	return cloneItemForProjection(item, true)
-}
-
-func cloneItemForProjection(item Item, includeDetails bool) Item {
+func cloneItemForProjection(item modelapi.Item, includeDetails bool) modelapi.Item {
+	if includeDetails {
+		return item.Clone()
+	}
 	if item.ProviderContext != nil {
 		context := *item.ProviderContext
 		item.ProviderContext = &context
 	}
-	item.ProviderData = cloneProviderData(item.ProviderData)
-	item.ToolCall = cloneToolCallPointer(item.ToolCall)
-	if includeDetails {
-		item.Details = cloneDetails(item.Details)
-		item.ToolResult = cloneToolResult(item.ToolResult)
-		return item
+	item.ProviderData = append([]modelapi.ProviderData(nil), item.ProviderData...)
+	for i := range item.ProviderData {
+		item.ProviderData[i].Data = item.ProviderData[i].Data.Clone()
 	}
+	item.ToolCall = cloneToolCallPointer(item.ToolCall)
 	item.Details = nil
 	if item.ToolResult != nil {
 		result := *item.ToolResult
@@ -1557,36 +1415,18 @@ func cloneItemForProjection(item Item, includeDetails bool) Item {
 	return item
 }
 
-func cloneModelItemsForProjection(items []Item) []Item {
-	cloned := make([]Item, len(items))
+func cloneModelItemsForProjection(items []modelapi.Item) []modelapi.Item {
+	cloned := make([]modelapi.Item, len(items))
 	for index, item := range items {
 		cloned[index] = cloneItemForProjection(item, false)
 	}
 	return cloned
 }
 
-func cloneToolCallPointer(call *ToolCall) *ToolCall {
+func cloneToolCallPointer(call *modelapi.ToolCall) *modelapi.ToolCall {
 	if call == nil {
 		return nil
 	}
-	cloned := cloneToolCall(*call)
-	return &cloned
-}
-
-func cloneToolCall(call ToolCall) ToolCall {
-	call.ProviderReferences = append([]ProviderReference(nil), call.ProviderReferences...)
-	for index := range call.ProviderReferences {
-		call.ProviderReferences[index].Data = append([]byte(nil), call.ProviderReferences[index].Data...)
-	}
-	return call
-}
-
-func cloneToolResult(result *ToolResult) *ToolResult {
-	if result == nil {
-		return nil
-	}
-	cloned := *result
-	cloned.Content = result.Content.Clone()
-	cloned.Details = cloneDetails(result.Details)
+	cloned := call.Clone()
 	return &cloned
 }

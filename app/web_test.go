@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelconfig"
 )
 
 func TestWebCatalogIncludesPublicSearchWithoutCredentials(t *testing.T) {
@@ -39,7 +40,7 @@ func TestCancelledWebLoginDoesNotStoreCredential(t *testing.T) {
 	if err := application.Login(cancelled, "keenable", "temporary-token"); err == nil {
 		t.Fatal("cancelled login succeeded")
 	}
-	if token, _, err := credentialForProvider(application.config.settings, "keenable"); err != nil || token != "" {
+	if token, _, err := modelconfig.CredentialForProvider(application.config.settings, "keenable", true); err != nil || token != "" {
 		t.Fatalf("credential after cancelled login = %q, %v", token, err)
 	}
 }

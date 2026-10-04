@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/levmv/skot/model"
 )
 
 func TestRuntimeAppliesSelectionsAfterTheCurrentResponseAndTools(t *testing.T) {
@@ -12,38 +14,38 @@ func TestRuntimeAppliesSelectionsAfterTheCurrentResponseAndTools(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			journal := &memoryJournal{}
-			started := make(chan ModelRequest, 1)
+			started := make(chan model.Request, 1)
 			release := make(chan struct{})
 			oldToolCalls := 0
 			oldTool := testRuntimeTool("edit")
 			oldTool.Run = func(context.Context, string) (ToolOutput, error) {
 				oldToolCalls++
-				return ToolOutput{Content: TextContent("edited")}, nil
+				return ToolOutput{Content: model.TextContent("edited")}, nil
 			}
 			first := &scriptedModel{
-				info: ModelInfo{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
-				steps: []modelStep{func(ctx context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				info: model.Info{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
+				steps: []modelStep{func(ctx context.Context, request model.Request, _ func(model.StreamEvent)) (model.Response, error) {
 					started <- request
 					select {
 					case <-ctx.Done():
-						return ModelResponse{}, ctx.Err()
+						return model.Response{}, ctx.Err()
 					case <-release:
 					}
-					items := []Item{{Kind: ItemReasoning, Text: "old model reasoning"}}
+					items := []model.Item{{Kind: model.ItemReasoning, Text: "old model reasoning"}}
 					if ending == "tools" {
-						items = append(items, Item{Kind: ItemToolCall, ToolCall: &ToolCall{ID: "edit-1", Name: "edit", RawArguments: `{}`}})
+						items = append(items, model.Item{Kind: model.ItemToolCall, ToolCall: &model.ToolCall{ID: "edit-1", Name: "edit", RawArguments: `{}`}})
 					} else {
-						items = append(items, Item{Kind: ItemAssistantText, Text: "first answer"})
+						items = append(items, model.Item{Kind: model.ItemAssistantText, Text: "first answer"})
 					}
-					return ModelResponse{Items: items}, nil
+					return model.Response{Items: items}, nil
 				}},
 			}
-			var nextRequest ModelRequest
+			var nextRequest model.Request
 			second := &scriptedModel{
-				info: ModelInfo{BackendID: "backend.b", Provider: "provider-b", Model: "beta"},
-				steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+				info: model.Info{BackendID: "backend.b", Provider: "provider-b", Model: "beta"},
+				steps: []modelStep{func(_ context.Context, request model.Request, _ func(model.StreamEvent)) (model.Response, error) {
 					nextRequest = request
-					return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second answer"}}}, nil
+					return model.Response{Items: []model.Item{{Kind: model.ItemAssistantText, Text: "second answer"}}}, nil
 				}},
 			}
 			runtime := newTestRuntime(t, Config{Backend: first, Journal: journal, Tools: []Tool{oldTool}})
@@ -52,7 +54,7 @@ func TestRuntimeAppliesSelectionsAfterTheCurrentResponseAndTools(t *testing.T) {
 				_, err := runtime.Run(ctx, "work", nil)
 				done <- err
 			}()
-			var firstRequest ModelRequest
+			var firstRequest model.Request
 			select {
 			case firstRequest = <-started:
 			case err := <-done:
@@ -97,7 +99,7 @@ func TestRuntimeAppliesSelectionsAfterTheCurrentResponseAndTools(t *testing.T) {
 				t.Fatalf("next request = %#v", nextRequest)
 			}
 			for _, item := range nextRequest.Items {
-				if item.Kind == ItemReasoning {
+				if item.Kind == model.ItemReasoning {
 					t.Fatal("previous model's reasoning leaked across the selection")
 				}
 			}

@@ -10,22 +10,24 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestRuntimeDirectResponse(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if request.Instructions != "be useful" {
 				t.Fatalf("instructions = %q", request.Instructions)
 			}
 			if request.SessionID == "" || request.ProviderEpoch == "" {
 				t.Fatalf("session context = %#v", request)
 			}
-			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "hel"})
-			return ModelResponse{
-				Items:      []Item{{Kind: ItemAssistantText, Text: "hello"}},
-				Usage:      ModelUsage{InputTokens: 9, OutputTokens: 2, ReasoningTokens: 1, TotalTokens: 11},
+			emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "hel"})
+			return modelapi.Response{
+				Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "hello"}},
+				Usage:      modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(9), OutputTokens: new(2), ReasoningTokens: new(1), TotalTokens: new(11)}},
 				StopReason: "stop",
 			}, nil
 		},
@@ -51,8 +53,8 @@ func TestRuntimeDirectResponse(t *testing.T) {
 	if state.SchemaVersion != JournalSchemaVersion {
 		t.Fatalf("schema version = %d", state.SchemaVersion)
 	}
-	if len(state.Items) != 2 || state.Items[0].Kind != ItemUserText || state.Items[0].Text != "say hello" ||
-		state.Items[1].Kind != ItemAssistantText || state.Items[1].Text != "hello" {
+	if len(state.Items) != 2 || state.Items[0].Kind != modelapi.ItemUserText || state.Items[0].Text != "say hello" ||
+		state.Items[1].Kind != modelapi.ItemAssistantText || state.Items[1].Text != "hello" {
 		t.Fatalf("replayed items = %#v", state.Items)
 	}
 	if len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0 {
@@ -82,7 +84,7 @@ func TestRuntimeDirectResponse(t *testing.T) {
 
 func TestRuntimeWithoutAvailableModelCanBeInspectedAndReconfigured(t *testing.T) {
 	journal := &memoryJournal{}
-	unavailable := ModelInfo{
+	unavailable := modelapi.Info{
 		BackendID: "anthropic.removed", Provider: "removed", Model: "old-model",
 		ProviderStateContract: "anthropic.messages.v1", ContextWindow: 64_000,
 	}
@@ -93,7 +95,7 @@ func TestRuntimeWithoutAvailableModelCanBeInspectedAndReconfigured(t *testing.T)
 	if _, err := runtime.State(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.Run(context.Background(), "continue", nil); !errors.Is(err, ErrModelUnavailable) || !errors.Is(err, ErrInvalidRequest) {
+	if _, err := runtime.Run(context.Background(), "continue", nil); !errors.Is(err, ErrModelUnavailable) || !errors.Is(err, modelapi.ErrInvalidRequest) {
 		t.Fatalf("run unavailable model error = %v", err)
 	}
 	if _, err := runtime.Compact(context.Background()); !errors.Is(err, ErrModelUnavailable) {
@@ -103,9 +105,9 @@ func TestRuntimeWithoutAvailableModelCanBeInspectedAndReconfigured(t *testing.T)
 		t.Fatalf("unavailable operations changed journal: %#v", records)
 	}
 
-	model := &scriptedModel{info: ModelInfo{BackendID: "test", Provider: "test", Model: "replacement"}, steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "continued"}}, StopReason: "stop"}, nil
+	model := &scriptedModel{info: modelapi.Info{BackendID: "test", Provider: "test", Model: "replacement"}, steps: []modelStep{
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "continued"}}, StopReason: "stop"}, nil
 		},
 	}}
 	if err := runtime.SwitchModel(context.Background(), model.testModelInfo(), model); err != nil {
@@ -130,28 +132,28 @@ func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
 		}
 	})
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{
-				Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{
+				Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{
 					ID: "call", Name: "wait", RawArguments: `{}`,
 				}}},
-				Usage: ModelUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+				Usage: modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(10), OutputTokens: new(2), TotalTokens: new(12)}},
 			}, nil
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{
-				Items:      []Item{{Kind: ItemAssistantText, Text: "done"}},
-				Usage:      ModelUsage{InputTokens: 3, OutputTokens: 1, TotalTokens: 4},
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{
+				Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}},
+				Usage:      modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(3), OutputTokens: new(1), TotalTokens: new(4)}},
 				StopReason: "stop",
 			}, nil
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "wait", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "wait", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			close(toolStarted)
 			<-releaseTool
-			return ToolOutput{Content: TextContent("ready")}, nil
+			return ToolOutput{Content: modelapi.TextContent("ready")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{
@@ -181,54 +183,54 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 	journal := &memoryJournal{}
 	var executed int
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if len(request.Tools) != 1 {
 				t.Fatalf("first request tools = %#v", request.Tools)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{"step":1}`}}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{"step":1}`}}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			if got := request.Items[len(request.Items)-1]; got.Kind != ItemToolResult || got.ToolResult == nil || got.ToolResult.Error {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			if got := request.Items[len(request.Items)-1]; got.Kind != modelapi.ItemToolResult || got.ToolResult == nil || got.ToolResult.Error {
 				t.Fatalf("first tool result = %#v", got)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{"step":2}`}}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{"step":2}`}}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			if got := request.Items[len(request.Items)-1]; got.Kind != ItemToolResult || got.ToolResult == nil || got.ToolResult.Error {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			if got := request.Items[len(request.Items)-1]; got.Kind != modelapi.ItemToolResult || got.ToolResult == nil || got.ToolResult.Error {
 				t.Fatalf("second tool result = %#v", got)
 			}
-			return ModelResponse{Items: []Item{
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{"step":3}`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{"step":4}`}},
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{"step":3}`}},
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{"step":4}`}},
 			}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if len(request.Tools) != 0 {
 				t.Fatalf("final request tools = %#v", request.Tools)
 			}
-			if len(request.Items) < 3 || request.Items[len(request.Items)-1].Kind != ItemUserText || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
+			if len(request.Items) < 3 || request.Items[len(request.Items)-1].Kind != modelapi.ItemUserText || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
 				t.Fatalf("final request items = %#v", request.Items)
 			}
 			for _, rejected := range request.Items[len(request.Items)-3 : len(request.Items)-1] {
-				if rejected.Kind != ItemToolResult || rejected.ToolResult == nil || !rejected.ToolResult.Error || !strings.Contains(rejected.ToolResult.Content.Text(), "after 2 iterations") {
+				if rejected.Kind != modelapi.ItemToolResult || rejected.ToolResult == nil || !rejected.ToolResult.Error || !strings.Contains(rejected.ToolResult.Content.Text(), "after 2 iterations") {
 					t.Fatalf("rejected tool result = %#v", rejected)
 				}
 			}
 			// A provider should not return a call when no tools were offered. If it
 			// does, the finalization boundary still must not reopen the tool loop.
-			return ModelResponse{Items: []Item{
-				{Kind: ItemAssistantText, Text: "best effort answer"},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}},
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemAssistantText, Text: "best effort answer"},
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}},
 			}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 2,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				executed++
-				return ToolOutput{Content: TextContent("ok")}, nil
+				return ToolOutput{Content: modelapi.TextContent("ok")}, nil
 			},
 		}},
 	})
@@ -257,7 +259,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 	if len(state.Blocks) != 1 || !state.Blocks[0].ToolLimitReached || state.Blocks[0].Status != RunCompleted {
 		t.Fatalf("replayed block = %#v", state.Blocks)
 	}
-	if len(state.PendingTools) != 0 || len(state.Items) != 10 || state.Items[len(state.Items)-1].Kind != ItemAssistantText {
+	if len(state.PendingTools) != 0 || len(state.Items) != 10 || state.Items[len(state.Items)-1].Kind != modelapi.ItemAssistantText {
 		t.Fatalf("replayed state = %#v", state)
 	}
 	finished, err := records[len(records)-1].decode[RunFinishedRecord]()
@@ -290,34 +292,36 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 
 	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`
 	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
 		steps: []modelStep{
-			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+			func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 			},
-			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
+			func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if !isCompactionRequest(request) || !itemsContainText(request.Items, "old context") {
 					t.Fatalf("tool-limit compaction request = %#v", request)
 				}
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if request.Summary != "older work summarized" || len(request.Tools) != 0 ||
 					request.Items[len(request.Items)-1].Text != toolLimitInstructions {
 					t.Fatalf("tool-limit final request = %#v", request)
 				}
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "best effort"}}, StopReason: "stop"}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "best effort"}}, StopReason: "stop"}, nil
 			},
 		},
 	}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
+			Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Run: func(context.Context, string) (ToolOutput, error) {
+				return ToolOutput{Content: modelapi.TextContent("ok")}, nil
+			},
 		}},
 	})
 	result, err := runtime.Run(context.Background(), "current work", nil)
@@ -339,8 +343,8 @@ func TestToolLimitFinalRequestRechecksContextCapacity(t *testing.T) {
 func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
 	journal := &memoryJournal{}
 	seedRuntime := newTestRuntime(t, Config{
-		Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
+		Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "old answer"}}, StopReason: "stop"}, nil
 		}),
 		Journal: journal,
 	})
@@ -354,46 +358,46 @@ func TestToolLimitFinalRequestRecoversFromRequestTooLarge(t *testing.T) {
 	finalRequests := 0
 	compactions := 0
 	var finalRequestSizes []int
-	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		if isCompactionRequest(request) {
 			compactions++
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "old work summarized"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "old work summarized"}}, StopReason: "stop"}, nil
 		}
 		requestSize := encodedTestModelRequestBytes(t, request)
 		if len(request.Tools) != 0 {
 			normalRequests++
 			switch normalRequests {
 			case 1:
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 			case 2:
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
 			default:
 				t.Fatalf("unexpected tools-enabled request %d", normalRequests)
 			}
 		}
 		finalRequests++
 		finalRequestSizes = append(finalRequestSizes, requestSize)
-		if request.Items[len(request.Items)-1].Kind != ItemUserText || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
+		if request.Items[len(request.Items)-1].Kind != modelapi.ItemUserText || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
 			t.Fatalf("tool-limit instructions missing from request: %#v", request)
 		}
 		if requestSize > requestLimit {
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("payload too large")), Kind: ProviderErrorRequestTooLarge,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge,
 			}
 		}
 		if request.Summary != "old work summarized" {
 			t.Fatalf("recovered tool-limit request = %#v", request)
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "best effort"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "best effort"}}, StopReason: "stop"}, nil
 	})
 	executed := 0
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				executed++
-				return ToolOutput{Content: TextContent("ok")}, nil
+				return ToolOutput{Content: modelapi.TextContent("ok")}, nil
 			},
 		}},
 	})
@@ -417,30 +421,32 @@ func TestToolLimitFinalRequestDoesNotChargeOmittedToolSchemas(t *testing.T) {
 	journal := &memoryJournal{}
 	largeArguments := `{"padding":"` + strings.Repeat("x", 24*1024) + `"}`
 	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
 		steps: []modelStep{
-			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+			func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 			},
-			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
+			func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: largeArguments}}}}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if len(request.Tools) != 0 || request.Items[len(request.Items)-1].Text != toolLimitInstructions {
 					t.Fatalf("tool-limit final request = %#v", request)
 				}
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "fits without schemas"}}, StopReason: "stop"}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "fits without schemas"}}, StopReason: "stop"}, nil
 			},
 		},
 	}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		Tools: []Tool{{
-			Spec: ToolSpec{
+			Spec: modelapi.ToolSpec{
 				Name: "inspect", Description: strings.Repeat("detailed tool documentation ", 1_200),
 				InputSchema: jsontext.Value(`{"type":"object"}`),
 			},
-			Run: func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
+			Run: func(context.Context, string) (ToolOutput, error) {
+				return ToolOutput{Content: modelapi.TextContent("ok")}, nil
+			},
 		}},
 	})
 	result, err := runtime.Run(context.Background(), "inspect the current state", nil)
@@ -463,21 +469,21 @@ func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
 	journal := &memoryJournal{}
 	finalErr := errors.New("provider unavailable")
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, finalErr
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, finalErr
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, MaxToolIterations: 1,
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 		}},
 	})
@@ -498,9 +504,9 @@ func TestRuntimeToolIterationFuseMarksFinalizationFailure(t *testing.T) {
 func TestRuntimeToolIterationLimits(t *testing.T) {
 	newRuntime := func(limit int) (*Runtime, error) {
 		return New(Config{
-			Model: ModelInfo{BackendID: "test", Provider: "test", Model: "test"},
-			Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+			Model: modelapi.Info{BackendID: "test", Provider: "test", Model: "test"},
+			Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 			}),
 			Journal: &memoryJournal{}, MaxToolIterations: limit,
 		})
@@ -532,12 +538,12 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	journal := &memoryJournal{}
 	toolRan := false
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, _ ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
-			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "partial answer"})
-			return ModelResponse{
-				Items: []Item{
-					{Kind: ItemAssistantText, Text: "partial answer"},
-					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "write", RawArguments: `{}`}},
+		func(_ context.Context, _ modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "partial answer"})
+			return modelapi.Response{
+				Items: []modelapi.Item{
+					{Kind: modelapi.ItemAssistantText, Text: "partial answer"},
+					{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "write", RawArguments: `{}`}},
 				},
 				StopReason: "length",
 			}, nil
@@ -546,7 +552,7 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "write", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "write", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
 				toolRan = true
 				return ToolOutput{}, nil
@@ -570,7 +576,7 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != "length" || len(response.Items) != 1 || response.Items[0].Kind != ItemAssistantText {
+	if response.StopReason != "length" || len(response.Items) != 1 || response.Items[0].Kind != modelapi.ItemAssistantText {
 		t.Fatalf("journaled partial response = %#v", response)
 	}
 	state, err := Replay(records)
@@ -584,12 +590,12 @@ func TestRuntimePersistsPartialResponseAsIncomplete(t *testing.T) {
 
 func TestRuntimeOwnedStopReasonsHaveExpectedCompletionClassification(t *testing.T) {
 	for _, reason := range []string{"stop", "tool_calls"} {
-		if IsIncompleteStopReason(reason) {
+		if modelapi.IsIncompleteStopReason(reason) {
 			t.Errorf("stop reason %q is incomplete", reason)
 		}
 	}
-	if !IsIncompleteStopReason(StopReasonOutputLimit) {
-		t.Errorf("stop reason %q is not incomplete", StopReasonOutputLimit)
+	if !modelapi.IsIncompleteStopReason(modelapi.StopReasonOutputLimit) {
+		t.Errorf("stop reason %q is not incomplete", modelapi.StopReasonOutputLimit)
 	}
 }
 
@@ -597,8 +603,8 @@ func TestRuntimePersistsEmptyRefusalAsIncomplete(t *testing.T) {
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{
 		Backend: &scriptedModel{steps: []modelStep{
-			func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{StopReason: "refusal"}, nil
+			func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{StopReason: "refusal"}, nil
 			},
 		}},
 		Journal: journal,
@@ -619,11 +625,11 @@ func TestRuntimePersistsEmptyRefusalAsIncomplete(t *testing.T) {
 
 func TestRuntimeDoesNotOwnApplicationInstructions(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if request.Instructions != "" {
 				t.Fatalf("instructions = %q", request.Instructions)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}})
@@ -634,13 +640,13 @@ func TestRuntimeDoesNotOwnApplicationInstructions(t *testing.T) {
 
 func TestRuntimeDoesNotRetryInvalidModelRequest(t *testing.T) {
 	attempts := 0
-	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		attempts++
-		return ModelResponse{}, MarkInvalidRequest(errors.New("request will remain invalid"))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(errors.New("request will remain invalid"))
 	})
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, RequestPolicy: ModelRequestPolicy{MaxAttempts: 3}})
 	_, err := runtime.Run(context.Background(), "task", nil)
-	if !errors.Is(err, ErrInvalidRequest) {
+	if !errors.Is(err, modelapi.ErrInvalidRequest) {
 		t.Fatalf("error = %v", err)
 	}
 	if attempts != 1 {
@@ -651,26 +657,26 @@ func TestRuntimeDoesNotRetryInvalidModelRequest(t *testing.T) {
 func TestRuntimePersistsRejectionAfterConclusiveImageControl(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if !modelRequestHasImages(request) {
 				t.Fatalf("image probe omitted image: %#v", request.Items)
 			}
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("images are not accepted")), StatusCode: 400, Kind: ProviderErrorRequest,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("images are not accepted")), StatusCode: 400, Kind: modelapi.ProviderErrorRequest,
 			}
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
 				t.Fatalf("image-free control = %#v", request.Items)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "continued without image"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "continued without image"}}, StopReason: "stop"}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model:   ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024},
+		Model:   modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024},
 		Backend: model, Journal: journal, Tools: []Tool{imageResultTool()},
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
 	})
@@ -686,14 +692,14 @@ func TestRuntimePersistsRejectionAfterConclusiveImageControl(t *testing.T) {
 		t.Fatalf("image delivery state = %#v", state.ImageDelivery)
 	}
 
-	resumedModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	resumedModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
 			t.Fatalf("resumed request = %#v", request.Items)
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "resumed"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "resumed"}}, StopReason: "stop"}, nil
 	}}}
 	resumed := newTestRuntime(t, Config{
-		Model:   ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024},
+		Model:   modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024},
 		Backend: resumedModel, Journal: journal, Tools: []Tool{imageResultTool()},
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: 1},
 	})
@@ -705,18 +711,18 @@ func TestRuntimePersistsRejectionAfterConclusiveImageControl(t *testing.T) {
 func TestRuntimeOmitsImagesForReviewedUnsupportedRouteWithoutObservation(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if modelRequestHasImages(request) || !requestContainsImageOmission(request) {
 				t.Fatalf("unsupported route request = %#v", request.Items)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "continued without image"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "continued without image"}}, StopReason: "stop"}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: ModelInfo{
+		Model: modelapi.Info{
 			BackendID: "test", Provider: "test", Model: "text-only", ContextWindow: 64 * 1024,
 			ImageInputUnsupported: true,
 		},
@@ -748,20 +754,20 @@ func TestRuntimeOmitsImagesForReviewedUnsupportedRouteWithoutObservation(t *test
 func TestRuntimeDoesNotProbeAmbiguousImageErrorWithEstimatedContext(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if !modelRequestHasImages(request) {
 				t.Fatalf("image request omitted image: %#v", request.Items)
 			}
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("ambiguous invalid request")), StatusCode: 400, Kind: ProviderErrorRequest,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("ambiguous invalid request")), StatusCode: 400, Kind: modelapi.ProviderErrorRequest,
 			}
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
-		Model: ModelInfo{
+		Model: modelapi.Info{
 			BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024, ContextWindowEstimated: true,
 		},
 		Backend: model, Journal: journal, Tools: []Tool{imageResultTool()},
@@ -783,21 +789,21 @@ func TestRuntimeDoesNotProbeAmbiguousImageErrorWithEstimatedContext(t *testing.T
 func TestRuntimeAcceptedImageDoesNotTriggerLaterErrorProbe(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if !modelRequestHasImages(request) {
 				t.Fatal("successful image request contained no image")
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "saw it"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "saw it"}}, StopReason: "stop"}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if !modelRequestHasImages(request) {
 				t.Fatal("accepted image was unexpectedly removed")
 			}
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("unrelated invalid setting")), StatusCode: 400, Kind: ProviderErrorRequest,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("unrelated invalid setting")), StatusCode: 400, Kind: modelapi.ProviderErrorRequest,
 			}
 		},
 	}}
@@ -822,16 +828,16 @@ func TestRuntimeAcceptedImageDoesNotTriggerLaterErrorProbe(t *testing.T) {
 
 func imageResultTool() Tool {
 	return Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: ImageToolContent("image metadata", ImageContent{
+			return ToolOutput{Content: modelapi.ImageToolContent("image metadata", modelapi.ImageContent{
 				MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
 			})}, nil
 		},
 	}
 }
 
-func requestContainsImageOmission(request ModelRequest) bool {
+func requestContainsImageOmission(request modelapi.Request) bool {
 	for _, item := range request.Items {
 		if item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "[image omitted") {
 			return true
@@ -843,13 +849,13 @@ func requestContainsImageOmission(request ModelRequest) bool {
 func TestRuntimeRetriesWithinFreshLogicalRequestBudget(t *testing.T) {
 	attempts := 0
 	var idleTimeout time.Duration
-	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		attempts++
 		idleTimeout = request.StreamIdleTimeout
 		if attempts == 1 {
-			return ModelResponse{}, MarkProviderFailure(errors.New("temporarily unavailable"))
+			return modelapi.Response{}, modelapi.MarkProviderFailure(errors.New("temporarily unavailable"))
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
@@ -872,20 +878,20 @@ func TestRuntimeJournalsBoundedFailedAttemptDiagnostics(t *testing.T) {
 	const secret = "provider-secret"
 	journal := &memoryJournal{}
 	attempts := 0
-	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		attempts++
 		if attempts <= 2 {
-			return ModelResponse{}, &ProviderError{
-				Cause:      MarkProviderFailure(errors.New("temporarily unavailable: " + secret + strings.Repeat("x", maxModelAttemptErrorBytes))),
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause:      modelapi.MarkProviderFailure(errors.New("temporarily unavailable: " + secret + strings.Repeat("x", maxModelAttemptErrorBytes))),
 				StatusCode: 503,
-				Kind:       ProviderErrorUnavailable,
+				Kind:       modelapi.ProviderErrorUnavailable,
 				Code:       "code-" + secret,
 				Type:       "service_error",
 				Retryable:  true,
 				RetryAfter: time.Millisecond,
 			}
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
@@ -922,7 +928,7 @@ func TestRuntimeJournalsBoundedFailedAttemptDiagnostics(t *testing.T) {
 			t.Fatalf("bounded diagnostic error = %d bytes / %q", len(diagnostic.Error), diagnostic.Error)
 		}
 		providerErr := diagnostic.ProviderError
-		if providerErr == nil || providerErr.StatusCode != 503 || providerErr.Kind != ProviderErrorUnavailable ||
+		if providerErr == nil || providerErr.StatusCode != 503 || providerErr.Kind != modelapi.ProviderErrorUnavailable ||
 			providerErr.Code != "code-[redacted]" || providerErr.Type != "service_error" || !providerErr.Retryable || providerErr.RetryAfter != time.Millisecond.String() {
 			t.Fatalf("provider diagnostic = %#v", providerErr)
 		}
@@ -931,25 +937,25 @@ func TestRuntimeJournalsBoundedFailedAttemptDiagnostics(t *testing.T) {
 
 func TestRuntimeStartsNewRetryBudgetAfterSuccessfulToolCallResponse(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, MarkProviderFailure(errors.New("first transient failure"))
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, modelapi.MarkProviderFailure(errors.New("first transient failure"))
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}}}, StopReason: "tool_calls"}, nil
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{}, MarkProviderFailure(errors.New("second transient failure"))
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{}, modelapi.MarkProviderFailure(errors.New("second transient failure"))
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
-				return ToolOutput{Content: TextContent("read")}, nil
+				return ToolOutput{Content: modelapi.TextContent("read")}, nil
 			},
 		}},
 		RequestPolicy: ModelRequestPolicy{
@@ -968,9 +974,9 @@ func TestRuntimeStartsNewRetryBudgetAfterSuccessfulToolCallResponse(t *testing.T
 }
 
 func TestRuntimeRequestBudgetBoundsOneHungAttempt(t *testing.T) {
-	model := modelFunc(func(ctx context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(ctx context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		<-ctx.Done()
-		return ModelResponse{}, ctx.Err()
+		return modelapi.Response{}, ctx.Err()
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
@@ -980,7 +986,7 @@ func TestRuntimeRequestBudgetBoundsOneHungAttempt(t *testing.T) {
 	})
 	started := time.Now()
 	_, err := runtime.Run(context.Background(), "task", nil)
-	if !errors.Is(err, ErrModelRequestBudget) || !errors.Is(err, ErrProviderFailure) {
+	if !errors.Is(err, ErrModelRequestBudget) || !errors.Is(err, modelapi.ErrProviderFailure) {
 		t.Fatalf("budget error = %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
@@ -991,31 +997,31 @@ func TestRuntimeRequestBudgetBoundsOneHungAttempt(t *testing.T) {
 func TestRuntimeDoesNotRetryNonRetryableProviderFailure(t *testing.T) {
 	attempts := 0
 	cause := errors.New("payment required \xff")
-	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		attempts++
-		return ModelResponse{}, &ProviderError{Cause: MarkProviderFailure(cause), StatusCode: 402}
+		return modelapi.Response{}, &modelapi.ProviderError{Cause: modelapi.MarkProviderFailure(cause), StatusCode: 402}
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
 		RequestPolicy: ModelRequestPolicy{MaxAttempts: -1, RetryBudget: time.Second, BaseDelay: time.Millisecond},
 	})
 	_, err := runtime.Run(context.Background(), "task", nil)
-	if !errors.Is(err, ErrProviderFailure) || !errors.Is(err, cause) || err.Error() != "payment required �" || attempts != 1 {
+	if !errors.Is(err, modelapi.ErrProviderFailure) || !errors.Is(err, cause) || err.Error() != "payment required �" || attempts != 1 {
 		t.Fatalf("error/attempts = %v / %d", err, attempts)
 	}
 }
 
 func TestRuntimeHonorsProviderRetryAfter(t *testing.T) {
 	attempts := 0
-	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		attempts++
 		if attempts == 1 {
-			return ModelResponse{}, &ProviderError{
-				Cause: MarkProviderFailure(errors.New("rate limited")), StatusCode: 429,
+			return modelapi.Response{}, &modelapi.ProviderError{
+				Cause: modelapi.MarkProviderFailure(errors.New("rate limited")), StatusCode: 429,
 				Retryable: true, RetryAfter: 20 * time.Millisecond,
 			}
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: &memoryJournal{},
@@ -1038,16 +1044,16 @@ func TestRuntimeSanitizesTextBeforeJournalToolsAndModel(t *testing.T) {
 	journal := &memoryJournal{}
 	var toolArguments string
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if request.Instructions != "instructions � [REDACTED]" || len(request.Items) != 1 || request.Items[0].Text != "input � [REDACTED]" {
 				t.Fatalf("unsanitized first request: %#v", request)
 			}
-			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "stream \xff " + secret})
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{
+			emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "stream \xff " + secret})
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{
 				ID: "provider-call", Name: "read", RawArguments: `{"token":"` + secret + `"}`,
 			}}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			for _, item := range request.Items {
 				if item.ToolCall != nil && strings.Contains(item.ToolCall.RawArguments, secret) {
 					t.Fatalf("secret reached replayed tool call: %#v", item)
@@ -1056,17 +1062,17 @@ func TestRuntimeSanitizesTextBeforeJournalToolsAndModel(t *testing.T) {
 					t.Fatalf("unsanitized tool result: %#v", item)
 				}
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "answer \xff " + secret}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "answer \xff " + secret}}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal, Instructions: "instructions \xff " + secret,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, secret, "[REDACTED]") },
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 				toolArguments = arguments
-				return ToolOutput{Content: TextContent("output \xff " + secret), Details: []Detail{{
+				return ToolOutput{Content: modelapi.TextContent("output \xff " + secret), Details: []modelapi.Detail{{
 					Kind: "test", Data: jsontext.Value(`{"failure_tail":"` + secret + `"}`),
 				}}}, nil
 			},
@@ -1097,15 +1103,15 @@ func TestRuntimeSanitizesTextBeforeJournalToolsAndModel(t *testing.T) {
 func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			last := request.Items[len(request.Items)-1]
 			if last.ToolResult == nil || !last.ToolResult.Error || len(last.ToolResult.Details) != 0 || !strings.Contains(last.ToolResult.Content.Text(), "details exceed size limit") {
 				t.Fatalf("tool result after oversized redaction = %#v", last)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "handled"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "handled"}}}, nil
 		},
 	}}
 	detailData, err := json.Marshal(map[string]string{"value": strings.Repeat("~", 30_000)})
@@ -1116,9 +1122,9 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 		Backend: model, Journal: journal,
 		Sanitize: func(text string) string { return strings.ReplaceAll(text, "~", "[REDACTED]") },
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (ToolOutput, error) {
-				return ToolOutput{Content: TextContent("done"), Details: []Detail{{Kind: "inspection", Data: detailData}}}, nil
+				return ToolOutput{Content: modelapi.TextContent("done"), Details: []modelapi.Detail{{Kind: "inspection", Data: detailData}}}, nil
 			},
 		}},
 	})
@@ -1134,7 +1140,7 @@ func TestRuntimeRejectsToolDetailsExpandedPastLimitByRedaction(t *testing.T) {
 func TestNormalizeToolsReturnsCanonicalOwnedCatalog(t *testing.T) {
 	schema := jsontext.Value(`{"type":"object"}`)
 	input := []Tool{{
-		Spec: ToolSpec{Name: " read ", InputSchema: schema},
+		Spec: modelapi.ToolSpec{Name: " read ", InputSchema: schema},
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	}}
 
@@ -1160,11 +1166,11 @@ func TestNormalizeToolsReturnsCanonicalOwnedCatalog(t *testing.T) {
 func TestRuntimePersistsConfiguredSessionIdentityAndWorkspace(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if request.SessionID != "session_fixed" {
 				t.Fatalf("request session ID = %q", request.SessionID)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
@@ -1189,22 +1195,22 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 	journal := &memoryJournal{}
 	providerID := "provider-call-id"
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{
-				Kind: ItemToolCall,
-				ToolCall: &ToolCall{
+		func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{
+				Kind: modelapi.ItemToolCall,
+				ToolCall: &modelapi.ToolCall{
 					ID:           providerID,
 					Name:         "echo",
 					RawArguments: `{"text":"hi"}`,
-					ProviderReferences: []ProviderReference{{
+					ProviderReferences: []modelapi.ProviderReference{{
 						Kind: "call_id",
 						Data: jsontext.Value(`"provider-call-id"`),
 					}},
 				},
 			}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			if len(request.Items) != 3 || request.Items[1].Kind != ItemToolCall || request.Items[2].Kind != ItemToolResult {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			if len(request.Items) != 3 || request.Items[1].Kind != modelapi.ItemToolCall || request.Items[2].Kind != modelapi.ItemToolResult {
 				t.Fatalf("second request items = %#v", request.Items)
 			}
 			if request.Items[2].ToolResult.CallID != request.Items[1].ToolCall.ID {
@@ -1213,19 +1219,19 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 			if len(request.Items[2].ToolResult.Details) != 0 {
 				t.Fatalf("product details leaked into model request: %#v", request.Items[2].ToolResult.Details)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
 	executed := 0
 	tool := Tool{
-		Spec: ToolSpec{Name: "echo", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "echo", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(_ context.Context, arguments string) (ToolOutput, error) {
 			executed++
 			records := journal.snapshot()
 			if records[len(records)-1].Kind != RecordModelResponse {
 				t.Fatalf("last record before tool execution = %q", records[len(records)-1].Kind)
 			}
-			return ToolOutput{Content: TextContent(arguments), Details: []Detail{{
+			return ToolOutput{Content: modelapi.TextContent(arguments), Details: []modelapi.Detail{{
 				Kind: "test_detail",
 				Data: jsontext.Value(`{"value":1}`),
 			}}}, nil
@@ -1268,13 +1274,13 @@ func TestRuntimeCommitsToolCallBeforeExecutionAndUsesSkotID(t *testing.T) {
 func TestRuntimeDiscardsFailedPartialAttempt(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, _ ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
-			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "partial"})
-			return ModelResponse{}, errors.New("stream broke")
+		func(_ context.Context, _ modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "partial"})
+			return modelapi.Response{}, errors.New("stream broke")
 		},
-		func(_ context.Context, _ ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
-			emit(ModelStreamEvent{Kind: EventTextDelta, Text: "accepted"})
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "accepted"}}}, nil
+		func(_ context.Context, _ modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: "accepted"})
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "accepted"}}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
@@ -1306,14 +1312,14 @@ func TestRuntimeDiscardsFailedPartialAttempt(t *testing.T) {
 
 func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing.T) {
 	journal := &memoryJournal{}
-	var firstRequest ModelRequest
+	var firstRequest modelapi.Request
 	firstModel := &scriptedModel{
-		info: ModelInfo{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
-		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		info: modelapi.Info{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
+		steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			firstRequest = request
-			return ModelResponse{Items: []Item{
-				{Kind: ItemReasoning, Text: "private continuation"},
-				{Kind: ItemAssistantText, Text: "first answer"},
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemReasoning, Text: "private continuation"},
+				{Kind: modelapi.ItemAssistantText, Text: "first answer"},
 			}}, nil
 		}},
 	}
@@ -1321,17 +1327,17 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 		t.Fatal(err)
 	}
 
-	var secondRequest ModelRequest
+	var secondRequest modelapi.Request
 	secondModel := &scriptedModel{
-		info: ModelInfo{BackendID: "backend.b", Provider: "provider-b", Model: "beta"},
-		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		info: modelapi.Info{BackendID: "backend.b", Provider: "provider-b", Model: "beta"},
+		steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			secondRequest = request
 			for _, item := range request.Items {
-				if item.Kind == ItemReasoning {
+				if item.Kind == modelapi.ItemReasoning {
 					t.Fatalf("old provider reasoning leaked after model switch: %#v", request.Items)
 				}
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second answer"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "second answer"}}}, nil
 		}},
 	}
 	if _, err := newTestRuntime(t, Config{Backend: secondModel, Journal: journal}).Run(context.Background(), "second", nil); err != nil {
@@ -1358,9 +1364,9 @@ func TestRuntimeChangesProviderEpochAndFiltersOwnedItemsOnModelSwitch(t *testing
 func TestRuntimeSwitchModelJournalsSelectionBeforeNextRun(t *testing.T) {
 	journal := &memoryJournal{}
 	firstModel := &scriptedModel{
-		info: ModelInfo{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
-		steps: []modelStep{func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}}, nil
+		info: modelapi.Info{BackendID: "backend.a", Provider: "provider-a", Model: "alpha"},
+		steps: []modelStep{func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "first"}}}, nil
 		}},
 	}
 	runtime := newTestRuntime(t, Config{Backend: firstModel, Journal: journal})
@@ -1368,12 +1374,12 @@ func TestRuntimeSwitchModelJournalsSelectionBeforeNextRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var secondRequest ModelRequest
+	var secondRequest modelapi.Request
 	secondModel := &scriptedModel{
-		info: ModelInfo{BackendID: "backend.b", Provider: "provider-b", Model: "beta", ReasoningEffort: "high"},
-		steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		info: modelapi.Info{BackendID: "backend.b", Provider: "provider-b", Model: "beta", ReasoningEffort: "high"},
+		steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			secondRequest = request
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "second"}}}, nil
 		}},
 	}
 	if err := runtime.SwitchModel(context.Background(), secondModel.testModelInfo(), secondModel); err != nil {
@@ -1404,12 +1410,12 @@ func TestRuntimeSwitchModelJournalsSelectionBeforeNextRun(t *testing.T) {
 func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
 	journal := &memoryJournal{}
 	first := &scriptedModel{
-		info: ModelInfo{
+		info: modelapi.Info{
 			BackendID: "chat_completions.test", Provider: "test", Model: "same",
 			ProviderStateContract: "chat_completions.reasoning_replay.current_turn.v1",
 		},
-		steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}}, nil
+		steps: []modelStep{func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "first"}}}, nil
 		}},
 	}
 	runtime := newTestRuntime(t, Config{Backend: first, Journal: journal})
@@ -1421,7 +1427,7 @@ func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second := &scriptedModel{info: ModelInfo{
+	second := &scriptedModel{info: modelapi.Info{
 		BackendID: "chat_completions.test", Provider: "test", Model: "same",
 		ProviderStateContract: "chat_completions.reasoning_replay.tool_turns.v1",
 	}}
@@ -1442,7 +1448,7 @@ func TestRuntimeRotatesEpochWhenProviderStateContractChanges(t *testing.T) {
 
 func TestRuntimeRequiresModelProvider(t *testing.T) {
 	_, err := New(Config{
-		Model:   ModelInfo{BackendID: "chat_completions.deepseek", Model: "model"},
+		Model:   modelapi.Info{BackendID: "chat_completions.deepseek", Model: "model"},
 		Backend: &scriptedModel{},
 		Journal: &memoryJournal{},
 	})
@@ -1453,17 +1459,17 @@ func TestRuntimeRequiresModelProvider(t *testing.T) {
 
 func TestRuntimeCanReplaceToolsBetweenRuns(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if got := toolNames(request.Tools); got != "read,edit" {
 				t.Fatalf("initial tools = %q", got)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "one"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "one"}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if got := toolNames(request.Tools); got != "read" {
 				t.Fatalf("replacement tools = %q", got)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "two"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "two"}}}, nil
 		},
 	}}
 	read := testRuntimeTool("read")
@@ -1482,12 +1488,12 @@ func TestRuntimeCanReplaceToolsBetweenRuns(t *testing.T) {
 
 func testRuntimeTool(name string) Tool {
 	return Tool{
-		Spec: ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: name, InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 	}
 }
 
-func toolNames(specs []ToolSpec) string {
+func toolNames(specs []modelapi.ToolSpec) string {
 	names := make([]string, 0, len(specs))
 	for _, spec := range specs {
 		names = append(names, spec.Name)
@@ -1496,15 +1502,15 @@ func toolNames(specs []ToolSpec) string {
 }
 
 func TestProjectModelItemsKeepsOnlyCurrentProviderReferences(t *testing.T) {
-	items := []Item{{
-		Kind:       ItemToolCall,
+	items := []modelapi.Item{{
+		Kind:       modelapi.ItemToolCall,
 		ResponseID: "response_1",
-		ToolCall: &ToolCall{ID: "call_1", Name: "read", ProviderReferences: []ProviderReference{
+		ToolCall: &modelapi.ToolCall{ID: "call_1", Name: "read", ProviderReferences: []modelapi.ProviderReference{
 			{Kind: "call_id", Backend: "backend.a", Epoch: "epoch_a", Data: jsontext.Value(`"a"`)},
 			{Kind: "call_id", Backend: "backend.b", Epoch: "epoch_b", Data: jsontext.Value(`"b"`)},
 		}},
 	}}
-	projected := projectOwnedModelItems(cloneItems(items), ProviderContext{Backend: "backend.b", Epoch: "epoch_b"})
+	projected := (modelapi.ProviderContext{Backend: "backend.b", Epoch: "epoch_b"}).ProjectItems(cloneItems(items), nil)
 	if len(projected) != 1 || len(projected[0].ToolCall.ProviderReferences) != 1 || string(projected[0].ToolCall.ProviderReferences[0].Data) != `"b"` {
 		t.Fatalf("projected items = %#v", projected)
 	}
@@ -1516,10 +1522,10 @@ func TestProjectModelItemsKeepsOnlyCurrentProviderReferences(t *testing.T) {
 func TestRuntimeCancellationIsDurable(t *testing.T) {
 	journal := &memoryJournal{}
 	started := make(chan struct{})
-	model := modelFunc(func(ctx context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(ctx context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		close(started)
 		<-ctx.Done()
-		return ModelResponse{}, ctx.Err()
+		return modelapi.Response{}, ctx.Err()
 	})
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1574,9 +1580,9 @@ func TestRuntimeCancellationDuringDeliveryIsDurable(t *testing.T) {
 			modelCalled := false
 			config := Config{
 				Journal: journal,
-				Backend: modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+				Backend: modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 					modelCalled = true
-					return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "unexpected"}}, StopReason: "stop"}, nil
+					return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "unexpected"}}, StopReason: "stop"}, nil
 				}),
 			}
 			if test.boundaryEvent != nil {
@@ -1614,11 +1620,11 @@ func TestRuntimeCancellationDuringDeliveryIsDurable(t *testing.T) {
 func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T) {
 	journal := &memoryJournal{}
 	toolStarted := make(chan struct{})
-	model := &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{ID: "call-cancelled", Name: "wait", RawArguments: `{}`}}}}, nil
+	model := &scriptedModel{steps: []modelStep{func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{ID: "call-cancelled", Name: "wait", RawArguments: `{}`}}}}, nil
 	}}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "wait", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "wait", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
 			close(toolStarted)
 			<-ctx.Done()
@@ -1662,14 +1668,14 @@ func TestRuntimeCancellationDuringToolSettlesCallBeforeRunFinishes(t *testing.T)
 func TestReconcileRejectsFinishedRunWithPendingTool(t *testing.T) {
 	journal := &memoryJournal{}
 	runID := "run-cancelled"
-	call := ToolCall{ID: "call-cancelled", Name: "wait", RawArguments: `{}`}
+	call := modelapi.ToolCall{ID: "call-cancelled", Name: "wait", RawArguments: `{}`}
 	mustAppend(t, journal, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session-cancelled"})
-	mustAppend(t, journal, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch-cancelled"})
+	mustAppend(t, journal, RecordModelSelected, modelapi.ReplayContext{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch-cancelled"})
 	mustAppend(t, journal, RecordRunStarted, RunStartedRecord{RunID: runID})
 	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: "wait"})
 	mustAppend(t, journal, RecordModelResponse, ModelResponseRecord{
 		RunID: runID, Backend: "test", Model: "test", Epoch: "epoch-cancelled",
-		Items: []Item{{Kind: ItemToolCall, ResponseID: "response-cancelled", ToolCall: &call}},
+		Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ResponseID: "response-cancelled", ToolCall: &call}},
 	})
 	mustAppend(t, journal, RecordRunFinished, RunFinishedRecord{RunID: runID, Status: RunCancelled, Error: context.Canceled.Error()})
 
@@ -1684,9 +1690,9 @@ func TestReconcileRejectsFinishedRunWithPendingTool(t *testing.T) {
 func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 	journal := &memoryJournal{}
 	runID := "run_interrupted"
-	call := ToolCall{ID: "call_local", Name: "write", RawArguments: `{}`}
+	call := modelapi.ToolCall{ID: "call_local", Name: "write", RawArguments: `{}`}
 	mustAppend(t, journal, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session_interrupted"})
-	mustAppend(t, journal, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch_interrupted"})
+	mustAppend(t, journal, RecordModelSelected, modelapi.ReplayContext{Backend: "test", Provider: "test", Model: "test", Epoch: "epoch_interrupted"})
 	mustAppend(t, journal, RecordRunStarted, RunStartedRecord{RunID: runID})
 	mustAppend(t, journal, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: "change it"})
 	mustAppend(t, journal, RecordModelResponse, ModelResponseRecord{
@@ -1694,7 +1700,7 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 		Backend: "test",
 		Model:   "test",
 		Epoch:   "epoch_interrupted",
-		Items:   []Item{{Kind: ItemToolCall, ResponseID: "response_interrupted", ToolCall: &call}},
+		Items:   []modelapi.Item{{Kind: modelapi.ItemToolCall, ResponseID: "response_interrupted", ToolCall: &call}},
 	})
 
 	state, records, err := Reconcile(context.Background(), journal)
@@ -1721,37 +1727,37 @@ func TestReconcileRecordsUnknownWithoutExecutingTool(t *testing.T) {
 	}
 }
 
-type modelStep func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
+type modelStep func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error)
 
 type scriptedModel struct {
-	info  ModelInfo
+	info  modelapi.Info
 	steps []modelStep
 	next  int
 }
 
-func (model *scriptedModel) testModelInfo() ModelInfo {
+func (model *scriptedModel) testModelInfo() modelapi.Info {
 	if model.info.BackendID == "" {
-		return ModelInfo{BackendID: "test", Provider: "test", Model: "test"}
+		return modelapi.Info{BackendID: "test", Provider: "test", Model: "test"}
 	}
 	return model.info
 }
 
-func (model *scriptedModel) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+func (model *scriptedModel) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	if model.next >= len(model.steps) {
-		return ModelResponse{}, errors.New("unexpected model request")
+		return modelapi.Response{}, errors.New("unexpected model request")
 	}
 	step := model.steps[model.next]
 	model.next++
 	return step(ctx, request, emit)
 }
 
-type modelFunc func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
+type modelFunc func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error)
 
-func (modelFunc) testModelInfo() ModelInfo {
-	return ModelInfo{BackendID: "test", Provider: "test", Model: "test"}
+func (modelFunc) testModelInfo() modelapi.Info {
+	return modelapi.Info{BackendID: "test", Provider: "test", Model: "test"}
 }
 
-func (function modelFunc) Complete(ctx context.Context, request ModelRequest, emit func(ModelStreamEvent)) (ModelResponse, error) {
+func (function modelFunc) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	return function(ctx, request, emit)
 }
 
@@ -1807,12 +1813,12 @@ func TestRuntimeJournalFailureLeavesRecoverableUnfinishedRun(t *testing.T) {
 			tool := testRuntimeTool("work")
 			tool.Run = func(context.Context, string) (ToolOutput, error) {
 				toolCalls++
-				return ToolOutput{Content: TextContent("done")}, nil
+				return ToolOutput{Content: modelapi.TextContent("done")}, nil
 			}
-			model := &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{
-					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "work", RawArguments: `{}`}},
-					{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "work", RawArguments: `{}`}},
+			model := &scriptedModel{steps: []modelStep{func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{
+					{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "work", RawArguments: `{}`}},
+					{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "work", RawArguments: `{}`}},
 				}}, nil
 			}}}
 			runtime := newTestRuntime(t, Config{Journal: journal, Backend: model, Tools: []Tool{tool}})
@@ -1879,8 +1885,8 @@ func (journal *memoryJournal) snapshot() []Record {
 func newTestRuntime(t *testing.T, config Config) *Runtime {
 	t.Helper()
 	if config.Model.BackendID == "" {
-		config.Model = ModelInfo{BackendID: "test", Provider: "test", Model: "test"}
-		if described, ok := config.Backend.(interface{ testModelInfo() ModelInfo }); ok {
+		config.Model = modelapi.Info{BackendID: "test", Provider: "test", Model: "test"}
+		if described, ok := config.Backend.(interface{ testModelInfo() modelapi.Info }); ok {
 			config.Model = described.testModelInfo()
 		}
 	}
@@ -2018,6 +2024,6 @@ func authoritativeEventRecordKind(kind EventKind) (RecordKind, bool) {
 	}
 }
 
-func (model *scriptedModel) ProjectModelItems(items []Item) []Item { return items }
+func (model *scriptedModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item { return items }
 
-func (function modelFunc) ProjectModelItems(items []Item) []Item { return items }
+func (function modelFunc) ProjectModelItems(items []modelapi.Item) []modelapi.Item { return items }

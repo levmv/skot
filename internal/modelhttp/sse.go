@@ -9,8 +9,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/model"
 )
 
 // ErrEventTooLarge reports one event above the local output ceiling. Adapters
@@ -65,7 +65,7 @@ func (stream *EventStream) Close() {
 
 // Next returns the payload of the next event. It reports io.EOF at the end of
 // the stream, ErrEventTooLarge for an event above the local ceiling, and a
-// wrapped agent.ErrModelStreamIdle when the provider goes quiet.
+// wrapped model.ErrModelStreamIdle when the provider goes quiet.
 func (stream *EventStream) Next() ([]byte, error) {
 	for {
 		select {
@@ -85,7 +85,7 @@ func (stream *EventStream) Next() ([]byte, error) {
 			}
 			return result.payload, result.err
 		case <-stream.deadline:
-			return nil, fmt.Errorf("%w after %s", agent.ErrModelStreamIdle, stream.idle)
+			return nil, fmt.Errorf("%w after %s", model.ErrModelStreamIdle, stream.idle)
 		case <-stream.ctx.Done():
 			return nil, stream.ctx.Err()
 		}

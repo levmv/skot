@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 type reasoningReplay int
@@ -18,34 +20,34 @@ const (
 // received. Its projection policies mirror the real Chat Completions ones.
 type reasoningModel struct {
 	replay   reasoningReplay
-	requests []ModelRequest
+	requests []modelapi.Request
 }
 
-func (model *reasoningModel) testModelInfo() ModelInfo {
-	return ModelInfo{BackendID: "test", Provider: "test", Model: "test", ProviderStateContract: "test.reasoning.v1"}
+func (model *reasoningModel) testModelInfo() modelapi.Info {
+	return modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ProviderStateContract: "test.reasoning.v1"}
 }
 
-func (model *reasoningModel) Complete(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+func (model *reasoningModel) Complete(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	model.requests = append(model.requests, request)
-	return ModelResponse{Items: []Item{
-		{Kind: ItemReasoning, Text: strings.Repeat("weighing the options ", 256)},
-		{Kind: ItemAssistantText, Text: "answer"},
+	return modelapi.Response{Items: []modelapi.Item{
+		{Kind: modelapi.ItemReasoning, Text: strings.Repeat("weighing the options ", 256)},
+		{Kind: modelapi.ItemAssistantText, Text: "answer"},
 	}}, nil
 }
 
-func (model *reasoningModel) ProjectModelItems(items []Item) []Item {
+func (model *reasoningModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
 	if model.replay == replayAll {
 		return items
 	}
 	lastUser := -1
 	for index, item := range items {
-		if item.Kind == ItemUserText {
+		if item.Kind == modelapi.ItemUserText {
 			lastUser = index
 		}
 	}
 	kept := items[:0]
 	for index, item := range items {
-		if item.Kind == ItemReasoning && (model.replay == replayNone || index <= lastUser) {
+		if item.Kind == modelapi.ItemReasoning && (model.replay == replayNone || index <= lastUser) {
 			continue
 		}
 		kept = append(kept, item)
@@ -84,7 +86,7 @@ func TestContextEstimateMatchesTheProjectedRequest(t *testing.T) {
 
 			replayed := false
 			for _, item := range request.Items {
-				if item.Kind == ItemReasoning {
+				if item.Kind == modelapi.ItemReasoning {
 					replayed = true
 				}
 			}
@@ -154,11 +156,11 @@ func TestRunRequestProjectsExtraUserTextWithHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range request.Items {
-		if item.Kind == ItemReasoning {
+		if item.Kind == modelapi.ItemReasoning {
 			t.Fatalf("extra user text was projected after history: %#v", request.Items)
 		}
 	}
-	if last := request.Items[len(request.Items)-1]; last.Kind != ItemUserText || last.Text != toolLimitInstructions {
+	if last := request.Items[len(request.Items)-1]; last.Kind != modelapi.ItemUserText || last.Text != toolLimitInstructions {
 		t.Fatalf("extra user text = %#v", last)
 	}
 	report := runtime.contextReportForRequest(state, false, toolLimitInstructions)

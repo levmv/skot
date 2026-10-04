@@ -1,6 +1,10 @@
 package agent
 
-import "context"
+import (
+	"context"
+
+	"github.com/levmv/skot/model"
+)
 
 // Keep one anomalous model response from turning ParallelSafe into unbounded
 // process-wide fan-out. The limit is per run; unsafe and unknown tools remain
@@ -8,11 +12,11 @@ import "context"
 const maxParallelToolCalls = 4
 
 type toolExecution struct {
-	result    ToolResult
+	result    model.ToolResult
 	cancelled bool
 }
 
-func (runtime *Runtime) executeToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []ToolCall) (bool, error) {
+func (runtime *Runtime) executeToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []model.ToolCall) (bool, error) {
 	for start := 0; start < len(calls); {
 		if err := ctx.Err(); err != nil {
 			return true, nil
@@ -39,12 +43,12 @@ func (runtime *Runtime) executeToolCalls(ctx context.Context, live *stateReducer
 	return false, nil
 }
 
-func (runtime *Runtime) toolCallParallelSafe(call ToolCall) bool {
+func (runtime *Runtime) toolCallParallelSafe(call model.ToolCall) bool {
 	tool, exists := runtime.toolByName[call.Name]
 	return exists && tool.Spec.ParallelSafe
 }
 
-func (runtime *Runtime) executeSerialToolCall(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call ToolCall) (bool, error) {
+func (runtime *Runtime) executeSerialToolCall(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call model.ToolCall) (bool, error) {
 	emitEvent(emit, Event{Kind: EventToolStarted, RunID: runID, Call: cloneToolCallPointer(&call)})
 	result, cancelled := runtime.executeTool(ctx, live.state.SessionID, call)
 	if cancelled {
@@ -56,7 +60,7 @@ func (runtime *Runtime) executeSerialToolCall(ctx context.Context, live *stateRe
 	return false, nil
 }
 
-func (runtime *Runtime) executeParallelToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []ToolCall) (bool, error) {
+func (runtime *Runtime) executeParallelToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []model.ToolCall) (bool, error) {
 	groupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -101,26 +105,26 @@ func waitForToolExecutions(outcomes []<-chan toolExecution) {
 	}
 }
 
-func (runtime *Runtime) commitToolResult(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call ToolCall, result ToolResult) error {
+func (runtime *Runtime) commitToolResult(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call model.ToolCall, result model.ToolResult) error {
 	record, err := appendRecordAndApply(ctx, runtime.journal, live, RecordToolResult, ToolResultRecord{RunID: runID, Result: result})
 	if err != nil {
 		return err
 	}
 	if runtime.externalWork != nil {
-		runtime.externalWork.ToolResultCommitted(*cloneToolResult(&result))
+		runtime.externalWork.ToolResultCommitted(*result.Clone())
 	}
-	emitEvent(emit, Event{Sequence: record.Sequence, Kind: EventToolFinished, RunID: runID, Call: cloneToolCallPointer(&call), Result: cloneToolResult(&result)})
+	emitEvent(emit, Event{Sequence: record.Sequence, Kind: EventToolFinished, RunID: runID, Call: cloneToolCallPointer(&call), Result: result.Clone()})
 	return nil
 }
 
-func (runtime *Runtime) commitRejectedToolResult(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call ToolCall, result ToolResult) error {
+func (runtime *Runtime) commitRejectedToolResult(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, call model.ToolCall, result model.ToolResult) error {
 	record, err := appendRecordAndApply(ctx, runtime.journal, live, RecordToolResult, ToolResultRecord{RunID: runID, Result: result})
 	if err != nil {
 		return err
 	}
 	if runtime.externalWork != nil {
-		runtime.externalWork.ToolResultCommitted(*cloneToolResult(&result))
+		runtime.externalWork.ToolResultCommitted(*result.Clone())
 	}
-	emitEvent(emit, Event{Sequence: record.Sequence, Kind: EventToolRejected, RunID: runID, Call: cloneToolCallPointer(&call), Result: cloneToolResult(&result)})
+	emitEvent(emit, Event{Sequence: record.Sequence, Kind: EventToolRejected, RunID: runID, Call: cloneToolCallPointer(&call), Result: result.Clone()})
 	return nil
 }

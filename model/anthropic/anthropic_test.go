@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
@@ -106,12 +106,12 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "/v1")
-	var events []agent.ModelStreamEvent
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
+	var events []model.StreamEvent
+	response, err := backend.Complete(context.Background(), model.Request{
 		Instructions: "be brief", Summary: "prior turn",
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "read it"}},
-		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
-	}, func(event agent.ModelStreamEvent) { events = append(events, event) })
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "read it"}},
+		Tools: []model.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
+	}, func(event model.StreamEvent) { events = append(events, event) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +129,13 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 	})
 	t.Run("response", func(t *testing.T) {
 		// Messages says tool_use; the agent sees the normalized reason.
-		if response.StopReason != "tool_calls" || response.Usage != (agent.ModelUsage{
+		if response.StopReason != "tool_calls" || response.Usage.Tokens.Known() != (model.TokenCounts{
 			InputTokens: 19, CachedInputTokens: 4, CacheWriteInputTokens: 3, OutputTokens: 9, TotalTokens: 28,
 		}) {
 			t.Fatalf("stop/usage = %q/%#v", response.StopReason, response.Usage)
 		}
-		if len(response.Items) != 3 || response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking " ||
-			response.Items[1].Kind != agent.ItemAssistantText || response.Items[1].Text != "hello" || response.Items[2].ToolCall == nil {
+		if len(response.Items) != 3 || response.Items[0].Kind != model.ItemReasoning || response.Items[0].Text != "checking " ||
+			response.Items[1].Kind != model.ItemAssistantText || response.Items[1].Text != "hello" || response.Items[2].ToolCall == nil {
 			t.Fatalf("items = %#v", response.Items)
 		}
 		if len(response.Items[0].ProviderData) != 1 || response.Items[0].ProviderData[0].Kind != thinkingDataKind {
@@ -155,9 +155,9 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 		if err := json.Unmarshal(call.ProviderReferences[0].Data, &providerID); err != nil || providerID != "toolu_provider_1" {
 			t.Fatalf("provider ID = %q, error = %v", providerID, err)
 		}
-		if got := events; !reflect.DeepEqual(got, []agent.ModelStreamEvent{
-			{Kind: agent.EventReasoningSummaryDelta, Text: "checking "},
-			{Kind: agent.EventTextDelta, Text: "hello"},
+		if got := events; !reflect.DeepEqual(got, []model.StreamEvent{
+			{Kind: model.EventReasoningSummaryDelta, Text: "checking "},
+			{Kind: model.EventTextDelta, Text: "hello"},
 		}) {
 			t.Fatalf("events = %#v", got)
 		}
@@ -168,27 +168,27 @@ func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	providerID := jsontext.Value(`"toolu_provider_7"`)
 	thinkingState := jsontext.Value(`{"type":"thinking","thinking":"original thinking","signature":"signed-thinking"}`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		Instructions: "instructions", Summary: "summary", ProviderEpoch: "epoch_1",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "first"},
+		Items: []model.Item{
+			{Kind: model.ItemUserText, Text: "first"},
 			{
-				Kind: agent.ItemReasoning, ResponseID: "response_1", Text: "sanitized thinking",
-				ProviderContext: &agent.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"},
-				ProviderData:    []agent.ProviderData{{Kind: thinkingDataKind, Data: thinkingState}},
+				Kind: model.ItemReasoning, ResponseID: "response_1", Text: "sanitized thinking",
+				ProviderContext: &model.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"},
+				ProviderData:    []model.ProviderData{{Kind: thinkingDataKind, Data: thinkingState}},
 			},
-			{Kind: agent.ItemAssistantText, ResponseID: "response_1", Text: "checking"},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+			{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "checking"},
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID: "call_local", Name: "read_file", RawArguments: `{"path":"README.md"}`,
-				ProviderReferences: []agent.ProviderReference{{
+				ProviderReferences: []model.ProviderReference{{
 					Kind: "anthropic_messages.test.tool_use_id", Backend: "anthropic_messages.test", Epoch: "epoch_1", Data: providerID,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("failed"), Error: true}},
-			{Kind: agent.ItemBoundaryText, Text: "Background job completed."},
-			{Kind: agent.ItemUserText, Text: "continue"},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_local", Content: model.TextContent("failed"), Error: true}},
+			{Kind: model.ItemBoundaryText, Text: "Background job completed."},
+			{Kind: model.ItemUserText, Text: "continue"},
 		},
-		Tools: []agent.ToolSpec{{Name: "read_file", InputSchema: jsontext.Value(`{"type":"object","additionalProperties":false}`)}},
+		Tools: []model.ToolSpec{{Name: "read_file", InputSchema: jsontext.Value(`{"type":"object","additionalProperties":false}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -213,10 +213,10 @@ func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {
 
 func TestBuildRequestLowersImageToolResult(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "inspect"},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"shot.png"}`}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.ImageToolContent("image metadata", agent.ImageContent{
+	request, err := backend.buildRequest(model.Request{Items: []model.Item{
+		{Kind: model.ItemUserText, Text: "inspect"},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"shot.png"}`}},
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.ImageToolContent("image metadata", model.ImageContent{
 			MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
 		})}},
 	}})
@@ -234,19 +234,19 @@ func TestBuildRequestLowersImageToolResult(t *testing.T) {
 func TestBuildRequestPreservesEmptyThinkingAndToolResultFields(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	state := jsontext.Value(`{"type":"thinking","signature":"sig-abc"}`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_1",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "run the tool"},
+		Items: []model.Item{
+			{Kind: model.ItemUserText, Text: "run the tool"},
 			{
-				Kind: agent.ItemReasoning, ResponseID: "response_1",
-				ProviderContext: &agent.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"},
-				ProviderData:    []agent.ProviderData{{Kind: thinkingDataKind, Data: state}},
+				Kind: model.ItemReasoning, ResponseID: "response_1",
+				ProviderContext: &model.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"},
+				ProviderData:    []model.ProviderData{{Kind: thinkingDataKind, Data: state}},
 			},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID: "call_1", Name: "empty", RawArguments: `{}`,
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1"}},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1"}},
 		},
 	})
 	if err != nil {
@@ -275,15 +275,15 @@ func TestBuildRequestPreservesEmptyThinkingAndToolResultFields(t *testing.T) {
 func TestBuildRequestDropsMismatchedThinkingState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	state := jsontext.Value(`{"type":"thinking","signature":"signature"}`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_1",
-		Items: []agent.Item{
+		Items: []model.Item{
 			{
-				Kind: agent.ItemReasoning, ResponseID: "response_1", Text: "private",
-				ProviderContext: &agent.ProviderContext{Backend: "anthropic_messages.other", Epoch: "epoch_1"},
-				ProviderData:    []agent.ProviderData{{Kind: thinkingDataKind, Data: state}},
+				Kind: model.ItemReasoning, ResponseID: "response_1", Text: "private",
+				ProviderContext: &model.ProviderContext{Backend: "anthropic_messages.other", Epoch: "epoch_1"},
+				ProviderData:    []model.ProviderData{{Kind: thinkingDataKind, Data: state}},
 			},
-			{Kind: agent.ItemAssistantText, ResponseID: "response_1", Text: "visible"},
+			{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "visible"},
 		},
 	})
 	if err != nil {
@@ -302,12 +302,12 @@ func TestRedactedThinkingRoundTripsAsProviderState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Kind != agent.ItemReasoning || items[0].Text != "" || len(items[0].ProviderData) != 1 {
+	if len(items) != 1 || items[0].Kind != model.ItemReasoning || items[0].Text != "" || len(items[0].ProviderData) != 1 {
 		t.Fatalf("items = %#v", items)
 	}
 	items[0].ResponseID = "response_1"
-	items[0].ProviderContext = &agent.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"}
-	request, err := backend.buildRequest(agent.ModelRequest{ProviderEpoch: "epoch_1", Items: items})
+	items[0].ProviderContext = &model.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"}
+	request, err := backend.buildRequest(model.Request{ProviderEpoch: "epoch_1", Items: items})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,9 +332,9 @@ func TestInvalidRedactedThinkingDataIsDroppedAndRejectedWhenSaved(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, replayed, err := backend.replayThinkingBlock(agent.Item{
-				ProviderContext: &agent.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"},
-				ProviderData:    []agent.ProviderData{{Kind: thinkingDataKind, Data: state}},
+			_, replayed, err := backend.replayThinkingBlock(model.Item{
+				ProviderContext: &model.ProviderContext{Backend: "anthropic_messages.test", Epoch: "epoch_1"},
+				ProviderData:    []model.ProviderData{{Kind: thinkingDataKind, Data: state}},
 			}, "epoch_1")
 			if err == nil || replayed || !strings.Contains(err.Error(), "no opaque data") {
 				t.Fatalf("replayed/error = %t/%v", replayed, err)
@@ -355,9 +355,9 @@ func TestResponseItemsSortSparseProviderIndices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(items, []agent.Item{
-		{Kind: agent.ItemAssistantText, Text: "early"},
-		{Kind: agent.ItemAssistantText, Text: "late"},
+	if !reflect.DeepEqual(items, []model.Item{
+		{Kind: model.ItemAssistantText, Text: "early"},
+		{Kind: model.ItemAssistantText, Text: "late"},
 	}) {
 		t.Fatalf("items = %#v", items)
 	}
@@ -382,13 +382,13 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 	}))
 	backend := newTestServerBackend(t, server, "")
 	backend.maxCompletionBytes = len(start) + len(kept)
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "continue"}},
+	response, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "continue"}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != agent.StopReasonOutputLimit || !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "kept"}}) {
+	if response.StopReason != model.StopReasonOutputLimit || !reflect.DeepEqual(response.Items, []model.Item{{Kind: model.ItemAssistantText, Text: "kept"}}) {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -398,10 +398,10 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
 	backend := newTestServerBackend(t, server, "")
 	backend.maxRequestBytes = 64
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) || requests.Load() != 0 {
+	if !errors.Is(err, model.ErrInvalidRequest) || !errors.Is(err, model.ErrModelRequestTooLarge) || requests.Load() != 0 {
 		t.Fatalf("error/requests = %v/%d", err, requests.Load())
 	}
 }
@@ -435,7 +435,7 @@ func TestCompletePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 				}
 			}))
 			backend := newTestServerBackend(t, server, "")
-			response, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+			response, err := backend.Complete(context.Background(), model.Request{}, nil)
 			if test.wantError {
 				if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
 					t.Fatalf("malformed completed call error = %v", err)
@@ -445,9 +445,9 @@ func TestCompletePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(response.Items) != 2 || response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking" ||
-				len(response.Items[0].ProviderData) != 1 || response.Items[1].Kind != agent.ItemAssistantText || response.Items[1].Text != "partial" ||
-				response.StopReason != test.reason || response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
+			if len(response.Items) != 2 || response.Items[0].Kind != model.ItemReasoning || response.Items[0].Text != "checking" ||
+				len(response.Items[0].ProviderData) != 1 || response.Items[1].Kind != model.ItemAssistantText || response.Items[1].Text != "partial" ||
+				response.StopReason != test.reason || response.Usage.Tokens.Known() != (model.TokenCounts{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
 				t.Fatalf("incomplete response = %#v", response)
 			}
 			var thinking thinkingBlockState
@@ -466,9 +466,9 @@ func TestCompleteDecodesStructuredHTTPError(t *testing.T) {
 		fmt.Fprint(writer, `{"type":"error","error":{"type":"authentication_error","message":"bad key"}}`)
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorAuthentication ||
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
+	var providerErr *model.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorAuthentication ||
 		providerErr.Code != "" || providerErr.Type != "authentication_error" ||
 		providerErr.StatusCode != http.StatusUnauthorized || providerErr.RetryAfter != 2*time.Second {
 		t.Fatalf("error = %#v (%v)", providerErr, err)
@@ -483,8 +483,8 @@ func TestCompleteReturnsStreamError(t *testing.T) {
 		})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "overloaded") {
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
+	if !errors.Is(err, model.ErrProviderFailure) || !strings.Contains(err.Error(), "overloaded") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -497,10 +497,10 @@ func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
 		})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
-		providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Type != "request_too_large" ||
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != model.ProviderErrorRequestTooLarge || providerErr.Type != "request_too_large" ||
 		providerErr.Retryable {
 		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
@@ -515,7 +515,7 @@ func TestCompleteReturnsEmptyRefusalForRuntimeClassification(t *testing.T) {
 		writeSSEEvent(t, writer, map[string]any{"type": "message_stop"})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+	response, err := backend.Complete(context.Background(), model.Request{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,8 +536,8 @@ func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 		<-request.Context().Done()
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{StreamIdleTimeout: 10 * time.Millisecond}, nil)
-	if !errors.Is(err, agent.ErrModelStreamIdle) {
+	_, err := backend.Complete(context.Background(), model.Request{StreamIdleTimeout: 10 * time.Millisecond}, nil)
+	if !errors.Is(err, model.ErrModelStreamIdle) {
 		t.Fatalf("error = %v", err)
 	}
 	<-started
@@ -558,7 +558,7 @@ func TestCompleteHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := backend.Complete(ctx, agent.ModelRequest{}, nil)
+		_, err := backend.Complete(ctx, model.Request{}, nil)
 		done <- err
 	}()
 	<-started
@@ -581,8 +581,8 @@ func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
 		})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "before message_stop") {
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
+	if !errors.Is(err, model.ErrProviderFailure) || !strings.Contains(err.Error(), "before message_stop") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -659,8 +659,8 @@ func TestCompleteRejectsMalformedStreamState(t *testing.T) {
 				}
 			}))
 			backend := newTestServerBackend(t, server, "")
-			_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-			if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) {
+			_, err := backend.Complete(context.Background(), model.Request{}, nil)
+			if !errors.Is(err, model.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want provider failure containing %q", err, test.want)
 			}
 		})
@@ -688,20 +688,20 @@ func TestBuildRequestUsesDefaultMaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{})
+	request, err := backend.buildRequest(model.Request{})
 	if err != nil || request.Model != "wire-model" || request.MaxTokens != defaultMaxTokens {
 		t.Fatalf("wire request/error = %#v/%v", request, err)
 	}
 }
 
 func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
-	items := []agent.Item{
-		{Kind: agent.ItemUserText, Text: "read the file"},
-		{Kind: agent.ItemAssistantText, ResponseID: "response_1", Text: "checking"},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+	items := []model.Item{
+		{Kind: model.ItemUserText, Text: "read the file"},
+		{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "checking"},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 			ID: "call_1", Name: "read_file", RawArguments: `{"path":"README.md"}`,
 		}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.TextContent("contents")}},
 	}
 
 	plain, err := plainRequest(newTestBackend(t, "http://example.invalid/v1"), items)
@@ -735,14 +735,14 @@ func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
 	}
 
 	// An empty turn has nothing to anchor a breakpoint to.
-	empty, err := backend.buildRequest(agent.ModelRequest{})
+	empty, err := backend.buildRequest(model.Request{})
 	if err != nil || breakpoints(empty) != 0 {
 		t.Fatalf("empty request/error = %#v/%v", empty, err)
 	}
 }
 
-func plainRequest(backend *Backend, items []agent.Item) (messagesRequest, error) {
-	return backend.buildRequest(agent.ModelRequest{Instructions: "instructions", Items: items})
+func plainRequest(backend *Backend, items []model.Item) (messagesRequest, error) {
+	return backend.buildRequest(model.Request{Instructions: "instructions", Items: items})
 }
 
 func breakpoints(request messagesRequest) int {
@@ -761,7 +761,7 @@ func TestNewRejectsNegativeMaxTokens(t *testing.T) {
 	if _, err := New(Config{
 		Provider: "test", Model: "model", MaxTokens: -1,
 		BaseURL: "http://example.invalid", Authorizer: APIKey("unused"),
-	}); !errors.Is(err, agent.ErrInvalidRequest) {
+	}); !errors.Is(err, model.ErrInvalidRequest) {
 		t.Fatalf("negative max tokens error = %v", err)
 	}
 }
@@ -816,9 +816,9 @@ func TestCompleteRejectsUnknownStopReason(t *testing.T) {
 		writeSSEEvent(t, writer, map[string]any{"type": "message_stop"})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||
 		!strings.Contains(err.Error(), "handed_off") {
 		t.Fatalf("unknown stop reason error = %v / %#v", err, providerErr)
 	}
@@ -827,7 +827,7 @@ func TestCompleteRejectsUnknownStopReason(t *testing.T) {
 func TestNormalizedStopReasonsHaveExpectedCompletionClassification(t *testing.T) {
 	for provider, normalized := range stopReasons {
 		wantIncomplete := normalized != "stop" && normalized != "tool_calls"
-		if got := agent.IsIncompleteStopReason(normalized); got != wantIncomplete {
+		if got := model.IsIncompleteStopReason(normalized); got != wantIncomplete {
 			t.Errorf("stop reason %q normalized to %q: incomplete = %v, want %v", provider, normalized, got, wantIncomplete)
 		}
 	}

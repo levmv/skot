@@ -22,6 +22,7 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
 	"github.com/levmv/skot/internal/privatefs"
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -315,7 +316,7 @@ func (manager *ProcessManager) Tools() []agent.Tool {
 	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory; defaults to the workspace. Use instead of cd. Relative paths start at the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
 	return []agent.Tool{
 		{
-			Spec: agent.ToolSpec{
+			Spec: model.ToolSpec{
 				Name:         "bash",
 				Description:  "Run Bash in a fresh shell with process-group cancellation, bounded output, and a hard timeout. Long commands become managed jobs. Non-zero exits are structured results, not tool errors. Check exit codes and investigate failures before continuing.",
 				InputSchema:  jsontext.Value(bashSchema),
@@ -324,7 +325,7 @@ func (manager *ProcessManager) Tools() []agent.Tool {
 			Run: manager.bash,
 		},
 		{
-			Spec: agent.ToolSpec{
+			Spec: model.ToolSpec{
 				Name:         "job",
 				Description:  "List, inspect, wait for, or stop managed Bash and configured program processes. Stop asks the supervisor to kill its payload and record the result.",
 				InputSchema:  jsontext.Value(`{"type":"object","properties":{"action":{"type":"string","enum":["list","output","wait","stop"]},"job_id":{"type":"string","description":"Required except for list."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"For wait: seconds to block. Defaults to 60."}},"required":["action"],"additionalProperties":false}`),
@@ -451,7 +452,7 @@ func (manager *ProcessManager) job(ctx context.Context, raw string) (agent.ToolO
 		if err != nil {
 			return agent.ToolOutput{}, err
 		}
-		return agent.ToolOutput{Content: agent.TextContent(content)}, nil
+		return agent.ToolOutput{Content: model.TextContent(content)}, nil
 	}
 	if action != "output" && action != "wait" && action != "stop" {
 		return agent.ToolOutput{}, errors.New("action must be one of: list, output, wait, stop")
@@ -700,7 +701,7 @@ func (manager *ProcessManager) Status(jobID string) (agent.ProcessResult, bool) 
 	return manager.processResult(job, job.snapshot(), true), true
 }
 
-func (manager *ProcessManager) StatusDetails(jobID string) ([]agent.Detail, bool) {
+func (manager *ProcessManager) StatusDetails(jobID string) ([]model.Detail, bool) {
 	result, ok := manager.Status(jobID)
 	if !ok {
 		return nil, false
@@ -709,7 +710,7 @@ func (manager *ProcessManager) StatusDetails(jobID string) ([]agent.Detail, bool
 	if err != nil {
 		return nil, false
 	}
-	return []agent.Detail{detail}, true
+	return []model.Detail{detail}, true
 }
 
 // PendingCompletionEvents reports jobs already registered with the manager.
@@ -743,7 +744,7 @@ func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []agent
 		event := agent.BoundaryEvent{JobID: job.id, FinishedAt: state.finishedAt, Content: content}
 		// Preserve the text notice even if its presentation details cannot be encoded.
 		if detail, err := agent.NewDetail(agent.ProcessResultDetailKind, result); err == nil {
-			event.Details = []agent.Detail{detail}
+			event.Details = []model.Detail{detail}
 		}
 		events = append(events, event)
 	}
@@ -1095,8 +1096,8 @@ func (manager *ProcessManager) result(job *processJob, options jobResultOptions)
 		return agent.ToolOutput{}, fmt.Errorf("encode process result: %w", err)
 	}
 	return agent.ToolOutput{
-		Content: agent.TextContent(formatJob(job.id, state, output, options)),
-		Details: []agent.Detail{detail},
+		Content: model.TextContent(formatJob(job.id, state, output, options)),
+		Details: []model.Detail{detail},
 	}, nil
 }
 

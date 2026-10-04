@@ -18,6 +18,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
+	"github.com/levmv/skot/model"
 )
 
 // TestIndependentApplicationsRunInOneProcess exercises app as an importing
@@ -231,13 +232,13 @@ func TestIndependentApplicationsRunInOneProcess(t *testing.T) {
 		if replayed.SessionID != states[index].SessionID || len(replayed.Blocks) != wantBlocks || len(replayed.ActiveRuns) != 0 || len(replayed.PendingTools) != 0 {
 			t.Fatalf("replayed child %d state = %#v", index, replayed)
 		}
-		wantUsage := agent.ModelUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}
+		wantUsage := model.TokenCounts{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}
 		wantStatuses := []agent.RunStatus{agent.RunCompleted}
 		switch index {
 		case 1:
 			wantStatuses = append(wantStatuses, agent.RunCancelled)
 		case 2:
-			wantUsage = agent.ModelUsage{InputTokens: 20, OutputTokens: 4, TotalTokens: 24}
+			wantUsage = model.TokenCounts{InputTokens: 20, OutputTokens: 4, TotalTokens: 24}
 			wantStatuses = append(wantStatuses, agent.RunCompleted)
 		}
 		if replayed.Usage != wantUsage {

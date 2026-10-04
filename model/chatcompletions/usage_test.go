@@ -8,20 +8,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestCompleteDistinguishesMissingZeroAndPartialUsage(t *testing.T) {
 	const answer = `{"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]}`
 	for _, test := range []struct {
 		name, before, after string
-		status              agent.UsageStatus
+		status              model.UsageStatus
 		known               bool
 	}{
-		{name: "missing", status: agent.UsageUnavailable},
-		{name: "null", after: `{"choices":[],"usage":null}`, status: agent.UsageUnavailable},
-		{name: "zero", after: `{"choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`, status: agent.UsageFinal, known: true},
-		{name: "earlier snapshot", before: `{"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}`, status: agent.UsagePartial, known: true},
+		{name: "missing", status: model.UsageUnavailable},
+		{name: "null", after: `{"choices":[],"usage":null}`, status: model.UsageUnavailable},
+		{name: "zero", after: `{"choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`, status: model.UsageFinal, known: true},
+		{name: "earlier snapshot", before: `{"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}`, status: model.UsagePartial, known: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -32,11 +32,11 @@ func TestCompleteDistinguishesMissingZeroAndPartialUsage(t *testing.T) {
 					}
 				}
 			}))
-			response, err := newTestServerBackend(t, server, "").Complete(t.Context(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
+			response, err := newTestServerBackend(t, server, "").Complete(t.Context(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			details := response.UsageDetails
+			details := response.Usage
 			if details.Status != test.status || (details.Tokens.InputTokens != nil) != test.known ||
 				details.Tokens.CachedInputTokens != nil || len(details.Costs) != 0 {
 				t.Fatalf("usage = %#v", details)
@@ -67,21 +67,21 @@ func TestCompleteKeepsOpenRouterReceiptWhenOutputIsRejected(t *testing.T) {
 			}))
 			backend := newTestServerBackend(t, server, "")
 			backend.provider = "openrouter"
-			response, err := backend.Complete(t.Context(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
+			response, err := backend.Complete(t.Context(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, nil)
 			if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
 				t.Fatalf("error = %v", err)
 			}
-			details := response.UsageDetails
-			if details.Status != agent.UsageFinal || details.RequestID != "req-1" || details.ResponseID != "gen-1" || details.Model != "actual-model" || details.Provider != "upstream" ||
-				response.Usage != (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 4, CacheWriteInputTokens: 2, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17}) {
+			details := response.Usage
+			if details.Status != model.UsageFinal || details.RequestID != "req-1" || details.ResponseID != "gen-1" || details.Model != "actual-model" || details.Provider != "upstream" ||
+				response.Usage.Tokens.Known() != (model.TokenCounts{InputTokens: 12, CachedInputTokens: 4, CacheWriteInputTokens: 2, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17}) {
 				t.Fatalf("receipt = %#v, counts = %#v", details, response.Usage)
 			}
-			costs := make(map[string]agent.ReportedCost)
+			costs := make(map[string]model.ReportedCost)
 			for _, cost := range details.Costs {
 				costs[cost.Kind] = cost
 			}
-			if len(details.Costs) != test.costCount || costs["account_charge"] != (agent.ReportedCost{Kind: "account_charge", Amount: amount, Currency: "USD"}) ||
-				(test.costCount == 2 && costs["upstream_inference"] != (agent.ReportedCost{Kind: "upstream_inference", Amount: "0", Currency: "USD"})) {
+			if len(details.Costs) != test.costCount || costs["account_charge"] != (model.ReportedCost{Kind: "account_charge", Amount: amount, Currency: "USD"}) ||
+				(test.costCount == 2 && costs["upstream_inference"] != (model.ReportedCost{Kind: "upstream_inference", Amount: "0", Currency: "USD"})) {
 				t.Fatalf("costs = %#v", details.Costs)
 			}
 		})
@@ -97,9 +97,9 @@ func TestCompleteKeepsPartialUsageOnCancellation(t *testing.T) {
 		writer.(http.Flusher).Flush()
 		<-request.Context().Done()
 	}))
-	response, err := newTestServerBackend(t, server, "").Complete(ctx, agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, func(agent.ModelStreamEvent) { cancel() })
-	if err == nil || response.UsageDetails.Status != agent.UsagePartial || response.UsageDetails.ResponseID != "gen-1" ||
-		response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}) {
+	response, err := newTestServerBackend(t, server, "").Complete(ctx, model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, func(model.StreamEvent) { cancel() })
+	if err == nil || response.Usage.Status != model.UsagePartial || response.Usage.ResponseID != "gen-1" ||
+		response.Usage.Tokens.Known() != (model.TokenCounts{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}) {
 		t.Fatalf("cancelled response = %#v, %v", response, err)
 	}
 }

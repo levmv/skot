@@ -16,16 +16,17 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/toolpolicy"
+	modelapi "github.com/levmv/skot/model"
 )
 
 type fakeAgent struct {
 	state            agent.State
 	queued           []string
-	shellResult      agent.ToolResult
+	shellResult      modelapi.ToolResult
 	shellErr         error
 	shellCommand     string
 	shellPrivate     bool
-	status           []agent.Detail
+	status           []modelapi.Detail
 	statusFound      bool
 	toolSet          string
 	toolSets         []string
@@ -111,19 +112,19 @@ func (fake *fakeAgent) QueuedInputs() []string {
 
 func (fake *fakeAgent) State(context.Context) (agent.State, error) { return fake.state, nil }
 
-func (fake *fakeAgent) RunShell(_ context.Context, command string) (agent.ToolResult, error) {
+func (fake *fakeAgent) RunShell(_ context.Context, command string) (modelapi.ToolResult, error) {
 	fake.shellCommand = command
 	fake.shellPrivate = false
 	return fake.shellResult, fake.shellErr
 }
 
-func (fake *fakeAgent) RunPrivateShell(_ context.Context, command string) (agent.ToolResult, error) {
+func (fake *fakeAgent) RunPrivateShell(_ context.Context, command string) (modelapi.ToolResult, error) {
 	fake.shellCommand = command
 	fake.shellPrivate = true
 	return fake.shellResult, fake.shellErr
 }
 
-func (fake *fakeAgent) ToolStatus(string) ([]agent.Detail, bool) {
+func (fake *fakeAgent) ToolStatus(string) ([]modelapi.Detail, bool) {
 	return fake.status, fake.statusFound
 }
 
@@ -179,15 +180,15 @@ func (fake *fakeAgent) SwitchModelWithContextWindow(_ context.Context, model, ef
 	changed := fake.model != model || fake.reasoningEffort != effort || fake.modelAPI != api ||
 		fake.modelContext != contextWindow
 	err := fake.modelErr
-	if app.IsModelAPIRequired(err) {
+	if modelapi.IsAPIRequired(err) {
 		// The refusal stands until the caller supplies the protocol, exactly as
 		// the application refuses an undeclared mixed-protocol route.
 		if api == "" {
 			return err
 		}
-		err = &app.ModelContextWindowRequiredError{URI: model}
+		err = &modelapi.ContextWindowRequiredError{URI: model}
 	}
-	if app.IsModelContextWindowRequired(err) {
+	if modelapi.IsContextWindowRequired(err) {
 		if contextWindow == 0 {
 			return err
 		}
@@ -1080,11 +1081,11 @@ func TestTranscriptTracksDirtyRenderedSuffix(t *testing.T) {
 }
 
 func TestSessionHistorySeedsTranscriptAndInputHistory(t *testing.T) {
-	fake := &fakeAgent{state: agent.State{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "hello"},
-		{Kind: agent.ItemReasoning, Text: "private summary", ProviderData: []agent.ProviderData{{Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"opaque-secret"}`)}}},
-		{Kind: agent.ItemBoundaryText, Text: "Background job job-1 completed."},
-		{Kind: agent.ItemAssistantText, Text: "hi"},
+	fake := &fakeAgent{state: agent.State{Items: []modelapi.Item{
+		{Kind: modelapi.ItemUserText, Text: "hello"},
+		{Kind: modelapi.ItemReasoning, Text: "private summary", ProviderData: []modelapi.ProviderData{{Kind: "responses.reasoning_item", Data: jsontext.Value(`{"encrypted_content":"opaque-secret"}`)}}},
+		{Kind: modelapi.ItemBoundaryText, Text: "Background job job-1 completed."},
+		{Kind: modelapi.ItemAssistantText, Text: "hi"},
 	}}}
 	model := testScreenModel(t, fake)
 
@@ -1280,8 +1281,8 @@ func TestSettingNoticeNamesTheTransitionOnlyWhenItChanged(t *testing.T) {
 func TestNoticesArePaddedWithoutDoubleBlankLines(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.resize(60, 30)
-	model.addToolCall(agent.ToolCall{ID: "c1", Name: "bash", RawArguments: `{"command":"go build"}`})
-	model.addToolCall(agent.ToolCall{ID: "c2", Name: "bash", RawArguments: `{"command":"go vet"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "c1", Name: "bash", RawArguments: `{"command":"go build"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "c2", Name: "bash", RawArguments: `{"command":"go vet"}`})
 	model.addBlock(screenBlockAssistant, "Done.")
 	model.appendBlock(screenBlock{kind: screenBlockDuration, duration: 3 * time.Second})
 	model.addBlock(screenBlockSystem, "tools: default")

@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -19,31 +21,31 @@ import (
 func Open(ctx context.Context, config Config) (*Application, error) {
 	build := currentBuildSnapshot(config.Version)
 	if config.RetryBudget < 0 {
-		return nil, agent.MarkInvalidRequest(errors.New("retry budget cannot be negative"))
+		return nil, model.MarkInvalidRequest(errors.New("retry budget cannot be negative"))
 	}
 	if config.StreamIdleTimeout < 0 {
-		return nil, agent.MarkInvalidRequest(errors.New("stream idle timeout cannot be negative"))
+		return nil, model.MarkInvalidRequest(errors.New("stream idle timeout cannot be negative"))
 	}
 	if config.MaxToolIterations < -1 {
-		return nil, agent.MarkInvalidRequest(errors.New("max tool iterations must be positive or -1 for unlimited"))
+		return nil, model.MarkInvalidRequest(errors.New("max tool iterations must be positive or -1 for unlimited"))
 	}
 	if config.ContextWindow < 0 {
-		return nil, agent.MarkInvalidRequest(errors.New("model context window cannot be negative"))
+		return nil, model.MarkInvalidRequest(errors.New("model context window cannot be negative"))
 	}
 	config.RetryBudget = effectiveRetryBudget(config.RetryBudget)
 	config.StreamIdleTimeout = effectiveStreamIdleTimeout(config.StreamIdleTimeout)
 	config.MaxToolIterations = effectiveMaxToolIterations(config.MaxToolIterations)
 	if config.Resume && strings.TrimSpace(config.JournalPath) != "" {
-		return nil, agent.MarkInvalidRequest(errors.New("resume cannot be combined with a journal path"))
+		return nil, model.MarkInvalidRequest(errors.New("resume cannot be combined with a journal path"))
 	}
 	if config.Resume && config.SaveSession {
-		return nil, agent.MarkInvalidRequest(errors.New("resume cannot be combined with save session"))
+		return nil, model.MarkInvalidRequest(errors.New("resume cannot be combined with save session"))
 	}
-	modelAPIOverride, err := parseModelAPI(config.ModelAPI)
+	modelAPIOverride, err := modelconfig.ParseAPI(config.ModelAPI)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
+		return nil, model.MarkInvalidRequest(err)
 	}
-	home, err := ResolveHome(config.Home)
+	home, err := state.ResolveHome(config.Home)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +60,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	root, err := workspacetools.ResolveWorkspaceRoot(config.Root)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
+		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
 	}
 	var notices []string
 	theme := state.ThemeAuto
@@ -105,13 +107,13 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	scope, err := workspacetools.NormalizeScope(config.Scope)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
+		return nil, model.MarkInvalidRequest(err)
 	}
 	config.Scope = string(scope)
 
 	layers, pathNotices, err := resolveFilesystemLayers(root, config.AddedPaths, config.ProtectedPaths, settings.ProtectedPaths, workspaceSettings)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
+		return nil, model.MarkInvalidRequest(err)
 	}
 	notices = append(notices, pathNotices...)
 
@@ -119,25 +121,25 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	security := newSecurityState(scope, layers.additions.Paths(), layers.protection.Paths())
 	access, err := workspacetools.NewFilesystemAccess(root, security.Scope, layers.additions, layers.protection)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize filesystem policy: %w", err))
+		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize filesystem policy: %w", err))
 	}
 	catalog, _, err := workspacetools.NewWorkspaceToolsWithAccess(access)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
+		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize workspace tools: %w", err))
 	}
 	instructions, err := loadEffectiveInstructions(config.SystemPrompt, config.SystemPromptExplicit, root, layers.protection)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
+		return nil, model.MarkInvalidRequest(fmt.Errorf("load project instructions: %w", err))
 	}
 	processes, err := workspacetools.NewProcessManagerWithAccess(access, home, "")
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
+		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
 	resources := &openResources{processes: processes}
-	processes.HideModelEnvironment(credentialEnvironmentNames()...)
+	processes.HideModelEnvironment(modelconfig.CredentialEnvironmentNames()...)
 	children, err := newChildSupervisor(home, settings.AgentModels, config.AgentModels)
 	if err != nil {
-		return resources.fail(agent.MarkInvalidRequest(err))
+		return resources.fail(model.MarkInvalidRequest(err))
 	}
 	resources.children = children
 	catalog = append(catalog, children.tool())
@@ -148,7 +150,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes, builtInOptions)
 	if err != nil {
-		return resources.fail(agent.MarkInvalidRequest(err))
+		return resources.fail(model.MarkInvalidRequest(err))
 	}
 	catalog = builtCatalog.tools
 	toolSets := builtCatalog.toolSets
@@ -158,7 +160,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		selectedToolSet, err = toolSets.Normalize(ToolSetDefault)
 	}
 	if err != nil {
-		return resources.fail(agent.MarkInvalidRequest(err))
+		return resources.fail(model.MarkInvalidRequest(err))
 	}
 	config.ToolSet = selectedToolSet
 	if config.Interactive || toolSetNeedsProcessBoundary(toolSets, builtCatalog.programDeclarations, config.ToolSet) {
@@ -166,12 +168,12 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		if security.Scope == workspacetools.ScopeWorkspace {
 			toolHome, err = processes.ToolHome()
 			if err != nil {
-				return resources.fail(agent.MarkInvalidRequest(err))
+				return resources.fail(model.MarkInvalidRequest(err))
 			}
 		}
 		security = buildProcessSecurityState(ctx, security, root, toolHome)
 		if err := validateSecurity(security); err != nil {
-			return resources.fail(agent.MarkInvalidRequest(err))
+			return resources.fail(model.MarkInvalidRequest(err))
 		}
 	}
 	catalog, programSnapshots, err := bindProgramToolsForSet(
@@ -179,7 +181,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		builtCatalog.programToolsFile, processes,
 	)
 	if err != nil {
-		return resources.fail(agent.MarkInvalidRequest(err))
+		return resources.fail(model.MarkInvalidRequest(err))
 	}
 
 	memorySession := freshHeadlessMemorySession(config, toolSets)
@@ -227,7 +229,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		selectionContext = rememberedContextWindow
 		notices = append(notices, rememberedNotices...)
 	}
-	var knownModel *agent.ModelInfo
+	var knownModel *model.Info
 	if resumedState != nil {
 		if modelInfo, ok := restoredModelInfo(*resumedState, config.ModelURI); ok {
 			knownModel = &modelInfo
@@ -239,7 +241,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		contextWindow:     config.ContextWindow,
 		credentials:       settingsStore,
 		masker:            masker,
-		metadataLookup:    openRouterContextWindow,
+		metadataLookup:    modelconfig.OpenRouterContextWindow,
 		tools:             catalog,
 		programTools:      programSnapshots,
 		applicationBuild:  build,
@@ -261,8 +263,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		modelSelectionAPI: modelSelectionAPI,
 		selectionContext:  selectionContext,
 		instructions:      instructions,
-		modelOptions: modelBackendOptions{
-			requireCredential: !config.Interactive,
+		modelOptions: modelconfig.BackendOptions{
+			RequireCredential: !config.Interactive,
 		},
 		resumedState: resumedState,
 		knownModel:   knownModel,
@@ -274,7 +276,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	config.ReasoningEffort = modelInfo.ReasoningEffort
 	if err := children.configure(builder, instructions, config.ModelURI, config.ReasoningEffort,
 		buildParams.selectionAPI(), buildParams.selectionContextWindow()); err != nil {
-		return resources.fail(agent.MarkInvalidRequest(err))
+		return resources.fail(model.MarkInvalidRequest(err))
 	}
 	if err := children.Preload(ctx, runtimeSessionID); err != nil {
 		return resources.fail(fmt.Errorf("load child agents: %w", err))
@@ -310,7 +312,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			baseURL:                  config.BaseURL,
 			modelAPI:                 modelAPIOverride,
 			contextWindow:            config.ContextWindow,
-			metadataLookup:           openRouterContextWindow,
+			metadataLookup:           modelconfig.OpenRouterContextWindow,
 			retryBudget:              config.RetryBudget,
 			streamIdleTimeout:        config.StreamIdleTimeout,
 			maxToolIterations:        config.MaxToolIterations,
@@ -337,7 +339,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 // applyRememberedModelPreference resolves the interactive model fallback. A
 // workspace record is a deliberate choice for that workspace and wins; the
 // shared last selection only fills in for a workspace which has never made one.
-func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelAPI) (string, int, []string) {
+func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelconfig.API) (string, int, []string) {
 	if config.ModelExplicit {
 		return "", 0, nil
 	}
@@ -353,7 +355,7 @@ func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSet
 
 // kind and root name the invalid value in a notice: a workspace preference is
 // reported with the path whose record must be corrected.
-func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelAPI) (string, int, []string) {
+func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelconfig.API) (string, int, []string) {
 	if strings.TrimSpace(preference.Model) == "" {
 		return "", 0, nil
 	}
@@ -365,16 +367,16 @@ func applyModelPreference(config *Config, preference state.ModelPreference, kind
 	if !config.ReasoningEffortExplicit && preference.ReasoningEffort != nil {
 		effort = *preference.ReasoningEffort
 	}
-	selectionAPI := string(selectionModelAPI(preference.Model, preference.ModelAPI))
-	selectionContextWindow := selectionModelContextWindow(preference.Model, preference.ContextWindow)
+	selectionAPI := string(modelconfig.SelectionAPI(preference.Model, preference.ModelAPI))
+	selectionContextWindow := modelconfig.SelectionContextWindow(preference.Model, preference.ContextWindow)
 	if config.ReasoningEffortExplicit {
 		config.ModelURI = preference.Model
 		return selectionAPI, selectionContextWindow, nil
 	}
-	overrides := modelRouteOverrides{
+	overrides := modelconfig.Overrides{
 		BaseURL: config.BaseURL, API: api, ContextWindow: config.ContextWindow,
-	}.withSelection(preference.Model, selectionAPI, selectionContextWindow)
-	_, err := resolveModelRoute(preference.Model, effort, overrides, modelRouteEnrichment{})
+	}.WithSelection(preference.Model, selectionAPI, selectionContextWindow)
+	_, err := modelconfig.Resolve(preference.Model, effort, overrides, modelconfig.Enrichment{})
 	if err == nil {
 		config.ModelURI = preference.Model
 		config.ReasoningEffort = effort
@@ -382,7 +384,7 @@ func applyModelPreference(config *Config, preference state.ModelPreference, kind
 	}
 	// A remembered effort the route rejects must not disqualify the model itself.
 	if preference.ReasoningEffort != nil {
-		if _, fallbackErr := resolveModelRoute(preference.Model, "", overrides, modelRouteEnrichment{}); fallbackErr == nil {
+		if _, fallbackErr := modelconfig.Resolve(preference.Model, "", overrides, modelconfig.Enrichment{}); fallbackErr == nil {
 			config.ModelURI = preference.Model
 			config.ReasoningEffort = ""
 			return selectionAPI, selectionContextWindow, []string{fmt.Sprintf("invalid %s reasoning_effort %q%s; ignored: %v", kind, effort, location, err)}

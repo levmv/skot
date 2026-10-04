@@ -1,4 +1,4 @@
-package agent
+package model
 
 import (
 	"bytes"
@@ -11,9 +11,8 @@ import (
 )
 
 // Content is the provider-neutral, model-visible payload of a tool result.
-// Text-only content keeps its historical JSON string representation; content
-// containing media is encoded as tagged parts. This lets existing journals
-// replay without maintaining a second in-memory representation.
+// Text-only content is encoded as a JSON string; content containing images
+// is encoded as an array of tagged parts.
 type Content []ContentPart
 
 type ContentPartKind string
@@ -29,9 +28,7 @@ type ContentPart struct {
 	Image *ImageContent   `json:"image,omitzero"`
 }
 
-// ImageContent contains request-ready bytes. The filesystem path and any
-// source dimensions belong in an adjacent text part rather than this reusable
-// provider-neutral value.
+// ImageContent contains PNG or JPEG bytes and their dimensions.
 type ImageContent struct {
 	MediaType string `json:"media_type"`
 	Data      []byte `json:"data"`
@@ -57,9 +54,7 @@ func ImageToolContent(text string, image ImageContent) Content {
 	}
 }
 
-// Text concatenates text parts in order. Images deliberately contribute no
-// synthetic prose: producers and projections add an explicit descriptive
-// marker when the model or UI needs one.
+// Text concatenates text parts in order, ignoring images.
 func (content Content) Text() string {
 	var text strings.Builder
 	for _, part := range content {
@@ -95,28 +90,8 @@ func (content Content) Clone() Content {
 	return cloned
 }
 
-// cloneContentForProjection owns the part and image headers while sharing the
-// immutable bytes established by normalizeContent. Request projection changes
-// part structure and text only; copying image payloads on every context report
-// and model request would add no isolation.
-func cloneContentForProjection(content Content) Content {
-	if content == nil {
-		return nil
-	}
-	cloned := make(Content, len(content))
-	for index, part := range content {
-		cloned[index] = part
-		if part.Image != nil {
-			image := *part.Image
-			cloned[index].Image = &image
-		}
-	}
-	return cloned
-}
-
-// WithoutImages replaces every image with marker while preserving the order
-// of surrounding text. It is used only for request projection; the journaled
-// canonical content remains unchanged.
+// WithoutImages returns content with images replaced by marker text, preserving
+// the order of surrounding text. A nil marker uses "[image omitted]".
 func (content Content) WithoutImages(marker func(ImageContent) string) Content {
 	projected := make(Content, 0, len(content))
 	for _, part := range content {
@@ -133,12 +108,10 @@ func (content Content) WithoutImages(marker func(ImageContent) string) Content {
 	return projected
 }
 
-// MarshalJSON preserves the schema-v3 string shape for text-only results. It
-// also validates at the final journal serialization boundary, so an invalid
-// value cannot be written in a form which replay would later reject. A tagged
-// array is required only when part ordering or media carries semantics.
+// MarshalJSON validates content and encodes text as a string or mixed content
+// as an array of parts.
 func (content Content) MarshalJSON() ([]byte, error) {
-	normalized, err := normalizeContent(content)
+	normalized, err := NormalizeContent(content)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +142,7 @@ func (content *Content) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &parts); err != nil {
 		return err
 	}
-	normalized, err := normalizeContent(Content(parts))
+	normalized, err := NormalizeContent(Content(parts))
 	if err != nil {
 		return err
 	}
@@ -177,7 +150,8 @@ func (content *Content) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func normalizeContent(content Content) (Content, error) {
+// NormalizeContent validates text and image parts and returns an owned copy.
+func NormalizeContent(content Content) (Content, error) {
 	if len(content) > maxContentParts {
 		return nil, fmt.Errorf("content has %d parts, limit is %d", len(content), maxContentParts)
 	}

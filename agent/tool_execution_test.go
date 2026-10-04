@@ -10,6 +10,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testing.T) {
@@ -18,14 +20,14 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 	finished := make(chan string, 2)
 	release := map[string]chan struct{}{"first": make(chan struct{}), "second": make(chan struct{})}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"first"}`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"second"}`}},
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{"value":"first"}`}},
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{"value":"second"}`}},
 			}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			var results []*ToolResult
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			var results []*modelapi.ToolResult
 			for _, item := range request.Items {
 				if item.ToolResult != nil {
 					results = append(results, item.ToolResult)
@@ -35,11 +37,11 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 				results[1].Content.Text() != "second failed �" || !results[1].Error {
 				t.Fatalf("model tool results = %#v", results)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
+		Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(_ context.Context, raw string) (ToolOutput, error) {
 			var args struct {
 				Value string `json:"value"`
@@ -54,7 +56,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 			if name == "second" {
 				return ToolOutput{}, errors.New("second failed \xff")
 			}
-			return ToolOutput{Content: TextContent(name)}, nil
+			return ToolOutput{Content: modelapi.TextContent(name)}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
@@ -87,7 +89,7 @@ func TestRuntimeExecutesParallelSafeCallsConcurrentlyAndCommitsInOrder(t *testin
 		t.Fatalf("run outcome = %#v, %v", outcome.result, outcome.err)
 	}
 
-	var committed []ToolResult
+	var committed []modelapi.ToolResult
 	for _, record := range journal.snapshot() {
 		if record.Kind != RecordToolResult {
 			continue
@@ -111,19 +113,19 @@ func testRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 	started := make(chan string, 3)
 	releaseWrite := make(chan struct{})
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"before"}`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "write", RawArguments: `{}`}},
-				{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"after"}`}},
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{"value":"before"}`}},
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "write", RawArguments: `{}`}},
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{"value":"after"}`}},
 			}}, nil
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
 	read := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
+		Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(_ context.Context, raw string) (ToolOutput, error) {
 			var args struct {
 				Value string `json:"value"`
@@ -132,15 +134,15 @@ func testRuntimeKeepsUnsafeToolCallsAsSerialBarriers(t *testing.T) {
 				return ToolOutput{}, err
 			}
 			started <- "read:" + args.Value
-			return ToolOutput{Content: TextContent(raw)}, nil
+			return ToolOutput{Content: modelapi.TextContent(raw)}, nil
 		},
 	}
 	write := Tool{
-		Spec: ToolSpec{Name: "write", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "write", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			started <- "write"
 			<-releaseWrite
-			return ToolOutput{Content: TextContent("written")}, nil
+			return ToolOutput{Content: modelapi.TextContent("written")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{read, write}})
@@ -181,20 +183,20 @@ func testRuntimeBoundsParallelSafeFanout(t *testing.T) {
 	release := make(chan struct{})
 	var active atomic.Int32
 	var peak atomic.Int32
-	calls := make([]Item, callCount)
+	calls := make([]modelapi.Item, callCount)
 	for index := range calls {
-		calls[index] = Item{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: fmt.Sprintf(`{"index":%d}`, index)}}
+		calls[index] = modelapi.Item{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: fmt.Sprintf(`{"index":%d}`, index)}}
 	}
 	model := &scriptedModel{steps: []modelStep{
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: calls}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: calls}, nil
 		},
-		func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
+		Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			current := active.Add(1)
 			for previous := peak.Load(); current > previous && !peak.CompareAndSwap(previous, current); previous = peak.Load() {
@@ -202,7 +204,7 @@ func testRuntimeBoundsParallelSafeFanout(t *testing.T) {
 			started <- struct{}{}
 			<-release
 			active.Add(-1)
-			return ToolOutput{Content: TextContent("read")}, nil
+			return ToolOutput{Content: modelapi.TextContent("read")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}, Tools: []Tool{tool}})
@@ -233,14 +235,14 @@ func testRuntimeBoundsParallelSafeFanout(t *testing.T) {
 func TestRuntimeCancelsAllActiveParallelSafeCalls(t *testing.T) {
 	started := make(chan struct{}, 2)
 	stopped := make(chan struct{}, 2)
-	model := &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{
-			{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"first"}`}},
-			{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{"value":"second"}`}},
+	model := &scriptedModel{steps: []modelStep{func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{
+			{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{"value":"first"}`}},
+			{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{"value":"second"}`}},
 		}}, nil
 	}}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
+		Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 		Run: func(ctx context.Context, _ string) (ToolOutput, error) {
 			started <- struct{}{}
 			<-ctx.Done()

@@ -18,9 +18,11 @@ import (
 
 	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/privatefs"
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/toolpolicy"
+	modelapi "github.com/levmv/skot/model"
 )
 
 const (
@@ -76,7 +78,7 @@ type childRun struct {
 	Answer           string
 	Error            string
 	ToolLimitReached bool
-	Usage            agent.ModelUsage
+	Usage            modelapi.TokenCounts
 	StartedAt        time.Time
 	FinishedAt       time.Time
 	Delivered        bool
@@ -95,21 +97,21 @@ type childAgent struct {
 }
 
 type childSnapshot struct {
-	AgentID         string           `json:"agent_id"`
-	ParentSessionID string           `json:"parent_session_id"`
-	SessionID       string           `json:"session_id"`
-	State           string           `json:"state"`
-	Model           string           `json:"model"`
-	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
-	RunID           string           `json:"run_id,omitempty"`
-	RunStatus       agent.RunStatus  `json:"run_status,omitempty"`
-	Answer          string           `json:"-"`
-	Error           string           `json:"-"`
-	ToolLimit       bool             `json:"tool_limit_reached,omitzero"`
-	Usage           agent.ModelUsage `json:"usage"`
-	StartedAt       time.Time        `json:"started_at,omitzero"`
-	FinishedAt      time.Time        `json:"finished_at,omitzero"`
-	ResultDelivered bool             `json:"result_delivered,omitzero"`
+	AgentID         string               `json:"agent_id"`
+	ParentSessionID string               `json:"parent_session_id"`
+	SessionID       string               `json:"session_id"`
+	State           string               `json:"state"`
+	Model           string               `json:"model"`
+	ReasoningEffort string               `json:"reasoning_effort,omitempty"`
+	RunID           string               `json:"run_id,omitempty"`
+	RunStatus       agent.RunStatus      `json:"run_status,omitempty"`
+	Answer          string               `json:"-"`
+	Error           string               `json:"-"`
+	ToolLimit       bool                 `json:"tool_limit_reached,omitzero"`
+	Usage           modelapi.TokenCounts `json:"usage"`
+	StartedAt       time.Time            `json:"started_at,omitzero"`
+	FinishedAt      time.Time            `json:"finished_at,omitzero"`
+	ResultDelivered bool                 `json:"result_delivered,omitzero"`
 }
 
 // childSupervisor owns nested read-only sessions. It deliberately shares the
@@ -158,11 +160,11 @@ func newChildSupervisor(home string, configuredModels ...[]string) (*childSuperv
 }
 
 func normalizeChildModel(value string) (string, error) {
-	provider, model, err := parseModelURI(value)
+	provider, model, err := modelconfig.ParseURI(value)
 	if err != nil {
 		return "", err
 	}
-	if _, err := modelProviderSpec(provider); err != nil {
+	if _, err := modelconfig.Provider(provider); err != nil {
 		return "", err
 	}
 	return provider + "/" + model, nil
@@ -289,7 +291,7 @@ func cloneAgentScopeSnapshot(snapshot agent.ScopeSnapshot) agent.ScopeSnapshot {
 
 func (supervisor *childSupervisor) tool() agent.Tool {
 	return agent.Tool{
-		Spec: agent.ToolSpec{
+		Spec: modelapi.ToolSpec{
 			Name: "agent", Description: "Manage independent read-only child agents: start or continue them asynchronously, check or wait for results, or stop them.",
 			InputSchema: childAgentSchema,
 		},
@@ -353,7 +355,7 @@ func (supervisor *childSupervisor) runTool(ctx context.Context, raw string) (age
 }
 
 func decodeChildToolArgs(raw string, target *childToolArgs) error {
-	if err := agent.DecodeToolArguments(raw, target); err != nil {
+	if err := modelapi.DecodeToolArguments(raw, target); err != nil {
 		return err
 	}
 	target.Action = strings.ToLower(strings.TrimSpace(target.Action))
@@ -506,7 +508,7 @@ func (supervisor *childSupervisor) childModelLocked(requested string) (string, s
 	if _, allowed := supervisor.allowedModels[model]; !allowed {
 		return "", "", fmt.Errorf("model %q is not allowed for child agents; add it to agent_models", model)
 	}
-	effort, err := normalizeReasoningEffort(model, "")
+	effort, err := modelconfig.NormalizeReasoningEffort(model, "")
 	return model, effort, err
 }
 
@@ -547,7 +549,7 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 		journal: journal, sessionID: sessionID, modelURI: model, reasoningEffort: effort,
 		modelSelectionAPI: supervisor.selectionAPILocked(model),
 		selectionContext:  supervisor.selectionContextWindowLocked(model),
-		instructions:      supervisor.instructions, modelOptions: modelBackendOptions{requireCredential: true},
+		instructions:      supervisor.instructions, modelOptions: modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true},
 	})
 	if err != nil {
 		child := &childAgent{metadata: metadata, dir: stagingDir, journal: journal}
@@ -602,7 +604,7 @@ func (supervisor *childSupervisor) launchLocked(child *childAgent, prompt string
 		}
 		run.FinishedAt = time.Now().UTC()
 		if state, err := runtime.State(context.WithoutCancel(runCtx)); err == nil {
-			previous := agent.ModelUsage{}
+			previous := modelapi.TokenCounts{}
 			if len(child.runs) > 1 {
 				for _, earlier := range child.runs[:len(child.runs)-1] {
 					previous = previous.Add(earlier.Usage)
@@ -648,8 +650,8 @@ func publishNewChild(child *childAgent) error {
 	return nil
 }
 
-func subtractModelUsage(total, previous agent.ModelUsage) agent.ModelUsage {
-	return agent.ModelUsage{
+func subtractModelUsage(total, previous modelapi.TokenCounts) modelapi.TokenCounts {
+	return modelapi.TokenCounts{
 		InputTokens:           max(0, total.InputTokens-previous.InputTokens),
 		CachedInputTokens:     max(0, total.CachedInputTokens-previous.CachedInputTokens),
 		CacheWriteInputTokens: max(0, total.CacheWriteInputTokens-previous.CacheWriteInputTokens),
@@ -979,10 +981,10 @@ func restoreChildRuns(records []agent.Record, blocks []agent.ConversationBlock) 
 	return runs
 }
 
-func assistantReply(items []agent.Item) string {
+func assistantReply(items []modelapi.Item) string {
 	var parts []string
 	for _, item := range items {
-		if item.Kind == agent.ItemAssistantText && strings.TrimSpace(item.Text) != "" {
+		if item.Kind == modelapi.ItemAssistantText && strings.TrimSpace(item.Text) != "" {
 			parts = append(parts, strings.TrimSpace(item.Text))
 		}
 	}
@@ -1007,7 +1009,7 @@ func (supervisor *childSupervisor) HasChildren(parentID string) bool {
 	return len(supervisor.children[parentID]) != 0
 }
 
-func (supervisor *childSupervisor) Status(id string) ([]agent.Detail, bool) {
+func (supervisor *childSupervisor) Status(id string) ([]modelapi.Detail, bool) {
 	if !validChildAgentID(id) {
 		return nil, false
 	}
@@ -1019,7 +1021,7 @@ func (supervisor *childSupervisor) Status(id string) ([]agent.Detail, bool) {
 			if err != nil {
 				return nil, false
 			}
-			return []agent.Detail{detail}, true
+			return []modelapi.Detail{detail}, true
 		}
 	}
 	return nil, false
@@ -1065,7 +1067,7 @@ func (supervisor *childSupervisor) EventCommitted(eventID string) {
 	supervisor.markDelivered(agentID, runID)
 }
 
-func (supervisor *childSupervisor) ToolResultCommitted(result agent.ToolResult) {
+func (supervisor *childSupervisor) ToolResultCommitted(result modelapi.ToolResult) {
 	for _, detail := range result.Details {
 		if detail.Kind != childDetailKind {
 			continue
@@ -1133,15 +1135,15 @@ func childToolOutput(prefix string, snapshot childSnapshot) (agent.ToolOutput, e
 	if err != nil {
 		return agent.ToolOutput{}, err
 	}
-	return agent.ToolOutput{Content: agent.TextContent(content), Details: []agent.Detail{detail}}, nil
+	return agent.ToolOutput{Content: modelapi.TextContent(content), Details: []modelapi.Detail{detail}}, nil
 }
 
 func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
 	if len(snapshots) == 0 {
-		return agent.ToolOutput{Content: agent.TextContent("no child agents")}, nil
+		return agent.ToolOutput{Content: modelapi.TextContent("no child agents")}, nil
 	}
 	var output strings.Builder
-	var details []agent.Detail
+	var details []modelapi.Detail
 	remaining := maxChildResultBytes
 	for index, snapshot := range snapshots {
 		if index != 0 {
@@ -1175,7 +1177,7 @@ func snapshotsToolOutput(snapshots []childSnapshot) (agent.ToolOutput, error) {
 		}
 		details = append(details, detail)
 	}
-	return agent.ToolOutput{Content: agent.TextContent(output.String()), Details: details}, nil
+	return agent.ToolOutput{Content: modelapi.TextContent(output.String()), Details: details}, nil
 }
 
 func childResultText(status agent.RunStatus, answer, runError string) string {
@@ -1191,7 +1193,7 @@ func childResultText(status agent.RunStatus, answer, runError string) string {
 	return answer
 }
 
-func snapshotDetail(snapshot childSnapshot) (agent.Detail, error) {
+func snapshotDetail(snapshot childSnapshot) (modelapi.Detail, error) {
 	return agent.NewDetail(childDetailKind, snapshot)
 }
 

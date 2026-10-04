@@ -8,14 +8,16 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
-	var requests []ModelRequest
+	var requests []modelapi.Request
 	var requestsMu sync.Mutex
-	model := modelFunc(func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		requestsMu.Lock()
 		requestIndex := len(requests)
 		requests = append(requests, request)
@@ -23,14 +25,14 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 		if requestIndex == 0 {
 			close(firstStarted)
 			<-releaseFirst
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "read", RawArguments: `{}`}}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}}}}, nil
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "steered answer"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "steered answer"}}, StopReason: "stop"}, nil
 	})
 	tool := Tool{
-		Spec: ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent("contents")}, nil
+			return ToolOutput{Content: modelapi.TextContent("contents")}, nil
 		},
 	}
 	journal := &memoryJournal{}
@@ -59,14 +61,14 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 	}
 
 	requestsMu.Lock()
-	captured := append([]ModelRequest(nil), requests...)
+	captured := append([]modelapi.Request(nil), requests...)
 	requestsMu.Unlock()
 	if len(captured) != 2 {
 		t.Fatalf("model requests = %d", len(captured))
 	}
 	items := captured[1].Items
-	if len(items) < 2 || items[len(items)-2].Kind != ItemUserText || items[len(items)-2].Text != "first steering" ||
-		items[len(items)-1].Kind != ItemUserText || items[len(items)-1].Text != "second steering" {
+	if len(items) < 2 || items[len(items)-2].Kind != modelapi.ItemUserText || items[len(items)-2].Text != "first steering" ||
+		items[len(items)-1].Kind != modelapi.ItemUserText || items[len(items)-1].Text != "second steering" {
 		t.Fatalf("second request items = %#v", items)
 	}
 	state, err := Replay(journal.snapshot())
@@ -115,37 +117,39 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 	queuedInput := strings.Repeat("queued context ", 1_200)
 	normalizedQueuedInput := strings.TrimSpace(queuedInput)
 	model := &scriptedModel{
-		info: ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
+		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 20 * 1024},
 		steps: []modelStep{
-			func(_ context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				close(firstStarted)
 				<-releaseFirst
-				return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if !isCompactionRequest(request) || !itemsContainText(request.Items, "old context") ||
 					!itemsContainText(request.Items, "recent context") || itemsContainText(request.Items, "current work") ||
 					itemsContainText(request.Items, "queued context") {
 					t.Fatalf("model-boundary compaction request = %#v", request)
 				}
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "older work summarized"}}, StopReason: "stop"}, nil
 			},
-			func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				if request.Summary != "older work summarized" {
 					t.Fatalf("summary = %q", request.Summary)
 				}
 				if len(request.Items) < 2 || request.Items[0].Text != "current work" || request.Items[len(request.Items)-1].Text != normalizedQueuedInput {
 					t.Fatalf("post-compaction request = %#v", request.Items)
 				}
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "steered answer"}}, StopReason: "stop"}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "steered answer"}}, StopReason: "stop"}, nil
 			},
 		},
 	}
 	runtime := newTestRuntime(t, Config{
 		Backend: model, Journal: journal,
 		Tools: []Tool{{
-			Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
-			Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{Content: TextContent("ok")}, nil },
+			Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Run: func(context.Context, string) (ToolOutput, error) {
+				return ToolOutput{Content: modelapi.TextContent("ok")}, nil
+			},
 		}},
 	})
 	done := make(chan error, 1)
@@ -176,10 +180,10 @@ func TestQueuedInputTriggersCompactionBeforeNextModelRequest(t *testing.T) {
 func TestQueuedInputAfterFinalBoundaryRemainsClaimable(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	model := modelFunc(func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		close(started)
 		<-release
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	})
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: &memoryJournal{}})
 	done := make(chan error, 1)
@@ -217,10 +221,10 @@ func TestQueuedInputAfterFinalBoundaryRemainsClaimable(t *testing.T) {
 
 func TestCancellationKeepsUndeliveredQueuedInput(t *testing.T) {
 	started := make(chan struct{})
-	model := modelFunc(func(ctx context.Context, _ ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	model := modelFunc(func(ctx context.Context, _ modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		close(started)
 		<-ctx.Done()
-		return ModelResponse{}, ctx.Err()
+		return modelapi.Response{}, ctx.Err()
 	})
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})

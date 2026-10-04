@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestClearCommandStartsCleanSessionAndInvalidatesTranscript(t *testing.T) {
@@ -157,9 +158,9 @@ func TestResumePickerDefersSwitchAndLoadsSelectedHistoryBelowScrollback(t *testi
 	if cmd == nil || fake.resumeArg != "" {
 		t.Fatalf("session switched before picker frame: arg=%q cmd=%v", fake.resumeArg, cmd)
 	}
-	fake.state = agent.State{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "restored prompt"},
-		{Kind: agent.ItemAssistantText, Text: "restored answer"},
+	fake.state = agent.State{Items: []modelapi.Item{
+		{Kind: modelapi.ItemUserText, Text: "restored prompt"},
+		{Kind: modelapi.ItemAssistantText, Text: "restored answer"},
 	}}
 	message := cmd()
 	model, _ = model.update(message)

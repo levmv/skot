@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
+	modelapi "github.com/levmv/skot/model"
 )
 
 const (
@@ -36,13 +37,13 @@ type ConversationAgent interface {
 	PopQueued() (string, bool)
 	QueuedInputs() []string
 	State(context.Context) (agent.State, error)
-	ToolStatus(string) ([]agent.Detail, bool)
+	ToolStatus(string) ([]modelapi.Detail, bool)
 	Compact(context.Context) (agent.ContextCompactedRecord, error)
 }
 
 type ShellAgent interface {
-	RunShell(context.Context, string) (agent.ToolResult, error)
-	RunPrivateShell(context.Context, string) (agent.ToolResult, error)
+	RunShell(context.Context, string) (modelapi.ToolResult, error)
+	RunPrivateShell(context.Context, string) (modelapi.ToolResult, error)
 }
 
 // Agent is the complete screen-to-application boundary. ConversationAgent and
@@ -209,7 +210,7 @@ type transcriptRenderMsg struct{}
 type turnTickMsg struct{}
 
 type shellDoneMsg struct {
-	result agent.ToolResult
+	result modelapi.ToolResult
 	err    error
 }
 

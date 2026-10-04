@@ -6,28 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/levmv/skot/model"
 )
 
-func (runtime *Runtime) RunShell(ctx context.Context, command string) (ToolResult, error) {
+func (runtime *Runtime) RunShell(ctx context.Context, command string) (model.ToolResult, error) {
 	return runtime.runUserShell(ctx, command, true)
 }
 
-func (runtime *Runtime) RunPrivateShell(ctx context.Context, command string) (ToolResult, error) {
+func (runtime *Runtime) RunPrivateShell(ctx context.Context, command string) (model.ToolResult, error) {
 	return runtime.runUserShell(ctx, command, false)
 }
 
-func (runtime *Runtime) runUserShell(ctx context.Context, command string, journaled bool) (ToolResult, error) {
+func (runtime *Runtime) runUserShell(ctx context.Context, command string, journaled bool) (model.ToolResult, error) {
 	if !runtime.runMu.TryLock() {
-		return ToolResult{}, ErrRunActive
+		return model.ToolResult{}, ErrRunActive
 	}
 	defer runtime.runMu.Unlock()
 
 	command = strings.TrimSpace(command)
 	if command == "" {
-		return ToolResult{}, errors.New("shell command is required")
+		return model.ToolResult{}, errors.New("shell command is required")
 	}
 	if runtime.userShell == nil {
-		return ToolResult{}, errors.New("user shell is unavailable")
+		return model.ToolResult{}, errors.New("user shell is unavailable")
 	}
 	if !journaled {
 		return runtime.executeUserShell(ctx, "", command)
@@ -35,59 +37,59 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 
 	records, err := runtime.journal.Records(ctx)
 	if err != nil {
-		return ToolResult{}, fmt.Errorf("read journal: %w", err)
+		return model.ToolResult{}, fmt.Errorf("read journal: %w", err)
 	}
 	live, err := reduceRecords(records)
 	if err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	runtime.publishSessionStatus(live.state)
 	if live.state.hasUnfinishedWork() {
-		return ToolResult{}, unfinishedWorkError("running a shell command")
+		return model.ToolResult{}, unfinishedWorkError("running a shell command")
 	}
 	if err := runtime.prepareSession(ctx, live); err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 
 	runID, err := newID("run")
 	if err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	callID, err := newID("call")
 	if err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	responseID, err := newID("response")
 	if err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	arguments, err := json.Marshal(struct {
 		Command string `json:"command"`
 	}{Command: runtime.sanitize(command)}, json.Deterministic(true))
 	if err != nil {
-		return ToolResult{}, fmt.Errorf("encode shell command: %w", err)
+		return model.ToolResult{}, fmt.Errorf("encode shell command: %w", err)
 	}
 
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunStarted, RunStartedRecord{RunID: runID}); err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: "!" + runtime.sanitize(command)}); err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
-	call := ToolCall{ID: callID, Name: "bash", RawArguments: string(arguments)}
+	call := model.ToolCall{ID: callID, Name: "bash", RawArguments: string(arguments)}
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordModelResponse, ModelResponseRecord{
 		RunID:   runID,
 		Backend: live.state.Selection.Backend,
 		Model:   live.state.Selection.Model,
 		Epoch:   live.state.Selection.Epoch,
-		Items: []Item{{
-			Kind:       ItemToolCall,
+		Items: []model.Item{{
+			Kind:       model.ItemToolCall,
 			ResponseID: responseID,
 			ToolCall:   &call,
 		}},
 		StopReason: "user_shell",
 	}); err != nil {
-		return ToolResult{}, err
+		return model.ToolResult{}, err
 	}
 
 	result, runErr := runtime.executeUserShell(ctx, callID, command)
@@ -117,16 +119,16 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 	return result, runErr
 }
 
-func (runtime *Runtime) executeUserShell(ctx context.Context, callID, command string) (ToolResult, error) {
+func (runtime *Runtime) executeUserShell(ctx context.Context, callID, command string) (model.ToolResult, error) {
 	output, err := runtime.userShell(ctx, command)
 	details, detailErr := runtime.sanitizeOutputDetails(output.Details)
 	if detailErr != nil {
 		err = errors.Join(err, fmt.Errorf("invalid shell output: %w", detailErr))
 		details = nil
 	}
-	result := ToolResult{CallID: callID, Content: runtime.sanitizeContent(output.Content), Details: details, Error: err != nil}
+	result := model.ToolResult{CallID: callID, Content: runtime.sanitizeContent(output.Content), Details: details, Error: err != nil}
 	if err != nil && strings.TrimSpace(result.Content.Text()) == "" {
-		result.Content = TextContent(runtime.sanitize(err.Error()))
+		result.Content = model.TextContent(runtime.sanitize(err.Error()))
 	}
 	return result, sanitizeError(err, runtime.sanitize)
 }

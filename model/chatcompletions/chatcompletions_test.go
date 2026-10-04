@@ -16,7 +16,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestCompleteStreamsTextAndReasoning(t *testing.T) {
@@ -54,11 +54,11 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "/v1")
-	var events []agent.ModelStreamEvent
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
+	var events []model.StreamEvent
+	response, err := backend.Complete(context.Background(), model.Request{
 		Instructions: "be brief",
-		Items:        []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
-	}, func(event agent.ModelStreamEvent) {
+		Items:        []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
+	}, func(event model.StreamEvent) {
 		events = append(events, event)
 	})
 	if err != nil {
@@ -78,21 +78,21 @@ func TestCompleteStreamsTextAndReasoning(t *testing.T) {
 	if response.StopReason != "stop" {
 		t.Fatalf("stop reason = %q", response.StopReason)
 	}
-	if response.Usage != (agent.ModelUsage{
+	if response.Usage.Tokens.Known() != (model.TokenCounts{
 		InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17,
 	}) {
 		t.Fatalf("usage = %#v", response.Usage)
 	}
-	if got := response.Items; !reflect.DeepEqual(got, []agent.Item{
-		{Kind: agent.ItemReasoning, Text: "checking "},
-		{Kind: agent.ItemAssistantText, Text: "hello"},
+	if got := response.Items; !reflect.DeepEqual(got, []model.Item{
+		{Kind: model.ItemReasoning, Text: "checking "},
+		{Kind: model.ItemAssistantText, Text: "hello"},
 	}) {
 		t.Fatalf("items = %#v", got)
 	}
-	if got := events; !reflect.DeepEqual(got, []agent.ModelStreamEvent{
-		{Kind: agent.EventReasoningSummaryDelta, Text: "checking "},
-		{Kind: agent.EventTextDelta, Text: "hel"},
-		{Kind: agent.EventTextDelta, Text: "lo"},
+	if got := events; !reflect.DeepEqual(got, []model.StreamEvent{
+		{Kind: model.EventReasoningSummaryDelta, Text: "checking "},
+		{Kind: model.EventTextDelta, Text: "hel"},
+		{Kind: model.EventTextDelta, Text: "lo"},
 	}) {
 		t.Fatalf("events = %#v", got)
 	}
@@ -132,8 +132,8 @@ func TestCompleteAccumulatesToolCallDeltas(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "read it"}},
+	response, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "read it"}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -164,22 +164,22 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 
 	backend := newTestServerBackend(t, server, "")
 	backend.maxCompletionBytes = len(first)
-	var events []agent.ModelStreamEvent
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "continue forever"}},
-	}, func(event agent.ModelStreamEvent) {
+	var events []model.StreamEvent
+	response, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "continue forever"}},
+	}, func(event model.StreamEvent) {
 		events = append(events, event)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != agent.StopReasonOutputLimit {
+	if response.StopReason != model.StopReasonOutputLimit {
 		t.Fatalf("stop reason = %q", response.StopReason)
 	}
-	if got := response.Items; !reflect.DeepEqual(got, []agent.Item{{Kind: agent.ItemAssistantText, Text: "kept"}}) {
+	if got := response.Items; !reflect.DeepEqual(got, []model.Item{{Kind: model.ItemAssistantText, Text: "kept"}}) {
 		t.Fatalf("partial items = %#v", got)
 	}
-	if got := events; !reflect.DeepEqual(got, []agent.ModelStreamEvent{{Kind: agent.EventTextDelta, Text: "kept"}}) {
+	if got := events; !reflect.DeepEqual(got, []model.StreamEvent{{Kind: model.EventTextDelta, Text: "kept"}}) {
 		t.Fatalf("stream events = %#v", got)
 	}
 }
@@ -192,10 +192,10 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 
 	backend := newTestServerBackend(t, server, "")
 	backend.maxRequestBytes = 64
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) {
+	if !errors.Is(err, model.ErrInvalidRequest) || !errors.Is(err, model.ErrModelRequestTooLarge) {
 		t.Fatalf("error = %v", err)
 	}
 	if requests.Load() != 0 {
@@ -206,25 +206,25 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 func TestBuildRequestMapsProductCallIDBackToProviderID(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	providerID := jsontext.Value(`"provider_call_7"`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_1",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "read it"},
-			{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: &agent.ProviderContext{Backend: "chat_completions.test", Epoch: "epoch_1"}, Text: "need the file"},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+		Items: []model.Item{
+			{Kind: model.ItemUserText, Text: "read it"},
+			{Kind: model.ItemReasoning, ResponseID: "response_1", ProviderContext: &model.ProviderContext{Backend: "chat_completions.test", Epoch: "epoch_1"}, Text: "need the file"},
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID:           "call_local",
 				Name:         "read_file",
 				RawArguments: `{"path":"README.md"}`,
-				ProviderReferences: []agent.ProviderReference{{
+				ProviderReferences: []model.ProviderReference{{
 					Kind:    "chat_completions.test.call_id",
 					Backend: "chat_completions.test",
 					Epoch:   "epoch_1",
 					Data:    providerID,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("contents")}},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_local", Content: model.TextContent("contents")}},
 		},
-		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
+		Tools: []model.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -249,14 +249,14 @@ func TestBuildRequestMapsProductCallIDBackToProviderID(t *testing.T) {
 
 func TestBuildRequestGroupsImageToolResultsAfterAllToolMessages(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "inspect both"},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"one.png"}`}},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_2", Name: "read", RawArguments: `{"path":"two.jpg"}`}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.ImageToolContent("first", agent.ImageContent{
+	request, err := backend.buildRequest(model.Request{Items: []model.Item{
+		{Kind: model.ItemUserText, Text: "inspect both"},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"one.png"}`}},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{ID: "call_2", Name: "read", RawArguments: `{"path":"two.jpg"}`}},
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.ImageToolContent("first", model.ImageContent{
 			MediaType: "image/png", Data: []byte{1}, Width: 10, Height: 5,
 		})}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_2", Content: agent.ImageToolContent("second", agent.ImageContent{
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_2", Content: model.ImageToolContent("second", model.ImageContent{
 			MediaType: "image/jpeg", Data: []byte{2}, Width: 8, Height: 4,
 		})}},
 	}})
@@ -276,9 +276,9 @@ func TestBuildRequestGroupsImageToolResultsAfterAllToolMessages(t *testing.T) {
 
 func TestBuildRequestMapsBoundaryEventToSystemMessage(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "continue"},
-		{Kind: agent.ItemBoundaryText, Text: "Background job job-1 completed."},
+	request, err := backend.buildRequest(model.Request{Items: []model.Item{
+		{Kind: model.ItemUserText, Text: "continue"},
+		{Kind: model.ItemBoundaryText, Text: "Background job job-1 completed."},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -293,11 +293,11 @@ func TestBuildRequestMapsBoundaryEventToSystemMessage(t *testing.T) {
 
 func TestBuildRequestStripsReasoningFromOlderTurns(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "first"},
-		{Kind: agent.ItemReasoning, ResponseID: "response_1", Text: "old reasoning"},
-		{Kind: agent.ItemAssistantText, ResponseID: "response_1", Text: "first answer"},
-		{Kind: agent.ItemUserText, Text: "second"},
+	request, err := backend.buildRequest(model.Request{Items: []model.Item{
+		{Kind: model.ItemUserText, Text: "first"},
+		{Kind: model.ItemReasoning, ResponseID: "response_1", Text: "old reasoning"},
+		{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "first answer"},
+		{Kind: model.ItemUserText, Text: "second"},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -323,22 +323,22 @@ func TestBuildRequestKeepsDeepSeekReasoningFromAllTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned := &agent.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}
-	items := []agent.Item{
-		{Kind: agent.ItemUserText, Text: "first"},
-		{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool reasoning"},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+	owned := &model.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}
+	items := []model.Item{
+		{Kind: model.ItemUserText, Text: "first"},
+		{Kind: model.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool reasoning"},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 			ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`,
 		}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
-		{Kind: agent.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain reasoning"},
-		{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
-		{Kind: agent.ItemUserText, Text: "second"},
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.TextContent("contents")}},
+		{Kind: model.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain reasoning"},
+		{Kind: model.ItemAssistantText, ResponseID: "response_2", Text: "done"},
+		{Kind: model.ItemUserText, Text: "second"},
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_deepseek",
 		Items:         items,
-		Tools:         []agent.ToolSpec{{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)}},
+		Tools:         []model.ToolSpec{{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -349,7 +349,7 @@ func TestBuildRequestKeepsDeepSeekReasoningFromAllTurns(t *testing.T) {
 	if request.Messages[1].ReasoningContent != "tool reasoning" || request.Messages[3].ReasoningContent != "plain reasoning" {
 		t.Fatalf("deepseek reasoning projection = %#v", request.Messages)
 	}
-	if len(items) != 7 || items[4].Kind != agent.ItemReasoning || items[4].Text != "plain reasoning" {
+	if len(items) != 7 || items[4].Kind != model.ItemReasoning || items[4].Text != "plain reasoning" {
 		t.Fatalf("caller items were mutated: %#v", items)
 	}
 }
@@ -365,9 +365,9 @@ func TestBuildRequestUsesSessionAsOpenAIPromptCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		SessionID: "session_stable",
-		Items:     []agent.Item{{Kind: agent.ItemUserText, Text: "hello"}},
+		Items:     []model.Item{{Kind: model.ItemUserText, Text: "hello"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -384,8 +384,8 @@ func TestBuildRequestDoesNotInferOptionalFieldsFromProviderName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{
-		SessionID: "session_stable", Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hello"}},
+	request, err := backend.buildRequest(model.Request{
+		SessionID: "session_stable", Items: []model.Item{{Kind: model.ItemUserText, Text: "hello"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +396,7 @@ func TestBuildRequestDoesNotInferOptionalFieldsFromProviderName(t *testing.T) {
 	if _, err := New(Config{
 		Provider: "openrouter", Model: "model", ReasoningEffort: "high",
 		BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
-	}); !errors.Is(err, agent.ErrInvalidRequest) {
+	}); !errors.Is(err, model.ErrInvalidRequest) {
 		t.Fatalf("undeclared reasoning effort error = %v", err)
 	}
 }
@@ -424,7 +424,7 @@ func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := backend.buildRequest(agent.ModelRequest{})
+			request, err := backend.buildRequest(model.Request{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -454,7 +454,7 @@ func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 
 func TestBuildRequestOmitsDefaultReasoningEffort(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{})
+	request, err := backend.buildRequest(model.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestBuildRequestCanUseCanonicalAPIModelWithoutChangingSelection(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{})
+	request, err := backend.buildRequest(model.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,10 +486,10 @@ func TestBuildRequestCanUseCanonicalAPIModelWithoutChangingSelection(t *testing.
 
 func TestBuildRequestPlacesSummaryBeforeVerbatimMessages(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		Instructions: "instructions",
 		Summary:      "older work summary",
-		Items:        []agent.Item{{Kind: agent.ItemUserText, Text: "recent question"}},
+		Items:        []model.Item{{Kind: model.ItemUserText, Text: "recent question"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -503,18 +503,18 @@ func TestBuildRequestPlacesSummaryBeforeVerbatimMessages(t *testing.T) {
 func TestBuildRequestDropsMismatchedProviderMetadata(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	providerID := jsontext.Value(`"provider_call_old"`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_new",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "first"},
-			{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: &agent.ProviderContext{Backend: "chat_completions.test", Epoch: "epoch_old"}, Text: "old reasoning"},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+		Items: []model.Item{
+			{Kind: model.ItemUserText, Text: "first"},
+			{Kind: model.ItemReasoning, ResponseID: "response_1", ProviderContext: &model.ProviderContext{Backend: "chat_completions.test", Epoch: "epoch_old"}, Text: "old reasoning"},
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID: "call_local", Name: "read", RawArguments: `{}`,
-				ProviderReferences: []agent.ProviderReference{{
+				ProviderReferences: []model.ProviderReference{{
 					Kind: "chat_completions.test.call_id", Backend: "chat_completions.test", Epoch: "epoch_old", Data: providerID,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_local", Content: agent.TextContent("done")}},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_local", Content: model.TextContent("done")}},
 		},
 	})
 	if err != nil {
@@ -533,17 +533,17 @@ func TestCompleteReturnsProviderHTTPError(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 429") || !strings.Contains(err.Error(), "slow down") {
 		t.Fatalf("error = %v", err)
 	}
-	if !errors.Is(err, agent.ErrProviderFailure) {
+	if !errors.Is(err, model.ErrProviderFailure) {
 		t.Fatalf("429 class = %v", err)
 	}
-	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorRateLimit ||
+	var providerErr *model.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorRateLimit ||
 		providerErr.Code != "" || providerErr.Type != "rate_limit" || !providerErr.Retryable || providerErr.RetryAfter != 7*time.Second {
 		t.Fatalf("429 provider metadata = %#v", providerErr)
 	}
@@ -563,11 +563,11 @@ func TestCompleteClassifiesDeepSeekQuotaCodeBeforeHTTP429(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	_, err = backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable ||
+	var providerErr *model.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorQuota || providerErr.Retryable ||
 		providerErr.Code != "insufficient_quota" || providerErr.Type != "rate_limit_error" {
 		t.Fatalf("quota provider metadata = %#v (%v)", providerErr, err)
 	}
@@ -580,10 +580,10 @@ func TestCompleteClassifiesPaymentRequiredAsNonRetryableProviderFailure(t *testi
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || errors.Is(err, agent.ErrInvalidRequest) ||
-		!errors.As(err, &providerErr) || providerErr.Kind != agent.ProviderErrorQuota || providerErr.Retryable {
+	_, err := backend.Complete(context.Background(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, nil)
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || errors.Is(err, model.ErrInvalidRequest) ||
+		!errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorQuota || providerErr.Retryable {
 		t.Fatalf("402 class/metadata = %v / %#v", err, providerErr)
 	}
 }
@@ -595,12 +595,12 @@ func TestCompleteClassifiesStructuredStreamContextLimit(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
-		providerErr.Kind != agent.ProviderErrorRequestTooLarge || providerErr.Type != "request_too_large" ||
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != model.ProviderErrorRequestTooLarge || providerErr.Type != "request_too_large" ||
 		providerErr.StatusCode != 0 || providerErr.Retryable || strings.Contains(err.Error(), "HTTP 0") {
 		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
@@ -615,10 +615,10 @@ func TestCompleteTimesOutIdleStream(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 20 * time.Millisecond,
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 20 * time.Millisecond,
 	}, nil)
-	if !errors.Is(err, agent.ErrModelStreamIdle) || !errors.Is(err, agent.ErrProviderFailure) {
+	if !errors.Is(err, model.ErrModelStreamIdle) || !errors.Is(err, model.ErrProviderFailure) {
 		t.Fatalf("idle stream error = %v", err)
 	}
 }
@@ -652,8 +652,8 @@ func testCompleteKeepsStreamAliveThroughComments(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 3 * interval,
+	response, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}, StreamIdleTimeout: 3 * interval,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -670,11 +670,11 @@ func TestCompleteClassifiesBadRequestAsNonRetryableProviderFailure(t *testing.T)
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || errors.Is(err, agent.ErrInvalidRequest) || !errors.As(err, &providerErr) || providerErr.Retryable {
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || errors.Is(err, model.ErrInvalidRequest) || !errors.As(err, &providerErr) || providerErr.Retryable {
 		t.Fatalf("400 class/metadata = %v / %#v", err, providerErr)
 	}
 }
@@ -726,18 +726,18 @@ func projectionTestBackend(t *testing.T, policy ReasoningReplayPolicy) *Backend 
 	return backend
 }
 
-func projectionTestHistory() []agent.Item {
-	owned := &agent.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}
-	return []agent.Item{
-		{Kind: agent.ItemUserText, Text: "first"},
-		{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool thinking"},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{}`}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
-		{Kind: agent.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain thinking"},
-		{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
-		{Kind: agent.ItemUserText, Text: "second"},
-		{Kind: agent.ItemReasoning, ResponseID: "response_3", ProviderContext: owned, Text: "current thinking"},
-		{Kind: agent.ItemAssistantText, ResponseID: "response_3", Text: "answer"},
+func projectionTestHistory() []model.Item {
+	owned := &model.ProviderContext{Backend: "chat_completions.deepseek", Epoch: "epoch_deepseek"}
+	return []model.Item{
+		{Kind: model.ItemUserText, Text: "first"},
+		{Kind: model.ItemReasoning, ResponseID: "response_1", ProviderContext: owned, Text: "tool thinking"},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{ID: "call_1", Name: "read", RawArguments: `{}`}},
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.TextContent("contents")}},
+		{Kind: model.ItemReasoning, ResponseID: "response_2", ProviderContext: owned, Text: "plain thinking"},
+		{Kind: model.ItemAssistantText, ResponseID: "response_2", Text: "done"},
+		{Kind: model.ItemUserText, Text: "second"},
+		{Kind: model.ItemReasoning, ResponseID: "response_3", ProviderContext: owned, Text: "current thinking"},
+		{Kind: model.ItemAssistantText, ResponseID: "response_3", Text: "answer"},
 	}
 }
 
@@ -754,10 +754,10 @@ func TestProjectModelItemsAppliesRouteReplayPolicy(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			history := projectionTestHistory()
-			projected := projectionTestBackend(t, test.policy).ProjectModelItems(append([]agent.Item(nil), history...))
+			projected := projectionTestBackend(t, test.policy).ProjectModelItems(append([]model.Item(nil), history...))
 			var got []string
 			for _, item := range projected {
-				if item.Kind == agent.ItemReasoning {
+				if item.Kind == model.ItemReasoning {
 					got = append(got, item.Text)
 				}
 			}
@@ -779,7 +779,7 @@ func TestProjectModelItemsAppliesRouteReplayPolicy(t *testing.T) {
 func TestProviderStateContractVersionsEachReplayPolicy(t *testing.T) {
 	tests := []struct {
 		policy ReasoningReplayPolicy
-		want   agent.ProviderStateContract
+		want   model.ProviderStateContract
 	}{
 		{policy: ReasoningReplayAllTurns, want: "chat_completions.reasoning_replay.all_turns.v1"},
 		{policy: ReasoningReplayCurrentTurn, want: "chat_completions.reasoning_replay.current_turn.v1"},
@@ -797,7 +797,7 @@ func TestProviderStateContractVersionsEachReplayPolicy(t *testing.T) {
 func TestCompleteRejectsFailedGenerations(t *testing.T) {
 	for _, test := range []struct {
 		name, terminal, wantText string
-		wantKind                 agent.ProviderErrorKind
+		wantKind                 model.ProviderErrorKind
 		wantRetryable            bool
 	}{
 		{
@@ -823,22 +823,22 @@ func TestCompleteRejectsFailedGenerations(t *testing.T) {
 		{
 			name:     "choice invalid request",
 			terminal: `{"choices":[{"index":0,"delta":{},"finish_reason":"error","error":{"type":"invalid_request_error","message":"Invalid messages"}}]}`,
-			wantText: "Invalid messages", wantKind: agent.ProviderErrorRequest,
+			wantText: "Invalid messages", wantKind: model.ProviderErrorRequest,
 		},
 		{
 			name:     "numeric request error",
 			terminal: `{"error":{"code":400,"message":"Invalid messages","metadata":{"error_type":"invalid_prompt"}},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
-			wantText: "Invalid messages", wantKind: agent.ProviderErrorRequest,
+			wantText: "Invalid messages", wantKind: model.ProviderErrorRequest,
 		},
 		{
 			name:     "numeric quota error",
 			terminal: `{"error":{"code":402,"message":"Insufficient credits","metadata":{"error_type":"payment_required"}},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
-			wantText: "Insufficient credits", wantKind: agent.ProviderErrorQuota,
+			wantText: "Insufficient credits", wantKind: model.ProviderErrorQuota,
 		},
 		{
 			name:     "numeric rate limit",
 			terminal: `{"error":{"code":429,"message":"Too many requests"},"choices":[{"index":0,"delta":{},"finish_reason":"error"}]}`,
-			wantText: "Too many requests", wantKind: agent.ProviderErrorRateLimit, wantRetryable: true,
+			wantText: "Too many requests", wantKind: model.ProviderErrorRateLimit, wantRetryable: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -856,11 +856,11 @@ func TestCompleteRejectsFailedGenerations(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			response, err := backend.Complete(t.Context(), agent.ModelRequest{
-				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+			response, err := backend.Complete(t.Context(), model.Request{
+				Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 			}, nil)
-			var providerErr *agent.ProviderError
-			if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
+			var providerErr *model.ProviderError
+			if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) ||
 				providerErr.Kind != test.wantKind || providerErr.Retryable != test.wantRetryable {
 				t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 			}
@@ -887,11 +887,11 @@ func TestCompleteRejectsUnknownFinishReason(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable {
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable {
 		t.Fatalf("unknown finish reason error = %v / %#v", err, providerErr)
 	}
 	if !strings.Contains(err.Error(), "guardrail_intervened") {
@@ -907,8 +907,8 @@ func TestCompleteNormalizesDoneOnlyTerminalToStop(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	response, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -939,7 +939,7 @@ func TestNormalizeFinishReasonCollapsesKnownSynonyms(t *testing.T) {
 func TestNormalizedFinishReasonsHaveExpectedCompletionClassification(t *testing.T) {
 	for provider, normalized := range finishReasons {
 		wantIncomplete := normalized != "stop" && normalized != "tool_calls"
-		if got := agent.IsIncompleteStopReason(normalized); got != wantIncomplete {
+		if got := model.IsIncompleteStopReason(normalized); got != wantIncomplete {
 			t.Errorf("finish reason %q normalized to %q: incomplete = %v, want %v", provider, normalized, got, wantIncomplete)
 		}
 	}
@@ -957,8 +957,8 @@ func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {
 			}))
 
 			backend := newTestServerBackend(t, server, "")
-			response, err := backend.Complete(context.Background(), agent.ModelRequest{
-				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+			response, err := backend.Complete(context.Background(), model.Request{
+				Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 			}, nil)
 			if err != nil {
 				t.Fatalf("empty %s response = %v", reason, err)
@@ -966,7 +966,7 @@ func TestCompleteAcceptsEmptyIncompleteResponses(t *testing.T) {
 			if len(response.Items) != 0 || response.StopReason != reason {
 				t.Fatalf("response = %#v", response)
 			}
-			if !agent.IsIncompleteStopReason(response.StopReason) {
+			if !model.IsIncompleteStopReason(response.StopReason) {
 				t.Fatalf("%q is not an incomplete stop reason", response.StopReason)
 			}
 		})
@@ -992,7 +992,7 @@ func TestCompletePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 				fmt.Fprintf(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":%q}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13}}\n\ndata: [DONE]\n\n", test.reason)
 			}))
 			backend := newTestServerBackend(t, server, "")
-			response, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+			response, err := backend.Complete(context.Background(), model.Request{}, nil)
 			if test.wantError {
 				if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
 					t.Fatalf("malformed completed call error = %v", err)
@@ -1002,8 +1002,8 @@ func TestCompletePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "partial"}}) ||
-				response.StopReason != test.reason || response.Usage != (agent.ModelUsage{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
+			if !reflect.DeepEqual(response.Items, []model.Item{{Kind: model.ItemAssistantText, Text: "partial"}}) ||
+				response.StopReason != test.reason || response.Usage.Tokens.Known() != (model.TokenCounts{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}) {
 				t.Fatalf("incomplete response = %#v", response)
 			}
 		})
@@ -1018,8 +1018,8 @@ func TestCompleteRejectsEmptyFinishedResponse(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "")
-	if _, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+	if _, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 	}, nil); err == nil || !strings.Contains(err.Error(), "no output items") {
 		t.Fatalf("empty finished response error = %v", err)
 	}

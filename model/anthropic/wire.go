@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 type messagesRequest struct {
@@ -127,12 +127,12 @@ type thinkingBlockState struct {
 	Data      jsontext.Value `json:"data,omitzero"`
 }
 
-func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesRequest, error) {
+func (backend *Backend) buildRequest(request model.Request) (messagesRequest, error) {
 	messages, err := backend.buildMessages(request)
 	if err != nil {
 		return messagesRequest{}, err
 	}
-	toolSpecs, err := agent.NormalizeToolSpecs(request.Tools)
+	toolSpecs, err := model.NormalizeToolSpecs(request.Tools)
 	if err != nil {
 		return messagesRequest{}, err
 	}
@@ -148,7 +148,7 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (messagesReques
 		if system != "" {
 			system += "\n\n"
 		}
-		system += agent.ConversationSummaryPrefix + request.Summary
+		system += model.ConversationSummaryPrefix + request.Summary
 	}
 	if backend.promptCache {
 		markPromptCacheBreakpoint(messages)
@@ -180,16 +180,16 @@ func markPromptCacheBreakpoint(messages []message) {
 	blocks[len(blocks)-1].CacheControl = &cacheControl{Type: "ephemeral"}
 }
 
-func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, error) {
+func (backend *Backend) buildMessages(request model.Request) ([]message, error) {
 	messages := make([]message, 0, len(request.Items))
 	callIDs := make(map[string]string)
 	for index := 0; index < len(request.Items); {
 		item := request.Items[index]
 		switch item.Kind {
-		case agent.ItemUserText, agent.ItemBoundaryText:
+		case model.ItemUserText, model.ItemBoundaryText:
 			messages = appendMessage(messages, "user", contentBlock{Type: "text", Text: item.Text})
 			index++
-		case agent.ItemAssistantText, agent.ItemReasoning, agent.ItemToolCall:
+		case model.ItemAssistantText, model.ItemReasoning, model.ItemToolCall:
 			if item.ResponseID == "" {
 				return nil, fmt.Errorf("assistant item %d has no response ID", index)
 			}
@@ -198,11 +198,11 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 			for index < len(request.Items) && request.Items[index].ResponseID == responseID {
 				part := request.Items[index]
 				switch part.Kind {
-				case agent.ItemAssistantText:
+				case model.ItemAssistantText:
 					if part.Text != "" {
 						blocks = append(blocks, contentBlock{Type: "text", Text: part.Text})
 					}
-				case agent.ItemReasoning:
+				case model.ItemReasoning:
 					block, ok, err := backend.replayThinkingBlock(part, request.ProviderEpoch)
 					if err != nil {
 						return nil, fmt.Errorf("reasoning item %d: %w", index, err)
@@ -210,11 +210,11 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 					if ok {
 						blocks = append(blocks, block)
 					}
-				case agent.ItemToolCall:
+				case model.ItemToolCall:
 					if part.ToolCall == nil || part.ToolCall.ID == "" || strings.TrimSpace(part.ToolCall.Name) == "" {
 						return nil, fmt.Errorf("assistant item %d has an invalid tool call", index)
 					}
-					arguments, err := agent.NormalizeToolArguments(part.ToolCall.RawArguments)
+					arguments, err := model.NormalizeToolArguments(part.ToolCall.RawArguments)
 					if err != nil {
 						return nil, fmt.Errorf("assistant item %d has invalid tool arguments: %w", index, err)
 					}
@@ -230,7 +230,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 				index++
 			}
 			messages = appendBlocks(messages, "assistant", blocks)
-		case agent.ItemToolResult:
+		case model.ItemToolResult:
 			if item.ToolResult == nil || item.ToolResult.CallID == "" {
 				return nil, fmt.Errorf("tool result item %d is invalid", index)
 			}
@@ -249,18 +249,18 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]message, er
 	return messages, nil
 }
 
-func anthropicToolResultContent(content agent.Content) any {
+func anthropicToolResultContent(content model.Content) any {
 	if !content.HasImage() {
 		return content.Text()
 	}
 	blocks := make([]toolResultContentBlock, 0, len(content))
 	for _, part := range content {
 		switch part.Kind {
-		case agent.ContentPartText:
+		case model.ContentPartText:
 			if part.Text != "" {
 				blocks = append(blocks, toolResultContentBlock{Type: "text", Text: part.Text})
 			}
-		case agent.ContentPartImage:
+		case model.ContentPartImage:
 			if part.Image != nil {
 				blocks = append(blocks, toolResultContentBlock{Type: "image", Source: &imageSource{
 					Type: "base64", MediaType: part.Image.MediaType, Data: part.Image.Data,
@@ -286,7 +286,7 @@ func appendBlocks(messages []message, role string, blocks []contentBlock) []mess
 	return append(messages, message{Role: role, Content: append([]contentBlock(nil), blocks...)})
 }
 
-func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string {
+func (backend *Backend) providerCallID(call model.ToolCall, epoch string) string {
 	for _, reference := range call.ProviderReferences {
 		if !reference.MatchesReplayContext(backend.callIDReferenceKind(), backend.backendID(), epoch) {
 			continue
@@ -299,7 +299,7 @@ func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string
 	return call.ID
 }
 
-func (backend *Backend) replayThinkingBlock(item agent.Item, epoch string) (contentBlock, bool, error) {
+func (backend *Backend) replayThinkingBlock(item model.Item, epoch string) (contentBlock, bool, error) {
 	if item.ProviderContext == nil || item.ProviderContext.Backend != backend.backendID() || item.ProviderContext.Epoch != epoch {
 		return contentBlock{}, false, nil
 	}

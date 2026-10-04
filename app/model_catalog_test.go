@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/model/chatcompletions"
 )
@@ -42,64 +43,64 @@ func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T
 }
 
 func TestResolveModelRouteAppliesReviewedFactsAndExplicitOverrides(t *testing.T) {
-	route, err := resolveModelRoute("deepseek/deepseek-v4-pro", "high", modelRouteOverrides{}, modelRouteEnrichment{})
+	route, err := modelconfig.Resolve("deepseek/deepseek-v4-pro", "high", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.API != modelAPIChatCompletions || route.ContextWindow != 1_000_000 || route.ContextWindowEstimated ||
+	if route.API != modelconfig.ChatCompletions || route.ContextWindow != 1_000_000 || route.ContextWindowEstimated ||
 		!route.ImageInputUnsupported ||
-		route.Compatibility != modelCompatibilitySupported || route.ChatTraits.ReasoningReplay != chatcompletions.ReasoningReplayAllTurns ||
+		route.Compatibility != modelconfig.Supported || route.ChatTraits.ReasoningReplay != chatcompletions.ReasoningReplayAllTurns ||
 		route.ProviderStateContract == "" {
 		t.Fatalf("resolved route = %#v", route)
 	}
 
-	overridden, err := resolveModelRoute("deepseek/deepseek-v4-pro", "high", modelRouteOverrides{
-		BaseURL: "https://gateway.example/v1", API: modelAPIResponses,
-	}, modelRouteEnrichment{ContextWindow: 2_000_000})
+	overridden, err := modelconfig.Resolve("deepseek/deepseek-v4-pro", "high", modelconfig.Overrides{
+		BaseURL: "https://gateway.example/v1", API: modelconfig.Responses,
+	}, modelconfig.Enrichment{ContextWindow: 2_000_000})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if overridden.API != modelAPIResponses || overridden.BaseURL != "https://gateway.example/v1" ||
-		overridden.ContextWindow != unknownModelContextWindow || !overridden.ContextWindowEstimated ||
+	if overridden.API != modelconfig.Responses || overridden.BaseURL != "https://gateway.example/v1" ||
+		overridden.ContextWindow != modelconfig.FallbackContextWindow || !overridden.ContextWindowEstimated ||
 		overridden.ImageInputUnsupported ||
-		overridden.Compatibility != modelCompatibilityUnverified || overridden.ChatTraits.PromptCacheKey ||
+		overridden.Compatibility != modelconfig.Unverified || overridden.ChatTraits.PromptCacheKey ||
 		overridden.ProviderStateContract != "responses.manual_history.v1" {
 		t.Fatalf("overridden route = %#v", overridden)
 	}
 
-	explicitContext, err := resolveModelRoute("deepseek/deepseek-v4-pro", "", modelRouteOverrides{
+	explicitContext, err := modelconfig.Resolve("deepseek/deepseek-v4-pro", "", modelconfig.Overrides{
 		BaseURL: "https://gateway.example/v1", ContextWindow: 64_000,
-	}, modelRouteEnrichment{})
+	}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if explicitContext.API != modelAPIChatCompletions || explicitContext.ContextWindow != 64_000 || explicitContext.ContextWindowEstimated ||
+	if explicitContext.API != modelconfig.ChatCompletions || explicitContext.ContextWindow != 64_000 || explicitContext.ContextWindowEstimated ||
 		explicitContext.ImageInputUnsupported ||
 		explicitContext.ChatTraits.ReasoningReplay != "" || explicitContext.ProviderStateContract != "" {
 		t.Fatalf("explicit context route = %#v", explicitContext)
 	}
-	optimistic, err := resolveModelRoute("deepseek/future-model", "", modelRouteOverrides{}, modelRouteEnrichment{})
+	optimistic, err := modelconfig.Resolve("deepseek/future-model", "", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if optimistic.ImageInputUnsupported {
 		t.Fatalf("undeclared route lost optimistic image delivery: %#v", optimistic)
 	}
-	strictGateway, err := resolveModelRoute("openai/example-model", "", modelRouteOverrides{BaseURL: "https://gateway.example/v1"}, modelRouteEnrichment{})
+	strictGateway, err := modelconfig.Resolve("openai/example-model", "", modelconfig.Overrides{BaseURL: "https://gateway.example/v1"}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strictGateway.API != modelAPIChatCompletions || strictGateway.ChatTraits.PromptCacheKey {
+	if strictGateway.API != modelconfig.ChatCompletions || strictGateway.ChatTraits.PromptCacheKey {
 		t.Fatalf("strict gateway route = %#v", strictGateway)
 	}
 }
 
 func TestActivateOpenRouterRouteEnrichesAndPureResolutionPreservesProtocol(t *testing.T) {
-	original := modelCatalog
-	modelCatalog = append(append([]modelSpec(nil), original...), modelSpec{
+	original := modelconfig.Catalog
+	modelconfig.Catalog = append(append([]modelconfig.Spec(nil), original...), modelconfig.Spec{
 		URI: "openrouter/moonshotai/kimi-k3",
 	})
-	t.Cleanup(func() { modelCatalog = original })
+	t.Cleanup(func() { modelconfig.Catalog = original })
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/model/moonshotai/kimi-k3" {
@@ -109,49 +110,49 @@ func TestActivateOpenRouterRouteEnrichesAndPureResolutionPreservesProtocol(t *te
 	}))
 	defer server.Close()
 	lookup := func(ctx context.Context, modelID string) (int, error) {
-		return fetchOpenRouterContextWindow(ctx, server.Client(), server.URL, modelID)
+		return modelconfig.FetchOpenRouterContextWindow(ctx, server.Client(), server.URL, modelID)
 	}
-	route, err := activateModelRoute(context.Background(), "openrouter/moonshotai/kimi-k3", "", modelRouteOverrides{}, nil, lookup)
+	route, err := modelconfig.Activate(context.Background(), "openrouter/moonshotai/kimi-k3", "", modelconfig.Overrides{}, nil, lookup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.ContextWindow != 1_048_576 || route.ContextWindowEstimated || route.API != modelAPIChatCompletions {
+	if route.ContextWindow != 1_048_576 || route.ContextWindowEstimated || route.API != modelconfig.ChatCompletions {
 		t.Fatalf("activated route = %#v", route)
 	}
-	modelCatalog[len(modelCatalog)-1].API = modelAPIResponses
-	resolved, err := resolveModelRoute("openrouter/moonshotai/kimi-k3", "", modelRouteOverrides{}, modelRouteEnrichment{ContextWindow: 1_048_576})
+	modelconfig.Catalog[len(modelconfig.Catalog)-1].API = modelconfig.Responses
+	resolved, err := modelconfig.Resolve("openrouter/moonshotai/kimi-k3", "", modelconfig.Overrides{}, modelconfig.Enrichment{ContextWindow: 1_048_576})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.ContextWindow != 1_048_576 || resolved.API != modelAPIResponses {
+	if resolved.ContextWindow != 1_048_576 || resolved.API != modelconfig.Responses {
 		t.Fatalf("resolved enriched route = %#v", resolved)
 	}
 }
 
 func TestActivateOpenRouterRouteWithoutLookupStaysOffline(t *testing.T) {
-	original := openRouterMetadataClient
+	original := modelconfig.OpenRouterMetadataClient
 	requested := false
-	openRouterMetadataClient = &http.Client{Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
+	modelconfig.OpenRouterMetadataClient = &http.Client{Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		requested = true
 		return nil, errors.New("unexpected metadata request")
 	})}
-	t.Cleanup(func() { openRouterMetadataClient = original })
+	t.Cleanup(func() { modelconfig.OpenRouterMetadataClient = original })
 
-	route, err := activateModelRoute(context.Background(), "openrouter/example/future", "", modelRouteOverrides{}, nil, nil)
+	route, err := modelconfig.Activate(context.Background(), "openrouter/example/future", "", modelconfig.Overrides{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requested || route.ContextWindow != unknownModelContextWindow || !route.ContextWindowEstimated {
+	if requested || route.ContextWindow != modelconfig.FallbackContextWindow || !route.ContextWindowEstimated {
 		t.Fatalf("offline route/requested = %#v/%t", route, requested)
 	}
 }
 
 func TestActivateOpenRouterRouteFallsBackToMatchingSavedContext(t *testing.T) {
 	offline := func(context.Context, string) (int, error) { return 0, errors.New("offline") }
-	saved := &savedModelContext{
+	saved := &modelconfig.SavedContextWindow{
 		URI: "openrouter/example/future", Endpoint: "https://openrouter.ai/api/v1", Window: 256_000,
 	}
-	route, err := activateModelRoute(context.Background(), "openrouter/example/future", "", modelRouteOverrides{}, saved, offline)
+	route, err := modelconfig.Activate(context.Background(), "openrouter/example/future", "", modelconfig.Overrides{}, saved, offline)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,18 +161,18 @@ func TestActivateOpenRouterRouteFallsBackToMatchingSavedContext(t *testing.T) {
 	}
 
 	saved.Endpoint = "https://different.example/v1"
-	route, err = activateModelRoute(context.Background(), "openrouter/example/future", "", modelRouteOverrides{}, saved, offline)
+	route, err = modelconfig.Activate(context.Background(), "openrouter/example/future", "", modelconfig.Overrides{}, saved, offline)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route.ContextWindow != unknownModelContextWindow || !route.ContextWindowEstimated {
+	if route.ContextWindow != modelconfig.FallbackContextWindow || !route.ContextWindowEstimated {
 		t.Fatalf("mismatched fallback route = %#v", route)
 	}
 }
 
 func TestActivateCustomOpenRouterEndpointDoesNotPerformPublicLookup(t *testing.T) {
 	lookups := 0
-	route, err := activateModelRoute(context.Background(), "openrouter/example/future", "", modelRouteOverrides{
+	route, err := modelconfig.Activate(context.Background(), "openrouter/example/future", "", modelconfig.Overrides{
 		BaseURL: "https://gateway.example/v1",
 	}, nil, func(context.Context, string) (int, error) {
 		lookups++
@@ -180,15 +181,15 @@ func TestActivateCustomOpenRouterEndpointDoesNotPerformPublicLookup(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lookups != 0 || route.ContextWindow != unknownModelContextWindow || !route.ContextWindowEstimated {
+	if lookups != 0 || route.ContextWindow != modelconfig.FallbackContextWindow || !route.ContextWindowEstimated {
 		t.Fatalf("custom route/lookups = %#v/%d", route, lookups)
 	}
 }
 
 func TestActivateOpenRouterResponsesRouteUsesProtocolIndependentEnrichment(t *testing.T) {
 	lookups := 0
-	route, err := activateModelRoute(context.Background(), "openrouter/example/future", "", modelRouteOverrides{
-		API: modelAPIResponses,
+	route, err := modelconfig.Activate(context.Background(), "openrouter/example/future", "", modelconfig.Overrides{
+		API: modelconfig.Responses,
 	}, nil, func(context.Context, string) (int, error) {
 		lookups++
 		return 512_000, nil
@@ -196,7 +197,7 @@ func TestActivateOpenRouterResponsesRouteUsesProtocolIndependentEnrichment(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lookups != 1 || route.API != modelAPIResponses || route.ContextWindow != 512_000 || route.ContextWindowEstimated {
+	if lookups != 1 || route.API != modelconfig.Responses || route.ContextWindow != 512_000 || route.ContextWindowEstimated {
 		t.Fatalf("route/lookups = %#v/%d", route, lookups)
 	}
 }
@@ -223,15 +224,15 @@ func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
 }
 
 func TestModelChoicesExposeEveryCatalogRoute(t *testing.T) {
-	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", "", modelRouteOverrides{})
-	for _, spec := range modelCatalog {
+	choices := modelChoices(nil, "opencode-go/gpt-5.6-luna", "", modelconfig.Overrides{})
+	for _, spec := range modelconfig.Catalog {
 		choiceIndex := slices.IndexFunc(choices, func(choice ModelChoice) bool { return choice.URI == spec.URI })
 		if choiceIndex < 0 {
 			t.Errorf("catalog choice %q is missing", spec.URI)
 			continue
 		}
 		choice := choices[choiceIndex]
-		wantUnavailable := spec.Compatibility == modelCompatibilityUnsupported
+		wantUnavailable := spec.Compatibility == modelconfig.Unsupported
 		if choice.Unavailable != wantUnavailable || choice.Name != spec.Name || choice.Protocol == "" {
 			t.Errorf("catalog choice %q = %#v", spec.URI, choice)
 		}
@@ -239,9 +240,9 @@ func TestModelChoicesExposeEveryCatalogRoute(t *testing.T) {
 }
 
 func TestModelChoicesSurfaceRecentRoutesWhichNoLongerResolve(t *testing.T) {
-	choices := modelChoices(nil, "opencode-go/removed-model", "", modelRouteOverrides{})
+	choices := modelChoices(nil, "opencode-go/removed-model", "", modelconfig.Overrides{})
 	if len(choices) == 0 || choices[0].URI != "opencode-go/removed-model" || !choices[0].Unavailable ||
-		!strings.Contains(choices[0].UnavailableReason, "not available in Skot's current model list") {
+		!strings.Contains(choices[0].UnavailableReason, "specify its API") {
 		t.Fatalf("removed recent choice = %#v", choices)
 	}
 }
@@ -258,7 +259,7 @@ func TestModelChoicesKeepRoutesSelectedWithTheirOwnProtocol(t *testing.T) {
 	if err := store.SetModelSelection("opencode-go/ox-alpha-free", "", "responses"); err != nil {
 		t.Fatal(err)
 	}
-	choices := modelChoices(store, "deepseek/deepseek-v4-flash", "", modelRouteOverrides{})
+	choices := modelChoices(store, "deepseek/deepseek-v4-flash", "", modelconfig.Overrides{})
 	remembered := slices.IndexFunc(choices, func(choice ModelChoice) bool {
 		return choice.URI == "opencode-go/ox-alpha-free"
 	})
@@ -277,7 +278,7 @@ func TestModelChoicesKeepRoutesSelectedWithTheirOwnProtocol(t *testing.T) {
 }
 
 func TestModelChoicesApplyGlobalProtocolOverride(t *testing.T) {
-	choices := modelChoices(nil, "", "", modelRouteOverrides{API: modelAPIResponses})
+	choices := modelChoices(nil, "", "", modelconfig.Overrides{API: modelconfig.Responses})
 	wanted := map[string]bool{
 		"deepseek/deepseek-flash":  false,
 		"opencode-go/gpt-5.6-luna": false,

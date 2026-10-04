@@ -22,6 +22,7 @@ import (
 	"github.com/levmv/skot/internal/session"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -49,7 +50,7 @@ func TestRunAcceptsRepeatedAddedDirectoryFlags(t *testing.T) {
 		"-home", t.TempDir(), "-root", root,
 		"-add-dir", added, "-add-dir", missing, "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), "added directory 2") {
+	if !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), "added directory 2") {
 		t.Fatalf("repeated -add-dir error = %v", err)
 	}
 }
@@ -80,7 +81,7 @@ func TestVerboseEmitterReportsDurableStatusEvents(t *testing.T) {
 		{Kind: agent.EventBoundaryDelivered, Text: "background work completed", Sequence: 4},
 		{Kind: agent.EventContextCompacted, Text: "context compacted", Sequence: 5},
 		{Kind: agent.EventToolResultsPruned, Text: "pruned old tool results", Sequence: 6},
-		{Kind: agent.EventToolRejected, Call: &agent.ToolCall{Name: "read"}, Result: &agent.ToolResult{Content: agent.TextContent("iteration limit"), Error: true}, Sequence: 7},
+		{Kind: agent.EventToolRejected, Call: &model.ToolCall{Name: "read"}, Result: &model.ToolResult{Content: model.TextContent("iteration limit"), Error: true}, Sequence: 7},
 		{Kind: agent.EventRunFinished, Status: agent.RunCompleted, ToolLimitReached: true, Sequence: 8},
 	} {
 		emit(event)
@@ -190,7 +191,7 @@ func TestRunJSONWritesOneVersionedResult(t *testing.T) {
 		t.Fatalf("JSON usage = %#v", result.Usage)
 	}
 	if result.Accounting == nil || !result.Accounting.Complete || result.Accounting.Usage != result.Usage || len(result.Accounting.Attempts) != 1 ||
-		result.Accounting.Attempts[0].RunID != result.RunID || result.Accounting.Attempts[0].Usage.Status != agent.UsageFinal {
+		result.Accounting.Attempts[0].RunID != result.RunID || result.Accounting.Attempts[0].Usage.Status != model.UsageFinal {
 		t.Fatalf("JSON accounting = %#v", result.Accounting)
 	}
 }
@@ -208,7 +209,7 @@ func TestRunJSONReportsInvalidUTF8ProviderErrorAndFinishesJournal(t *testing.T) 
 		"-model", "deepseek/test-model", "-base-url", server.URL,
 		"-home", t.TempDir(), "-root", t.TempDir(), "-journal", journalPath, "-json", "task",
 	}, bytes.NewReader(nil), &stdout, io.Discard)
-	if !errors.Is(err, agent.ErrProviderFailure) || exitCodeFor(err) != exitProvider {
+	if !errors.Is(err, model.ErrProviderFailure) || exitCodeFor(err) != exitProvider {
 		t.Fatalf("provider error/code = %v/%d", err, exitCodeFor(err))
 	}
 	var result jsonResult
@@ -241,7 +242,7 @@ func TestWriteJSONResultReportsFilesystemError(t *testing.T) {
 	var stdout bytes.Buffer
 	run := agent.RunResult{RunID: "run_test", Status: agent.RunFailed}
 	runErr := &os.PathError{Op: "write", Path: "session-\xff.jsonl", Err: os.ErrPermission}
-	if err := writeJSONResult(&stdout, run, agent.ModelUsage{}, "", jsonRunMetadata{}, runErr); err != nil {
+	if err := writeJSONResult(&stdout, run, model.TokenCounts{}, "", jsonRunMetadata{}, runErr); err != nil {
 		t.Fatal(err)
 	}
 	var result jsonResult
@@ -377,7 +378,7 @@ func TestRunClassifiesInvalidConfigurationAndProviderFailure(t *testing.T) {
 		err := run(context.Background(), []string{
 			"-home", t.TempDir(), "-root", t.TempDir(), "-tools", "admin", "task",
 		}, bytes.NewReader(nil), io.Discard, io.Discard)
-		if !errors.Is(err, agent.ErrInvalidRequest) || exitCodeFor(err) != exitConfig {
+		if !errors.Is(err, model.ErrInvalidRequest) || exitCodeFor(err) != exitConfig {
 			t.Fatalf("configuration error/code = %v/%d", err, exitCodeFor(err))
 		}
 	})
@@ -394,7 +395,7 @@ func TestRunClassifiesInvalidConfigurationAndProviderFailure(t *testing.T) {
 			"-model", "deepseek/test-model", "-base-url", server.URL,
 			"-home", t.TempDir(), "-root", t.TempDir(), "-retry-budget", "50ms", "task",
 		}, bytes.NewReader(nil), io.Discard, io.Discard)
-		if !errors.Is(err, agent.ErrProviderFailure) || exitCodeFor(err) != exitProvider {
+		if !errors.Is(err, model.ErrProviderFailure) || exitCodeFor(err) != exitProvider {
 			t.Fatalf("provider error/code = %v/%d", err, exitCodeFor(err))
 		}
 		if requests != 1 {
@@ -408,7 +409,7 @@ func TestRunRejectsUnknownModelAPI(t *testing.T) {
 		"-model", "deepseek/deepseek-v4-flash", "-model-api", "future",
 		"-base-url", "http://127.0.0.1:1", "-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unsupported model API "future"`) {
+	if !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), `unsupported model API "future"`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -486,7 +487,7 @@ func TestRunReadsToolsFileFromEnvironmentBeforeModelRequest(t *testing.T) {
 	err := run(context.Background(), []string{
 		"-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), io.Discard, io.Discard)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !strings.Contains(err.Error(), `unknown object member name "unexpected"`) {
+	if !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), `unknown object member name "unexpected"`) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -903,7 +904,7 @@ func TestRunUsesOllamaOpenAICompatibilityWithoutCredential(t *testing.T) {
 	}, bytes.NewReader(nil), &output, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "local\n" || requestBody.Model != "qwen3:8b" || authorization != "Bearer ollama" {
+	if output.String() != "local\n" || requestBody.Model != "qwen3:8b" || authorization != "" {
 		t.Fatalf("output/model/authorization = %q/%q/%q", output.String(), requestBody.Model, authorization)
 	}
 }
@@ -1129,7 +1130,7 @@ func TestRunHintsFlagTerminatorForCommandWordPrompts(t *testing.T) {
 			if err == nil || err.Error() != test.want {
 				t.Fatalf("run() error = %v", err)
 			}
-			if !errors.Is(err, agent.ErrInvalidRequest) {
+			if !errors.Is(err, model.ErrInvalidRequest) {
 				t.Fatalf("run() error is not an invalid request: %v", err)
 			}
 		})
@@ -1240,9 +1241,9 @@ func TestRunExecutesProviderToolCallWithProductOwnedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var acceptedCall *agent.ToolCall
+	var acceptedCall *model.ToolCall
 	for _, item := range state.Items {
-		if item.Kind == agent.ItemToolCall {
+		if item.Kind == model.ItemToolCall {
 			acceptedCall = item.ToolCall
 			break
 		}
@@ -1408,7 +1409,7 @@ func TestRunExecutesModelBashAndPersistsProcessDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range state.Items {
-		if item.Kind != agent.ItemToolResult || item.ToolResult == nil || len(item.ToolResult.Details) == 0 {
+		if item.Kind != model.ItemToolResult || item.ToolResult == nil || len(item.ToolResult.Details) == 0 {
 			continue
 		}
 		process, ok := agent.ProcessResultFromDetail(item.ToolResult.Details[0])

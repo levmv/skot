@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/levmv/skot/model"
 )
 
 // stateReducer is the single journal-record fold used by both Replay and a
@@ -115,7 +117,7 @@ func (reducer *stateReducer) applySessionStarted(record Record) error {
 }
 
 func (reducer *stateReducer) applyModelSelected(record Record) error {
-	payload, err := record.decode[ModelSelectedRecord]()
+	payload, err := record.decode[model.ReplayContext]()
 	if err != nil {
 		return err
 	}
@@ -156,6 +158,8 @@ func (reducer *stateReducer) applySessionConfigured(record Record) error {
 	}
 	configured := cloneEffectiveConfigSnapshot(payload)
 	state.Configured = &configured
+	// Use the latest effective endpoint; older model_selected records omitted it.
+	state.Selection.Endpoint = configured.Environment.Endpoint
 	return nil
 }
 
@@ -183,7 +187,7 @@ func (reducer *stateReducer) applyRunInputAdded(record Record) error {
 		return fmt.Errorf("input for inactive run %q at sequence %d", payload.RunID, record.Sequence)
 	}
 	state := &reducer.state
-	item := Item{Kind: ItemUserText, Text: payload.Text}
+	item := model.Item{Kind: model.ItemUserText, Text: payload.Text}
 	state.Items = append(state.Items, item)
 	state.Blocks = append(state.Blocks, ConversationBlock{
 		RunID:         payload.RunID,
@@ -219,13 +223,13 @@ func (reducer *stateReducer) applyModelResponse(record Record) error {
 		if err := validateProviderOwnership(item, state.Selection); err != nil {
 			return fmt.Errorf("invalid model response at sequence %d: %w", record.Sequence, err)
 		}
-		state.Items = append(state.Items, cloneItem(item))
-		state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: cloneItem(item)})
-		if item.Kind == ItemToolCall {
+		state.Items = append(state.Items, item.Clone())
+		state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: item.Clone()})
+		if item.Kind == model.ItemToolCall {
 			if pendingToolIndex(state.PendingTools, item.ToolCall.ID) >= 0 {
 				return fmt.Errorf("duplicate tool call ID %q at sequence %d", item.ToolCall.ID, record.Sequence)
 			}
-			state.PendingTools = append(state.PendingTools, PendingTool{RunID: payload.RunID, Call: cloneToolCall(*item.ToolCall)})
+			state.PendingTools = append(state.PendingTools, PendingTool{RunID: payload.RunID, Call: item.ToolCall.Clone()})
 		}
 	}
 	state.Blocks[blockIndex].EndSequence = record.Sequence
@@ -238,7 +242,7 @@ func (reducer *stateReducer) applyToolResult(record Record) error {
 	if err != nil {
 		return err
 	}
-	payload.Result.Content, err = normalizeContent(payload.Result.Content)
+	payload.Result.Content, err = model.NormalizeContent(payload.Result.Content)
 	if err != nil {
 		return fmt.Errorf("invalid tool result at sequence %d: %w", record.Sequence, err)
 	}
@@ -258,9 +262,9 @@ func (reducer *stateReducer) applyToolResult(record Record) error {
 	if !blockExists {
 		return fmt.Errorf("tool result has no user block at sequence %d", record.Sequence)
 	}
-	item := Item{Kind: ItemToolResult, ToolResult: cloneToolResult(&payload.Result)}
+	item := model.Item{Kind: model.ItemToolResult, ToolResult: payload.Result.Clone()}
 	state.Items = append(state.Items, item)
-	state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: cloneItem(item)})
+	state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: item.Clone()})
 	state.Blocks[blockIndex].EndSequence = record.Sequence
 	state.PendingTools = append(state.PendingTools[:index], state.PendingTools[index+1:]...)
 	return nil
@@ -289,9 +293,9 @@ func (reducer *stateReducer) applyBoundaryEvent(record Record) error {
 	if !exists {
 		return fmt.Errorf("boundary event has no user block at sequence %d", record.Sequence)
 	}
-	item := Item{Kind: ItemBoundaryText, Text: payload.Content, Details: payload.Details}
+	item := model.Item{Kind: model.ItemBoundaryText, Text: payload.Content, Details: payload.Details}
 	state.Items = append(state.Items, item)
-	state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: cloneItem(item)})
+	state.Blocks[blockIndex].Entries = append(state.Blocks[blockIndex].Entries, ConversationEntry{Sequence: record.Sequence, Time: record.Time, Item: item.Clone()})
 	state.Blocks[blockIndex].EndSequence = record.Sequence
 	state.DeliveredJobs[payload.JobID] = struct{}{}
 	state.DetachedJobs = removeJobID(state.DetachedJobs, payload.JobID)

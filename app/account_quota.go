@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/internal/codexauth"
+	"github.com/levmv/skot/internal/modelconfig"
 )
 
 const (
@@ -28,7 +29,7 @@ type accountQuotaCache struct {
 // AccountQuota returns a fresh allowance for the selected provider, if known.
 // It never performs I/O and is safe while a refresh or model request is running.
 func (application *Application) AccountQuota() AccountQuota {
-	provider, _, _ := parseModelURI(application.CurrentModel())
+	provider, _, _ := modelconfig.ParseURI(application.CurrentModel())
 	if provider != codexauth.Provider {
 		return AccountQuota{}
 	}
@@ -56,11 +57,11 @@ func (application *Application) refreshAccountQuota(ctx context.Context, client 
 	}
 	defer application.quotaRefreshMu.Unlock()
 	model := application.CurrentModel()
-	provider, _, _ := parseModelURI(model)
+	provider, _, _ := modelconfig.ParseURI(model)
 	if provider != codexauth.Provider {
 		return nil
 	}
-	tokens, err := storedCodexTokens(application.config.settings)
+	tokens, err := modelconfig.StoredCodexTokens(application.config.settings)
 	if err != nil || !tokens.Valid() {
 		application.invalidateAccountQuota()
 		return err
@@ -82,8 +83,8 @@ func (application *Application) refreshAccountQuota(ctx context.Context, client 
 
 	ctx, cancel := context.WithTimeout(ctx, accountQuotaTimeout)
 	defer cancel()
-	authorizer := codexAuthorizer{
-		store: application.config.settings, modelURI: model, client: client, masker: application.config.masker,
+	authorizer := modelconfig.CodexAuthorizer{
+		Store: application.config.settings, ModelURI: model, Client: client, Masker: application.config.masker,
 	}
 	quota, usedCredential, err := readCodexAccountQuota(ctx, authorizer)
 	if err != nil {
@@ -94,7 +95,7 @@ func (application *Application) refreshAccountQuota(ctx context.Context, client 
 	}
 	// Refresh may have rotated the token. A different login or logout while the
 	// request was running makes its result obsolete, even if HTTP succeeded.
-	current, err := storedCodexTokens(application.config.settings)
+	current, err := modelconfig.StoredCodexTokens(application.config.settings)
 	if err != nil || !current.Valid() || sha256.Sum256([]byte(current.AccessToken)) != usedCredential {
 		return err
 	}

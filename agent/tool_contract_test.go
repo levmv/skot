@@ -5,6 +5,8 @@ import (
 	"encoding/json/jsontext"
 	"strings"
 	"testing"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T) {
@@ -12,22 +14,22 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 		journal := &memoryJournal{}
 		executedWith := ""
 		model := &scriptedModel{steps: []modelStep{
-			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{
-					Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: " \n "},
+			func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{
+					Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: " \n "},
 				}}}, nil
 			},
-			func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-				return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}}, nil
+			func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 			},
 		}}
 		runtime := newTestRuntime(t, Config{
 			Backend: model, Journal: journal,
 			Tools: []Tool{{
-				Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+				Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 				Run: func(_ context.Context, raw string) (ToolOutput, error) {
 					executedWith = raw
-					return ToolOutput{Content: TextContent("ok")}, nil
+					return ToolOutput{Content: modelapi.TextContent("ok")}, nil
 				},
 			}},
 		})
@@ -61,15 +63,15 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 
 	t.Run("non-object provider arguments", func(t *testing.T) {
 		journal := &memoryJournal{}
-		model := &scriptedModel{steps: []modelStep{func(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{
-				Kind: ItemToolCall, ToolCall: &ToolCall{Name: "inspect", RawArguments: `[]`},
+		model := &scriptedModel{steps: []modelStep{func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{
+				Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `[]`},
 			}}}, nil
 		}}}
 		runtime := newTestRuntime(t, Config{
 			Backend: model, Journal: journal,
 			Tools: []Tool{{
-				Spec: ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+				Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
 				Run:  func(context.Context, string) (ToolOutput, error) { return ToolOutput{}, nil },
 			}},
 		})
@@ -86,12 +88,12 @@ func TestRuntimeNormalizesToolArgumentsBeforeExecutionAndJournaling(t *testing.T
 func TestReplayNormalizesStoredToolArguments(t *testing.T) {
 	records := []Record{
 		recordForTest(t, 1, RecordSessionStarted, SessionStartedRecord{SchemaVersion: JournalSchemaVersion, SessionID: "session"}),
-		recordForTest(t, 2, RecordModelSelected, ModelSelectedRecord{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"}),
+		recordForTest(t, 2, RecordModelSelected, modelapi.ReplayContext{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"}),
 		recordForTest(t, 3, RecordRunStarted, RunStartedRecord{RunID: "run"}),
 		recordForTest(t, 4, RecordRunInputAdded, RunInputAddedRecord{RunID: "run", Text: "render"}),
 		recordForTest(t, 5, RecordModelResponse, ModelResponseRecord{
 			RunID: "run", Backend: "test", Model: "model", Epoch: "epoch",
-			Items: []Item{{Kind: ItemToolCall, ResponseID: "response", ToolCall: &ToolCall{
+			Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ResponseID: "response", ToolCall: &modelapi.ToolCall{
 				ID: "call", Name: "render", RawArguments: ` { "markup": "<p>&</p>" } `,
 			}}},
 		}),

@@ -4,66 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/levmv/skot/model"
 )
-
-// ReportedTokens preserves the difference between an absent counter and zero.
-// Cache reads/writes are subsets of input; reasoning is a subset of output.
-// TotalTokens is derived only when both input and output are known.
-type ReportedTokens struct {
-	InputTokens           *int `json:"input_tokens,omitzero"`
-	CachedInputTokens     *int `json:"cached_input_tokens,omitzero"`
-	CacheWriteInputTokens *int `json:"cache_write_input_tokens,omitzero"`
-	OutputTokens          *int `json:"output_tokens,omitzero"`
-	ReasoningTokens       *int `json:"reasoning_tokens,omitzero"`
-	TotalTokens           *int `json:"total_tokens,omitzero"`
-}
-
-// Known returns the observed counters, using zero for absent fields.
-// Keep ReportedTokens when the distinction between missing and zero matters.
-func (tokens ReportedTokens) Known() ModelUsage {
-	value := func(v *int) int {
-		if v == nil {
-			return 0
-		}
-		return *v
-	}
-	return ModelUsage{
-		InputTokens: value(tokens.InputTokens), CachedInputTokens: value(tokens.CachedInputTokens),
-		CacheWriteInputTokens: value(tokens.CacheWriteInputTokens), OutputTokens: value(tokens.OutputTokens),
-		ReasoningTokens: value(tokens.ReasoningTokens), TotalTokens: value(tokens.TotalTokens),
-	}
-}
-
-type UsageStatus string
-
-const (
-	UsageUnavailable UsageStatus = "unavailable"
-	UsagePartial     UsageStatus = "partial"
-	UsageFinal       UsageStatus = "final"
-)
-
-// ReportedCost preserves a decimal amount supplied by the provider.
-// Amount preserves the JSON number's decimal representation (including zero).
-// OpenRouter's account_charge is denominated in USD credits; BYOK requests can
-// also report upstream_inference in USD. These are not automatically added together.
-type ReportedCost struct {
-	Kind     string `json:"kind"`
-	Amount   string `json:"amount"`
-	Currency string `json:"currency"`
-}
-
-// ModelUsageDetails describes the latest observed usage for one provider call.
-// Final means a terminal usage snapshot was observed, not that every optional
-// counter or monetary charge is available.
-type ModelUsageDetails struct {
-	Status     UsageStatus    `json:"status,omitempty"`
-	Tokens     ReportedTokens `json:"tokens"`
-	Costs      []ReportedCost `json:"costs,omitempty"`
-	RequestID  string         `json:"request_id,omitempty"`
-	ResponseID string         `json:"response_id,omitempty"`
-	Model      string         `json:"model,omitempty"`
-	Provider   string         `json:"provider,omitempty"`
-}
 
 type ModelAttemptOutcome string
 
@@ -90,13 +33,13 @@ type ModelAttempt struct {
 // no legacy history. Optional counters and costs may still be absent; inspect
 // Attempts when computing prices. No monetary amounts are estimated or summed.
 type UsageReport struct {
-	Usage             ModelUsage     `json:"usage"`
-	Complete          bool           `json:"complete"`
-	Attempts          []ModelAttempt `json:"attempts"`
-	LegacyUsage       ModelUsage     `json:"legacy_usage,omitzero"`
-	LegacyResponses   int            `json:"legacy_responses,omitzero"`
-	UntrackedAttempts int            `json:"untracked_attempts,omitzero"`
-	LastSequence      uint64         `json:"last_sequence"`
+	Usage             model.TokenCounts `json:"usage"`
+	Complete          bool              `json:"complete"`
+	Attempts          []ModelAttempt    `json:"attempts"`
+	LegacyUsage       model.TokenCounts `json:"legacy_usage,omitzero"`
+	LegacyResponses   int               `json:"legacy_responses,omitzero"`
+	UntrackedAttempts int               `json:"untracked_attempts,omitzero"`
+	LastSequence      uint64            `json:"last_sequence"`
 }
 
 // Usage returns attempts observed after afterSequence (zero selects the whole
@@ -166,7 +109,7 @@ func ReplayUsage(records []Record, afterSequence uint64) (UsageReport, error) {
 		}
 		report.Attempts = append(report.Attempts, attempt)
 		report.Usage = report.Usage.Add(attempt.Usage.Tokens.Known())
-		if attempt.StartedSequence == 0 || attempt.FinishedSequence == 0 || attempt.Usage.Status != UsageFinal ||
+		if attempt.StartedSequence == 0 || attempt.FinishedSequence == 0 || attempt.Usage.Status != model.UsageFinal ||
 			attempt.Usage.Tokens.InputTokens == nil || attempt.Usage.Tokens.OutputTokens == nil {
 			report.Complete = false
 		}
@@ -180,9 +123,9 @@ func ReplayUsage(records []Record, afterSequence uint64) (UsageReport, error) {
 		}
 		// Accounting needs only these fields, not the conversation payload.
 		payload, err := record.decode[struct {
-			AttemptID  string     `json:"attempt_id"`
-			Usage      ModelUsage `json:"usage"`
-			StopReason string     `json:"stop_reason"`
+			AttemptID  string            `json:"attempt_id"`
+			Usage      model.TokenCounts `json:"usage"`
+			StopReason string            `json:"stop_reason"`
 		}]()
 		if err != nil {
 			return UsageReport{}, err
@@ -202,27 +145,4 @@ func ReplayUsage(records []Record, afterSequence uint64) (UsageReport, error) {
 		report.Complete = false
 	}
 	return report, nil
-}
-
-func normalizeUsage(details ModelUsageDetails, legacy ModelUsage) ModelUsageDetails {
-	// Old/custom backends can still supply ModelUsage. Non-zero values are known,
-	// but zero cannot prove presence, and no terminal usage receipt was supplied.
-	if details.Status == "" {
-		details.Status = UsageUnavailable
-		if legacy != (ModelUsage{}) {
-			details.Status = UsagePartial
-			known := func(v int) *int {
-				if v == 0 {
-					return nil
-				}
-				return &v
-			}
-			details.Tokens = ReportedTokens{
-				InputTokens: known(legacy.InputTokens), CachedInputTokens: known(legacy.CachedInputTokens),
-				CacheWriteInputTokens: known(legacy.CacheWriteInputTokens), OutputTokens: known(legacy.OutputTokens),
-				ReasoningTokens: known(legacy.ReasoningTokens), TotalTokens: known(legacy.TotalTokens),
-			}
-		}
-	}
-	return details
 }

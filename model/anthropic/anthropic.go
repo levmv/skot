@@ -13,9 +13,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
+	modelapi "github.com/levmv/skot/model"
 )
 
 const (
@@ -27,7 +27,7 @@ const (
 
 // ProviderStateContract identifies signature-bearing thinking blocks that must
 // be replayed verbatim during a tool turn.
-const ProviderStateContract agent.ProviderStateContract = "anthropic_messages.thinking_replay.v1"
+const ProviderStateContract modelapi.ProviderStateContract = "anthropic_messages.thinking_replay.v1"
 
 type apiError = modelhttp.ProviderErrorEnvelope
 
@@ -83,19 +83,19 @@ func New(config Config) (*Backend, error) {
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	if provider == "" {
-		return nil, agent.MarkInvalidRequest(errors.New("provider is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("provider is required"))
 	}
 	if model == "" {
-		return nil, agent.MarkInvalidRequest(errors.New("model is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("model is required"))
 	}
 	if baseURL == "" {
-		return nil, agent.MarkInvalidRequest(errors.New("base URL is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("base URL is required"))
 	}
 	if config.MaxTokens < 0 {
-		return nil, agent.MarkInvalidRequest(errors.New("max tokens cannot be negative"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("max tokens cannot be negative"))
 	}
 	if config.Authorizer == nil {
-		return nil, agent.MarkInvalidRequest(errors.New("authorizer is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("authorizer is required"))
 	}
 	maxTokens := config.MaxTokens
 	if maxTokens == 0 {
@@ -113,7 +113,7 @@ func New(config Config) (*Backend, error) {
 }
 
 // ProjectModelItems retains thinking blocks for replay with their signatures.
-func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
+func (backend *Backend) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
 	return items
 }
 
@@ -125,23 +125,23 @@ func (backend *Backend) backendID() string {
 // a provider. Route resolution and the adapter must use this same function.
 func BackendID(provider string) string { return "anthropic_messages." + strings.TrimSpace(provider) }
 
-func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
+func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (result modelapi.Response, returnErr error) {
 	var usage modelhttp.UsageAccumulator
 	defer usage.Attach(&result)
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(err)
 	}
 	body, err := modelhttp.MarshalRequestJSON(wireRequest)
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode Anthropic Messages request: %w", err))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("encode Anthropic Messages request: %w", err))
 	}
 	if len(body) > backend.maxRequestBytes {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("%w: messages request is %d bytes, limit is %d", agent.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("%w: messages request is %d bytes, limit is %d", modelapi.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("create Anthropic Messages request: %w", err))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("create Anthropic Messages request: %w", err))
 	}
 	httpRequest.Header.Set("anthropic-version", anthropicVersion)
 	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
@@ -150,18 +150,18 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		httpRequest.Header.Set("anthropic-beta", strings.Join(betas, ","))
 	}
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
 	}
-	defer func() { returnErr = agent.MarkProviderFailure(returnErr) }()
+	defer func() { returnErr = modelapi.MarkProviderFailure(returnErr) }()
 
 	response, err := backend.client.Do(httpRequest)
 	if err != nil {
-		return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages request: %w", backend.provider, err)
+		return modelapi.Response{}, fmt.Errorf("%s Anthropic Messages request: %w", backend.provider, err)
 	}
 	defer response.Body.Close()
 	usage.SetRequestID(response.Header)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Anthropic Messages API", response)
+		return modelapi.Response{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Anthropic Messages API", response)
 	}
 
 	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
@@ -174,14 +174,14 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	for !terminal {
 		payload, readErr := stream.Next()
 		if errors.Is(readErr, io.EOF) {
-			return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages stream ended before message_stop", backend.provider)
+			return modelapi.Response{}, fmt.Errorf("%s Anthropic Messages stream ended before message_stop", backend.provider)
 		}
 		if errors.Is(readErr, modelhttp.ErrEventTooLarge) {
 			limited = true
 			break
 		}
 		if readErr != nil {
-			return agent.ModelResponse{}, fmt.Errorf("read %s Anthropic Messages stream: %w", backend.provider, readErr)
+			return modelapi.Response{}, fmt.Errorf("read %s Anthropic Messages stream: %w", backend.provider, readErr)
 		}
 		if len(payload) > backend.maxCompletionBytes-completionBytes {
 			limited = true
@@ -190,23 +190,23 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		completionBytes += len(payload)
 		var event streamEvent
 		if err := json.Unmarshal(payload, &event); err != nil {
-			return agent.ModelResponse{}, fmt.Errorf("decode %s Anthropic Messages stream event: %w", backend.provider, err)
+			return modelapi.Response{}, fmt.Errorf("decode %s Anthropic Messages stream event: %w", backend.provider, err)
 		}
 		finalUsage := event.Type == "message_delta" && event.Delta.StopReason != ""
 		if err := usage.Observe(event.Usage, "anthropic_messages", backend.provider, finalUsage); err != nil {
-			return agent.ModelResponse{}, err
+			return modelapi.Response{}, err
 		}
 		switch event.Type {
 		case "message_start":
 			if event.Message != nil {
 				if event.Message.ID != "" {
-					usage.Details.ResponseID = event.Message.ID
+					usage.Snapshot.ResponseID = event.Message.ID
 				}
 				if event.Message.Model != "" {
-					usage.Details.Model = event.Message.Model
+					usage.Snapshot.Model = event.Message.Model
 				}
 				if err := usage.Observe(event.Message.Usage, "anthropic_messages", backend.provider, false); err != nil {
-					return agent.ModelResponse{}, err
+					return modelapi.Response{}, err
 				}
 				if event.Message.StopReason != nil {
 					stopReason = *event.Message.StopReason
@@ -214,10 +214,10 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			}
 		case "content_block_start":
 			if event.Index < 0 {
-				return agent.ModelResponse{}, fmt.Errorf("%s content block index %d is negative", backend.provider, event.Index)
+				return modelapi.Response{}, fmt.Errorf("%s content block index %d is negative", backend.provider, event.Index)
 			}
 			if _, exists := blocks[event.Index]; exists {
-				return agent.ModelResponse{}, fmt.Errorf("%s repeated content block index %d", backend.provider, event.Index)
+				return modelapi.Response{}, fmt.Errorf("%s repeated content block index %d", backend.provider, event.Index)
 			}
 			block := &streamBlock{kind: event.ContentBlock.Type, id: event.ContentBlock.ID, name: event.ContentBlock.Name}
 			block.text.WriteString(event.ContentBlock.Text)
@@ -231,18 +231,18 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		case "content_block_delta":
 			block := blocks[event.Index]
 			if block == nil {
-				return agent.ModelResponse{}, fmt.Errorf("%s content delta references unopened block %d", backend.provider, event.Index)
+				return modelapi.Response{}, fmt.Errorf("%s content delta references unopened block %d", backend.provider, event.Index)
 			}
 			switch event.Delta.Type {
 			case "text_delta":
 				if block.kind == "text" {
 					block.text.WriteString(event.Delta.Text)
-					emitModelEvent(emit, agent.EventTextDelta, event.Delta.Text)
+					emitModelEvent(emit, modelapi.EventTextDelta, event.Delta.Text)
 				}
 			case "thinking_delta":
 				if block.kind == "thinking" {
 					block.reasoning.WriteString(event.Delta.Thinking)
-					emitModelEvent(emit, agent.EventReasoningSummaryDelta, event.Delta.Thinking)
+					emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, event.Delta.Thinking)
 				}
 			case "signature_delta":
 				if block.kind == "thinking" {
@@ -255,7 +255,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			}
 		case "content_block_stop":
 			if blocks[event.Index] == nil {
-				return agent.ModelResponse{}, fmt.Errorf("%s content stop references unopened block %d", backend.provider, event.Index)
+				return modelapi.Response{}, fmt.Errorf("%s content stop references unopened block %d", backend.provider, event.Index)
 			}
 			blocks[event.Index].closed = true
 		case "message_delta":
@@ -265,7 +265,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		case "message_stop":
 			terminal = true
 		case "error":
-			return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Error)
+			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Error)
 		case "ping":
 		default:
 			// Anthropic's versioning contract permits adding new stream events.
@@ -274,24 +274,24 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 	}
 
 	if limited {
-		stopReason = agent.StopReasonOutputLimit
+		stopReason = modelapi.StopReasonOutputLimit
 	} else if strings.TrimSpace(stopReason) == "" {
-		return agent.ModelResponse{}, fmt.Errorf("%s Anthropic Messages stream ended without a stop reason", backend.provider)
+		return modelapi.Response{}, fmt.Errorf("%s Anthropic Messages stream ended without a stop reason", backend.provider)
 	} else {
 		normalized, err := backend.normalizeStopReason(stopReason)
 		if err != nil {
-			return agent.ModelResponse{}, err
+			return modelapi.Response{}, err
 		}
 		stopReason = normalized
 	}
 	items, err := backend.responseItems(blocks, stopReason)
 	if err != nil {
-		return agent.ModelResponse{}, err
+		return modelapi.Response{}, err
 	}
-	if len(items) == 0 && !agent.IsIncompleteStopReason(stopReason) {
-		return agent.ModelResponse{}, errors.New("messages response returned no output items")
+	if len(items) == 0 && !modelapi.IsIncompleteStopReason(stopReason) {
+		return modelapi.Response{}, errors.New("messages response returned no output items")
 	}
-	return agent.ModelResponse{Items: items, StopReason: stopReason}, nil
+	return modelapi.Response{Items: items, StopReason: stopReason}, nil
 }
 
 // stopReasons is the closed set of Anthropic Messages stop reasons Skot
@@ -315,9 +315,9 @@ func (backend *Backend) normalizeStopReason(reason string) (string, error) {
 	return normalized, nil
 }
 
-func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason string) ([]agent.Item, error) {
-	locallyLimited := stopReason == agent.StopReasonOutputLimit
-	items := make([]agent.Item, 0, len(blocks))
+func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason string) ([]modelapi.Item, error) {
+	locallyLimited := stopReason == modelapi.StopReasonOutputLimit
+	items := make([]modelapi.Item, 0, len(blocks))
 	indices := make([]int, 0, len(blocks))
 	for index := range blocks {
 		indices = append(indices, index)
@@ -326,7 +326,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason st
 	for _, index := range indices {
 		block := blocks[index]
 		// Tool arguments may be truncated even when the thinking blocks are complete.
-		if block.kind == "tool_use" && agent.IsIncompleteStopReason(stopReason) {
+		if block.kind == "tool_use" && modelapi.IsIncompleteStopReason(stopReason) {
 			continue
 		}
 		if !locallyLimited && (block.kind == "text" || block.kind == "thinking" || block.kind == "redacted_thinking" || block.kind == "tool_use") && !block.closed {
@@ -335,11 +335,11 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason st
 		switch block.kind {
 		case "text":
 			if block.text.Len() != 0 {
-				items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: block.text.String()})
+				items = append(items, modelapi.Item{Kind: modelapi.ItemAssistantText, Text: block.text.String()})
 			}
 		case "thinking":
 			if block.reasoning.Len() != 0 || block.signature.Len() != 0 {
-				item := agent.Item{Kind: agent.ItemReasoning, Text: block.reasoning.String()}
+				item := modelapi.Item{Kind: modelapi.ItemReasoning, Text: block.reasoning.String()}
 				if !locallyLimited && block.signature.Len() != 0 {
 					state, err := json.Marshal(thinkingBlockState{
 						Type: "thinking", Thinking: block.reasoning.String(), Signature: block.signature.String(),
@@ -347,7 +347,7 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason st
 					if err != nil {
 						return nil, fmt.Errorf("encode %s thinking state: %w", backend.provider, err)
 					}
-					item.ProviderData = []agent.ProviderData{{Kind: thinkingDataKind, Data: state}}
+					item.ProviderData = []modelapi.ProviderData{{Kind: thinkingDataKind, Data: state}}
 				}
 				items = append(items, item)
 			}
@@ -358,32 +358,32 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason st
 				if err != nil {
 					return nil, fmt.Errorf("encode %s redacted thinking state: %w", backend.provider, err)
 				}
-				items = append(items, agent.Item{
-					Kind:         agent.ItemReasoning,
-					ProviderData: []agent.ProviderData{{Kind: thinkingDataKind, Data: state}},
+				items = append(items, modelapi.Item{
+					Kind:         modelapi.ItemReasoning,
+					ProviderData: []modelapi.ProviderData{{Kind: thinkingDataKind, Data: state}},
 				})
 			}
 		case "tool_use":
 			if strings.TrimSpace(block.id) == "" || strings.TrimSpace(block.name) == "" {
 				return nil, fmt.Errorf("%s returned an incomplete tool_use block", backend.provider)
 			}
-			arguments, err := agent.NormalizeToolArguments(block.arguments.String())
+			arguments, err := modelapi.NormalizeToolArguments(block.arguments.String())
 			if err != nil {
 				return nil, fmt.Errorf("%s returned invalid arguments for tool %q: %w", backend.provider, block.name, err)
 			}
 			providerID, _ := json.Marshal(block.id, json.Deterministic(true))
-			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{
+			items = append(items, modelapi.Item{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{
 				Name: block.name, RawArguments: arguments,
-				ProviderReferences: []agent.ProviderReference{{Kind: backend.callIDReferenceKind(), Data: providerID}},
+				ProviderReferences: []modelapi.ProviderReference{{Kind: backend.callIDReferenceKind(), Data: providerID}},
 			}})
 		}
 	}
 	return items, nil
 }
 
-func emitModelEvent(emit func(agent.ModelStreamEvent), kind agent.EventKind, value string) {
+func emitModelEvent(emit func(modelapi.StreamEvent), kind modelapi.StreamEventKind, value string) {
 	if emit != nil && value != "" {
-		emit(agent.ModelStreamEvent{Kind: kind, Text: value})
+		emit(modelapi.StreamEvent{Kind: kind, Text: value})
 	}
 }
 

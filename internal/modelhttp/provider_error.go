@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	modelapi "github.com/levmv/skot/model"
 )
 
 // ProviderErrorDetails is the protocol-neutral classification input shared by
@@ -113,8 +113,8 @@ func DecodeProviderError(provider, model, label string, response *http.Response)
 // Its empty provider-error kind lets diagnostics add a compatibility hint for
 // unverified routes.
 func UnsupportedCompletionReasonError(provider, reason string) error {
-	return &agent.ProviderError{
-		Cause: agent.MarkProviderFailure(fmt.Errorf(
+	return &modelapi.ProviderError{
+		Cause: modelapi.MarkProviderFailure(fmt.Errorf(
 			"%s reported unsupported completion reason %q", strings.TrimSpace(provider), reason)),
 	}
 }
@@ -151,49 +151,49 @@ func NewProviderError(details ProviderErrorDetails) error {
 	summary := providerErrorSummary(provider, model, kind)
 	var cause error
 	if status == "" {
-		cause = agent.MarkProviderFailure(fmt.Errorf("%s: %s", summary, message))
+		cause = modelapi.MarkProviderFailure(fmt.Errorf("%s: %s", summary, message))
 	} else {
-		cause = agent.MarkProviderFailure(fmt.Errorf("%s (HTTP %s): %s", summary, status, message))
+		cause = modelapi.MarkProviderFailure(fmt.Errorf("%s (HTTP %s): %s", summary, status, message))
 	}
 	// A statusless, unclassified in-band error has no structured signal that
 	// retrying unchanged is futile. A recognized kind supplies its own policy.
 	retryable := statusForPolicy == http.StatusRequestTimeout ||
 		(statusForPolicy == 0 && kind == "") ||
-		kind == agent.ProviderErrorRateLimit || kind == agent.ProviderErrorUnavailable
-	return &agent.ProviderError{
+		kind == modelapi.ProviderErrorRateLimit || kind == modelapi.ProviderErrorUnavailable
+	return &modelapi.ProviderError{
 		Cause: cause, StatusCode: details.StatusCode, Kind: kind, Code: code, Type: errorType,
 		Retryable: retryable, RetryAfter: details.RetryAfter,
 	}
 }
 
-func classifyProviderError(provider string, status int, code, errorType string) agent.ProviderErrorKind {
+func classifyProviderError(provider string, status int, code, errorType string) modelapi.ProviderErrorKind {
 	// NewProviderError normalizes both structured signals before classification.
 	if isRequestTooLargeSignal(code) || isRequestTooLargeSignal(errorType) {
-		return agent.ProviderErrorRequestTooLarge
+		return modelapi.ProviderErrorRequestTooLarge
 	}
 	if strings.EqualFold(strings.TrimSpace(provider), "openai-codex") {
 		for _, signal := range []string{code, errorType} {
 			switch signal {
 			case "usage_limit_reached":
-				return agent.ProviderErrorQuota
+				return modelapi.ProviderErrorQuota
 			case "usage_not_included":
-				return agent.ProviderErrorSubscription
+				return modelapi.ProviderErrorSubscription
 			}
 		}
 	}
 	if code == "invalid_request_error" || errorType == "invalid_request_error" {
-		return agent.ProviderErrorRequest
+		return modelapi.ProviderErrorRequest
 	}
 	// DeepSeek's stable quota signal wins over HTTP 429, which otherwise means
 	// a temporary rate limit. Do not add message fragments here: prose is not a
 	// routing contract.
 	if strings.EqualFold(strings.TrimSpace(provider), "deepseek") &&
 		(code == "insufficient_quota" || errorType == "insufficient_quota") {
-		return agent.ProviderErrorQuota
+		return modelapi.ProviderErrorQuota
 	}
 	// Responses can report a rate limit inside an HTTP 200 event stream.
 	if code == "rate_limit_exceeded" || errorType == "rate_limit_exceeded" {
-		return agent.ProviderErrorRateLimit
+		return modelapi.ProviderErrorRateLimit
 	}
 	// Anthropic's context-window overflow shares the generic 400
 	// invalid_request_error used by ordinary invalid requests. Treating that pair
@@ -201,20 +201,20 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 	// stable routing signal.
 	switch status {
 	case http.StatusRequestEntityTooLarge:
-		return agent.ProviderErrorRequestTooLarge
+		return modelapi.ProviderErrorRequestTooLarge
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
-		return agent.ProviderErrorRequest
+		return modelapi.ProviderErrorRequest
 	case http.StatusUnauthorized:
-		return agent.ProviderErrorAuthentication
+		return modelapi.ProviderErrorAuthentication
 	case http.StatusPaymentRequired:
-		return agent.ProviderErrorQuota
+		return modelapi.ProviderErrorQuota
 	case http.StatusForbidden:
-		return agent.ProviderErrorPermission
+		return modelapi.ProviderErrorPermission
 	case http.StatusTooManyRequests:
-		return agent.ProviderErrorRateLimit
+		return modelapi.ProviderErrorRateLimit
 	default:
 		if status >= 500 {
-			return agent.ProviderErrorUnavailable
+			return modelapi.ProviderErrorUnavailable
 		}
 		return ""
 	}
@@ -229,7 +229,7 @@ func isRequestTooLargeSignal(value string) bool {
 	}
 }
 
-func providerErrorSummary(provider, model string, kind agent.ProviderErrorKind) string {
+func providerErrorSummary(provider, model string, kind modelapi.ProviderErrorKind) string {
 	target := provider
 	if target == "" {
 		target = "provider"
@@ -238,21 +238,21 @@ func providerErrorSummary(provider, model string, kind agent.ProviderErrorKind) 
 		target += " model " + strconv.Quote(model)
 	}
 	switch kind {
-	case agent.ProviderErrorAuthentication:
+	case modelapi.ProviderErrorAuthentication:
 		return target + " rejected the credential"
-	case agent.ProviderErrorPermission:
+	case modelapi.ProviderErrorPermission:
 		return target + " denied access"
-	case agent.ProviderErrorSubscription:
+	case modelapi.ProviderErrorSubscription:
 		return target + " is not included in the current subscription"
-	case agent.ProviderErrorQuota:
+	case modelapi.ProviderErrorQuota:
 		return target + " quota is exhausted"
-	case agent.ProviderErrorRateLimit:
+	case modelapi.ProviderErrorRateLimit:
 		return target + " is temporarily rate limited"
-	case agent.ProviderErrorRequest:
+	case modelapi.ProviderErrorRequest:
 		return target + " rejected the request"
-	case agent.ProviderErrorRequestTooLarge:
+	case modelapi.ProviderErrorRequestTooLarge:
 		return target + " rejected the oversized request"
-	case agent.ProviderErrorUnavailable:
+	case modelapi.ProviderErrorUnavailable:
 		return target + " is temporarily unavailable"
 	default:
 		return target + " request failed"

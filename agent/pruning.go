@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"unicode/utf8"
+
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -94,20 +96,20 @@ func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, r
 	return nil
 }
 
-func pruneToolResult(content Content, headBytes, tailBytes int) Content {
+func pruneToolResult(content model.Content, headBytes, tailBytes int) model.Content {
 	text := content.Text()
 	headEnd, tailStart, omissionMarker, textPruned := toolResultTextPruning(text, headBytes, tailBytes)
 	if !textPruned && !content.HasImage() {
 		return content
 	}
-	projected := make(Content, 0, len(content)+1)
+	projected := make(model.Content, 0, len(content)+1)
 	// Treat text parts as one pruning budget, then map the retained head and
 	// tail back onto their original positions so image markers remain ordered.
 	textOffset := 0
 	omissionWritten := false
 	for _, part := range content {
 		switch part.Kind {
-		case ContentPartText:
+		case model.ContentPartText:
 			if !textPruned {
 				projected = append(projected, part)
 				continue
@@ -129,11 +131,11 @@ func pruneToolResult(content Content, headBytes, tailBytes int) Content {
 				projected = appendTextContentPart(projected, part.Text[keep:])
 			}
 			textOffset = partEnd
-		case ContentPartImage:
+		case model.ContentPartImage:
 			if part.Image == nil {
 				continue
 			}
-			projected = append(projected, ContentPart{Kind: ContentPartText, Text: fmt.Sprintf(
+			projected = append(projected, model.ContentPart{Kind: model.ContentPartText, Text: fmt.Sprintf(
 				"\n[image pruned: %s, %dx%d; full image remains in session journal]\n",
 				part.Image.MediaType, part.Image.Width, part.Image.Height,
 			)})
@@ -165,9 +167,9 @@ func toolResultTextPruning(content string, headBytes, tailBytes int) (headEnd, t
 	return headEnd, tailStart, marker, true
 }
 
-func appendTextContentPart(content Content, text string) Content {
+func appendTextContentPart(content model.Content, text string) model.Content {
 	if text == "" {
 		return content
 	}
-	return append(content, ContentPart{Kind: ContentPartText, Text: text})
+	return append(content, model.ContentPart{Kind: model.ContentPartText, Text: text})
 }

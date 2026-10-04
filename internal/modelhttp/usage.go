@@ -8,28 +8,27 @@ import (
 	"maps"
 	"net/http"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
-// UsageAccumulator retains cumulative snapshots, never sums successive stream
-// events. Only the usage object is captured, not arbitrary response contents.
+// UsageAccumulator merges cumulative usage snapshots from a stream.
+// Counters in successive events replace earlier values; they are not summed.
 type UsageAccumulator struct {
-	Details agent.ModelUsageDetails
-	fields  map[string]jsontext.Value
+	Snapshot model.Usage
+	fields   map[string]jsontext.Value
 }
 
-func (usage *UsageAccumulator) Attach(response *agent.ModelResponse) {
-	response.Usage = usage.Details.Tokens.Known()
-	response.UsageDetails = usage.Details
-	if response.UsageDetails.Status == "" {
-		response.UsageDetails.Status = agent.UsageUnavailable
+func (usage *UsageAccumulator) Attach(response *model.Response) {
+	response.Usage = usage.Snapshot
+	if response.Usage.Status == "" {
+		response.Usage.Status = model.UsageUnavailable
 	}
 }
 
 func (usage *UsageAccumulator) SetRequestID(header http.Header) {
-	usage.Details.RequestID = header.Get("x-request-id")
-	if usage.Details.RequestID == "" {
-		usage.Details.RequestID = header.Get("request-id")
+	usage.Snapshot.RequestID = header.Get("x-request-id")
+	if usage.Snapshot.RequestID == "" {
+		usage.Snapshot.RequestID = header.Get("request-id")
 	}
 }
 
@@ -78,7 +77,7 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 	if err := json.Unmarshal(merged, &values); err != nil {
 		return fmt.Errorf("decode usage counters: %w", err)
 	}
-	tokens := agent.ReportedTokens{TotalTokens: values.TotalTokens}
+	tokens := model.ReportedTokens{TotalTokens: values.TotalTokens}
 	switch protocol {
 	case "chat_completions":
 		tokens.InputTokens, tokens.OutputTokens = values.PromptTokens, values.CompletionTokens
@@ -109,12 +108,12 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 		total := *tokens.InputTokens + *tokens.OutputTokens
 		tokens.TotalTokens = &total
 	}
-	usage.Details.Tokens = tokens
-	usage.Details.Status = agent.UsagePartial
+	usage.Snapshot.Tokens = tokens
+	usage.Snapshot.Status = model.UsagePartial
 	if final {
-		usage.Details.Status = agent.UsageFinal
+		usage.Snapshot.Status = model.UsageFinal
 	}
-	usage.Details.Costs = nil
+	usage.Snapshot.Costs = nil
 	if provider == "openrouter" {
 		// Unsupported monetary values do not invalidate token counts or output.
 		var costs map[string]jsontext.Value
@@ -130,7 +129,7 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 			{"account_charge", usage.fields["cost"]}, {"upstream_inference", costs["upstream_inference_cost"]},
 		} {
 			if cost.raw.Kind() == '0' {
-				usage.Details.Costs = append(usage.Details.Costs, agent.ReportedCost{Kind: cost.kind, Amount: string(bytes.TrimSpace(cost.raw)), Currency: "USD"})
+				usage.Snapshot.Costs = append(usage.Snapshot.Costs, model.ReportedCost{Kind: cost.kind, Amount: string(bytes.TrimSpace(cost.raw)), Currency: "USD"})
 			}
 		}
 	}

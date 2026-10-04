@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/model"
 )
 
 // incompleteReasons is the closed set of documented Responses incomplete
@@ -57,7 +57,7 @@ func (traits RouteTraits) validate() error {
 	}
 }
 
-func (RouteTraits) ProviderStateContract() agent.ProviderStateContract {
+func (RouteTraits) ProviderStateContract() model.ProviderStateContract {
 	return "responses.manual_history.v1"
 }
 
@@ -148,7 +148,7 @@ type responseSummaryPart struct {
 }
 
 // responseReasoningState is the provider-owned subset which must survive a
-// stateless turn. The visible summary deliberately lives in agent.Item.Text so
+// stateless turn. The visible summary deliberately lives in model.Item.Text so
 // it follows the ordinary sanitization path instead of being duplicated inside
 // opaque journal data.
 type responseReasoningState struct {
@@ -191,10 +191,10 @@ type streamEvent struct {
 
 type apiError = modelhttp.ProviderErrorEnvelope
 
-func (backend *Backend) buildRequest(request agent.ModelRequest) (responseRequest, error) {
+func (backend *Backend) buildRequest(request model.Request) (responseRequest, error) {
 	input := make([]jsontext.Value, 0, len(request.Items)+1)
 	if request.Summary != "" {
-		message, err := marshalInputItem(inputMessage{Role: "developer", Content: agent.ConversationSummaryPrefix + request.Summary})
+		message, err := marshalInputItem(inputMessage{Role: "developer", Content: model.ConversationSummaryPrefix + request.Summary})
 		if err != nil {
 			return responseRequest{}, err
 		}
@@ -203,31 +203,31 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 	callIDs := make(map[string]string)
 	for index, item := range request.Items {
 		switch item.Kind {
-		case agent.ItemUserText:
+		case model.ItemUserText:
 			raw, err := marshalInputItem(inputMessage{Role: "user", Content: item.Text})
 			if err != nil {
 				return responseRequest{}, err
 			}
 			input = append(input, raw)
-		case agent.ItemBoundaryText:
+		case model.ItemBoundaryText:
 			raw, err := marshalInputItem(inputMessage{Role: "developer", Content: item.Text})
 			if err != nil {
 				return responseRequest{}, err
 			}
 			input = append(input, raw)
-		case agent.ItemAssistantText:
+		case model.ItemAssistantText:
 			if item.ResponseID == "" {
 				return responseRequest{}, fmt.Errorf("assistant item %d has no response ID", index)
 			}
 			// Assistant text is semantic history and intentionally carries no
-			// provider-owned message ID in agent.Item. Responses accepts prior
+			// provider-owned message ID in model.Item. Responses accepts prior
 			// assistant output in the portable easy-input message form.
 			raw, err := marshalInputItem(inputMessage{Role: "assistant", Content: item.Text})
 			if err != nil {
 				return responseRequest{}, err
 			}
 			input = append(input, raw)
-		case agent.ItemReasoning:
+		case model.ItemReasoning:
 			if item.ResponseID == "" {
 				return responseRequest{}, fmt.Errorf("reasoning item %d has no response ID", index)
 			}
@@ -238,11 +238,11 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 			if ok {
 				input = append(input, raw)
 			}
-		case agent.ItemToolCall:
+		case model.ItemToolCall:
 			if item.ResponseID == "" || item.ToolCall == nil || item.ToolCall.ID == "" || strings.TrimSpace(item.ToolCall.Name) == "" {
 				return responseRequest{}, fmt.Errorf("assistant item %d has an invalid tool call", index)
 			}
-			arguments, err := agent.NormalizeToolArguments(item.ToolCall.RawArguments)
+			arguments, err := model.NormalizeToolArguments(item.ToolCall.RawArguments)
 			if err != nil {
 				return responseRequest{}, fmt.Errorf("assistant item %d has invalid tool arguments: %w", index, err)
 			}
@@ -262,7 +262,7 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 				return responseRequest{}, err
 			}
 			input = append(input, raw)
-		case agent.ItemToolResult:
+		case model.ItemToolResult:
 			if item.ToolResult == nil || item.ToolResult.CallID == "" {
 				return responseRequest{}, fmt.Errorf("tool result item %d is invalid", index)
 			}
@@ -282,7 +282,7 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 		}
 	}
 
-	toolSpecs, err := agent.NormalizeToolSpecs(request.Tools)
+	toolSpecs, err := model.NormalizeToolSpecs(request.Tools)
 	if err != nil {
 		return responseRequest{}, err
 	}
@@ -314,18 +314,18 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (responseReques
 	return wireRequest, nil
 }
 
-func responsesToolResultContent(content agent.Content) any {
+func responsesToolResultContent(content model.Content) any {
 	if !content.HasImage() {
 		return content.Text()
 	}
 	parts := make([]functionCallOutputPart, 0, len(content))
 	for _, part := range content {
 		switch part.Kind {
-		case agent.ContentPartText:
+		case model.ContentPartText:
 			if part.Text != "" {
 				parts = append(parts, functionCallOutputPart{Type: "input_text", Text: part.Text})
 			}
-		case agent.ContentPartImage:
+		case model.ContentPartImage:
 			if part.Image != nil {
 				parts = append(parts, functionCallOutputPart{
 					Type:     "input_image",
@@ -345,7 +345,7 @@ func marshalInputItem(value any) (jsontext.Value, error) {
 	return data, nil
 }
 
-func (backend *Backend) reasoningInput(item agent.Item, epoch string) (jsontext.Value, bool, error) {
+func (backend *Backend) reasoningInput(item model.Item, epoch string) (jsontext.Value, bool, error) {
 	if !backend.matchesProviderContext(item.ProviderContext, epoch) {
 		return nil, false, nil
 	}
@@ -376,7 +376,7 @@ func (backend *Backend) reasoningInput(item agent.Item, epoch string) (jsontext.
 	return nil, false, nil
 }
 
-func (backend *Backend) functionCallIdentity(call agent.ToolCall, epoch string) (functionCallIdentity, error) {
+func (backend *Backend) functionCallIdentity(call model.ToolCall, epoch string) (functionCallIdentity, error) {
 	for _, reference := range call.ProviderReferences {
 		if !reference.MatchesReplayContext(backend.callReferenceKind(), backend.backendID(), epoch) {
 			continue
@@ -393,40 +393,40 @@ func (backend *Backend) functionCallIdentity(call agent.ToolCall, epoch string) 
 	return functionCallIdentity{CallID: call.ID}, nil
 }
 
-func (backend *Backend) matchesProviderContext(context *agent.ProviderContext, epoch string) bool {
+func (backend *Backend) matchesProviderContext(context *model.ProviderContext, epoch string) bool {
 	if context == nil {
 		return epoch == ""
 	}
 	return context.Backend == backend.backendID() && context.Epoch == epoch
 }
 
-func (backend *Backend) parseResponse(response wireResponse) (agent.ModelResponse, error) {
+func (backend *Backend) parseResponse(response wireResponse) (model.Response, error) {
 	if response.Error != nil {
-		return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, response.Error)
+		return model.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, response.Error)
 	}
 	stopReason := "stop"
 	if response.Status == "incomplete" {
 		reason, err := backend.normalizeIncompleteReason(response.IncompleteDetails)
 		if err != nil {
-			return agent.ModelResponse{}, err
+			return model.Response{}, err
 		}
 		stopReason = reason
 	}
-	items := make([]agent.Item, 0, len(response.Output))
+	items := make([]model.Item, 0, len(response.Output))
 	for index, raw := range response.Output {
 		var output responseOutputItem
 		if err := json.Unmarshal(raw, &output); err != nil {
-			return agent.ModelResponse{}, fmt.Errorf("decode %s response output item %d: %w", backend.provider, index, err)
+			return model.Response{}, fmt.Errorf("decode %s response output item %d: %w", backend.provider, index, err)
 		}
 		switch output.Type {
 		case "reasoning":
 			if strings.TrimSpace(output.ID) == "" || output.EncryptedContent == "" {
-				return agent.ModelResponse{}, fmt.Errorf("%s response reasoning item %d is missing encrypted state", backend.provider, index)
+				return model.Response{}, fmt.Errorf("%s response reasoning item %d is missing encrypted state", backend.provider, index)
 			}
 			var summary strings.Builder
 			for _, part := range output.Summary {
 				if part.Type != "summary_text" {
-					return agent.ModelResponse{}, fmt.Errorf("%s response reasoning item %d has unsupported summary part %q", backend.provider, index, part.Type)
+					return model.Response{}, fmt.Errorf("%s response reasoning item %d has unsupported summary part %q", backend.provider, index, part.Type)
 				}
 				summary.WriteString(part.Text)
 			}
@@ -434,15 +434,15 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 				ID: output.ID, EncryptedContent: output.EncryptedContent,
 			}, json.Deterministic(true))
 			if err != nil {
-				return agent.ModelResponse{}, fmt.Errorf("encode %s reasoning state: %w", backend.provider, err)
+				return model.Response{}, fmt.Errorf("encode %s reasoning state: %w", backend.provider, err)
 			}
-			items = append(items, agent.Item{
-				Kind: agent.ItemReasoning, Text: summary.String(),
-				ProviderData: []agent.ProviderData{{Kind: reasoningItemDataKind, Data: state}},
+			items = append(items, model.Item{
+				Kind: model.ItemReasoning, Text: summary.String(),
+				ProviderData: []model.ProviderData{{Kind: reasoningItemDataKind, Data: state}},
 			})
 		case "message":
 			if output.Role != "assistant" {
-				return agent.ModelResponse{}, fmt.Errorf("%s response message item %d has role %q", backend.provider, index, output.Role)
+				return model.Response{}, fmt.Errorf("%s response message item %d has role %q", backend.provider, index, output.Role)
 			}
 			var text strings.Builder
 			for _, content := range output.Content {
@@ -452,11 +452,11 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 				case "refusal":
 					text.WriteString(content.Refusal)
 				default:
-					return agent.ModelResponse{}, fmt.Errorf("%s response message item %d has unsupported content %q", backend.provider, index, content.Type)
+					return model.Response{}, fmt.Errorf("%s response message item %d has unsupported content %q", backend.provider, index, content.Type)
 				}
 			}
 			if text.Len() != 0 {
-				items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: text.String()})
+				items = append(items, model.Item{Kind: model.ItemAssistantText, Text: text.String()})
 			}
 		case "function_call":
 			// Skip all calls in an incomplete response; their arguments may be truncated.
@@ -464,27 +464,27 @@ func (backend *Backend) parseResponse(response wireResponse) (agent.ModelRespons
 				continue
 			}
 			if strings.TrimSpace(output.CallID) == "" || strings.TrimSpace(output.Name) == "" {
-				return agent.ModelResponse{}, fmt.Errorf("%s response function call item %d is incomplete", backend.provider, index)
+				return model.Response{}, fmt.Errorf("%s response function call item %d is incomplete", backend.provider, index)
 			}
 			identity, err := json.Marshal(functionCallIdentity{ID: output.ID, CallID: output.CallID, Status: output.Status}, json.Deterministic(true))
 			if err != nil {
-				return agent.ModelResponse{}, fmt.Errorf("encode %s function call identity: %w", backend.provider, err)
+				return model.Response{}, fmt.Errorf("encode %s function call identity: %w", backend.provider, err)
 			}
-			arguments, err := agent.NormalizeToolArguments(output.Arguments)
+			arguments, err := model.NormalizeToolArguments(output.Arguments)
 			if err != nil {
-				return agent.ModelResponse{}, fmt.Errorf("%s response function call item %d has invalid arguments: %w", backend.provider, index, err)
+				return model.Response{}, fmt.Errorf("%s response function call item %d has invalid arguments: %w", backend.provider, index, err)
 			}
-			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{
+			items = append(items, model.Item{Kind: model.ItemToolCall, ToolCall: &model.ToolCall{
 				Name: output.Name, RawArguments: arguments,
-				ProviderReferences: []agent.ProviderReference{{Kind: backend.callReferenceKind(), Data: identity}},
+				ProviderReferences: []model.ProviderReference{{Kind: backend.callReferenceKind(), Data: identity}},
 			}})
 			stopReason = "tool_calls"
 		default:
-			return agent.ModelResponse{}, fmt.Errorf("%s response contains unsupported output item %q", backend.provider, output.Type)
+			return model.Response{}, fmt.Errorf("%s response contains unsupported output item %q", backend.provider, output.Type)
 		}
 	}
 	if len(items) == 0 && response.Status != "incomplete" {
-		return agent.ModelResponse{}, fmt.Errorf("%s response returned no output items", backend.provider)
+		return model.Response{}, fmt.Errorf("%s response returned no output items", backend.provider)
 	}
-	return agent.ModelResponse{Items: items, StopReason: stopReason}, nil
+	return model.Response{Items: items, StopReason: stopReason}, nil
 }

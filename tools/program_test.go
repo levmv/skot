@@ -16,6 +16,7 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
 	"github.com/levmv/skot/internal/session"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestLoadProgramToolsTreatsMissingAsEmptyAndRejectsUnknownFields(t *testing.T) {
@@ -327,16 +328,16 @@ func TestProgramLaunchFailureAllowsOtherCallsAndSessionReplay(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = journal.Close() })
 			calls := 0
-			model := programTestModel(func(request agent.ModelRequest) (agent.ModelResponse, error) {
+			model := programTestModel(func(request modelapi.Request) (modelapi.Response, error) {
 				calls++
 				if calls == 1 {
-					return agent.ModelResponse{Items: []agent.Item{
-						{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "vanishing", RawArguments: `{}`}},
-						{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "peer", RawArguments: `{}`}},
-						{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "later", RawArguments: `{}`}},
+					return modelapi.Response{Items: []modelapi.Item{
+						{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "vanishing", RawArguments: `{}`}},
+						{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "peer", RawArguments: `{}`}},
+						{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "later", RawArguments: `{}`}},
 					}}, nil
 				}
-				var results []*agent.ToolResult
+				var results []*modelapi.ToolResult
 				for _, item := range request.Items {
 					if item.ToolResult != nil {
 						results = append(results, item.ToolResult)
@@ -347,23 +348,23 @@ func TestProgramLaunchFailureAllowsOtherCallsAndSessionReplay(t *testing.T) {
 					results[2].Error || results[2].Content.Text() != "later completed" {
 					t.Fatalf("model calls/results = %d / %#v", calls, results)
 				}
-				return agent.ModelResponse{Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "done"}}}, nil
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
 			})
 			runtime, err := agent.New(agent.Config{
-				Model:   agent.ModelInfo{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 128_000},
+				Model:   modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 128_000},
 				Backend: model, Journal: journal, SessionID: "session-program-failure", Workspace: root,
 				Tools: []agent.Tool{
 					resolved[0].Tool,
 					{
-						Spec: agent.ToolSpec{Name: "peer", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
+						Spec: modelapi.ToolSpec{Name: "peer", InputSchema: jsontext.Value(`{"type":"object"}`), ParallelSafe: true},
 						Run: func(ctx context.Context, _ string) (agent.ToolOutput, error) {
-							return agent.ToolOutput{Content: agent.TextContent("peer completed")}, ctx.Err()
+							return agent.ToolOutput{Content: modelapi.TextContent("peer completed")}, ctx.Err()
 						},
 					},
 					{
-						Spec: agent.ToolSpec{Name: "later", InputSchema: jsontext.Value(`{"type":"object"}`)},
+						Spec: modelapi.ToolSpec{Name: "later", InputSchema: jsontext.Value(`{"type":"object"}`)},
 						Run: func(ctx context.Context, _ string) (agent.ToolOutput, error) {
-							return agent.ToolOutput{Content: agent.TextContent("later completed")}, ctx.Err()
+							return agent.ToolOutput{Content: modelapi.TextContent("later completed")}, ctx.Err()
 						},
 					},
 				},
@@ -391,13 +392,13 @@ func TestProgramLaunchFailureAllowsOtherCallsAndSessionReplay(t *testing.T) {
 	}
 }
 
-type programTestModel func(agent.ModelRequest) (agent.ModelResponse, error)
+type programTestModel func(modelapi.Request) (modelapi.Response, error)
 
-func (model programTestModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+func (model programTestModel) Complete(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	return model(request)
 }
 
-func (programTestModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (programTestModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item { return items }
 
 func TestSupervisedForegroundProgramReportsLaunchFailure(t *testing.T) {
 	root := t.TempDir()

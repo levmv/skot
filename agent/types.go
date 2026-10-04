@@ -6,104 +6,17 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/levmv/skot/model"
 )
-
-type ItemKind string
-
-const (
-	ItemUserText      ItemKind = "user_text"
-	ItemBoundaryText  ItemKind = "boundary_text"
-	ItemAssistantText ItemKind = "assistant_text"
-	ItemReasoning     ItemKind = "reasoning_summary"
-	ItemToolCall      ItemKind = "tool_call"
-	ItemToolResult    ItemKind = "tool_result"
-)
-
-type Item struct {
-	Kind            ItemKind         `json:"kind"`
-	ResponseID      string           `json:"response_id,omitempty"`
-	ProviderContext *ProviderContext `json:"provider_context,omitzero"`
-	// ProviderData carries bounded adapter-owned state whose opaque fields must
-	// survive replay verbatim. Visible text remains in Text so it follows the
-	// normal sanitization path. Ownership is inherited from ProviderContext; the
-	// entries deliberately do not duplicate backend or epoch fields.
-	ProviderData []ProviderData `json:"provider_data,omitempty"`
-	Text         string         `json:"text,omitempty"`
-	ToolCall     *ToolCall      `json:"tool_call,omitzero"`
-	ToolResult   *ToolResult    `json:"tool_result,omitzero"`
-	// Details describe product-owned boundary events and stay out of model input.
-	Details []Detail `json:"details,omitempty"`
-}
-
-type ProviderContext struct {
-	Backend string `json:"backend"`
-	Epoch   string `json:"epoch"`
-}
-
-type ProviderData struct {
-	Kind string         `json:"kind"`
-	Data jsontext.Value `json:"data"`
-}
-
-type ToolCall struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	// RawArguments is a normalized JSON object; empty provider input is {}.
-	RawArguments       string              `json:"raw_arguments"`
-	ProviderReferences []ProviderReference `json:"provider_references,omitempty"`
-}
-
-// ProviderReference carries adapter-owned replay identity in journaled tool
-// calls. Kind identifies the adapter payload; Backend and Epoch bind it to a
-// provider selection. Empty Backend and Epoch identify a legacy reference.
-type ProviderReference struct {
-	Kind    string         `json:"kind"`
-	Backend string         `json:"backend"`
-	Epoch   string         `json:"epoch"`
-	Data    jsontext.Value `json:"data"`
-}
-
-// MatchesReplayContext reports whether a reference of kind belongs to the
-// selected backend epoch. A legacy unattributed reference matches only when
-// the selected epoch is also empty.
-func (reference ProviderReference) MatchesReplayContext(kind, backend, epoch string) bool {
-	if reference.Kind != kind {
-		return false
-	}
-	if reference.Backend == "" && reference.Epoch == "" && epoch == "" {
-		return true
-	}
-	return reference.Backend == backend && reference.Epoch == epoch
-}
-
-type ToolResult struct {
-	CallID  string   `json:"call_id"`
-	Content Content  `json:"content"`
-	Details []Detail `json:"details,omitempty"`
-	Error   bool     `json:"error,omitzero"`
-	Unknown bool     `json:"unknown,omitzero"`
-}
-
-type Detail struct {
-	Kind string         `json:"kind"`
-	Data jsontext.Value `json:"data"`
-}
-
-type ToolSpec struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	// InputSchema must be a JSON Schema with top-level type object.
-	InputSchema  jsontext.Value `json:"input_schema"`
-	ParallelSafe bool           `json:"parallel_safe,omitzero"`
-}
 
 type ToolOutput struct {
-	Content Content
-	Details []Detail
+	Content model.Content
+	Details []model.Detail
 }
 
 type Tool struct {
-	Spec ToolSpec
+	Spec model.ToolSpec
 	Run  func(context.Context, string) (ToolOutput, error)
 }
 
@@ -116,7 +29,7 @@ type BoundaryEvent struct {
 	JobID      string
 	FinishedAt time.Time
 	Content    string
-	Details    []Detail
+	Details    []model.Detail
 }
 
 // ExternalWork connects asynchronous work to journaled model
@@ -127,106 +40,12 @@ type BoundaryEvent struct {
 // session durable beyond the current application process; implementations with
 // no such work return nil.
 type ExternalWork interface {
-	Status(id string) ([]Detail, bool)
+	Status(id string) ([]model.Detail, bool)
 	PendingEvents(sessionID string) []BoundaryEvent
 	EventCommitted(jobID string)
-	ToolResultCommitted(ToolResult)
+	ToolResultCommitted(model.ToolResult)
 	Await(context.Context, string) (bool, error)
 	DetachedJobs(sessionID string) []string
-}
-
-// ConversationSummaryPrefix introduces compacted history to a model.
-const ConversationSummaryPrefix = "Conversation summary:\n"
-
-type ModelRequest struct {
-	SessionID     string
-	ProviderEpoch string
-	Instructions  string
-	Summary       string
-	Items         []Item
-	Tools         []ToolSpec
-	// StreamIdleTimeout bounds silence between provider stream payloads. Zero
-	// leaves this concern to the backend implementation or caller context.
-	StreamIdleTimeout time.Duration
-}
-
-type ModelInfo struct {
-	// BackendID keeps the historical "backend" JSON name for journal
-	// compatibility after the Go field was made explicit.
-	BackendID       string `json:"backend"`
-	Provider        string `json:"provider,omitempty"`
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// ProviderStateContract is an adapter-owned, human-readable identifier for
-	// the rules used to create and replay opaque provider state. A change must
-	// rotate the session epoch even when the backend and model stay the same.
-	ProviderStateContract ProviderStateContract `json:"provider_state_contract,omitempty"`
-	// ImageInputUnsupported is a reviewed route policy, not observed session
-	// evidence. False keeps delivery optimistic.
-	ImageInputUnsupported  bool `json:"image_input_unsupported,omitzero"`
-	ContextWindow          int  `json:"context_window,omitzero"`
-	ContextWindowEstimated bool `json:"context_window_estimated,omitzero"`
-	MaxRequestBytes        int  `json:"max_request_bytes,omitzero"`
-	MaxCompletionBytes     int  `json:"max_completion_bytes,omitzero"`
-	// Endpoint identifies the effective provider endpoint without credentials.
-	// It is journaled diagnostic metadata, not authorization configuration.
-	Endpoint string `json:"endpoint,omitempty"`
-}
-
-type ModelResponse struct {
-	Items      []Item
-	Usage      ModelUsage
-	StopReason string
-	// UsageDetails remains meaningful even when Complete returns an error.
-	UsageDetails ModelUsageDetails
-	// attemptID correlates the accepted response with runtime accounting.
-	attemptID string
-}
-
-const StopReasonOutputLimit = "output_limit"
-
-type ModelUsage struct {
-	InputTokens int `json:"input_tokens,omitzero"`
-	// CachedInputTokens is the cached subset of InputTokens, not additional
-	// input.
-	CachedInputTokens int `json:"cached_input_tokens,omitzero"`
-	// CacheWriteInputTokens is another subset of InputTokens.
-	CacheWriteInputTokens int `json:"cache_write_input_tokens,omitzero"`
-	OutputTokens          int `json:"output_tokens,omitzero"`
-	// ReasoningTokens is the reported reasoning subset of OutputTokens, not an
-	// additional token count.
-	ReasoningTokens int `json:"reasoning_tokens,omitzero"`
-	// TotalTokens counts InputTokens plus OutputTokens when both are known.
-	// Partial usage can lack a total; inspect ModelUsageDetails for presence.
-	TotalTokens int `json:"total_tokens,omitzero"`
-}
-
-func (usage ModelUsage) Add(other ModelUsage) ModelUsage {
-	return ModelUsage{
-		InputTokens:           usage.InputTokens + other.InputTokens,
-		CachedInputTokens:     usage.CachedInputTokens + other.CachedInputTokens,
-		CacheWriteInputTokens: usage.CacheWriteInputTokens + other.CacheWriteInputTokens,
-		OutputTokens:          usage.OutputTokens + other.OutputTokens,
-		ReasoningTokens:       usage.ReasoningTokens + other.ReasoningTokens,
-		TotalTokens:           usage.TotalTokens + other.TotalTokens,
-	}
-}
-
-type ModelStreamEvent struct {
-	Kind EventKind
-	Text string
-}
-
-// Backend executes model requests and owns protocol-specific replay policy.
-// The selected model and its effective, secret-free configuration are supplied
-// separately to Runtime as ModelInfo.
-type Backend interface {
-	Complete(context.Context, ModelRequest, func(ModelStreamEvent)) (ModelResponse, error)
-	// ProjectModelItems applies adapter replay policy after runtime ownership
-	// filtering. It may filter reasoning items in place, but must preserve order
-	// and every other item, and must not retain the slice. Runtime uses the result
-	// for both request serialization and context estimates.
-	ProjectModelItems([]Item) []Item
 }
 
 type EventKind string
@@ -264,9 +83,9 @@ type Event struct {
 	RunID     string
 	AttemptID string
 	Text      string
-	Call      *ToolCall
-	Result    *ToolResult
-	Details   []Detail
+	Call      *model.ToolCall
+	Result    *model.ToolResult
+	Details   []model.Detail
 	Status    RunStatus
 	// ToolLimitReached reports that the run hit its model-to-tool iteration
 	// fuse. A completed run may still carry this diagnostic marker.
@@ -305,18 +124,6 @@ func (err RunIncompleteError) Error() string {
 
 func (RunIncompleteError) Unwrap() error { return ErrRunIncomplete }
 
-// IsIncompleteStopReason reports whether a normalized adapter stop reason
-// represents a partial response. Adapters reject unknown provider reasons.
-func IsIncompleteStopReason(reason string) bool {
-	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "length", "max_tokens", "max_output_tokens", "content_filter", "refusal", "pause_turn",
-		"model_context_window_exceeded", "incomplete", "insufficient_system_resource", StopReasonOutputLimit:
-		return true
-	default:
-		return false
-	}
-}
-
 func validRunStatus(status RunStatus) bool {
 	switch status {
 	case RunCompleted, RunFailed, RunIncomplete, RunCancelled, RunInterrupted:
@@ -342,10 +149,6 @@ type RecordKind string
 const JournalSchemaVersion = 3
 
 const auxiliaryRecordKindPrefix = "aux/"
-
-// ProviderStateContract is intentionally readable in journal records. Agent
-// compares it for epoch ownership but does not interpret adapter semantics.
-type ProviderStateContract string
 
 const (
 	RecordSessionStarted        RecordKind = "session_started"
@@ -404,19 +207,19 @@ type ModelAttemptRecord struct {
 	ErrorTruncated bool                       `json:"error_truncated,omitzero"`
 	ProviderError  *ModelAttemptProviderError `json:"provider_error,omitzero"`
 	Outcome        ModelAttemptOutcome        `json:"outcome,omitempty"`
-	Usage          ModelUsageDetails          `json:"usage,omitzero"`
+	Usage          model.Usage                `json:"usage,omitzero"`
 }
 
 // ModelAttemptFailedRecord is the payload of a failed-attempt diagnostic record.
 type ModelAttemptFailedRecord = ModelAttemptRecord
 
 type ModelAttemptProviderError struct {
-	StatusCode int               `json:"status_code,omitzero"`
-	Kind       ProviderErrorKind `json:"kind,omitempty"`
-	Code       string            `json:"code,omitempty"`
-	Type       string            `json:"type,omitempty"`
-	Retryable  bool              `json:"retryable"`
-	RetryAfter string            `json:"retry_after,omitempty"`
+	StatusCode int                     `json:"status_code,omitzero"`
+	Kind       model.ProviderErrorKind `json:"kind,omitempty"`
+	Code       string                  `json:"code,omitempty"`
+	Type       string                  `json:"type,omitempty"`
+	Retryable  bool                    `json:"retryable"`
+	RetryAfter string                  `json:"retry_after,omitempty"`
 }
 
 type Journal interface {
@@ -440,15 +243,6 @@ type SessionStartedRecord struct {
 	Workspace     string `json:"workspace,omitempty"`
 }
 
-type ModelSelectedRecord struct {
-	Backend               string                `json:"backend"`
-	Provider              string                `json:"provider"`
-	Model                 string                `json:"model"`
-	ReasoningEffort       string                `json:"reasoning_effort,omitempty"`
-	ProviderStateContract ProviderStateContract `json:"provider_state_contract,omitempty"`
-	Epoch                 string                `json:"epoch"`
-}
-
 // EffectiveConfigSnapshot is the secret-free configuration under which
 // subsequent session work runs. Its JSON shape is versioned by
 // JournalSchemaVersion. Values are effective values after defaults and
@@ -461,11 +255,11 @@ type EffectiveConfigSnapshot struct {
 }
 
 type ModelContextSnapshot struct {
-	Instructions           string     `json:"instructions,omitempty"`
-	CompactionInstructions string     `json:"compaction_instructions"`
-	ToolLimitInstructions  string     `json:"tool_limit_instructions"`
-	ToolSet                string     `json:"tool_set,omitempty"`
-	Tools                  []ToolSpec `json:"tools,omitempty"`
+	Instructions           string           `json:"instructions,omitempty"`
+	CompactionInstructions string           `json:"compaction_instructions"`
+	ToolLimitInstructions  string           `json:"tool_limit_instructions"`
+	ToolSet                string           `json:"tool_set,omitempty"`
+	Tools                  []model.ToolSpec `json:"tools,omitempty"`
 }
 
 type RuntimePolicySnapshot struct {
@@ -538,19 +332,19 @@ type RunInputAddedRecord struct {
 
 type ModelResponseRecord struct {
 	// Optional correlation for accounting; semantic replay never depends on it.
-	AttemptID  string     `json:"attempt_id,omitempty"`
-	RunID      string     `json:"run_id"`
-	Backend    string     `json:"backend"`
-	Model      string     `json:"model"`
-	Epoch      string     `json:"epoch"`
-	Items      []Item     `json:"items"`
-	Usage      ModelUsage `json:"usage"`
-	StopReason string     `json:"stop_reason,omitempty"`
+	AttemptID  string            `json:"attempt_id,omitempty"`
+	RunID      string            `json:"run_id"`
+	Backend    string            `json:"backend"`
+	Model      string            `json:"model"`
+	Epoch      string            `json:"epoch"`
+	Items      []model.Item      `json:"items"`
+	Usage      model.TokenCounts `json:"usage"`
+	StopReason string            `json:"stop_reason,omitempty"`
 }
 
 type ToolResultRecord struct {
-	RunID  string     `json:"run_id"`
-	Result ToolResult `json:"result"`
+	RunID  string           `json:"run_id"`
+	Result model.ToolResult `json:"result"`
 }
 
 type ImageDeliveryStatus string
@@ -570,11 +364,11 @@ type ImageDeliveryObservedRecord struct {
 }
 
 type BoundaryEventRecord struct {
-	RunID      string    `json:"run_id"`
-	JobID      string    `json:"job_id"`
-	FinishedAt time.Time `json:"finished_at,omitzero"`
-	Content    string    `json:"content"`
-	Details    []Detail  `json:"details,omitempty"`
+	RunID      string         `json:"run_id"`
+	JobID      string         `json:"job_id"`
+	FinishedAt time.Time      `json:"finished_at,omitzero"`
+	Content    string         `json:"content"`
+	Details    []model.Detail `json:"details,omitempty"`
 }
 
 type RunFinishedRecord struct {
@@ -589,11 +383,11 @@ type RunFinishedRecord struct {
 }
 
 type ContextCompactedRecord struct {
-	AttemptID              string     `json:"attempt_id,omitempty"`
-	CoveredThroughSequence uint64     `json:"covered_through_sequence"`
-	FirstVerbatimSequence  uint64     `json:"first_verbatim_sequence"`
-	Summary                string     `json:"summary"`
-	Usage                  ModelUsage `json:"usage"`
+	AttemptID              string            `json:"attempt_id,omitempty"`
+	CoveredThroughSequence uint64            `json:"covered_through_sequence"`
+	FirstVerbatimSequence  uint64            `json:"first_verbatim_sequence"`
+	Summary                string            `json:"summary"`
+	Usage                  model.TokenCounts `json:"usage"`
 }
 
 // ToolResultsPrunedRecord is a journaled model-context policy. Full tool output

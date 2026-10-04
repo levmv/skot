@@ -3,31 +3,25 @@ package app
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/levmv/skot/agent"
-	"github.com/levmv/skot/internal/state"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/toolpolicy"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
-
-type modelBackendOptions struct {
-	requireCredential bool
-	httpClient        *http.Client
-	masker            *secretMasker
-}
 
 // runtimeBuilder contains the resolved application-owned dependencies shared
 // by initial, cleared, and resumed session runtimes. Session identity and model
 // selection remain per-build inputs.
 type runtimeBuilder struct {
 	baseURL           string
-	modelAPI          modelAPI
+	modelAPI          modelconfig.API
 	contextWindow     int
-	credentials       *state.Store
+	credentials       modelconfig.CredentialStore
 	masker            *secretMasker
-	metadataLookup    modelContextLookup
+	metadataLookup    modelconfig.ContextWindowLookup
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
 	applicationBuild  agent.BuildSnapshot
@@ -56,18 +50,18 @@ type runtimeBuildParams struct {
 	// session obtains its effective window from the recorded runtime policy.
 	selectionContext int
 	instructions     string
-	modelOptions     modelBackendOptions
+	modelOptions     modelconfig.BackendOptions
 	resumedState     *agent.State
 	// knownModel may only describe the same saved selection being reopened, or
 	// the current Runtime selection carried through ClearSession. It permits an
 	// inspectable Runtime when that exact route no longer resolves.
-	knownModel *agent.ModelInfo
+	knownModel *model.Info
 }
 
 func (builder runtimeBuilder) build(ctx context.Context, params runtimeBuildParams) (*agent.Runtime, error) {
 	route, err := builder.activateRoute(ctx, params)
 	if err != nil {
-		return nil, agent.MarkInvalidRequest(err)
+		return nil, model.MarkInvalidRequest(err)
 	}
 	modelInfo, backend, err := builder.modelForRoute(route, params.modelOptions)
 	if err != nil {
@@ -84,36 +78,36 @@ func (builder runtimeBuilder) buildRestored(ctx context.Context, params runtimeB
 	return builder.newRuntime(params, modelInfo, backend)
 }
 
-func (builder runtimeBuilder) resolveRestored(ctx context.Context, params runtimeBuildParams) (agent.ModelInfo, agent.Backend, error) {
+func (builder runtimeBuilder) resolveRestored(ctx context.Context, params runtimeBuildParams) (model.Info, model.Backend, error) {
 	route, err := builder.activateRoute(ctx, params)
 	if err == nil {
 		return builder.modelForRoute(route, params.modelOptions)
 	}
 	if ctx.Err() != nil {
-		return agent.ModelInfo{}, nil, ctx.Err()
+		return model.Info{}, nil, ctx.Err()
 	}
 	if params.knownModel != nil && modelInfoMatchesURI(*params.knownModel, params.modelURI) {
 		// A route which resolves with its default effort is still available: the
 		// original failure was validation of the requested effort, not a reason to
 		// silently fall back to the saved descriptor.
-		if _, routeErr := resolveModelRoute(params.modelURI, "", builder.modelOverrides(params), modelRouteEnrichment{}); routeErr == nil {
-			return agent.ModelInfo{}, nil, agent.MarkInvalidRequest(err)
+		if _, routeErr := modelconfig.Resolve(params.modelURI, "", builder.modelOverrides(params), modelconfig.Enrichment{}); routeErr == nil {
+			return model.Info{}, nil, model.MarkInvalidRequest(err)
 		}
 		return *params.knownModel, nil, nil
 	}
-	return agent.ModelInfo{}, nil, agent.MarkInvalidRequest(err)
+	return model.Info{}, nil, model.MarkInvalidRequest(err)
 }
 
-func (builder runtimeBuilder) activateRoute(ctx context.Context, params runtimeBuildParams) (resolvedModelRoute, error) {
-	return activateModelRoute(
+func (builder runtimeBuilder) activateRoute(ctx context.Context, params runtimeBuildParams) (modelconfig.Route, error) {
+	return modelconfig.Activate(
 		ctx, params.modelURI, params.reasoningEffort, builder.modelOverrides(params),
-		savedModelContextFromState(params.resumedState), builder.metadataLookup,
+		savedContextWindowFromState(params.resumedState), builder.metadataLookup,
 	)
 }
 
-func (builder runtimeBuilder) modelOverrides(params runtimeBuildParams) modelRouteOverrides {
-	overrides := modelRouteOverrides{BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
-	return overrides.withSelection(params.modelURI, params.selectionAPI(), params.selectionContextWindow())
+func (builder runtimeBuilder) modelOverrides(params runtimeBuildParams) modelconfig.Overrides {
+	overrides := modelconfig.Overrides{BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
+	return overrides.WithSelection(params.modelURI, params.selectionAPI(), params.selectionContextWindow())
 }
 
 // selectionAPI prefers the protocol the caller chose. A session which already
@@ -131,7 +125,7 @@ func (params runtimeBuildParams) selectionAPI() string {
 	if !strings.EqualFold(strings.TrimSpace(params.modelURI), saved) {
 		return ""
 	}
-	return string(modelAPIFromBackendID(selection.Backend))
+	return string(modelconfig.APIFromBackendID(selection.Backend))
 }
 
 func (params runtimeBuildParams) selectionContextWindow() int {
@@ -150,29 +144,30 @@ func (params runtimeBuildParams) selectionContextWindow() int {
 	return max(0, params.resumedState.Configured.RuntimePolicy.ContextWindow)
 }
 
-func (builder runtimeBuilder) modelForRoute(route resolvedModelRoute, options modelBackendOptions) (agent.ModelInfo, agent.Backend, error) {
-	modelInfo, err := modelInfoForRoute(route)
+func (builder runtimeBuilder) modelForRoute(route modelconfig.Route, options modelconfig.BackendOptions) (model.Info, model.Backend, error) {
+	modelInfo, err := modelconfig.Info(route)
 	if err != nil {
-		return agent.ModelInfo{}, nil, agent.MarkInvalidRequest(err)
+		return model.Info{}, nil, model.MarkInvalidRequest(err)
 	}
-	options.masker = builder.masker
-	backend, err := buildModelBackend(route, builder.credentials, options)
+	options.Masker = builder.masker
+	options.UseEnvironment = true
+	backend, err := modelconfig.BuildBackend(route, builder.credentials, options)
 	if err != nil {
-		return agent.ModelInfo{}, nil, err
+		return model.Info{}, nil, err
 	}
 	return modelInfo, backend, nil
 }
 
-func restoredModelInfo(state agent.State, modelURI string) (agent.ModelInfo, bool) {
+func restoredModelInfo(state agent.State, modelURI string) (model.Info, bool) {
 	selection := state.Selection
 	if strings.TrimSpace(selection.Backend) == "" || strings.TrimSpace(selection.Provider) == "" || strings.TrimSpace(selection.Model) == "" {
-		return agent.ModelInfo{}, false
+		return model.Info{}, false
 	}
 	savedURI := strings.TrimSpace(selection.Provider) + "/" + strings.TrimSpace(selection.Model)
 	if !strings.EqualFold(strings.TrimSpace(modelURI), savedURI) {
-		return agent.ModelInfo{}, false
+		return model.Info{}, false
 	}
-	info := agent.ModelInfo{
+	info := model.Info{
 		BackendID: selection.Backend, Provider: selection.Provider, Model: selection.Model,
 		ReasoningEffort: selection.ReasoningEffort, ProviderStateContract: selection.ProviderStateContract,
 	}
@@ -187,7 +182,7 @@ func restoredModelInfo(state agent.State, modelURI string) (agent.ModelInfo, boo
 	return info, true
 }
 
-func modelInfoMatchesURI(info agent.ModelInfo, modelURI string) bool {
+func modelInfoMatchesURI(info model.Info, modelURI string) bool {
 	if strings.TrimSpace(info.BackendID) == "" || strings.TrimSpace(info.Provider) == "" || strings.TrimSpace(info.Model) == "" {
 		return false
 	}
@@ -195,7 +190,7 @@ func modelInfoMatchesURI(info agent.ModelInfo, modelURI string) bool {
 	return strings.EqualFold(strings.TrimSpace(modelURI), want)
 }
 
-func (builder runtimeBuilder) newRuntime(params runtimeBuildParams, modelInfo agent.ModelInfo, backend agent.Backend) (*agent.Runtime, error) {
+func (builder runtimeBuilder) newRuntime(params runtimeBuildParams, modelInfo model.Info, backend model.Backend) (*agent.Runtime, error) {
 	selectedTools, err := builder.toolSets.Tools(builder.tools, builder.toolSet)
 	if err != nil {
 		return nil, fmt.Errorf("select tools for tool set: %w", err)

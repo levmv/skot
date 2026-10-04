@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
 	workspacetools "github.com/levmv/skot/tools"
@@ -179,7 +180,7 @@ func toolSetSupportsMemorySession(toolSets toolpolicy.ToolSets, toolSet string) 
 
 func webCredentialLookup(credentials *state.Store) workspacetools.WebCredentialLookup {
 	return func(provider string) (string, error) {
-		token, _, err := credentialForProvider(credentials, provider)
+		token, _, err := modelconfig.CredentialForProvider(credentials, provider, true)
 		return token, err
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestDescribeToolCallUsesToolArguments(t *testing.T) {
@@ -49,7 +50,7 @@ func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 	model.transcript.root = "/home/dev"
 	// Models name the same directory both ways, so both forms join one group.
 	for index, file := range []string{"skot/main.go", "/home/dev/skot/config.go", "skot/process.go"} {
-		model.addToolCall(agent.ToolCall{
+		model.addToolCall(modelapi.ToolCall{
 			ID:           string(rune('a' + index)),
 			Name:         "read",
 			RawArguments: `{"path":"` + file + `"}`,
@@ -63,9 +64,9 @@ func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 	if got := strings.Join(model.transcript.lines, "\n"); !strings.Contains(got, "read  skot/ → main.go, config.go, process.go") {
 		t.Fatalf("read group = %q", got)
 	}
-	model.finishTool(agent.ToolResult{CallID: "a"})
-	model.finishTool(agent.ToolResult{CallID: "b"})
-	model.finishTool(agent.ToolResult{CallID: "c"})
+	model.finishTool(modelapi.ToolResult{CallID: "a"})
+	model.finishTool(modelapi.ToolResult{CallID: "b"})
+	model.finishTool(modelapi.ToolResult{CallID: "c"})
 	for _, block := range model.transcript.blocks {
 		if block.tool == nil || !block.tool.done || len(block.tool.callIDs) != 0 {
 			t.Fatalf("completed call = %#v", block)
@@ -75,8 +76,8 @@ func TestConsecutiveReadsFromDirectoryAreGrouped(t *testing.T) {
 
 func TestImageReadShowsDimensionsWithoutPayload(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	model.addToolCall(agent.ToolCall{ID: "image", Name: "read", RawArguments: `{"path":"shot.png"}`})
-	model.finishTool(agent.ToolResult{CallID: "image", Content: agent.ImageToolContent("metadata", agent.ImageContent{
+	model.addToolCall(modelapi.ToolCall{ID: "image", Name: "read", RawArguments: `{"path":"shot.png"}`})
+	model.finishTool(modelapi.ToolResult{CallID: "image", Content: modelapi.ImageToolContent("metadata", modelapi.ImageContent{
 		MediaType: "image/png", Data: []byte("payload-must-stay-hidden"), Width: 1200, Height: 800,
 	})})
 
@@ -94,10 +95,10 @@ func TestImageReadShowsDimensionsWithoutPayload(t *testing.T) {
 func TestFailedReadKeepsItsDiagnosticOutsidePresentationGroup(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.clearTranscript()
-	model.addToolCall(agent.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"internal/a.go"}`})
-	model.finishTool(agent.ToolResult{CallID: "first"})
-	model.addToolCall(agent.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"internal/b.go"}`})
-	model.finishTool(agent.ToolResult{CallID: "second", Content: agent.TextContent("permission denied"), Error: true})
+	model.addToolCall(modelapi.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"internal/a.go"}`})
+	model.finishTool(modelapi.ToolResult{CallID: "first"})
+	model.addToolCall(modelapi.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"internal/b.go"}`})
+	model.finishTool(modelapi.ToolResult{CallID: "second", Content: modelapi.TextContent("permission denied"), Error: true})
 	model.refreshTranscript()
 
 	rendered := strings.Join(model.transcript.lines, "\n")
@@ -110,14 +111,14 @@ func TestFailedReadKeepsItsDiagnosticOutsidePresentationGroup(t *testing.T) {
 
 func TestReadGroupTimesOnlyTheToolWorkAcrossSeparateCalls(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	model.addToolCallAt(agent.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"agent/runtime.go"}`}, time.Now())
-	model.finishTool(agent.ToolResult{CallID: "first"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "first", Name: "read", RawArguments: `{"path":"agent/runtime.go"}`}, time.Now())
+	model.finishTool(modelapi.ToolResult{CallID: "first"})
 	// Backdate the finished read: the model then spent three seconds thinking
 	// before asking for the next file in the same directory.
 	model.transcript.blocks[len(model.transcript.blocks)-1].tool.startedAt = time.Now().Add(-3 * time.Second)
 
-	model.addToolCallAt(agent.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"agent/details.go"}`}, time.Now())
-	model.finishTool(agent.ToolResult{CallID: "second"})
+	model.addToolCallAt(modelapi.ToolCall{ID: "second", Name: "read", RawArguments: `{"path":"agent/details.go"}`}, time.Now())
+	model.finishTool(modelapi.ToolResult{CallID: "second"})
 
 	model.refreshTranscript()
 	rendered := strings.Join(model.transcript.lines, "\n")
@@ -129,7 +130,7 @@ func TestReadGroupTimesOnlyTheToolWorkAcrossSeparateCalls(t *testing.T) {
 func TestToolDisplayIsSanitizedBeforeTerminal(t *testing.T) {
 	fake := &fakeAgent{}
 	model := testScreenModel(t, fake)
-	model.addToolCall(agent.ToolCall{ID: "call", Name: "read", RawArguments: `{"path":"safe\u001b[31mred"}`})
+	model.addToolCall(modelapi.ToolCall{ID: "call", Name: "read", RawArguments: `{"path":"safe\u001b[31mred"}`})
 	if got := model.transcript.blocks[len(model.transcript.blocks)-1].text; strings.Contains(got, "\x1b") {
 		t.Fatalf("tool display contains an escape: %q", got)
 	}
@@ -148,8 +149,8 @@ func TestCompactToolTextSanitizesTerminalControls(t *testing.T) {
 
 func TestRejectedToolCallIsShownWithoutRemainingPending(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
-	call := agent.ToolCall{ID: "rejected", Name: "read", RawArguments: `{"path":"large.txt"}`}
-	result := agent.ToolResult{CallID: call.ID, Content: agent.TextContent("tool iteration limit reached"), Error: true}
+	call := modelapi.ToolCall{ID: "rejected", Name: "read", RawArguments: `{"path":"large.txt"}`}
+	result := modelapi.ToolResult{CallID: call.ID, Content: modelapi.TextContent("tool iteration limit reached"), Error: true}
 	model.applyAgentEvent(agent.Event{Kind: agent.EventToolRejected, Call: &call, Result: &result})
 
 	block := model.transcript.blocks[len(model.transcript.blocks)-1]

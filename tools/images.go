@@ -19,6 +19,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/model"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
@@ -124,7 +125,7 @@ func readImageFile(ctx context.Context, path, display string) (output agent.Tool
 		"path: %s\nsha256: %x\nmedia_type: %s\nsource_size: %dx%d\nimage_size: %dx%d\n\nImage content follows.",
 		display, digest, normalizedType, sourceWidth, sourceHeight, width, height,
 	)
-	return agent.ToolOutput{Content: agent.ImageToolContent(metadata, agent.ImageContent{
+	return agent.ToolOutput{Content: model.ImageToolContent(metadata, model.ImageContent{
 		MediaType: normalizedType, Data: normalized, Width: width, Height: height,
 	})}, true, nil
 }

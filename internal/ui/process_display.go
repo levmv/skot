@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 type processResultMeta = agent.ProcessResult
@@ -192,7 +193,7 @@ func (transcript transcriptState) jobCommand(jobID string) string {
 	return ""
 }
 
-func (m *screenModel) addBoundaryEvent(text string, details []agent.Detail) {
+func (m *screenModel) addBoundaryEvent(text string, details []model.Detail) {
 	block := screenBlock{kind: screenBlockSystem, text: sanitizeTerminalText(text)}
 	for _, detail := range details {
 		if process, ok := agent.ProcessResultFromDetail(detail); ok {
@@ -231,7 +232,7 @@ func (m *screenModel) refreshProcessResults() bool {
 	return m.transcript.refreshProcessResults(m.agent.ToolStatus, viewportTop, viewportKnown)
 }
 
-func (transcript *transcriptState) refreshProcessResults(status func(string) ([]agent.Detail, bool), viewportTop int, viewportKnown bool) bool {
+func (transcript *transcriptState) refreshProcessResults(status func(string) ([]model.Detail, bool), viewportTop int, viewportKnown bool) bool {
 	changed := false
 	blockCount := len(transcript.blocks)
 	for index := range blockCount {

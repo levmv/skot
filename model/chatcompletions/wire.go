@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/model"
 )
 
 // ReasoningEffortEncoding selects the explicitly supported wire field for a
@@ -67,7 +67,7 @@ func (traits RouteTraits) validate(reasoningEffort string) error {
 	return nil
 }
 
-func (traits RouteTraits) ProviderStateContract() agent.ProviderStateContract {
+func (traits RouteTraits) ProviderStateContract() model.ProviderStateContract {
 	switch traits.ReasoningReplay {
 	case ReasoningReplayAllTurns:
 		return "chat_completions.reasoning_replay.all_turns.v1"
@@ -214,14 +214,14 @@ func (delta *streamDelta) UnmarshalJSON(data []byte) error {
 
 type apiError = modelhttp.ProviderErrorEnvelope
 
-func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, error) {
+func (backend *Backend) buildRequest(request model.Request) (chatRequest, error) {
 	// Direct callers may supply unprojected, caller-owned items. Project a copy.
-	request.Items = backend.ProjectModelItems(append([]agent.Item(nil), request.Items...))
+	request.Items = backend.ProjectModelItems(append([]model.Item(nil), request.Items...))
 	messages, err := backend.buildMessages(request)
 	if err != nil {
 		return chatRequest{}, err
 	}
-	toolSpecs, err := agent.NormalizeToolSpecs(request.Tools)
+	toolSpecs, err := model.NormalizeToolSpecs(request.Tools)
 	if err != nil {
 		return chatRequest{}, err
 	}
@@ -264,27 +264,27 @@ func (backend *Backend) buildRequest(request agent.ModelRequest) (chatRequest, e
 	return wireRequest, nil
 }
 
-func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage, error) {
+func (backend *Backend) buildMessages(request model.Request) ([]chatMessage, error) {
 	messages := make([]chatMessage, 0, len(request.Items)+1)
 	if request.Instructions != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: textChatContent(request.Instructions)})
 	}
 	if request.Summary != "" {
-		messages = append(messages, chatMessage{Role: "system", Content: textChatContent(agent.ConversationSummaryPrefix + request.Summary)})
+		messages = append(messages, chatMessage{Role: "system", Content: textChatContent(model.ConversationSummaryPrefix + request.Summary)})
 	}
 	callIDs := make(map[string]string)
 	for index := 0; index < len(request.Items); {
 		item := request.Items[index]
 		switch item.Kind {
-		case agent.ItemUserText:
+		case model.ItemUserText:
 			messages = append(messages, chatMessage{Role: "user", Content: textChatContent(item.Text)})
 			index++
 
-		case agent.ItemBoundaryText:
+		case model.ItemBoundaryText:
 			messages = append(messages, chatMessage{Role: "system", Content: textChatContent(item.Text)})
 			index++
 
-		case agent.ItemAssistantText, agent.ItemReasoning, agent.ItemToolCall:
+		case model.ItemAssistantText, model.ItemReasoning, model.ItemToolCall:
 			if item.ResponseID == "" {
 				return nil, fmt.Errorf("assistant item %d has no response ID", index)
 			}
@@ -293,17 +293,17 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 			for index < len(request.Items) && request.Items[index].ResponseID == responseID {
 				part := request.Items[index]
 				switch part.Kind {
-				case agent.ItemAssistantText:
+				case model.ItemAssistantText:
 					message.Content.Text += part.Text
-				case agent.ItemReasoning:
+				case model.ItemReasoning:
 					if backend.matchesProviderContext(part.ProviderContext, request.ProviderEpoch) {
 						message.ReasoningContent += part.Text
 					}
-				case agent.ItemToolCall:
+				case model.ItemToolCall:
 					if part.ToolCall == nil || part.ToolCall.ID == "" || part.ToolCall.Name == "" {
 						return nil, fmt.Errorf("assistant item %d has an invalid tool call", index)
 					}
-					arguments, err := agent.NormalizeToolArguments(part.ToolCall.RawArguments)
+					arguments, err := model.NormalizeToolArguments(part.ToolCall.RawArguments)
 					if err != nil {
 						return nil, fmt.Errorf("assistant item %d has invalid tool arguments: %w", index, err)
 					}
@@ -324,9 +324,9 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 			}
 			messages = append(messages, message)
 
-		case agent.ItemToolResult:
+		case model.ItemToolResult:
 			var imageParts []chatContentPart
-			for index < len(request.Items) && request.Items[index].Kind == agent.ItemToolResult {
+			for index < len(request.Items) && request.Items[index].Kind == model.ItemToolResult {
 				result := request.Items[index].ToolResult
 				if result == nil || result.CallID == "" {
 					return nil, fmt.Errorf("tool result item %d is invalid", index)
@@ -343,7 +343,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 					Role: "tool", Content: textChatContent(text), ToolCallID: providerID,
 				})
 				for _, part := range result.Content {
-					if part.Kind != agent.ContentPartImage || part.Image == nil {
+					if part.Kind != model.ContentPartImage || part.Image == nil {
 						continue
 					}
 					imageParts = append(imageParts,
@@ -364,7 +364,7 @@ func (backend *Backend) buildMessages(request agent.ModelRequest) ([]chatMessage
 	return messages, nil
 }
 
-func imageDataURL(image agent.ImageContent) string {
+func imageDataURL(image model.ImageContent) string {
 	return "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
@@ -410,11 +410,11 @@ func (backend *Backend) normalizeFinishReason(reason string) (string, error) {
 // ProjectModelItems applies the route's reasoning replay policy. All-turn replay
 // keeps all reasoning; current-turn replay keeps reasoning after the last user
 // message; the zero policy drops it.
-func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
+func (backend *Backend) ProjectModelItems(items []model.Item) []model.Item {
 	lastUser := -1
 	if backend.traits.ReasoningReplay == ReasoningReplayCurrentTurn {
 		for index, item := range items {
-			if item.Kind == agent.ItemUserText {
+			if item.Kind == model.ItemUserText {
 				lastUser = index
 			}
 		}
@@ -422,7 +422,7 @@ func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 
 	projected := items[:0]
 	for index, item := range items {
-		if item.Kind == agent.ItemReasoning {
+		if item.Kind == model.ItemReasoning {
 			keep := false
 			switch backend.traits.ReasoningReplay {
 			case ReasoningReplayAllTurns:
@@ -439,7 +439,7 @@ func (backend *Backend) ProjectModelItems(items []agent.Item) []agent.Item {
 	return projected
 }
 
-func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string {
+func (backend *Backend) providerCallID(call model.ToolCall, epoch string) string {
 	for _, reference := range call.ProviderReferences {
 		if !reference.MatchesReplayContext(backend.callIDReferenceKind(), backend.backendID(), epoch) {
 			continue
@@ -452,7 +452,7 @@ func (backend *Backend) providerCallID(call agent.ToolCall, epoch string) string
 	return call.ID
 }
 
-func (backend *Backend) matchesProviderContext(providerContext *agent.ProviderContext, epoch string) bool {
+func (backend *Backend) matchesProviderContext(providerContext *model.ProviderContext, epoch string) bool {
 	if providerContext == nil {
 		return epoch == ""
 	}

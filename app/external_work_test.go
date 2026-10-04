@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -30,7 +31,7 @@ func TestCommittedProcessToolResultSuppressesDuplicateCompletion(t *testing.T) {
 	if !ok || running.JobID == "" || running.Status != agent.ProcessRunning {
 		t.Fatalf("started process = %#v, %v", running, ok)
 	}
-	work.ToolResultCommitted(agent.ToolResult{Details: started.Details})
+	work.ToolResultCommitted(model.ToolResult{Details: started.Details})
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		status, ok := manager.Status(running.JobID)
@@ -54,7 +55,7 @@ func TestCommittedProcessToolResultSuppressesDuplicateCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	work.ToolResultCommitted(agent.ToolResult{Details: read.Details})
+	work.ToolResultCommitted(model.ToolResult{Details: read.Details})
 	if events := manager.PendingCompletionEvents("session-test"); len(events) != 0 {
 		t.Fatalf("committed terminal tool result left duplicate completion: %#v", events)
 	}

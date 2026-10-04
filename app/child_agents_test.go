@@ -20,6 +20,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/session"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
@@ -83,7 +84,7 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 	if events := application.state.children.PendingEvents(parentID); len(events) != 1 || !strings.Contains(events[0].Content, "answer: first") {
 		t.Fatalf("completion events = %#v", events)
 	}
-	application.state.children.ToolResultCommitted(agent.ToolResult{Details: checked.Details})
+	application.state.children.ToolResultCommitted(modelapi.ToolResult{Details: checked.Details})
 	if events := application.state.children.PendingEvents(parentID); len(events) != 0 {
 		t.Fatalf("committed completion was offered again: %#v", events)
 	}
@@ -366,7 +367,7 @@ func TestResumePreservesUnavailableChildWithoutChangingItsModel(t *testing.T) {
 	runChildTestTool(t, tool, parentID, childToolArgs{Action: "check", IDs: []string{childID}, Wait: "all"})
 
 	child := application.state.children.children[parentID][childID]
-	appendApplicationRecord(t, child.journal, agent.RecordModelSelected, agent.ModelSelectedRecord{
+	appendApplicationRecord(t, child.journal, agent.RecordModelSelected, modelapi.ReplayContext{
 		Backend: "legacy_messages.opencode-go", Provider: "opencode-go", Model: "minimax-m2.5", Epoch: "epoch-removed",
 	})
 	child.mu.Lock()
@@ -415,9 +416,9 @@ func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 	runtime, err := newApplicationTestRuntime(agent.Config{
 		Backend: model, Journal: journal, SessionID: "session_0123456789abcdef0123456789abcdef",
 		Tools: []agent.Tool{{
-			Spec: agent.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
+			Spec: modelapi.ToolSpec{Name: "read", InputSchema: jsontext.Value(`{"type":"object"}`)},
 			Run: func(context.Context, string) (agent.ToolOutput, error) {
-				return agent.ToolOutput{Content: agent.TextContent("ok")}, nil
+				return agent.ToolOutput{Content: modelapi.TextContent("ok")}, nil
 			},
 		}},
 	})
@@ -451,17 +452,17 @@ func TestRestoreChildRunsPreservesResultsAcrossCompaction(t *testing.T) {
 		runs[1].Usage.TotalTokens != 7 || runs[2].Usage.TotalTokens != 7+9 {
 		t.Fatalf("replayed child runs = %#v", runs)
 	}
-	if reply := assistantReply([]agent.Item{{Kind: agent.ItemAssistantText, Text: "first"}, {Kind: agent.ItemAssistantText, Text: "second"}}); reply != "first\nsecond" {
+	if reply := assistantReply([]modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "first"}, {Kind: modelapi.ItemAssistantText, Text: "second"}}); reply != "first\nsecond" {
 		t.Fatalf("multi-part assistant reply = %q", reply)
 	}
 }
 
 func TestSubtractModelUsageIncludesReasoningTokens(t *testing.T) {
 	got := subtractModelUsage(
-		agent.ModelUsage{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 12, ReasoningTokens: 7, TotalTokens: 32},
-		agent.ModelUsage{InputTokens: 8, CachedInputTokens: 2, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 13},
+		modelapi.TokenCounts{InputTokens: 20, CachedInputTokens: 5, OutputTokens: 12, ReasoningTokens: 7, TotalTokens: 32},
+		modelapi.TokenCounts{InputTokens: 8, CachedInputTokens: 2, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 13},
 	)
-	want := (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 3, OutputTokens: 7, ReasoningTokens: 4, TotalTokens: 19})
+	want := (modelapi.TokenCounts{InputTokens: 12, CachedInputTokens: 3, OutputTokens: 7, ReasoningTokens: 4, TotalTokens: 19})
 	if got != want {
 		t.Fatalf("usage delta = %#v, want %#v", got, want)
 	}
@@ -606,26 +607,26 @@ func TestRunningChildIsCancelledCleanlyAndCanContinueAfterResume(t *testing.T) {
 
 type childReplayModel struct{ calls int }
 
-func (model *childReplayModel) Complete(_ context.Context, request agent.ModelRequest, _ func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
+func (model *childReplayModel) Complete(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 	if len(request.Items) != 0 && strings.HasSuffix(request.Items[len(request.Items)-1].Text, "Output only the summary.") {
-		return agent.ModelResponse{
-			Items: []agent.Item{{Kind: agent.ItemAssistantText, Text: "summary"}},
-			Usage: agent.ModelUsage{ReasoningTokens: 4, TotalTokens: 9},
+		return modelapi.Response{
+			Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "summary"}},
+			Usage: modelapi.Usage{Status: modelapi.UsagePartial, Tokens: modelapi.ReportedTokens{ReasoningTokens: new(4), TotalTokens: new(9)}},
 		}, nil
 	}
 	model.calls++
 	if model.calls == 1 {
-		return agent.ModelResponse{
-			Items: []agent.Item{
-				{Kind: agent.ItemAssistantText, Text: "draft"},
-				{Kind: agent.ItemToolCall, ToolCall: &agent.ToolCall{Name: "read", RawArguments: `{}`}},
+		return modelapi.Response{
+			Items: []modelapi.Item{
+				{Kind: modelapi.ItemAssistantText, Text: "draft"},
+				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "read", RawArguments: `{}`}},
 			},
-			Usage: agent.ModelUsage{ReasoningTokens: 2, TotalTokens: 5},
+			Usage: modelapi.Usage{Status: modelapi.UsagePartial, Tokens: modelapi.ReportedTokens{ReasoningTokens: new(2), TotalTokens: new(5)}},
 		}, nil
 	}
-	return agent.ModelResponse{
-		Items: []agent.Item{{Kind: agent.ItemAssistantText}},
-		Usage: agent.ModelUsage{ReasoningTokens: 3, TotalTokens: 7},
+	return modelapi.Response{
+		Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText}},
+		Usage: modelapi.Usage{Status: modelapi.UsagePartial, Tokens: modelapi.ReportedTokens{ReasoningTokens: new(3), TotalTokens: new(7)}},
 	}, nil
 }
 
@@ -783,4 +784,4 @@ func containsChildTestName(values []string, name string) bool {
 	return slices.Contains(values, name)
 }
 
-func (model *childReplayModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (model *childReplayModel) ProjectModelItems(items []modelapi.Item) []modelapi.Item { return items }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 type screenBlockKind uint8
@@ -95,7 +96,7 @@ func (m *screenModel) loadSessionHistory() error {
 	for index := 0; index < len(state.Items); index++ {
 		item := state.Items[index]
 		switch item.Kind {
-		case agent.ItemUserText:
+		case model.ItemUserText:
 			m.composer.remember(item.Text)
 			if call, result, ok := recordedShellItems(state.Items, index); ok {
 				m.addToolCall(call)
@@ -105,19 +106,19 @@ func (m *screenModel) loadSessionHistory() error {
 				continue
 			}
 			m.addBlock(screenBlockUser, item.Text)
-		case agent.ItemBoundaryText:
+		case model.ItemBoundaryText:
 			if strings.TrimSpace(item.Text) != "" {
 				m.addBoundaryEvent(item.Text, item.Details)
 			}
-		case agent.ItemAssistantText:
+		case model.ItemAssistantText:
 			if strings.TrimSpace(item.Text) != "" {
 				m.addBlock(screenBlockAssistant, item.Text)
 			}
-		case agent.ItemToolCall:
+		case model.ItemToolCall:
 			if item.ToolCall != nil {
 				m.addToolCall(*item.ToolCall)
 			}
-		case agent.ItemToolResult:
+		case model.ItemToolResult:
 			if item.ToolResult != nil {
 				m.finishTool(*item.ToolResult)
 			}
@@ -248,11 +249,11 @@ func (transcript *transcriptState) markBlockDirty(index int) {
 	}
 }
 
-func (m *screenModel) addToolCall(call agent.ToolCall) {
+func (m *screenModel) addToolCall(call model.ToolCall) {
 	m.addToolCallAt(call, time.Time{})
 }
 
-func (m *screenModel) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
+func (m *screenModel) addToolCallAt(call model.ToolCall, startedAt time.Time) {
 	m.transcript.addToolCallAt(call, startedAt)
 	var args jobDisplayArgs
 	if call.Name != "job" || !decodeToolDisplayArgs(call.RawArguments, &args) || args.JobID == "" {
@@ -263,7 +264,7 @@ func (m *screenModel) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
 	}
 }
 
-func (transcript *transcriptState) addToolCallAt(call agent.ToolCall, startedAt time.Time) {
+func (transcript *transcriptState) addToolCallAt(call model.ToolCall, startedAt time.Time) {
 	display := describeToolCall(call.Name, call.RawArguments, transcript.root)
 	var group *toolGroupMeta
 	if display.GroupKey != "" {
@@ -296,13 +297,13 @@ func (transcript *transcriptState) markLastToolAsShell(private bool) {
 	}
 }
 
-func (m *screenModel) finishTool(result agent.ToolResult) {
+func (m *screenModel) finishTool(result model.ToolResult) {
 	for _, path := range m.transcript.finishTool(result) {
 		m.operation.changedPaths = appendUniquePath(m.operation.changedPaths, path)
 	}
 }
 
-func (transcript *transcriptState) finishTool(result agent.ToolResult) []string {
+func (transcript *transcriptState) finishTool(result model.ToolResult) []string {
 	var changedPaths []string
 	for index := range slices.Backward(transcript.blocks) {
 		block := &transcript.blocks[index]
@@ -351,7 +352,7 @@ func (transcript *transcriptState) finishTool(result agent.ToolResult) []string 
 			block.text += ": " + compactSingleLine(sanitizeTerminalText(result.Content.Text()), 180)
 		}
 		for _, part := range result.Content {
-			if part.Kind == agent.ContentPartImage && part.Image != nil {
+			if part.Kind == model.ContentPartImage && part.Image != nil {
 				block.text += fmt.Sprintf("  [%s %d×%d]", part.Image.MediaType, part.Image.Width, part.Image.Height)
 			}
 		}
@@ -388,17 +389,17 @@ func (transcript transcriptState) toolPresentationGroupStart(index int) int {
 	return index
 }
 
-func displayableToolResult(content agent.Content) string {
+func displayableToolResult(content model.Content) string {
 	var result strings.Builder
 	endsWithNewline := true
 	for _, part := range content {
 		switch {
-		case part.Kind == agent.ContentPartText:
+		case part.Kind == model.ContentPartText:
 			result.WriteString(part.Text)
 			if part.Text != "" {
 				endsWithNewline = strings.HasSuffix(part.Text, "\n")
 			}
-		case part.Kind == agent.ContentPartImage && part.Image != nil:
+		case part.Kind == model.ContentPartImage && part.Image != nil:
 			if result.Len() > 0 && !endsWithNewline {
 				result.WriteString("  ")
 			}
@@ -409,23 +410,23 @@ func displayableToolResult(content agent.Content) string {
 	return result.String()
 }
 
-func recordedShellItems(items []agent.Item, index int) (agent.ToolCall, agent.ToolResult, bool) {
-	if index < 0 || index+2 >= len(items) || items[index].Kind != agent.ItemUserText {
-		return agent.ToolCall{}, agent.ToolResult{}, false
+func recordedShellItems(items []model.Item, index int) (model.ToolCall, model.ToolResult, bool) {
+	if index < 0 || index+2 >= len(items) || items[index].Kind != model.ItemUserText {
+		return model.ToolCall{}, model.ToolResult{}, false
 	}
 	command, private, shell := shellEscapeCommand(items[index].Text)
 	callItem := items[index+1]
 	resultItem := items[index+2]
-	if !shell || private || command == "" || callItem.Kind != agent.ItemToolCall || callItem.ToolCall == nil ||
-		callItem.ToolCall.Name != "bash" || resultItem.Kind != agent.ItemToolResult || resultItem.ToolResult == nil ||
+	if !shell || private || command == "" || callItem.Kind != model.ItemToolCall || callItem.ToolCall == nil ||
+		callItem.ToolCall.Name != "bash" || resultItem.Kind != model.ItemToolResult || resultItem.ToolResult == nil ||
 		resultItem.ToolResult.CallID != callItem.ToolCall.ID {
-		return agent.ToolCall{}, agent.ToolResult{}, false
+		return model.ToolCall{}, model.ToolResult{}, false
 	}
 	var arguments struct {
 		Command string `json:"command"`
 	}
 	if !decodeToolDisplayArgs(callItem.ToolCall.RawArguments, &arguments) || strings.TrimSpace(arguments.Command) != command {
-		return agent.ToolCall{}, agent.ToolResult{}, false
+		return model.ToolCall{}, model.ToolResult{}, false
 	}
 	return *callItem.ToolCall, *resultItem.ToolResult, true
 }

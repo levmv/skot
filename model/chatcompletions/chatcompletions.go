@@ -12,9 +12,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/levmv/skot/agent"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
+	modelapi "github.com/levmv/skot/model"
 )
 
 type Authorizer = modelhttp.Authorizer
@@ -68,19 +68,19 @@ func New(config Config) (*Backend, error) {
 	reasoningEffort := strings.ToLower(strings.TrimSpace(config.ReasoningEffort))
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	if provider == "" {
-		return nil, agent.MarkInvalidRequest(errors.New("provider is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("provider is required"))
 	}
 	if model == "" {
-		return nil, agent.MarkInvalidRequest(errors.New("model is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("model is required"))
 	}
 	if baseURL == "" {
-		return nil, agent.MarkInvalidRequest(errors.New("base URL is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("base URL is required"))
 	}
 	if err := config.Traits.validate(reasoningEffort); err != nil {
-		return nil, agent.MarkInvalidRequest(err)
+		return nil, modelapi.MarkInvalidRequest(err)
 	}
 	if config.Authorizer == nil {
-		return nil, agent.MarkInvalidRequest(errors.New("authorizer is required"))
+		return nil, modelapi.MarkInvalidRequest(errors.New("authorizer is required"))
 	}
 	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Backend{
@@ -98,38 +98,38 @@ func New(config Config) (*Backend, error) {
 	}, nil
 }
 
-func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest, emit func(agent.ModelStreamEvent)) (result agent.ModelResponse, returnErr error) {
+func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (result modelapi.Response, returnErr error) {
 	var usage modelhttp.UsageAccumulator
 	defer usage.Attach(&result)
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(err)
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(err)
 	}
 	body, err := modelhttp.MarshalRequestJSON(wireRequest)
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("encode chat completion request: %w", err))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("encode chat completion request: %w", err))
 	}
 	if len(body) > backend.maxRequestBytes {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("%w: chat completion request is %d bytes, limit is %d", agent.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("%w: chat completion request is %d bytes, limit is %d", modelapi.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("create chat completion request: %w", err))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("create chat completion request: %w", err))
 	}
 	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
-		return agent.ModelResponse{}, agent.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
+		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
 	}
-	defer func() { returnErr = agent.MarkProviderFailure(returnErr) }()
+	defer func() { returnErr = modelapi.MarkProviderFailure(returnErr) }()
 
 	response, err := backend.client.Do(httpRequest)
 	if err != nil {
-		return agent.ModelResponse{}, fmt.Errorf("%s chat completion: %w", backend.provider, err)
+		return modelapi.Response{}, fmt.Errorf("%s chat completion: %w", backend.provider, err)
 	}
 	defer response.Body.Close()
 	usage.SetRequestID(response.Header)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return agent.ModelResponse{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "API", response)
+		return modelapi.Response{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "API", response)
 	}
 
 	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
@@ -144,7 +144,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		if errors.Is(err, io.EOF) {
 			if stopReason == "" {
 				if !stream.SawDone() {
-					return agent.ModelResponse{}, fmt.Errorf("%s stream ended before a finish reason", backend.provider)
+					return modelapi.Response{}, fmt.Errorf("%s stream ended before a finish reason", backend.provider)
 				}
 				// Some compatible gateways use the legacy sentinel as their only
 				// terminal signal. Keep accepting it, but do not let an empty value
@@ -158,7 +158,7 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			break
 		}
 		if err != nil {
-			return agent.ModelResponse{}, fmt.Errorf("read %s stream: %w", backend.provider, err)
+			return modelapi.Response{}, fmt.Errorf("read %s stream: %w", backend.provider, err)
 		}
 		if len(payload) > backend.maxCompletionBytes-completionBytes {
 			limited = true
@@ -167,16 +167,16 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 		completionBytes += len(payload)
 		var chunk streamChunk
 		if err := json.Unmarshal(payload, &chunk); err != nil {
-			return agent.ModelResponse{}, fmt.Errorf("decode %s stream chunk: %w", backend.provider, err)
+			return modelapi.Response{}, fmt.Errorf("decode %s stream chunk: %w", backend.provider, err)
 		}
 		if chunk.ID != "" {
-			usage.Details.ResponseID = chunk.ID
+			usage.Snapshot.ResponseID = chunk.ID
 		}
 		if chunk.Model != "" {
-			usage.Details.Model = chunk.Model
+			usage.Snapshot.Model = chunk.Model
 		}
 		if chunk.Provider != "" {
-			usage.Details.Provider = chunk.Provider
+			usage.Snapshot.Provider = chunk.Provider
 		}
 		finalUsage := len(chunk.Choices) == 0
 		for _, choice := range chunk.Choices {
@@ -185,17 +185,17 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 			}
 		}
 		if err := usage.Observe(chunk.Usage, "chat_completions", backend.provider, finalUsage); err != nil {
-			return agent.ModelResponse{}, err
+			return modelapi.Response{}, err
 		}
 		if chunk.Error != nil {
-			return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, chunk.Error)
+			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, chunk.Error)
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 {
 				continue
 			}
 			if choice.Error != nil {
-				return agent.ModelResponse{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, choice.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, choice.Error)
 			}
 			// Reject a failed generation before accepting its output or tool
 			// calls; a later usage chunk or size limit must not hide the error.
@@ -205,66 +205,66 @@ func (backend *Backend) Complete(ctx context.Context, request agent.ModelRequest
 					if native := strings.TrimSpace(choice.NativeFinishReason); native != "" {
 						err = fmt.Errorf("%w (native_finish_reason %q)", err, native)
 					}
-					return agent.ModelResponse{}, err
+					return modelapi.Response{}, err
 				}
 				stopReason = normalized
 			}
 			if choice.Delta.ReasoningContent != "" {
 				reasoning.WriteString(choice.Delta.ReasoningContent)
-				emitModelEvent(emit, agent.EventReasoningSummaryDelta, choice.Delta.ReasoningContent)
+				emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, choice.Delta.ReasoningContent)
 			}
 			if choice.Delta.Content != "" {
 				text.WriteString(choice.Delta.Content)
-				emitModelEvent(emit, agent.EventTextDelta, choice.Delta.Content)
+				emitModelEvent(emit, modelapi.EventTextDelta, choice.Delta.Content)
 			}
 			if err := calls.merge(choice.Delta.ToolCalls); err != nil {
-				return agent.ModelResponse{}, fmt.Errorf("decode %s tool calls: %w", backend.provider, err)
+				return modelapi.Response{}, fmt.Errorf("decode %s tool calls: %w", backend.provider, err)
 			}
 		}
 	}
 
 	if limited {
-		stopReason = agent.StopReasonOutputLimit
+		stopReason = modelapi.StopReasonOutputLimit
 	}
-	items := make([]agent.Item, 0, 2+len(calls.calls))
+	items := make([]modelapi.Item, 0, 2+len(calls.calls))
 	if reasoning.Len() != 0 {
-		items = append(items, agent.Item{Kind: agent.ItemReasoning, Text: reasoning.String()})
+		items = append(items, modelapi.Item{Kind: modelapi.ItemReasoning, Text: reasoning.String()})
 	}
 	if text.Len() != 0 {
-		items = append(items, agent.Item{Kind: agent.ItemAssistantText, Text: text.String()})
+		items = append(items, modelapi.Item{Kind: modelapi.ItemAssistantText, Text: text.String()})
 	}
 	// Tool arguments can be truncated when a response stops early.
-	if !agent.IsIncompleteStopReason(stopReason) {
+	if !modelapi.IsIncompleteStopReason(stopReason) {
 		for _, call := range calls.snapshot() {
 			if strings.TrimSpace(call.Function.Name) == "" {
-				return agent.ModelResponse{}, errors.New("chat completion returned a tool call without a name")
+				return modelapi.Response{}, errors.New("chat completion returned a tool call without a name")
 			}
-			arguments, err := agent.NormalizeToolArguments(call.Function.Arguments)
+			arguments, err := modelapi.NormalizeToolArguments(call.Function.Arguments)
 			if err != nil {
-				return agent.ModelResponse{}, fmt.Errorf("chat completion returned invalid arguments for tool %q: %w", call.Function.Name, err)
+				return modelapi.Response{}, fmt.Errorf("chat completion returned invalid arguments for tool %q: %w", call.Function.Name, err)
 			}
-			toolCall := agent.ToolCall{Name: call.Function.Name, RawArguments: arguments}
+			toolCall := modelapi.ToolCall{Name: call.Function.Name, RawArguments: arguments}
 			if call.ID != "" {
 				data, _ := json.Marshal(call.ID, json.Deterministic(true))
-				toolCall.ProviderReferences = []agent.ProviderReference{{
+				toolCall.ProviderReferences = []modelapi.ProviderReference{{
 					Kind: backend.callIDReferenceKind(),
 					Data: data,
 				}}
 			}
-			items = append(items, agent.Item{Kind: agent.ItemToolCall, ToolCall: &toolCall})
+			items = append(items, modelapi.Item{Kind: modelapi.ItemToolCall, ToolCall: &toolCall})
 		}
 	}
 	// Empty output is valid for an incomplete provider stop, which the runtime
 	// reports as an incomplete run rather than a transport failure.
-	if len(items) == 0 && !agent.IsIncompleteStopReason(stopReason) {
-		return agent.ModelResponse{}, errors.New("chat completion returned no output items")
+	if len(items) == 0 && !modelapi.IsIncompleteStopReason(stopReason) {
+		return modelapi.Response{}, errors.New("chat completion returned no output items")
 	}
-	return agent.ModelResponse{Items: items, StopReason: stopReason}, nil
+	return modelapi.Response{Items: items, StopReason: stopReason}, nil
 }
 
-func emitModelEvent(emit func(agent.ModelStreamEvent), kind agent.EventKind, text string) {
+func emitModelEvent(emit func(modelapi.StreamEvent), kind modelapi.StreamEventKind, text string) {
 	if emit != nil {
-		emit(agent.ModelStreamEvent{Kind: kind, Text: text})
+		emit(modelapi.StreamEvent{Kind: kind, Text: text})
 	}
 }
 

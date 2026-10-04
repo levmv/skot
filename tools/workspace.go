@@ -11,6 +11,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/filesearch"
+	"github.com/levmv/skot/model"
 )
 
 type workspace struct {
@@ -139,7 +140,7 @@ func ResolveWorkspaceRoot(root string) (string, error) {
 
 func (workspace *workspace) tool(name, description, schema string, parallelSafe bool, run func(context.Context, string) (agent.ToolOutput, error)) agent.Tool {
 	return agent.Tool{
-		Spec: agent.ToolSpec{
+		Spec: model.ToolSpec{
 			Name:         name,
 			Description:  description,
 			InputSchema:  jsontext.Value(schema),
@@ -150,7 +151,7 @@ func (workspace *workspace) tool(name, description, schema string, parallelSafe 
 }
 
 func decodeArgs(raw string, target any) error {
-	return agent.DecodeToolArguments(raw, target)
+	return model.DecodeToolArguments(raw, target)
 }
 
 func clampLimit(value, fallback, maximum int) int {

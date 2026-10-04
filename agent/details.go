@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/levmv/skot/model"
 )
 
 const maxDetailsBytes = 256 * 1024
@@ -70,22 +72,22 @@ type ProcessResult struct {
 }
 
 // NewDetail encodes one durable, kind-discriminated presentation payload.
-func NewDetail(kind string, value any) (Detail, error) {
+func NewDetail(kind string, value any) (model.Detail, error) {
 	kind = strings.TrimSpace(kind)
 	if kind == "" {
-		return Detail{}, errors.New("detail kind is required")
+		return model.Detail{}, errors.New("detail kind is required")
 	}
 	if !utf8.ValidString(kind) {
-		return Detail{}, errors.New("detail kind must be valid UTF-8")
+		return model.Detail{}, errors.New("detail kind must be valid UTF-8")
 	}
 	data, err := json.Marshal(value, json.Deterministic(true))
 	if err != nil {
-		return Detail{}, fmt.Errorf("encode %s detail: %w", kind, err)
+		return model.Detail{}, fmt.Errorf("encode %s detail: %w", kind, err)
 	}
-	return Detail{Kind: kind, Data: data}, nil
+	return model.Detail{Kind: kind, Data: data}, nil
 }
 
-func FileChangeFromDetail(detail Detail) (FileChange, bool) {
+func FileChangeFromDetail(detail model.Detail) (FileChange, bool) {
 	if detail.Kind != FileChangeDetailKind || len(detail.Data) == 0 {
 		return FileChange{}, false
 	}
@@ -98,7 +100,7 @@ func FileChangeFromDetail(detail Detail) (FileChange, bool) {
 	return change, true
 }
 
-func ProcessResultFromDetail(detail Detail) (ProcessResult, bool) {
+func ProcessResultFromDetail(detail model.Detail) (ProcessResult, bool) {
 	if detail.Kind != ProcessResultDetailKind || len(detail.Data) == 0 {
 		return ProcessResult{}, false
 	}
@@ -109,11 +111,11 @@ func ProcessResultFromDetail(detail Detail) (ProcessResult, bool) {
 	return result, true
 }
 
-func normalizeDetails(details []Detail) ([]Detail, error) {
+func normalizeDetails(details []model.Detail) ([]model.Detail, error) {
 	if len(details) == 0 {
 		return nil, nil
 	}
-	normalized := make([]Detail, len(details))
+	normalized := make([]model.Detail, len(details))
 	total := 0
 	for index, detail := range details {
 		detail.Kind = strings.TrimSpace(detail.Kind)
@@ -130,18 +132,18 @@ func normalizeDetails(details []Detail) ([]Detail, error) {
 		if total > maxDetailsBytes {
 			return nil, errors.New("details exceed size limit")
 		}
-		normalized[index] = Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
+		normalized[index] = model.Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
 	}
 	return normalized, nil
 }
 
-func cloneDetails(details []Detail) []Detail {
+func cloneDetails(details []model.Detail) []model.Detail {
 	if len(details) == 0 {
 		return nil
 	}
-	cloned := make([]Detail, len(details))
+	cloned := make([]model.Detail, len(details))
 	for index, detail := range details {
-		cloned[index] = Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
+		cloned[index] = model.Detail{Kind: detail.Kind, Data: detail.Data.Clone()}
 	}
 	return cloned
 }

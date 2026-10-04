@@ -17,6 +17,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/filesearch"
+	"github.com/levmv/skot/model"
 )
 
 // File-tool text is model-facing: metadata uses key/value header lines,
@@ -71,7 +72,7 @@ func (workspace *workspace) read(ctx context.Context, raw string) (agent.ToolOut
 	} else {
 		output.WriteString(content)
 	}
-	return agent.ToolOutput{Content: agent.TextContent(output.String())}, nil
+	return agent.ToolOutput{Content: model.TextContent(output.String())}, nil
 }
 
 func readNumberedLines(ctx context.Context, path string, offset, limit int) (content string, next int, more bool, digest string, err error) {
@@ -179,9 +180,9 @@ func (workspace *workspace) grep(ctx context.Context, raw string) (agent.ToolOut
 	}
 	if len(lines) == 0 {
 		if oversizedLines == 0 {
-			return agent.ToolOutput{Content: agent.TextContent("no matches\n")}, nil
+			return agent.ToolOutput{Content: model.TextContent("no matches\n")}, nil
 		}
-		return agent.ToolOutput{Content: agent.TextContent(fmt.Sprintf("skipped_oversized_lines: %d\n\nno matches\n", oversizedLines))}, nil
+		return agent.ToolOutput{Content: model.TextContent(fmt.Sprintf("skipped_oversized_lines: %d\n\nno matches\n", oversizedLines))}, nil
 	}
 	var output strings.Builder
 	fmt.Fprintf(&output, "matches: %d\n", len(lines))
@@ -194,7 +195,7 @@ func (workspace *workspace) grep(ctx context.Context, raw string) (agent.ToolOut
 	output.WriteByte('\n')
 	output.WriteString(strings.Join(lines, "\n"))
 	output.WriteByte('\n')
-	return agent.ToolOutput{Content: agent.TextContent(output.String())}, nil
+	return agent.ToolOutput{Content: model.TextContent(output.String())}, nil
 }
 
 func (workspace *workspace) runGrep(ctx context.Context, pattern, include string, plan searchPlan) ([]string, bool, int, error) {
@@ -247,7 +248,7 @@ func (workspace *workspace) glob(ctx context.Context, raw string) (agent.ToolOut
 		return agent.ToolOutput{}, err
 	}
 	if len(paths) == 0 {
-		return agent.ToolOutput{Content: agent.TextContent("no paths\n")}, nil
+		return agent.ToolOutput{Content: model.TextContent("no paths\n")}, nil
 	}
 	var output strings.Builder
 	fmt.Fprintf(&output, "paths: %d\n", len(paths))
@@ -257,7 +258,7 @@ func (workspace *workspace) glob(ctx context.Context, raw string) (agent.ToolOut
 	output.WriteByte('\n')
 	output.WriteString(strings.Join(paths, "\n"))
 	output.WriteByte('\n')
-	return agent.ToolOutput{Content: agent.TextContent(output.String())}, nil
+	return agent.ToolOutput{Content: model.TextContent(output.String())}, nil
 }
 
 func (workspace *workspace) runGlob(ctx context.Context, pattern string, plan searchPlan) ([]string, bool, error) {
@@ -380,8 +381,8 @@ func (workspace *workspace) edit(ctx context.Context, raw string) (agent.ToolOut
 		return agent.ToolOutput{}, err
 	}
 	return agent.ToolOutput{
-		Content: agent.TextContent(fmt.Sprintf("operation: %s\nsha256: %x\n", change.Operation, newHash)),
-		Details: []agent.Detail{detail},
+		Content: model.TextContent(fmt.Sprintf("operation: %s\nsha256: %x\n", change.Operation, newHash)),
+		Details: []model.Detail{detail},
 	}, nil
 }
 
@@ -435,8 +436,8 @@ func (workspace *workspace) write(ctx context.Context, raw string) (agent.ToolOu
 		return agent.ToolOutput{}, err
 	}
 	return agent.ToolOutput{
-		Content: agent.TextContent(fmt.Sprintf("operation: %s\nsha256: %x\n", operation, newHash)),
-		Details: []agent.Detail{detail},
+		Content: model.TextContent(fmt.Sprintf("operation: %s\nsha256: %x\n", operation, newHash)),
+		Details: []model.Detail{detail},
 	}, nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 const (
@@ -68,7 +69,7 @@ func (workspace *workspace) ls(ctx context.Context, raw string) (agent.ToolOutpu
 	limit := clampLimit(args.Limit, defaultListEntries, maxListEntries)
 	start := min(offset-1, len(entries))
 	if start >= len(entries) {
-		return agent.ToolOutput{Content: agent.TextContent("no entries\n")}, nil
+		return agent.ToolOutput{Content: model.TextContent("no entries\n")}, nil
 	}
 	lines := make([]string, 0, min(limit, len(entries)-start))
 	usedBytes := 0
@@ -97,7 +98,7 @@ func (workspace *workspace) ls(ctx context.Context, raw string) (agent.ToolOutpu
 	output.WriteByte('\n')
 	output.WriteString(strings.Join(lines, "\n"))
 	output.WriteByte('\n')
-	return agent.ToolOutput{Content: agent.TextContent(output.String())}, nil
+	return agent.ToolOutput{Content: model.TextContent(output.String())}, nil
 }
 
 func formatDirectoryEntry(directory string, entry os.DirEntry) (string, error) {

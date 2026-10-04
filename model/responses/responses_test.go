@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
@@ -63,10 +63,10 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	backend := newTestServerBackend(t, server, "/v1")
 	backend.header = make(http.Header)
 	backend.header.Set("X-Test", "yes")
-	var events []agent.ModelStreamEvent
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Instructions: "be brief", Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
-	}, func(event agent.ModelStreamEvent) { events = append(events, event) })
+	var events []model.StreamEvent
+	response, err := backend.Complete(context.Background(), model.Request{
+		Instructions: "be brief", Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
+	}, func(event model.StreamEvent) { events = append(events, event) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,22 +83,22 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	if err := json.Unmarshal(received.Input[0], &user); err != nil || user.Role != "user" || user.Content != "hi" {
 		t.Fatalf("user input = %#v, %v", user, err)
 	}
-	if response.StopReason != "stop" || response.Usage != (agent.ModelUsage{
+	if response.StopReason != "stop" || response.Usage.Tokens.Known() != (model.TokenCounts{
 		InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17,
 	}) {
 		t.Fatalf("response metadata = %#v", response)
 	}
-	if len(response.Items) != 2 || response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking " ||
+	if len(response.Items) != 2 || response.Items[0].Kind != model.ItemReasoning || response.Items[0].Text != "checking " ||
 		len(response.Items[0].ProviderData) != 1 || response.Items[0].ProviderData[0].Kind != reasoningItemDataKind ||
 		string(response.Items[0].ProviderData[0].Data) != `{"id":"rs_1","encrypted_content":"ciphertext"}` ||
 		bytes.Contains(response.Items[0].ProviderData[0].Data, []byte("checking")) ||
-		response.Items[1].Kind != agent.ItemAssistantText || response.Items[1].Text != "hello" {
+		response.Items[1].Kind != model.ItemAssistantText || response.Items[1].Text != "hello" {
 		t.Fatalf("response items = %#v", response.Items)
 	}
-	if !reflect.DeepEqual(events, []agent.ModelStreamEvent{
-		{Kind: agent.EventReasoningSummaryDelta, Text: "checking "},
-		{Kind: agent.EventTextDelta, Text: "hel"},
-		{Kind: agent.EventTextDelta, Text: "lo"},
+	if !reflect.DeepEqual(events, []model.StreamEvent{
+		{Kind: model.EventReasoningSummaryDelta, Text: "checking "},
+		{Kind: model.EventTextDelta, Text: "hel"},
+		{Kind: model.EventTextDelta, Text: "lo"},
 	}) {
 		t.Fatalf("events = %#v", events)
 	}
@@ -147,16 +147,16 @@ func TestCompleteAssemblesFinishedItemsWithCompactTerminalResponse(t *testing.T)
 				writeSSEEvent(t, writer, map[string]any{"type": test.terminal, "response": terminal})
 			}))
 			backend := newTestServerBackend(t, server, "")
-			var events []agent.ModelStreamEvent
-			response, err := backend.Complete(t.Context(), agent.ModelRequest{}, func(event agent.ModelStreamEvent) { events = append(events, event) })
+			var events []model.StreamEvent
+			response, err := backend.Complete(t.Context(), model.Request{}, func(event model.StreamEvent) { events = append(events, event) })
 			if err != nil {
 				t.Fatal(err)
 			}
-			if response.Usage != (agent.ModelUsage{InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17}) {
+			if response.Usage.Tokens.Known() != (model.TokenCounts{InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17}) {
 				t.Fatalf("usage = %#v", response.Usage)
 			}
-			if !reflect.DeepEqual(events, []agent.ModelStreamEvent{
-				{Kind: agent.EventReasoningSummaryDelta, Text: "checking"}, {Kind: agent.EventTextDelta, Text: "Reading."},
+			if !reflect.DeepEqual(events, []model.StreamEvent{
+				{Kind: model.EventReasoningSummaryDelta, Text: "checking"}, {Kind: model.EventTextDelta, Text: "Reading."},
 			}) {
 				t.Fatalf("duplicated or missing streaming output: %#v", events)
 			}
@@ -167,7 +167,7 @@ func TestCompleteAssemblesFinishedItemsWithCompactTerminalResponse(t *testing.T)
 			if len(response.Items) != wantCount || response.StopReason != wantStop {
 				t.Fatalf("output count/stop = %d/%s", len(response.Items), response.StopReason)
 			}
-			if response.Items[0].Kind != agent.ItemReasoning || response.Items[0].Text != "checking" || len(response.Items[0].ProviderData) != 1 || string(response.Items[0].ProviderData[0].Data) != `{"id":"rs_1","encrypted_content":"ciphertext"}` || response.Items[1].Kind != agent.ItemAssistantText || response.Items[1].Text != "Reading." {
+			if response.Items[0].Kind != model.ItemReasoning || response.Items[0].Text != "checking" || len(response.Items[0].ProviderData) != 1 || string(response.Items[0].ProviderData[0].Data) != `{"id":"rs_1","encrypted_content":"ciphertext"}` || response.Items[1].Kind != model.ItemAssistantText || response.Items[1].Text != "Reading." {
 				t.Fatalf("lost or reordered completed items: %#v", response.Items)
 			}
 			if test.status == "completed" {
@@ -194,8 +194,8 @@ func TestCompleteDoesNotPromoteUnfinishedStreamItems(t *testing.T) {
 		writeSSEEvent(t, writer, map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed"}})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(t.Context(), agent.ModelRequest{}, nil)
-	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "no output items") {
+	_, err := backend.Complete(t.Context(), model.Request{}, nil)
+	if !errors.Is(err, model.ErrProviderFailure) || !strings.Contains(err.Error(), "no output items") {
 		t.Fatalf("unfinished tool call was accepted: %v", err)
 	}
 }
@@ -211,21 +211,21 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	}
 	reasoningState := jsontext.Value(`{"id":"rs_1","encrypted_content":"ciphertext"}`)
 	identityRaw := jsontext.Value(`{"id":"fc_1","call_id":"provider_call_1","status":"completed"}`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_1", Instructions: "instructions", Summary: "older summary",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "inspect"},
-			{Kind: agent.ItemReasoning, ResponseID: "response_1", Text: "sanitized summary", ProviderContext: &agent.ProviderContext{Backend: "responses.openai", Epoch: "epoch_1"}, ProviderData: []agent.ProviderData{{Kind: reasoningItemDataKind, Data: reasoningState}}},
-			{Kind: agent.ItemAssistantText, ResponseID: "response_1", Text: "calling tool"},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+		Items: []model.Item{
+			{Kind: model.ItemUserText, Text: "inspect"},
+			{Kind: model.ItemReasoning, ResponseID: "response_1", Text: "sanitized summary", ProviderContext: &model.ProviderContext{Backend: "responses.openai", Epoch: "epoch_1"}, ProviderData: []model.ProviderData{{Kind: reasoningItemDataKind, Data: reasoningState}}},
+			{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "calling tool"},
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID: "skot_call_1", Name: "read_file", RawArguments: `{"path":"README.md"}`,
-				ProviderReferences: []agent.ProviderReference{{
+				ProviderReferences: []model.ProviderReference{{
 					Kind: backend.callReferenceKind(), Backend: "responses.openai", Epoch: "epoch_1", Data: identityRaw,
 				}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call_1", Content: agent.TextContent("contents")}},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "skot_call_1", Content: model.TextContent("contents")}},
 		},
-		Tools: []agent.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
+		Tools: []model.ToolSpec{{Name: "read_file", Description: "Read a file", InputSchema: jsontext.Value(`{"type":"object"}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,10 +284,10 @@ func TestBuildRequestLowersImageFunctionOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{
-		{Kind: agent.ItemUserText, Text: "inspect"},
-		{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"shot.jpg"}`}},
-		{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.ImageToolContent("image metadata", agent.ImageContent{
+	request, err := backend.buildRequest(model.Request{Items: []model.Item{
+		{Kind: model.ItemUserText, Text: "inspect"},
+		{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"shot.jpg"}`}},
+		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.ImageToolContent("image metadata", model.ImageContent{
 			MediaType: "image/jpeg", Data: []byte{1, 2, 3}, Width: 10, Height: 5,
 		})}},
 	}})
@@ -311,9 +311,9 @@ func TestBuildRequestLowersImageFunctionOutput(t *testing.T) {
 
 func TestBuildRequestIncludesRequiredEmptyReasoningSummary(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
-	request, err := backend.buildRequest(agent.ModelRequest{Items: []agent.Item{{
-		Kind: agent.ItemReasoning, ResponseID: "response_1",
-		ProviderData: []agent.ProviderData{{
+	request, err := backend.buildRequest(model.Request{Items: []model.Item{{
+		Kind: model.ItemReasoning, ResponseID: "response_1",
+		ProviderData: []model.ProviderData{{
 			Kind: reasoningItemDataKind, Data: jsontext.Value(`{"id":"rs_1","encrypted_content":"ciphertext"}`),
 		}},
 	}}})
@@ -385,7 +385,7 @@ func TestParseResponsePreservesPartialOutputWithoutToolCalls(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "partial"}}) ||
+			if !reflect.DeepEqual(response.Items, []model.Item{{Kind: model.ItemAssistantText, Text: "partial"}}) ||
 				response.StopReason != test.details.Reason {
 				t.Fatalf("incomplete response = %#v", response)
 			}
@@ -401,7 +401,7 @@ func TestParseResponseAcceptsDocumentedIncompleteReasonAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != "max_tokens" || !agent.IsIncompleteStopReason(response.StopReason) {
+	if response.StopReason != "max_tokens" || !model.IsIncompleteStopReason(response.StopReason) {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -416,17 +416,17 @@ func TestCompleteClassifiesStreamRateLimit(t *testing.T) {
 		})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
-		providerErr.Kind != agent.ProviderErrorRateLimit || providerErr.Code != "rate_limit_exceeded" || !providerErr.Retryable {
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != model.ProviderErrorRateLimit || providerErr.Code != "rate_limit_exceeded" || !providerErr.Retryable {
 		t.Fatalf("error/metadata = %v / %#v", err, providerErr)
 	}
 }
 
 func TestNormalizedIncompleteReasonsAreIncomplete(t *testing.T) {
 	for provider, normalized := range incompleteReasons {
-		if !agent.IsIncompleteStopReason(normalized) {
+		if !model.IsIncompleteStopReason(normalized) {
 			t.Errorf("incomplete reason %q normalized to %q is not incomplete", provider, normalized)
 		}
 	}
@@ -440,7 +440,7 @@ func TestCompleteRejectsMismatchedTerminalEventStatus(t *testing.T) {
 		})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{}, nil)
+	_, err := backend.Complete(context.Background(), model.Request{}, nil)
 	if err == nil || !strings.Contains(err.Error(), `terminal event "response.completed" carries status "incomplete"`) {
 		t.Fatalf("terminal mismatch error = %v", err)
 	}
@@ -460,15 +460,15 @@ func TestParseResponseRequiresEncryptedReasoningState(t *testing.T) {
 func TestBuildRequestDropsMismatchedProviderState(t *testing.T) {
 	backend := newTestBackend(t, "http://example.invalid/v1")
 	identityRaw := jsontext.Value(`{"id":"fc_old","call_id":"provider_old"}`)
-	request, err := backend.buildRequest(agent.ModelRequest{
+	request, err := backend.buildRequest(model.Request{
 		ProviderEpoch: "epoch_new",
-		Items: []agent.Item{
-			{Kind: agent.ItemReasoning, ResponseID: "response_1", ProviderContext: &agent.ProviderContext{Backend: "responses.test", Epoch: "epoch_old"}, ProviderData: []agent.ProviderData{{Kind: reasoningItemDataKind, Data: jsontext.Value(`{"id":"rs_old","encrypted_content":"old"}`)}}},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{
+		Items: []model.Item{
+			{Kind: model.ItemReasoning, ResponseID: "response_1", ProviderContext: &model.ProviderContext{Backend: "responses.test", Epoch: "epoch_old"}, ProviderData: []model.ProviderData{{Kind: reasoningItemDataKind, Data: jsontext.Value(`{"id":"rs_old","encrypted_content":"old"}`)}}},
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID: "skot_call", Name: "read", RawArguments: `{}`,
-				ProviderReferences: []agent.ProviderReference{{Kind: backend.callReferenceKind(), Backend: "responses.test", Epoch: "epoch_old", Data: identityRaw}},
+				ProviderReferences: []model.ProviderReference{{Kind: backend.callReferenceKind(), Backend: "responses.test", Epoch: "epoch_old", Data: identityRaw}},
 			}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "skot_call", Content: agent.TextContent("done")}},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "skot_call", Content: model.TextContent("done")}},
 		},
 	})
 	if err != nil {
@@ -499,17 +499,17 @@ func TestCompletePreservesPartialTextAtLocalOutputLimit(t *testing.T) {
 	}))
 	backend := newTestServerBackend(t, server, "")
 	backend.maxCompletionBytes = len(first)
-	var events []agent.ModelStreamEvent
-	response, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "continue"}},
-	}, func(event agent.ModelStreamEvent) { events = append(events, event) })
+	var events []model.StreamEvent
+	response, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "continue"}},
+	}, func(event model.StreamEvent) { events = append(events, event) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != agent.StopReasonOutputLimit || !reflect.DeepEqual(response.Items, []agent.Item{{Kind: agent.ItemAssistantText, Text: "kept"}}) {
+	if response.StopReason != model.StopReasonOutputLimit || !reflect.DeepEqual(response.Items, []model.Item{{Kind: model.ItemAssistantText, Text: "kept"}}) {
 		t.Fatalf("partial response = %#v", response)
 	}
-	if !reflect.DeepEqual(events, []agent.ModelStreamEvent{{Kind: agent.EventTextDelta, Text: "kept"}}) {
+	if !reflect.DeepEqual(events, []model.StreamEvent{{Kind: model.EventTextDelta, Text: "kept"}}) {
 		t.Fatalf("events = %#v", events)
 	}
 }
@@ -519,10 +519,10 @@ func TestCompleteRejectsOversizedRequestWithoutSendingIt(t *testing.T) {
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
 	backend := newTestServerBackend(t, server, "")
 	backend.maxRequestBytes = 64
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: strings.Repeat("x", 128)}},
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: strings.Repeat("x", 128)}},
 	}, nil)
-	if !errors.Is(err, agent.ErrInvalidRequest) || !errors.Is(err, agent.ErrModelRequestTooLarge) || requests.Load() != 0 {
+	if !errors.Is(err, model.ErrInvalidRequest) || !errors.Is(err, model.ErrModelRequestTooLarge) || requests.Load() != 0 {
 		t.Fatalf("error/requests = %v/%d", err, requests.Load())
 	}
 }
@@ -534,10 +534,10 @@ func TestCompleteReturnsStructuredProviderHTTPError(t *testing.T) {
 		_, _ = io.WriteString(writer, `{"error":{"message":"slow down","type":"rate_limit"}}`)
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) ||
-		providerErr.Kind != agent.ProviderErrorRateLimit || !providerErr.Retryable ||
+	_, err := backend.Complete(context.Background(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, nil)
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) ||
+		providerErr.Kind != model.ProviderErrorRateLimit || !providerErr.Retryable ||
 		providerErr.Type != "rate_limit" || providerErr.RetryAfter != 7*time.Second || !strings.Contains(err.Error(), "slow down") {
 		t.Fatalf("error = %v / %#v", err, providerErr)
 	}
@@ -571,11 +571,11 @@ func TestCompleteReturnsStructuredStreamErrors(t *testing.T) {
 				writeSSEEvent(t, writer, test.event)
 			}))
 			backend := newTestServerBackend(t, server, "")
-			_, err := backend.Complete(context.Background(), agent.ModelRequest{
-				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}},
+			_, err := backend.Complete(context.Background(), model.Request{
+				Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
 			}, nil)
-			if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) ||
-				errors.Is(err, agent.ErrModelRequestTooLarge) != test.tooLarge {
+			if !errors.Is(err, model.ErrProviderFailure) || !strings.Contains(err.Error(), test.want) ||
+				errors.Is(err, model.ErrModelRequestTooLarge) != test.tooLarge {
 				t.Fatalf("error = %v", err)
 			}
 		})
@@ -592,10 +592,10 @@ func TestCompleteHonorsStreamIdleTimeout(t *testing.T) {
 		<-request.Context().Done()
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{
-		Items: []agent.Item{{Kind: agent.ItemUserText, Text: "wait"}}, StreamIdleTimeout: 20 * time.Millisecond,
+	_, err := backend.Complete(context.Background(), model.Request{
+		Items: []model.Item{{Kind: model.ItemUserText, Text: "wait"}}, StreamIdleTimeout: 20 * time.Millisecond,
 	}, nil)
-	if !errors.Is(err, agent.ErrModelStreamIdle) || !errors.Is(err, agent.ErrProviderFailure) {
+	if !errors.Is(err, model.ErrModelStreamIdle) || !errors.Is(err, model.ErrProviderFailure) {
 		t.Fatalf("idle error = %v", err)
 	}
 }
@@ -610,7 +610,7 @@ func TestCompleteHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := backend.Complete(ctx, agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "wait"}}}, nil)
+		_, err := backend.Complete(ctx, model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "wait"}}}, nil)
 		done <- err
 	}()
 	<-started
@@ -630,8 +630,8 @@ func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
 		})
 	}))
 	backend := newTestServerBackend(t, server, "")
-	_, err := backend.Complete(context.Background(), agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "hi"}}}, nil)
-	if !errors.Is(err, agent.ErrProviderFailure) || !strings.Contains(err.Error(), "terminal event") {
+	_, err := backend.Complete(context.Background(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, nil)
+	if !errors.Is(err, model.ErrProviderFailure) || !strings.Contains(err.Error(), "terminal event") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -644,7 +644,7 @@ func TestBuildRequestUsesCanonicalAPIModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := backend.buildRequest(agent.ModelRequest{})
+	request, err := backend.buildRequest(model.Request{})
 	if err != nil || request.Model != "wire-model" || backend.backendID() != BackendID("openai") {
 		t.Fatalf("wire model/backend/error = %q/%q/%v", request.Model, backend.backendID(), err)
 	}
@@ -698,7 +698,7 @@ func TestParseResponseKeepsIncompleteStatusWithoutDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StopReason != "incomplete" || !agent.IsIncompleteStopReason(response.StopReason) {
+	if response.StopReason != "incomplete" || !model.IsIncompleteStopReason(response.StopReason) {
 		t.Fatalf("response = %#v", response)
 	}
 }
@@ -709,8 +709,8 @@ func TestParseResponseRejectsUnknownIncompleteReason(t *testing.T) {
 		Status: "incomplete", IncompleteDetails: &incompleteDetail{Reason: "guardrail_intervened"},
 		Output: []jsontext.Value{jsontext.Value(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}`)},
 	})
-	var providerErr *agent.ProviderError
-	if !errors.Is(err, agent.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||
+	var providerErr *model.ProviderError
+	if !errors.Is(err, model.ErrProviderFailure) || !errors.As(err, &providerErr) || providerErr.Retryable ||
 		!strings.Contains(err.Error(), "guardrail_intervened") {
 		t.Fatalf("unknown incomplete reason error = %v / %#v", err, providerErr)
 	}

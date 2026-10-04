@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestCatalogListsWorkspaceSessionsAndResolvesPrefix(t *testing.T) {
@@ -154,7 +155,7 @@ func createCatalogSession(t *testing.T, home, workspace, input string) string {
 		t.Fatal(err)
 	}
 	appendCatalogRecord(t, store, agent.RecordSessionStarted, agent.SessionStartedRecord{SchemaVersion: agent.JournalSchemaVersion, SessionID: id, Workspace: workspace})
-	appendCatalogRecord(t, store, agent.RecordModelSelected, agent.ModelSelectedRecord{Backend: "test", Model: "model", Epoch: "epoch"})
+	appendCatalogRecord(t, store, agent.RecordModelSelected, model.ReplayContext{Backend: "test", Model: "model", Epoch: "epoch"})
 	appendCatalogRecord(t, store, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "run"})
 	appendCatalogRecord(t, store, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "run", Text: input})
 	appendCatalogRecord(t, store, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "run", Status: agent.RunCompleted})

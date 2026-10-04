@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
 func TestInteractiveCleanupCanBeInterrupted(t *testing.T) {
@@ -43,11 +44,11 @@ func TestExitCodeForClassifiesCallerAction(t *testing.T) {
 	}{
 		{name: "success", want: exitOK},
 		{name: "unclassified", err: errors.New("broken invariant"), want: exitFailure},
-		{name: "configuration", err: agent.MarkInvalidRequest(errors.New("bad model")), want: exitConfig},
+		{name: "configuration", err: model.MarkInvalidRequest(errors.New("bad model")), want: exitConfig},
 		{name: "incomplete", err: agent.RunIncompleteError{StopReason: "length"}, want: exitConfig},
-		{name: "provider", err: agent.MarkProviderFailure(errors.New("unavailable")), want: exitProvider},
+		{name: "provider", err: model.MarkProviderFailure(errors.New("unavailable")), want: exitProvider},
 		{name: "interrupted", err: fmt.Errorf("run: %w", context.Canceled), want: exitInterrupted},
-		{name: "interruption wins", err: errors.Join(agent.MarkProviderFailure(errors.New("unavailable")), context.Canceled), want: exitInterrupted},
+		{name: "interruption wins", err: errors.Join(model.MarkProviderFailure(errors.New("unavailable")), context.Canceled), want: exitInterrupted},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

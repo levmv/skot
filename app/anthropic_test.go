@@ -10,7 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelconfig"
+	"github.com/levmv/skot/model"
 )
 
 func TestAnthropicThinkingBindingIsScopedToReviewedRoute(t *testing.T) {
@@ -27,7 +28,7 @@ func TestAnthropicThinkingBindingIsScopedToReviewedRoute(t *testing.T) {
 		{name: "compatible Messages", uri: "opencode-go/minimax-m3"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			route, err := resolveModelRoute(test.uri, "", modelRouteOverrides{BaseURL: test.baseURL}, modelRouteEnrichment{})
+			route, err := modelconfig.Resolve(test.uri, "", modelconfig.Overrides{BaseURL: test.baseURL}, modelconfig.Enrichment{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,12 +79,12 @@ data: {"type":"message_stop"}
 `)),
 				}, nil
 			})}
-			backend, err := buildModelBackend(route, nil, modelBackendOptions{requireCredential: true, httpClient: client})
+			backend, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := backend.Complete(context.Background(), agent.ModelRequest{
-				Items: []agent.Item{{Kind: agent.ItemUserText, Text: "reply ok"}},
+			if _, err := backend.Complete(context.Background(), model.Request{
+				Items: []model.Item{{Kind: model.ItemUserText, Text: "reply ok"}},
 			}, nil); err != nil {
 				t.Fatal(err)
 			}

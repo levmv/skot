@@ -12,7 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/modelconfig"
+	"github.com/levmv/skot/model"
 )
 
 type appRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -28,8 +29,8 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		uri                 string
 		effort              string
 		path                string
-		protocol            modelAPI
-		request             agent.ModelRequest
+		protocol            modelconfig.API
+		request             model.Request
 		wantReplayReasoning string
 		checkReplay         bool
 		writeBody           func(io.Writer)
@@ -37,7 +38,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 	}{
 		{
 			name: "chat completions all-turn replay", uri: "opencode-go/deepseek-flash", effort: "low",
-			path: "/zen/go/v1/chat/completions", protocol: modelAPIChatCompletions,
+			path: "/zen/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
 			request:             openCodeGoReplayRequest(),
 			wantReplayReasoning: "tool reasoningplain reasoning",
 			checkReplay:         true,
@@ -56,7 +57,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "chat completions default thinking replay", uri: "opencode-go/mimo-v2.6-pro",
-			path: "/zen/go/v1/chat/completions", protocol: modelAPIChatCompletions,
+			path: "/zen/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
 			request:             openCodeGoReplayRequest(),
 			wantReplayReasoning: "tool reasoningplain reasoning",
 			checkReplay:         true,
@@ -75,7 +76,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "chat completions current-turn replay", uri: "opencode-go/kimi-k3", effort: "max",
-			path: "/zen/go/v1/chat/completions", protocol: modelAPIChatCompletions,
+			path: "/zen/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
 			request:     openCodeGoReplayRequest(),
 			checkReplay: true,
 			writeBody: func(writer io.Writer) {
@@ -90,8 +91,8 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "responses reasoning controls", uri: "opencode-go/gpt-5.6-luna", effort: "high",
-			path: "/zen/go/v1/responses", protocol: modelAPIResponses,
-			request: agent.ModelRequest{Items: []agent.Item{{Kind: agent.ItemUserText, Text: "reply ok"}}},
+			path: "/zen/go/v1/responses", protocol: modelconfig.Responses,
+			request: model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "reply ok"}}},
 			writeBody: func(writer io.Writer) {
 				fmt.Fprint(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
 				fmt.Fprint(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n")
@@ -118,9 +119,9 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "anthropic messages", uri: "opencode-go/minimax-m3",
-			path: "/zen/go/v1/messages", protocol: modelAPIAnthropicMessages,
-			request: agent.ModelRequest{
-				Instructions: "be brief", Items: []agent.Item{{Kind: agent.ItemUserText, Text: "reply ok"}},
+			path: "/zen/go/v1/messages", protocol: modelconfig.AnthropicMessages,
+			request: model.Request{
+				Instructions: "be brief", Items: []model.Item{{Kind: model.ItemUserText, Text: "reply ok"}},
 			},
 			writeBody: func(writer io.Writer) {
 				fmt.Fprint(writer, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n")
@@ -158,7 +159,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				if got := request.Header.Get("User-Agent"); got != "Skot" {
 					t.Errorf("user agent = %q", got)
 				}
-				if test.protocol == modelAPIAnthropicMessages {
+				if test.protocol == modelconfig.AnthropicMessages {
 					if key := request.Header.Get("x-api-key"); key != "subscription-secret" {
 						t.Errorf("x-api-key = %q", key)
 					}
@@ -217,19 +218,19 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				return transport.RoundTrip(clone)
 			})}
 
-			route, err := resolveModelRoute(test.uri, test.effort, modelRouteOverrides{}, modelRouteEnrichment{})
+			route, err := modelconfig.Resolve(test.uri, test.effort, modelconfig.Overrides{}, modelconfig.Enrichment{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if route.API != test.protocol || route.Compatibility != modelCompatibilitySupported ||
+			if route.API != test.protocol || route.Compatibility != modelconfig.Supported ||
 				route.BaseURL != "https://opencode.ai/zen/go/v1" {
 				t.Fatalf("route = %#v", route)
 			}
-			backend, err := buildModelBackend(route, nil, modelBackendOptions{requireCredential: true, httpClient: client})
+			backend, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
 			if err != nil {
 				t.Fatal(err)
 			}
-			info, err := modelInfoForRoute(route)
+			info, err := modelconfig.Info(route)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -240,30 +241,30 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(response.Items) != 1 || response.Items[0].Kind != agent.ItemAssistantText || response.Items[0].Text != "ok" {
+			if len(response.Items) != 1 || response.Items[0].Kind != model.ItemAssistantText || response.Items[0].Text != "ok" {
 				t.Fatalf("response = %#v", response)
 			}
 		})
 	}
 }
 
-func openCodeGoReplayRequest() agent.ModelRequest {
-	return agent.ModelRequest{
+func openCodeGoReplayRequest() model.Request {
+	return model.Request{
 		ProviderEpoch: "epoch_1",
-		Items: []agent.Item{
-			{Kind: agent.ItemUserText, Text: "first"},
+		Items: []model.Item{
+			{Kind: model.ItemUserText, Text: "first"},
 			{
-				Kind: agent.ItemReasoning, ResponseID: "response_1", Text: "tool reasoning",
-				ProviderContext: &agent.ProviderContext{Backend: "chat_completions.opencode-go", Epoch: "epoch_1"},
+				Kind: model.ItemReasoning, ResponseID: "response_1", Text: "tool reasoning",
+				ProviderContext: &model.ProviderContext{Backend: "chat_completions.opencode-go", Epoch: "epoch_1"},
 			},
-			{Kind: agent.ItemToolCall, ResponseID: "response_1", ToolCall: &agent.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`}},
-			{Kind: agent.ItemToolResult, ToolResult: &agent.ToolResult{CallID: "call_1", Content: agent.TextContent("contents")}},
+			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{ID: "call_1", Name: "read", RawArguments: `{"path":"README.md"}`}},
+			{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.TextContent("contents")}},
 			{
-				Kind: agent.ItemReasoning, ResponseID: "response_2", Text: "plain reasoning",
-				ProviderContext: &agent.ProviderContext{Backend: "chat_completions.opencode-go", Epoch: "epoch_1"},
+				Kind: model.ItemReasoning, ResponseID: "response_2", Text: "plain reasoning",
+				ProviderContext: &model.ProviderContext{Backend: "chat_completions.opencode-go", Epoch: "epoch_1"},
 			},
-			{Kind: agent.ItemAssistantText, ResponseID: "response_2", Text: "done"},
-			{Kind: agent.ItemUserText, Text: "second"},
+			{Kind: model.ItemAssistantText, ResponseID: "response_2", Text: "done"},
+			{Kind: model.ItemUserText, Text: "second"},
 		},
 	}
 }

@@ -18,7 +18,9 @@ import (
 	"github.com/levmv/skot/app"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/session"
+	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/ui"
+	"github.com/levmv/skot/model"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -87,7 +89,7 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (returnErr error) {
 	defaultHome := strings.TrimSpace(os.Getenv("SK_HOME"))
 	systemPromptEnv, systemPromptEnvSet := os.LookupEnv("SK_SYSTEM_PROMPT")
-	if resolved, err := app.ResolveHome(defaultHome); err == nil {
+	if resolved, err := state.ResolveHome(defaultHome); err == nil {
 		// Resolution is best-effort until flags are parsed so `sk -version` does
 		// not depend on a usable home directory. app.Open validates it for every
 		// invocation that actually needs local data.
@@ -120,7 +122,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.BoolVar(&config.showVersion, "version", false, "print the Skot version and exit")
 	flags.Usage = func() { writeCLIUsage(flags) }
 	if err := flags.Parse(args); err != nil {
-		return agent.MarkInvalidRequest(err)
+		return model.MarkInvalidRequest(err)
 	}
 	setFlags := make(map[string]bool)
 	flags.Visit(func(value *flag.Flag) { setFlags[value.Name] = true })
@@ -134,32 +136,32 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	invocation := parseInvocation(flags.Args(), explicitPrompt)
 	if invocation.update {
 		if len(invocation.args) != 0 {
-			return agent.MarkInvalidRequest(errors.New("update does not accept arguments; put -- before the text to send it as a prompt"))
+			return model.MarkInvalidRequest(errors.New("update does not accept arguments; put -- before the text to send it as a prompt"))
 		}
 		return runUpdateCommand(ctx, stdout)
 	}
 	if invocation.resume && !session.LooksLikeIDPrefix(invocation.sessionPrefix) {
-		return agent.MarkInvalidRequest(fmt.Errorf("%q is not a session ID; put -- before the text to send it as a prompt", invocation.sessionPrefix))
+		return model.MarkInvalidRequest(fmt.Errorf("%q is not a session ID; put -- before the text to send it as a prompt", invocation.sessionPrefix))
 	}
 	retryBudget, err := parsePositiveDuration(config.retryBudget, "retry budget")
 	if err != nil {
-		return agent.MarkInvalidRequest(err)
+		return model.MarkInvalidRequest(err)
 	}
 	streamIdleTimeout, err := parsePositiveDuration(config.streamIdleTimeout, "stream idle timeout")
 	if err != nil {
-		return agent.MarkInvalidRequest(err)
+		return model.MarkInvalidRequest(err)
 	}
 	maxToolIterations, err := parsePositiveIntOrUnlimited(config.maxToolIterations, "max tool iterations")
 	if err != nil {
-		return agent.MarkInvalidRequest(err)
+		return model.MarkInvalidRequest(err)
 	}
 	if strings.TrimSpace(config.systemPromptFile) != "" {
 		if config.systemPromptExplicit {
-			return agent.MarkInvalidRequest(errors.New("set system instructions with -system-prompt or -system-prompt-file, not both"))
+			return model.MarkInvalidRequest(errors.New("set system instructions with -system-prompt or -system-prompt-file, not both"))
 		}
 		config.systemPrompt, err = loadPromptFile(config.systemPromptFile, "system prompt")
 		if err != nil {
-			return agent.MarkInvalidRequest(err)
+			return model.MarkInvalidRequest(err)
 		}
 		config.systemPromptExplicit = true
 	}
@@ -173,7 +175,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if !interactive {
 		prompt, err = readPrompt(invocation.args, stdin)
 		if err != nil {
-			return agent.MarkInvalidRequest(err)
+			return model.MarkInvalidRequest(err)
 		}
 	}
 
@@ -246,7 +248,7 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 	sessionWasResumable := application.SessionID() != ""
 	result, runErr := application.Run(ctx, prompt, emit)
 	durationMillis := time.Since(startedAt).Milliseconds()
-	var usage agent.ModelUsage
+	var usage model.TokenCounts
 	var accounting *agent.UsageReport
 	if measureUsage {
 		report, err := application.Usage(context.WithoutCancel(ctx), usageBefore)

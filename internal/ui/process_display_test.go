@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestJobActionsShowCommandWhenAvailable(t *testing.T) {
@@ -14,16 +15,16 @@ func TestJobActionsShowCommandWhenAvailable(t *testing.T) {
 	for _, test := range []struct {
 		name            string
 		command         string
-		launch          *agent.ToolCall
+		launch          *modelapi.ToolCall
 		statusAvailable bool
 	}{
 		{
 			name: "legacy bash launch", command: "go test ./...",
-			launch: &agent.ToolCall{ID: "launch", Name: "bash", RawArguments: `{"command":"go test ./...","background":true}`},
+			launch: &modelapi.ToolCall{ID: "launch", Name: "bash", RawArguments: `{"command":"go test ./...","background":true}`},
 		},
 		{
 			name: "program launch", command: "build_project",
-			launch: &agent.ToolCall{ID: "launch", Name: "build_project", RawArguments: `{}`},
+			launch: &modelapi.ToolCall{ID: "launch", Name: "build_project", RawArguments: `{}`},
 		},
 		{name: "runtime", command: "go test ./...", statusAvailable: true},
 		{name: "result only", command: "go test ./..."},
@@ -34,7 +35,7 @@ func TestJobActionsShowCommandWhenAvailable(t *testing.T) {
 				process := agent.ProcessResult{JobID: jobID, Command: test.command, Status: agent.ProcessRunning, DurationMillis: 42000}
 				fake := &fakeAgent{}
 				if test.statusAvailable {
-					fake.status = []agent.Detail{processDetailForTest(t, process)}
+					fake.status = []modelapi.Detail{processDetailForTest(t, process)}
 					fake.statusFound = true
 				}
 				model := testScreenModel(t, fake)
@@ -42,9 +43,9 @@ func TestJobActionsShowCommandWhenAvailable(t *testing.T) {
 					model.addToolCall(*test.launch)
 					legacy := process
 					legacy.Command = ""
-					model.finishTool(agent.ToolResult{CallID: test.launch.ID, Details: []agent.Detail{processDetailForTest(t, legacy)}})
+					model.finishTool(modelapi.ToolResult{CallID: test.launch.ID, Details: []modelapi.Detail{processDetailForTest(t, legacy)}})
 				}
-				call := agent.ToolCall{ID: "inspect", Name: "job", RawArguments: fmt.Sprintf(`{"action":%q,"job_id":%q}`, action, jobID)}
+				call := modelapi.ToolCall{ID: "inspect", Name: "job", RawArguments: fmt.Sprintf(`{"action":%q,"job_id":%q}`, action, jobID)}
 				model.addToolCallAt(call, time.Now())
 				assertDisplay := func(wantCommand string) {
 					t.Helper()
@@ -73,14 +74,14 @@ func TestJobActionsShowCommandWhenAvailable(t *testing.T) {
 				if action == "stop" {
 					process.Status = agent.ProcessKilled
 				}
-				result := agent.ToolResult{CallID: call.ID, Details: []agent.Detail{processDetailForTest(t, process)}}
+				result := modelapi.ToolResult{CallID: call.ID, Details: []modelapi.Detail{processDetailForTest(t, process)}}
 				model.finishTool(result)
 				assertDisplay(test.command)
 
 				// A resumed transcript may retain the inspection without its original launch.
-				model = testScreenModel(t, &fakeAgent{state: agent.State{Items: []agent.Item{
-					{Kind: agent.ItemToolCall, ToolCall: &call},
-					{Kind: agent.ItemToolResult, ToolResult: &result},
+				model = testScreenModel(t, &fakeAgent{state: agent.State{Items: []modelapi.Item{
+					{Kind: modelapi.ItemToolCall, ToolCall: &call},
+					{Kind: modelapi.ItemToolResult, ToolResult: &result},
 				}}})
 				assertDisplay(test.command)
 			})
@@ -95,12 +96,12 @@ func TestProcessCompletionShowsCommandAndDiagnosticsLiveAndInHistory(t *testing.
 		{JobID: "job-output", Command: "go test ./...", Status: agent.ProcessCompleted, OutputError: "read stdout: permission denied"},
 	} {
 		t.Run(process.JobID, func(t *testing.T) {
-			details := []agent.Detail{processDetailForTest(t, process)}
+			details := []modelapi.Detail{processDetailForTest(t, process)}
 			text := "Background job " + process.JobID + " completed: status=" + process.Status
 			live := testScreenModel(t, &fakeAgent{})
 			live.applyAgentEvent(agent.Event{Kind: agent.EventBoundaryDelivered, Text: text, Details: details})
-			restored := testScreenModel(t, &fakeAgent{state: agent.State{Items: []agent.Item{
-				{Kind: agent.ItemBoundaryText, Text: text, Details: details},
+			restored := testScreenModel(t, &fakeAgent{state: agent.State{Items: []modelapi.Item{
+				{Kind: modelapi.ItemBoundaryText, Text: text, Details: details},
 			}}})
 			for _, model := range []*screenModel{&live, &restored} {
 				index := len(model.transcript.blocks) - 1

@@ -21,6 +21,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
+	"github.com/levmv/skot/model"
 )
 
 func TestWorkspaceToolsExposeStandaloneCatalog(t *testing.T) {
@@ -45,7 +46,7 @@ func TestWorkspaceToolsExposeStandaloneCatalog(t *testing.T) {
 		t.Fatalf("tools = %q, want %q", got, want)
 	}
 	if _, err := agent.New(agent.Config{
-		Model:   agent.ModelInfo{BackendID: "test", Provider: "test", Model: "test"},
+		Model:   model.Info{BackendID: "test", Provider: "test", Model: "test"},
 		Backend: inertModel{}, Journal: inertJournal{}, Tools: tools,
 	}); err != nil {
 		t.Fatalf("agent rejected tool catalog: %v", err)
@@ -756,8 +757,8 @@ func jsonArgs(t *testing.T, value any) string {
 
 type inertModel struct{}
 
-func (inertModel) Complete(context.Context, agent.ModelRequest, func(agent.ModelStreamEvent)) (agent.ModelResponse, error) {
-	return agent.ModelResponse{}, errors.New("unused")
+func (inertModel) Complete(context.Context, model.Request, func(model.StreamEvent)) (model.Response, error) {
+	return model.Response{}, errors.New("unused")
 }
 
 type inertJournal struct{}
@@ -768,4 +769,4 @@ func (inertJournal) Append(context.Context, agent.PendingRecord) (agent.Record, 
 
 func (inertJournal) Records(context.Context) ([]agent.Record, error) { return nil, nil }
 
-func (inertModel) ProjectModelItems(items []agent.Item) []agent.Item { return items }
+func (inertModel) ProjectModelItems(items []model.Item) []model.Item { return items }

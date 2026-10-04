@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	modelapi "github.com/levmv/skot/model"
 )
 
 func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
@@ -18,7 +20,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDetails := func(details []Detail) {
+	assertDetails := func(details []modelapi.Detail) {
 		t.Helper()
 		if len(details) != 1 {
 			t.Fatalf("completion details = %#v", details)
@@ -29,26 +31,26 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		}
 	}
 	var sourceSession string
-	var secondRequest ModelRequest
+	var secondRequest modelapi.Request
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			for _, item := range request.Items {
-				if item.Kind == ItemBoundaryText {
+				if item.Kind == modelapi.ItemBoundaryText {
 					t.Fatalf("completion reached the first request: %#v", request.Items)
 				}
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{Name: "start_work", RawArguments: `{}`}}}}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "start_work", RawArguments: `{}`}}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			secondRequest = request
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "noticed completion"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "noticed completion"}}, StopReason: "stop"}, nil
 		},
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "start_work", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "start_work", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
 			completionAvailable = true
-			return ToolOutput{Content: TextContent("job started")}, nil
+			return ToolOutput{Content: modelapi.TextContent("job started")}, nil
 		},
 	}
 	runtime := newTestRuntime(t, Config{
@@ -62,7 +64,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 			return []BoundaryEvent{{
 				JobID: "job-test", FinishedAt: finishedAt,
 				Content: "Background job job-test completed: status=completed, exit_code=0.",
-				Details: []Detail{detail},
+				Details: []modelapi.Detail{detail},
 			}}
 		}, committed: func(jobID string) {
 			if jobID != "job-test" {
@@ -72,7 +74,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 				t.Fatal("completion was acknowledged before it reached the journal")
 			}
 			delivered = true
-		}, toolCommitted: func(ToolResult) {
+		}, toolCommitted: func(modelapi.ToolResult) {
 			if countRecordKind(journal.snapshot(), RecordToolResult) != 1 {
 				t.Fatal("tool result commit hook ran before journal append")
 			}
@@ -91,7 +93,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	}
 	boundaryIndex := -1
 	for index, item := range secondRequest.Items {
-		if item.Kind == ItemBoundaryText {
+		if item.Kind == modelapi.ItemBoundaryText {
 			boundaryIndex = index
 			if len(item.Details) != 0 {
 				t.Fatalf("presentation details reached the model: %#v", item.Details)
@@ -134,7 +136,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	if _, ok := state.DeliveredJobs["job-test"]; !ok {
 		t.Fatalf("delivered jobs = %#v", state.DeliveredJobs)
 	}
-	if len(state.Items) < 1 || state.Items[len(state.Items)-2].Kind != ItemBoundaryText {
+	if len(state.Items) < 1 || state.Items[len(state.Items)-2].Kind != modelapi.ItemBoundaryText {
 		t.Fatalf("replayed items = %#v", state.Items)
 	}
 	assertDetails(state.Items[len(state.Items)-2].Details)
@@ -153,10 +155,10 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 	}
 	assertAuthoritativeEvents(t, events, records)
 
-	replayModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+	replayModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 		found := false
 		for _, item := range request.Items {
-			found = found || item.Kind == ItemBoundaryText && strings.Contains(item.Text, "job-test completed")
+			found = found || item.Kind == modelapi.ItemBoundaryText && strings.Contains(item.Text, "job-test completed")
 			if len(item.Details) != 0 {
 				t.Fatalf("replayed presentation details reached the model: %#v", item.Details)
 			}
@@ -164,7 +166,7 @@ func TestRuntimeJournalsCompletionBeforeDeliveryAndReplaysIt(t *testing.T) {
 		if !found {
 			t.Fatalf("replayed request lost boundary event: %#v", request.Items)
 		}
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "still remembered"}}, StopReason: "stop"}, nil
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "still remembered"}}, StopReason: "stop"}, nil
 	}}}
 	if _, err := newTestRuntime(t, Config{Backend: replayModel, Journal: journal}).Run(context.Background(), "continue", nil); err != nil {
 		t.Fatal(err)
@@ -192,23 +194,23 @@ func TestRuntimeWaitsForRequiredJobsBeforeAcceptingFinalResponse(t *testing.T) {
 	delivered := false
 	waits := 0
 	model := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			for _, item := range request.Items {
-				if item.Kind == ItemBoundaryText {
+				if item.Kind == modelapi.ItemBoundaryText {
 					t.Fatalf("completion reached first request: %#v", request.Items)
 				}
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "premature answer"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "premature answer"}}, StopReason: "stop"}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			found := false
 			for _, item := range request.Items {
-				found = found || item.Kind == ItemBoundaryText && strings.Contains(item.Text, "required job completed")
+				found = found || item.Kind == modelapi.ItemBoundaryText && strings.Contains(item.Text, "required job completed")
 			}
 			if !found {
 				t.Fatalf("completion absent after join: %#v", request.Items)
 			}
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
@@ -254,8 +256,8 @@ func TestRuntimeUsesJournalAsAuthorityWhenDurableCompletionIsOfferedAgain(t *tes
 			commits++
 		},
 	}
-	firstModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}, StopReason: "stop"}, nil
+	firstModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "first"}}, StopReason: "stop"}, nil
 	}}}
 	if _, err := newTestRuntime(t, Config{Backend: firstModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "one", nil); err != nil {
 		t.Fatal(err)
@@ -264,8 +266,8 @@ func TestRuntimeUsesJournalAsAuthorityWhenDurableCompletionIsOfferedAgain(t *tes
 		t.Fatalf("initial boundary count = %d", count)
 	}
 
-	secondModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second"}}, StopReason: "stop"}, nil
+	secondModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "second"}}, StopReason: "stop"}, nil
 	}}}
 	if _, err := newTestRuntime(t, Config{Backend: secondModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "two", nil); err != nil {
 		t.Fatal(err)
@@ -284,7 +286,7 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 	journal := &memoryJournal{}
 	toolCommits := 0
 	committedCallID := ""
-	work := externalWorkFuncs{toolCommitted: func(result ToolResult) {
+	work := externalWorkFuncs{toolCommitted: func(result modelapi.ToolResult) {
 		if committedCallID == "" {
 			committedCallID = result.CallID
 		} else if result.CallID != committedCallID {
@@ -293,17 +295,17 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 		toolCommits++
 	}}
 	tool := Tool{
-		Spec: ToolSpec{Name: "durable_tool", InputSchema: jsontext.Value(`{"type":"object"}`)},
+		Spec: modelapi.ToolSpec{Name: "durable_tool", InputSchema: jsontext.Value(`{"type":"object"}`)},
 		Run: func(context.Context, string) (ToolOutput, error) {
-			return ToolOutput{Content: TextContent("complete")}, nil
+			return ToolOutput{Content: modelapi.TextContent("complete")}, nil
 		},
 	}
 	firstModel := &scriptedModel{steps: []modelStep{
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemToolCall, ToolCall: &ToolCall{ID: "call-durable", Name: "durable_tool", RawArguments: `{}`}}}}, nil
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{ID: "call-durable", Name: "durable_tool", RawArguments: `{}`}}}}, nil
 		},
-		func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-			return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "first"}}, StopReason: "stop"}, nil
+		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "first"}}, StopReason: "stop"}, nil
 		},
 	}}
 	if _, err := newTestRuntime(t, Config{Backend: firstModel, Journal: journal, Tools: []Tool{tool}, ExternalWork: work}).Run(context.Background(), "one", nil); err != nil {
@@ -314,8 +316,8 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 	}
 	beforeRestart := toolCommits
 
-	secondModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "second"}}, StopReason: "stop"}, nil
+	secondModel := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "second"}}, StopReason: "stop"}, nil
 	}}}
 	if _, err := newTestRuntime(t, Config{Backend: secondModel, Journal: journal, ExternalWork: work}).Run(context.Background(), "two", nil); err != nil {
 		t.Fatal(err)
@@ -327,8 +329,8 @@ func TestRuntimeReacknowledgesJournaledToolResultsAfterRestart(t *testing.T) {
 
 func TestRunFinishedRecordsDetachedJobs(t *testing.T) {
 	journal := &memoryJournal{}
-	model := &scriptedModel{steps: []modelStep{func(_ context.Context, request ModelRequest, _ func(ModelStreamEvent)) (ModelResponse, error) {
-		return ModelResponse{Items: []Item{{Kind: ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+	model := &scriptedModel{steps: []modelStep{func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+		return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
 	}}}
 	work := externalWorkFuncs{detached: func(sessionID string) []string {
 		if sessionID == "" {
@@ -369,15 +371,15 @@ func TestRunFinishedRecordsDetachedJobs(t *testing.T) {
 }
 
 type externalWorkFuncs struct {
-	status        func(string) ([]Detail, bool)
+	status        func(string) ([]modelapi.Detail, bool)
 	pending       func(string) []BoundaryEvent
 	committed     func(string)
-	toolCommitted func(ToolResult)
+	toolCommitted func(modelapi.ToolResult)
 	await         func(context.Context, string) (bool, error)
 	detached      func(string) []string
 }
 
-func (work externalWorkFuncs) Status(id string) ([]Detail, bool) {
+func (work externalWorkFuncs) Status(id string) ([]modelapi.Detail, bool) {
 	if work.status == nil {
 		return nil, false
 	}
@@ -397,7 +399,7 @@ func (work externalWorkFuncs) EventCommitted(jobID string) {
 	}
 }
 
-func (work externalWorkFuncs) ToolResultCommitted(result ToolResult) {
+func (work externalWorkFuncs) ToolResultCommitted(result modelapi.ToolResult) {
 	if work.toolCommitted != nil {
 		work.toolCommitted(result)
 	}

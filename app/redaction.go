@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/levmv/skot/internal/state"
+	"github.com/levmv/skot/internal/modelconfig"
 )
 
 type secretMasker struct {
@@ -14,13 +14,13 @@ type secretMasker struct {
 	replacer *strings.Replacer
 }
 
-func newSecretMasker(store *state.Store, extra ...string) *secretMasker {
+func newSecretMasker(store modelconfig.CredentialStore, extra ...string) *secretMasker {
 	masker := &secretMasker{}
-	if tokens, err := storedCodexTokens(store); err == nil {
-		maskCodexTokens(masker, tokens)
+	if tokens, err := modelconfig.StoredCodexTokens(store); err == nil {
+		modelconfig.MaskCodexTokens(masker, tokens)
 	}
-	for _, provider := range providerCredentialCatalog {
-		if token, _, err := credentialForProvider(store, provider.name); err == nil {
+	for _, provider := range modelconfig.CredentialCatalog {
+		if token, _, err := modelconfig.CredentialForProvider(store, provider.Name, true); err == nil {
 			masker.Add(token)
 		}
 	}

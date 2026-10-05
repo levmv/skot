@@ -1,4 +1,4 @@
-package tools
+package web
 
 import (
 	"context"
@@ -12,85 +12,65 @@ import (
 	"strings"
 	"time"
 
+	"github.com/levmv/skot/internal/webtext"
 	"golang.org/x/net/html"
 )
 
-type webPolicyError struct {
-	message string
-}
+// ErrURLNotAllowed identifies a URL rejected by the public-web destination policy.
+var ErrURLNotAllowed = errors.New("web destination not allowed")
 
-const nonPublicWebDestinationMessage = "private, local, and special-purpose destinations are not allowed"
+const nonPublicDestinationMessage = "private, local, and special-purpose destinations are not allowed"
 
-func (err *webPolicyError) Error() string { return err.message }
+func urlPolicyError(message string) error { return fmt.Errorf("%w: %s", ErrURLNotAllowed, message) }
 
-func newWebPolicyError(message string) error { return &webPolicyError{message: message} }
+var directHTTPClient = newPublicHTTPClient()
 
-func isWebPolicyError(err error) bool {
-	_, ok := errors.AsType[*webPolicyError](err)
-	return ok
-}
-
-type httpFetchBackend struct {
-	client *http.Client
-}
-
-func newHTTPFetchBackend() *httpFetchBackend {
-	return &httpFetchBackend{client: safeWebHTTPClient()}
-}
-
-func (*httpFetchBackend) Name() string { return "http" }
-
-func (backend *httpFetchBackend) Fetch(ctx context.Context, request webFetchRequest) (webFetchResult, error) {
-	target, err := validatePublicURL(request.URL)
+func (client *Client) fetchHTTP(ctx context.Context, request FetchRequest) (FetchResponse, error) {
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, request.URL, nil)
 	if err != nil {
-		return webFetchResult{}, err
-	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return webFetchResult{}, err
+		return FetchResponse{}, err
 	}
 	httpRequest.Header.Set("Accept", "text/html, text/plain, application/json;q=0.8")
 	httpRequest.Header.Set("User-Agent", "Skot/1 web-fetch")
-	response, err := backend.client.Do(httpRequest)
+	response, err := client.http.Do(httpRequest)
 	if err != nil {
-		return webFetchResult{}, fmt.Errorf("request URL: %w", err)
+		return FetchResponse{}, fmt.Errorf("request URL: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
-		return webFetchResult{}, fmt.Errorf("HTTP %d", response.StatusCode)
+		return FetchResponse{}, &HTTPError{StatusCode: response.StatusCode}
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, webMaxResponseBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
-		return webFetchResult{}, fmt.Errorf("read page: %w", err)
+		return FetchResponse{}, fmt.Errorf("read page: %w", err)
 	}
-	truncated := len(raw) > webMaxResponseBytes
+	truncated := len(raw) > maxResponseBytes
 	if truncated {
-		raw = raw[:webMaxResponseBytes]
+		raw = raw[:maxResponseBytes]
 	}
-	text, title, err := extractWebContent(raw, strings.ToLower(response.Header.Get("Content-Type")))
+	text, title, err := extractContent(raw, strings.ToLower(response.Header.Get("Content-Type")))
 	if err != nil {
-		return webFetchResult{}, err
+		return FetchResponse{}, err
 	}
-	finalURL := target.String()
+	finalURL := request.URL
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL.String()
 	}
-	return webFetchResult{URL: finalURL, Title: title, Text: text, Truncated: truncated}, nil
+	return FetchResponse{URL: finalURL, Title: title, Text: text, Truncated: truncated}, nil
 }
 
-func safeWebHTTPClient() *http.Client {
+func newPublicHTTPClient() *http.Client {
 	transport := &http.Transport{}
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = base.Clone()
 	}
-	// A proxy resolves and connects on our behalf, bypassing safeWebDial's DNS
+	// A proxy resolves and connects on our behalf, bypassing dialPublic's DNS
 	// checks. Direct fetching keeps the SSRF boundary local and auditable.
 	transport.Proxy = nil
-	transport.DialContext = safeWebDial
+	transport.DialContext = dialPublic
 	return &http.Client{
 		Transport: transport,
-		Timeout:   45 * time.Second,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
@@ -101,7 +81,7 @@ func safeWebHTTPClient() *http.Client {
 	}
 }
 
-func safeWebDial(ctx context.Context, network, address string) (net.Conn, error) {
+func dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -111,8 +91,8 @@ func safeWebDial(ctx context.Context, network, address string) (net.Conn, error)
 		return nil, err
 	}
 	for _, address := range addresses {
-		if !isPublicWebIP(address) {
-			return nil, newWebPolicyError(fmt.Sprintf("destination %s resolves to a non-public address", host))
+		if !isPublicIP(address) {
+			return nil, urlPolicyError(fmt.Sprintf("destination %s resolves to a non-public address", host))
 		}
 	}
 	if len(addresses) == 0 {
@@ -125,25 +105,25 @@ func safeWebDial(ctx context.Context, network, address string) (net.Conn, error)
 func validatePublicURL(raw string) (*url.URL, error) {
 	target, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || target.Hostname() == "" {
-		return nil, newWebPolicyError("URL must be absolute")
+		return nil, urlPolicyError("URL must be absolute")
 	}
 	if target.Scheme != "http" && target.Scheme != "https" {
-		return nil, newWebPolicyError("URL scheme must be http or https")
+		return nil, urlPolicyError("URL scheme must be http or https")
 	}
 	if target.User != nil {
-		return nil, newWebPolicyError("URL credentials are not allowed")
+		return nil, urlPolicyError("URL credentials are not allowed")
 	}
 	hostname := strings.ToLower(target.Hostname())
 	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
-		return nil, newWebPolicyError(nonPublicWebDestinationMessage)
+		return nil, urlPolicyError(nonPublicDestinationMessage)
 	}
-	if address := net.ParseIP(hostname); address != nil && !isPublicWebIP(address) {
-		return nil, newWebPolicyError(nonPublicWebDestinationMessage)
+	if address := net.ParseIP(hostname); address != nil && !isPublicIP(address) {
+		return nil, urlPolicyError(nonPublicDestinationMessage)
 	}
 	return target, nil
 }
 
-func isPublicWebIP(address net.IP) bool {
+func isPublicIP(address net.IP) bool {
 	parsed, ok := netip.AddrFromSlice(address)
 	if !ok {
 		return false
@@ -152,7 +132,7 @@ func isPublicWebIP(address net.IP) bool {
 	if !parsed.IsGlobalUnicast() {
 		return false
 	}
-	for _, prefix := range nonPublicWebPrefixes {
+	for _, prefix := range nonPublicPrefixes {
 		if prefix.Contains(parsed) {
 			return false
 		}
@@ -160,16 +140,16 @@ func isPublicWebIP(address net.IP) bool {
 	if wellKnownNAT64Prefix.Contains(parsed) {
 		bytes := parsed.As16()
 		translated := netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]})
-		return isPublicWebAddr(translated)
+		return isPublicAddr(translated)
 	}
 	return true
 }
 
-func isPublicWebAddr(address netip.Addr) bool {
+func isPublicAddr(address netip.Addr) bool {
 	if !address.IsValid() || !address.IsGlobalUnicast() {
 		return false
 	}
-	for _, prefix := range nonPublicWebPrefixes {
+	for _, prefix := range nonPublicPrefixes {
 		if prefix.Contains(address) {
 			return false
 		}
@@ -185,7 +165,7 @@ var wellKnownNAT64Prefix = netip.MustParsePrefix("64:ff9b::/96")
 // reserved ranges available for SSRF into a deployment that routes them
 // internally. The few anycast exceptions inside broader reserved blocks are
 // not useful enough to web_fetch to weaken this boundary.
-var nonPublicWebPrefixes = []netip.Prefix{
+var nonPublicPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
@@ -213,7 +193,7 @@ var nonPublicWebPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("fe80::/10"),
 }
 
-func extractWebContent(raw []byte, contentType string) (text, title string, err error) {
+func extractContent(raw []byte, contentType string) (text, title string, err error) {
 	prefix := strings.ToLower(string(raw[:min(len(raw), 256)]))
 	switch {
 	case strings.Contains(contentType, "text/html") || strings.Contains(prefix, "<html"):
@@ -221,19 +201,19 @@ func extractWebContent(raw []byte, contentType string) (text, title string, err 
 		if parseErr != nil {
 			return "", "", fmt.Errorf("parse HTML: %w", parseErr)
 		}
-		if titleNode := findWebElement(document, func(node *html.Node) bool { return node.Data == "title" }); titleNode != nil {
-			title = compactWebText(webNodeText(titleNode), 500)
+		if titleNode := findElement(document, func(node *html.Node) bool { return node.Data == "title" }); titleNode != nil {
+			title = webtext.Compact(nodeText(titleNode), maxResponseBytes)
 		}
-		contentRoot := findWebContentRoot(document)
+		contentRoot := findContentRoot(document)
 		var blocks []string
 		var walk func(*html.Node)
 		walk = func(node *html.Node) {
 			if node.Type == html.ElementNode {
-				if skipWebElement(node.Data) {
+				if skipElement(node.Data) {
 					return
 				}
-				if webContentBlock(node.Data) {
-					if value := compactWebText(webNodeText(node), 8_000); value != "" {
+				if isContentBlock(node.Data) {
+					if value := webtext.Compact(nodeText(node), maxResponseBytes); value != "" {
 						if len(blocks) == 0 || blocks[len(blocks)-1] != value {
 							blocks = append(blocks, value)
 						}
@@ -247,7 +227,7 @@ func extractWebContent(raw []byte, contentType string) (text, title string, err 
 		}
 		walk(contentRoot)
 		if len(blocks) == 0 {
-			return compactWebText(webNodeText(contentRoot), webMaxTextBytes), title, nil
+			return webtext.Compact(nodeText(contentRoot), maxResponseBytes), title, nil
 		}
 		return strings.Join(blocks, "\n\n"), title, nil
 	case strings.Contains(contentType, "text/") || strings.Contains(contentType, "json") || contentType == "":
@@ -257,34 +237,34 @@ func extractWebContent(raw []byte, contentType string) (text, title string, err 
 	}
 }
 
-func findWebContentRoot(document *html.Node) *html.Node {
-	if main := findWebElement(document, func(node *html.Node) bool {
-		return node.Data == "main" || hasWebAttribute(node, "role", "main")
+func findContentRoot(document *html.Node) *html.Node {
+	if main := findElement(document, func(node *html.Node) bool {
+		return node.Data == "main" || hasAttribute(node, "role", "main")
 	}); main != nil {
 		return main
 	}
-	if article := findUniqueWebElement(document, func(node *html.Node) bool { return node.Data == "article" }); article != nil {
+	if article := findUniqueElement(document, func(node *html.Node) bool { return node.Data == "article" }); article != nil {
 		return article
 	}
-	if body := findWebElement(document, func(node *html.Node) bool { return node.Data == "body" }); body != nil {
+	if body := findElement(document, func(node *html.Node) bool { return node.Data == "body" }); body != nil {
 		return body
 	}
 	return document
 }
 
-func findWebElement(root *html.Node, matches func(*html.Node) bool) *html.Node {
+func findElement(root *html.Node, matches func(*html.Node) bool) *html.Node {
 	if root.Type == html.ElementNode && matches(root) {
 		return root
 	}
 	for child := root.FirstChild; child != nil; child = child.NextSibling {
-		if found := findWebElement(child, matches); found != nil {
+		if found := findElement(child, matches); found != nil {
 			return found
 		}
 	}
 	return nil
 }
 
-func findUniqueWebElement(root *html.Node, matches func(*html.Node) bool) *html.Node {
+func findUniqueElement(root *html.Node, matches func(*html.Node) bool) *html.Node {
 	var found *html.Node
 	var multiple bool
 	var walk func(*html.Node)
@@ -310,7 +290,7 @@ func findUniqueWebElement(root *html.Node, matches func(*html.Node) bool) *html.
 	return found
 }
 
-func hasWebAttribute(node *html.Node, key, value string) bool {
+func hasAttribute(node *html.Node, key, value string) bool {
 	for _, attribute := range node.Attr {
 		if strings.EqualFold(attribute.Key, key) && strings.EqualFold(strings.TrimSpace(attribute.Val), value) {
 			return true
@@ -319,7 +299,7 @@ func hasWebAttribute(node *html.Node, key, value string) bool {
 	return false
 }
 
-func skipWebElement(tag string) bool {
+func skipElement(tag string) bool {
 	switch tag {
 	case "script", "style", "noscript", "svg", "canvas", "nav", "footer", "header", "aside", "form", "dialog", "menu", "template", "iframe":
 		return true
@@ -328,7 +308,7 @@ func skipWebElement(tag string) bool {
 	}
 }
 
-func webContentBlock(tag string) bool {
+func isContentBlock(tag string) bool {
 	switch tag {
 	case "p", "li", "pre", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "dt", "dd", "figcaption":
 		return true
@@ -337,11 +317,11 @@ func webContentBlock(tag string) bool {
 	}
 }
 
-func webNodeText(node *html.Node) string {
+func nodeText(node *html.Node) string {
 	var out strings.Builder
 	var walk func(*html.Node)
 	walk = func(current *html.Node) {
-		if current.Type == html.ElementNode && skipWebElement(current.Data) {
+		if current.Type == html.ElementNode && skipElement(current.Data) {
 			return
 		}
 		if current.Type == html.TextNode {

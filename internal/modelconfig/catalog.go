@@ -547,6 +547,7 @@ func defaultModelSpec(provider string) Spec {
 		traits.ReasoningEffort = chatcompletions.ReasoningEffortNested
 	case "openai":
 		traits.PromptCacheKey = true
+		traits.UseMaxCompletionTokens = true
 	case "ollama":
 		efforts = []string{DefaultReasoningEffort}
 		traits.ReasoningEffort = ""
@@ -556,6 +557,9 @@ func defaultModelSpec(provider string) Spec {
 		responsesTraits = responsemodel.RouteTraits{
 			ReasoningSummary:   responsemodel.ReasoningSummaryAuto,
 			EncryptedReasoning: true, PromptCacheKey: true, RequireInstructions: true,
+			// ChatGPT plan usage rejects max_output_tokens.
+			// https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations
+			OutputLimitUnsupported: true,
 		}
 	}
 	return Spec{ReasoningEfforts: efforts, ChatTraits: &traits, ResponsesTraits: &responsesTraits}

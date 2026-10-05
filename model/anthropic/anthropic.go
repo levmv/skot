@@ -43,8 +43,8 @@ type Config struct {
 	Provider string
 	Model    string
 	APIModel string
-	// MaxTokens is required by the Messages protocol. Zero selects a
-	// conservative compatibility default for explicitly configured routes.
+	// MaxTokens supplies the Messages output limit when Request.MaxOutputTokens
+	// is zero. Zero here selects a conservative compatibility default.
 	MaxTokens int
 	// PromptCache marks endpoints that honor cache_control breakpoints. It stays
 	// off for compatible endpoints that place their own breakpoints, because the
@@ -128,6 +128,14 @@ func BackendID(provider string) string { return "anthropic_messages." + strings.
 func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (result modelapi.Response, returnErr error) {
 	var usage modelhttp.UsageAccumulator
 	defer usage.Attach(&result)
+	requestStarted := false
+	defer func() {
+		if requestStarted {
+			returnErr = modelapi.MarkProviderFailure(returnErr)
+		} else {
+			returnErr = modelapi.MarkRequestNotSent(returnErr)
+		}
+	}()
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(err)
@@ -152,8 +160,11 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
 	}
-	defer func() { returnErr = modelapi.MarkProviderFailure(returnErr) }()
+	if err := ctx.Err(); err != nil {
+		return modelapi.Response{}, err
+	}
 
+	requestStarted = true
 	response, err := backend.client.Do(httpRequest)
 	if err != nil {
 		return modelapi.Response{}, fmt.Errorf("%s Anthropic Messages request: %w", backend.provider, err)

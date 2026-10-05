@@ -128,6 +128,9 @@ type thinkingBlockState struct {
 }
 
 func (backend *Backend) buildRequest(request model.Request) (messagesRequest, error) {
+	if request.MaxOutputTokens < 0 {
+		return messagesRequest{}, errors.New("max output tokens cannot be negative")
+	}
 	messages, err := backend.buildMessages(request)
 	if err != nil {
 		return messagesRequest{}, err
@@ -156,6 +159,9 @@ func (backend *Backend) buildRequest(request model.Request) (messagesRequest, er
 	wireRequest := messagesRequest{
 		Model: backend.apiModel, MaxTokens: backend.maxTokens, System: system,
 		Messages: messages, Tools: tools, Stream: true,
+	}
+	if request.MaxOutputTokens > 0 {
+		wireRequest.MaxTokens = request.MaxOutputTokens
 	}
 	if backend.dropMismatchedThinking {
 		wireRequest.Thinking = &thinkingConfig{

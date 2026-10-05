@@ -107,6 +107,11 @@ type Request struct {
 	Summary       string
 	Items         []Item
 	Tools         []ToolSpec
+	// MaxOutputTokens requests a provider-side generation limit. Zero keeps the
+	// route default; negative values are invalid. OpenAI, Anthropic, and DeepSeek
+	// count reasoning within this limit; compatible services may count differently.
+	// Routes known not to support it return ErrOutputLimitUnsupported before sending.
+	MaxOutputTokens int
 	// StreamIdleTimeout bounds silence between provider stream payloads. Zero
 	// leaves this concern to the backend implementation or caller context.
 	StreamIdleTimeout time.Duration

@@ -45,6 +45,8 @@ type RouteTraits struct {
 	ReasoningEffort ReasoningEffortEncoding
 	ReasoningReplay ReasoningReplayPolicy
 	PromptCacheKey  bool
+	// UseMaxCompletionTokens selects OpenAI's field instead of max_tokens.
+	UseMaxCompletionTokens bool
 }
 
 func (traits RouteTraits) validate(reasoningEffort string) error {
@@ -79,15 +81,17 @@ func (traits RouteTraits) ProviderStateContract() model.ProviderStateContract {
 }
 
 type chatRequest struct {
-	Model           string           `json:"model"`
-	Messages        []chatMessage    `json:"messages"`
-	Tools           []chatTool       `json:"tools,omitempty"`
-	Stream          bool             `json:"stream"`
-	StreamOptions   *streamOptions   `json:"stream_options,omitzero"`
-	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"`
-	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
-	Reasoning       *reasoningConfig `json:"reasoning,omitzero"`
-	Thinking        *thinkingControl `json:"thinking,omitzero"`
+	Model               string           `json:"model"`
+	Messages            []chatMessage    `json:"messages"`
+	Tools               []chatTool       `json:"tools,omitempty"`
+	Stream              bool             `json:"stream"`
+	StreamOptions       *streamOptions   `json:"stream_options,omitzero"`
+	PromptCacheKey      string           `json:"prompt_cache_key,omitempty"`
+	ReasoningEffort     string           `json:"reasoning_effort,omitempty"`
+	Reasoning           *reasoningConfig `json:"reasoning,omitzero"`
+	Thinking            *thinkingControl `json:"thinking,omitzero"`
+	MaxTokens           int              `json:"max_tokens,omitzero"`
+	MaxCompletionTokens int              `json:"max_completion_tokens,omitzero"`
 }
 
 type reasoningConfig struct {
@@ -215,6 +219,9 @@ func (delta *streamDelta) UnmarshalJSON(data []byte) error {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (chatRequest, error) {
+	if request.MaxOutputTokens < 0 {
+		return chatRequest{}, errors.New("max output tokens cannot be negative")
+	}
 	// Direct callers may supply unprojected, caller-owned items. Project a copy.
 	request.Items = backend.ProjectModelItems(append([]model.Item(nil), request.Items...))
 	messages, err := backend.buildMessages(request)
@@ -260,6 +267,11 @@ func (backend *Backend) buildRequest(request model.Request) (chatRequest, error)
 	}
 	if backend.traits.PromptCacheKey {
 		wireRequest.PromptCacheKey = request.SessionID
+	}
+	if backend.traits.UseMaxCompletionTokens {
+		wireRequest.MaxCompletionTokens = request.MaxOutputTokens
+	} else {
+		wireRequest.MaxTokens = request.MaxOutputTokens
 	}
 	return wireRequest, nil
 }

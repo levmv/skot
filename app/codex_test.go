@@ -114,6 +114,9 @@ data: {"type":"response.completed","response":{"status":"completed","output":[],
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := backend.Complete(t.Context(), model.Request{MaxOutputTokens: 2048}, nil); !errors.Is(err, model.ErrOutputLimitUnsupported) || !errors.Is(err, model.ErrInvalidRequest) {
+		t.Fatalf("unsupported output limit: %v", err)
+	}
 	result, err := backend.Complete(t.Context(), model.Request{
 		SessionID: "session-1", Items: []model.Item{{Kind: model.ItemUserText, Text: "inspect README"}},
 		Tools: []model.ToolSpec{{Name: "read", InputSchema: jsontext.Value(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)}},
@@ -267,6 +270,9 @@ func TestCodexRefreshKeepsTemporaryFailuresRetryable(t *testing.T) {
 			}
 			_, err = backend.Complete(t.Context(), model.Request{}, nil)
 			retryable := status != http.StatusBadRequest
+			if !errors.Is(err, model.ErrRequestNotSent) {
+				t.Fatalf("refresh failure lost unsent model request: %v", err)
+			}
 			if err == nil || errors.Is(err, model.ErrProviderFailure) != retryable || errors.Is(err, model.ErrInvalidRequest) == retryable || strings.Contains(err.Error(), "private-token-details") {
 				t.Fatalf("refresh error = %v, want retryable = %t", err, retryable)
 			}

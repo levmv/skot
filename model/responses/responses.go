@@ -106,6 +106,14 @@ func (backend *Backend) callReferenceKind() string {
 func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (result modelapi.Response, returnErr error) {
 	var usage modelhttp.UsageAccumulator
 	defer usage.Attach(&result)
+	requestStarted := false
+	defer func() {
+		if requestStarted {
+			returnErr = modelapi.MarkProviderFailure(returnErr)
+		} else {
+			returnErr = modelapi.MarkRequestNotSent(returnErr)
+		}
+	}()
 	wireRequest, err := backend.buildRequest(request)
 	if err != nil {
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(err)
@@ -130,8 +138,11 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 		}
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(err)
 	}
-	defer func() { returnErr = modelapi.MarkProviderFailure(returnErr) }()
+	if err := ctx.Err(); err != nil {
+		return modelapi.Response{}, err
+	}
 
+	requestStarted = true
 	response, err := backend.client.Do(httpRequest)
 	if err != nil {
 		return modelapi.Response{}, fmt.Errorf("%s Responses request: %w", backend.provider, err)

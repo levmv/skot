@@ -39,13 +39,14 @@ type ReasoningSummary string
 
 const ReasoningSummaryAuto ReasoningSummary = "auto"
 
-// RouteTraits contains only optional Responses fields demonstrated for a
-// concrete route. The zero value sends no optional summary request.
+// RouteTraits records demonstrated Responses route differences.
+// The zero value sends no optional summary request.
 type RouteTraits struct {
-	ReasoningSummary    ReasoningSummary
-	EncryptedReasoning  bool
-	PromptCacheKey      bool
-	RequireInstructions bool
+	ReasoningSummary       ReasoningSummary
+	EncryptedReasoning     bool
+	PromptCacheKey         bool
+	RequireInstructions    bool
+	OutputLimitUnsupported bool
 }
 
 func (traits RouteTraits) validate() error {
@@ -62,15 +63,16 @@ func (RouteTraits) ProviderStateContract() model.ProviderStateContract {
 }
 
 type responseRequest struct {
-	Model          string           `json:"model"`
-	Instructions   *string          `json:"instructions,omitzero"`
-	Input          []jsontext.Value `json:"input"`
-	Tools          []responseTool   `json:"tools,omitempty"`
-	Reasoning      *reasoningConfig `json:"reasoning,omitzero"`
-	Store          bool             `json:"store"`
-	Stream         bool             `json:"stream"`
-	Include        []string         `json:"include,omitempty"`
-	PromptCacheKey string           `json:"prompt_cache_key,omitempty"`
+	Model           string           `json:"model"`
+	Instructions    *string          `json:"instructions,omitzero"`
+	Input           []jsontext.Value `json:"input"`
+	Tools           []responseTool   `json:"tools,omitempty"`
+	Reasoning       *reasoningConfig `json:"reasoning,omitzero"`
+	Store           bool             `json:"store"`
+	Stream          bool             `json:"stream"`
+	Include         []string         `json:"include,omitempty"`
+	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"`
+	MaxOutputTokens int              `json:"max_output_tokens,omitzero"`
 }
 
 type reasoningConfig struct {
@@ -192,6 +194,12 @@ type streamEvent struct {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (responseRequest, error) {
+	if request.MaxOutputTokens < 0 {
+		return responseRequest{}, errors.New("max output tokens cannot be negative")
+	}
+	if request.MaxOutputTokens > 0 && backend.traits.OutputLimitUnsupported {
+		return responseRequest{}, model.ErrOutputLimitUnsupported
+	}
 	input := make([]jsontext.Value, 0, len(request.Items)+1)
 	if request.Summary != "" {
 		message, err := marshalInputItem(inputMessage{Role: "developer", Content: model.ConversationSummaryPrefix + request.Summary})
@@ -296,6 +304,7 @@ func (backend *Backend) buildRequest(request model.Request) (responseRequest, er
 	wireRequest := responseRequest{
 		Model: backend.apiModel, Input: input,
 		Tools: tools, Store: false, Stream: true,
+		MaxOutputTokens: request.MaxOutputTokens,
 	}
 	if backend.traits.EncryptedReasoning {
 		wireRequest.Include = []string{"reasoning.encrypted_content"}

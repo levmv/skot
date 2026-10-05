@@ -9,6 +9,12 @@ var (
 	// ErrInvalidRequest marks a request or configuration that cannot succeed
 	// when retried unchanged.
 	ErrInvalidRequest = errors.New("invalid request")
+	// ErrRequestNotSent marks a Complete failure before attempting to send the
+	// model request. Its absence does not prove delivery or a charge.
+	ErrRequestNotSent = errors.New("model request was not sent")
+	// ErrOutputLimitUnsupported means this route cannot honor MaxOutputTokens.
+	// Complete also classifies this as ErrInvalidRequest.
+	ErrOutputLimitUnsupported = errors.New("output token limit is not supported by this route")
 	// ErrProviderFailure marks a transport, protocol, or provider-side failure
 	// whose recovery depends on provider or external state rather than changing
 	// the invocation. Provider failures are not necessarily worth retrying
@@ -89,6 +95,15 @@ func MarkInvalidRequest(err error) error {
 		return err
 	}
 	return classifiedError{class: ErrInvalidRequest, cause: err}
+}
+
+// MarkRequestNotSent preserves err's text and cause while marking a failure
+// known to precede sending the model request.
+func MarkRequestNotSent(err error) error {
+	if err == nil || errors.Is(err, ErrRequestNotSent) {
+		return err
+	}
+	return classifiedError{class: ErrRequestNotSent, cause: err}
 }
 
 // MarkProviderFailure preserves err's text and cause while classifying it as

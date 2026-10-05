@@ -77,7 +77,7 @@ func TestJobMetadataRequiresCurrentProtocolTimingAndValidScope(t *testing.T) {
 
 func TestJobTerminalResultRequiresCurrentProtocolIdentityStatusAndFinishTime(t *testing.T) {
 	id := "job-result"
-	jobDir := filepath.Join(t.TempDir(), id)
+	jobDir := filepath.Join(canonicalpath.Resolve(t.TempDir()), id)
 	if err := os.MkdirAll(jobDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -770,7 +770,7 @@ func TestSupervisedWorkerCanBeAdoptedAfterAbruptManagerLoss(t *testing.T) {
 
 func TestAttachRecordsMissingWorkerAsAbandoned(t *testing.T) {
 	root := t.TempDir()
-	home := t.TempDir()
+	home := canonicalpath.Resolve(t.TempDir())
 	sessionID := "session-missing-worker"
 	id := "job-fake-worker"
 
@@ -807,7 +807,7 @@ func TestAttachRecordsMissingWorkerAsAbandoned(t *testing.T) {
 }
 
 func TestAdoptionRereadsResultAfterWorkerDisappears(t *testing.T) {
-	jobDir := t.TempDir()
+	jobDir := canonicalpath.Resolve(t.TempDir())
 	jobID := "job-result-probe-race"
 	zero := 0
 	want := jobTerminalResult{
@@ -839,7 +839,7 @@ func TestAdoptionRereadsResultAfterWorkerDisappears(t *testing.T) {
 }
 
 func TestWorkerLogCapturesEarlyLaunchFailureAndExplainsAbandonedJob(t *testing.T) {
-	jobDir := t.TempDir()
+	jobDir := canonicalpath.Resolve(t.TempDir())
 	workerLog, err := os.OpenFile(filepath.Join(jobDir, jobWorkerLogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -921,7 +921,7 @@ func TestSupervisedWorkerWritesItsFailureToJobLocalLog(t *testing.T) {
 }
 
 func TestWorkerLogsTerminalResultFailureAfterPayloadCompletes(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalpath.Resolve(t.TempDir())
 	jobID := "job-result-storage-failure"
 	jobDir := filepath.Join(root, jobID)
 	if err := os.Mkdir(jobDir, 0o700); err != nil {
@@ -1033,7 +1033,7 @@ func TestWorkerLogsTerminalResultFailureAfterPayloadCompletes(t *testing.T) {
 }
 
 func TestJobControlFIFOTracksReaderLifetimeWithoutWorkerResponse(t *testing.T) {
-	path := filepath.Join(t.TempDir(), jobControlFile)
+	path := filepath.Join(canonicalpath.Resolve(t.TempDir()), jobControlFile)
 	reader, err := createJobControl(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1052,7 +1052,7 @@ func TestJobControlFIFOTracksReaderLifetimeWithoutWorkerResponse(t *testing.T) {
 }
 
 func TestJobControlWriteReturnsEPIPEWhenReaderDiesAfterOpen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), jobControlFile)
+	path := filepath.Join(canonicalpath.Resolve(t.TempDir()), jobControlFile)
 	reader, err := createJobControl(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1071,7 +1071,7 @@ func TestJobControlWriteReturnsEPIPEWhenReaderDiesAfterOpen(t *testing.T) {
 }
 
 func TestJobControlWriteReportsFullFIFOWithoutBlocking(t *testing.T) {
-	path := filepath.Join(t.TempDir(), jobControlFile)
+	path := filepath.Join(canonicalpath.Resolve(t.TempDir()), jobControlFile)
 	reader, err := createJobControl(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1198,7 +1198,7 @@ func TestPayloadDoesNotInheritWorkerLifecycleFIFO(t *testing.T) {
 }
 
 func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalpath.Resolve(t.TempDir())
 	sessionID := "session-missing-control"
 	id := "job-missing-control"
 	jobDir := jobDirectory(filepath.Join(home, "jobs"), sessionID, id)
@@ -1297,7 +1297,7 @@ func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
 }
 
 func TestAttachSessionKeepsDeliveredOutputForAlreadyLoadedSession(t *testing.T) {
-	home := t.TempDir()
+	home := canonicalpath.Resolve(t.TempDir())
 	sessionID := "session-already-loaded"
 	id := "job-delivered-output"
 	jobDir := jobDirectory(filepath.Join(home, "jobs"), sessionID, id)
@@ -1424,8 +1424,61 @@ func TestSupervisedJobKeepsOnlyABoundedDurableTail(t *testing.T) {
 	}
 }
 
+func TestJobFilesRejectSymlinkRedirection(t *testing.T) {
+	for _, link := range []string{"log", "session directory"} {
+		t.Run(link, func(t *testing.T) {
+			home, outside := canonicalpath.Resolve(t.TempDir()), canonicalpath.Resolve(t.TempDir())
+			sessionDir := filepath.Join(home, "session")
+			jobDir, victimDir := filepath.Join(sessionDir, "job-test"), filepath.Join(outside, "job-test")
+			for _, directory := range []string{jobDir, victimDir} {
+				if err := os.MkdirAll(directory, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			victim := filepath.Join(victimDir, jobStdoutFile)
+			if err := os.WriteFile(victim, []byte("protected content"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(jobDir, jobStdoutFile)
+			if link == "log" {
+				if err := os.Symlink(victim, path); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.RemoveAll(sessionDir); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, sessionDir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if output := readDurableTail(path, 64); output.readErr == nil || len(output.data) != 0 {
+				t.Fatalf("redirected log read = %#v", output)
+			}
+			if writer, err := newDurableTailWriter(path, 64); err == nil {
+				_ = writer.Close()
+				t.Fatal("redirected log was opened for writing")
+			}
+			if link == "session directory" {
+				if err := writeJSONAtomic(filepath.Join(jobDir, jobResultFile), jobTerminalResult{}, 0o600); err == nil {
+					t.Fatal("result was written through a directory symlink")
+				}
+				if err := markJobDelivered(jobDir); err == nil {
+					t.Fatal("delivery marker was written through a directory symlink")
+				}
+				if err := removeJobDirectory(jobDir, true); err == nil {
+					t.Fatal("job was removed through a directory symlink")
+				}
+			}
+			if data, err := os.ReadFile(victim); err != nil || string(data) != "protected content" {
+				t.Fatalf("protected file changed: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestDurableTailCompactionPublishesWholeSnapshots(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tail.log")
+	path := filepath.Join(canonicalpath.Resolve(t.TempDir()), "tail.log")
 	writer, err := newDurableTailWriter(path, 64)
 	if err != nil {
 		t.Fatal(err)
@@ -1470,7 +1523,7 @@ func TestDurableTailCompactionPublishesWholeSnapshots(t *testing.T) {
 }
 
 func TestDurableTailCompactionThresholdIsIndependentFromTailLimit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tail.log")
+	path := filepath.Join(canonicalpath.Resolve(t.TempDir()), "tail.log")
 	writer, err := newDurableTailWriter(path, 64)
 	if err != nil {
 		t.Fatal(err)
@@ -1505,7 +1558,7 @@ func TestDurableTailCompactionThresholdIsIndependentFromTailLimit(t *testing.T) 
 }
 
 func TestDurableTailWriteFailureKeepsDrainingPayloadOutput(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tail.log")
+	path := filepath.Join(canonicalpath.Resolve(t.TempDir()), "tail.log")
 	writer, err := newDurableTailWriter(path, 2<<20)
 	if err != nil {
 		t.Fatal(err)

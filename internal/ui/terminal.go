@@ -13,6 +13,15 @@ func IsTerminalFile(file *os.File) bool {
 	return file != nil && term.IsTerminal(file.Fd())
 }
 
+// TerminalText removes terminal controls when out is a terminal. Pipes and
+// files receive the original text.
+func TerminalText(out io.Writer, text string) string {
+	if file, ok := out.(*os.File); ok && IsTerminalFile(file) {
+		return sanitizeTerminalText(text)
+	}
+	return text
+}
+
 func shouldUseStyle(out io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false

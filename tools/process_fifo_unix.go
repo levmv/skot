@@ -91,14 +91,9 @@ func validateJobControlFile(file *os.File, path string) error {
 }
 
 func openJobControlWriter(path string) (*os.File, error) {
-	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	writer, err := openJobFile(path, os.O_WRONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
-	}
-	writer := os.NewFile(uintptr(fd), path)
-	if writer == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("invalid job control writer descriptor")
 	}
 	if err := validateJobControlFile(writer, path); err != nil {
 		_ = writer.Close()

@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -51,7 +51,7 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 	privatefs.TryRestrictPermissions(manager.jobHome)
 
 	home := sessionJobHome(manager.jobHome, sessionID)
-	entries, err := os.ReadDir(home)
+	directory, err := openJobDirectory(home, false)
 	if errors.Is(err, os.ErrNotExist) {
 		manager.loadedSessions[sessionID] = struct{}{}
 		delete(manager.attachNotices, sessionID)
@@ -60,7 +60,11 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("read durable jobs for session %s: %w", sessionID, err)
 	}
-	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
+	defer directory.Close()
+	entries, err := fs.ReadDir(directory.FS(), ".")
+	if err != nil {
+		return fmt.Errorf("read durable jobs for session %s: %w", sessionID, err)
+	}
 	var notices []string
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "job-") {
@@ -76,7 +80,7 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 			continue
 		}
 		if delivered {
-			if err := os.RemoveAll(jobDir); err != nil {
+			if err := directory.RemoveAll(entry.Name()); err != nil {
 				notices = append(notices, fmt.Sprintf(
 					"delivered durable job %s could not be removed and was left for a later cleanup: %v",
 					entry.Name(), err,
@@ -105,7 +109,7 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 	}
 	manager.loadedSessions[sessionID] = struct{}{}
 	manager.attachNotices[sessionID] = notices
-	_ = os.Remove(home)
+	_ = removeJobDirectory(home, false)
 	return nil
 }
 
@@ -205,19 +209,21 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 	}
 	startedAt := time.Now().UTC()
 	jobDir := jobDirectory(manager.jobHome, spec.sessionID, id)
-	if err := privatefs.EnsureDirectory(manager.jobHome, "job home"); err != nil {
+	jobHome, err := openJobDirectory(manager.jobHome, true)
+	if err != nil {
 		return nil, err
 	}
-	privatefs.TryRestrictPermissions(manager.jobHome)
-	if err := privatefs.EnsureDirectory(filepath.Dir(jobDir), "session job home"); err != nil {
+	_ = jobHome.Close()
+	sessionHome, err := openJobDirectory(filepath.Dir(jobDir), true)
+	if err != nil {
 		return nil, err
 	}
-	privatefs.TryRestrictPermissions(filepath.Dir(jobDir))
-	if err := os.Mkdir(jobDir, 0o700); err != nil {
+	defer sessionHome.Close()
+	if err := sessionHome.Mkdir(id, 0o700); err != nil {
 		return nil, fmt.Errorf("create durable job: %w", err)
 	}
 	cleanup := func(cause error) (*processJob, error) {
-		return nil, errors.Join(cause, os.RemoveAll(jobDir))
+		return nil, errors.Join(cause, sessionHome.RemoveAll(id))
 	}
 	metadata := jobMetadata{
 		Version:        jobProtocolVersion,
@@ -265,7 +271,7 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		_ = closeControl()
 		return cleanup(fmt.Errorf("resolve worker executable: %w", err))
 	}
-	workerLog, err := os.OpenFile(filepath.Join(jobDir, jobWorkerLogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	workerLog, err := openJobFile(filepath.Join(jobDir, jobWorkerLogFile), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = closeControl()
 		return cleanup(fmt.Errorf("open job worker log: %w", err))
@@ -488,13 +494,13 @@ func removeSettledJobState(job *processJob) (bool, error) {
 			return false, nil
 		}
 	}
-	if err := os.RemoveAll(jobDir); err != nil {
+	if err := removeJobDirectory(jobDir, true); err != nil {
 		return false, err
 	}
 	// The session directory contains only job directories. Remove it when this
 	// was the last settled job; another live job or concurrent cleanup makes a
 	// failed removal harmless.
-	_ = os.Remove(filepath.Dir(jobDir))
+	_ = removeJobDirectory(filepath.Dir(jobDir), false)
 	return true, nil
 }
 
@@ -522,7 +528,7 @@ func (manager *ProcessManager) durableJobOutput(job *processJob, limit int) proc
 }
 
 func readDurableTail(path string, limit int) processOutput {
-	file, err := os.Open(path)
+	file, err := openJobFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return processOutput{readErr: err}
 	}
@@ -558,8 +564,13 @@ func (manager *ProcessManager) durableJobStats(job *processJob) (stored, discard
 	if err == nil && terminal {
 		return result.StdoutBytes + result.StderrBytes, result.StdoutDiscarded + result.StderrDiscarded
 	}
+	directory, err := openJobDirectory(job.jobDir, false)
+	if err != nil {
+		return 0, 0
+	}
+	defer directory.Close()
 	for _, name := range []string{jobStdoutFile, jobStderrFile} {
-		if info, statErr := os.Stat(filepath.Join(job.jobDir, name)); statErr == nil {
+		if info, statErr := directory.Stat(name); statErr == nil && info.Mode().IsRegular() {
 			stored += info.Size()
 		}
 	}

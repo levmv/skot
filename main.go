@@ -81,7 +81,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
-		fmt.Fprintf(os.Stderr, "sk: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sk: %s\n", ui.TerminalText(os.Stderr, err.Error()))
 		os.Exit(exitCodeFor(err))
 	}
 }
@@ -214,7 +214,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 	}()
 	for _, notice := range application.StartupNotices() {
-		fmt.Fprintln(stderr, "sk: "+notice)
+		fmt.Fprintln(stderr, "sk: "+ui.TerminalText(stderr, notice))
 	}
 	if interactive {
 		return ui.RunScreen(ctx, application, ui.Config{
@@ -276,7 +276,7 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 			return errors.Join(runErr, fmt.Errorf("write JSON result: %w", err))
 		}
 	} else if runErr == nil || result.Answer != "" {
-		if _, err := fmt.Fprintln(stdout, result.Answer); err != nil {
+		if _, err := fmt.Fprintln(stdout, ui.TerminalText(stdout, result.Answer)); err != nil {
 			return errors.Join(runErr, fmt.Errorf("write answer: %w", err))
 		}
 	}
@@ -399,29 +399,33 @@ func verboseEmitter(enabled bool, output io.Writer) agent.EmitFunc {
 		return nil
 	}
 	return func(event agent.Event) {
+		var text string
 		switch event.Kind {
 		case agent.EventModelAttemptStarted:
-			fmt.Fprintf(output, "sk: model attempt %s\n", event.AttemptID)
+			text = fmt.Sprintf("sk: model attempt %s\n", event.AttemptID)
 		case agent.EventModelAttemptDiscarded:
-			fmt.Fprintf(output, "sk: discarded attempt: %s\n", event.Text)
+			text = fmt.Sprintf("sk: discarded attempt: %s\n", event.Text)
 		case agent.EventModelRetryScheduled:
-			fmt.Fprintf(output, "sk: %s\n", event.Text)
+			text = fmt.Sprintf("sk: %s\n", event.Text)
 		case agent.EventToolStarted:
-			fmt.Fprintf(output, "sk: tool %s\n", event.Call.Name)
+			text = fmt.Sprintf("sk: tool %s\n", event.Call.Name)
 		case agent.EventToolFinished:
 			if event.Result.Error {
-				fmt.Fprintf(output, "sk: tool %s failed: %s\n", event.Call.Name, event.Result.Content.Text())
+				text = fmt.Sprintf("sk: tool %s failed: %s\n", event.Call.Name, event.Result.Content.Text())
 			}
 		case agent.EventToolRejected:
-			fmt.Fprintf(output, "sk: tool %s rejected: %s\n", event.Call.Name, event.Result.Content.Text())
+			text = fmt.Sprintf("sk: tool %s rejected: %s\n", event.Call.Name, event.Result.Content.Text())
 		case agent.EventStatus, agent.EventBoundaryDelivered, agent.EventContextCompacted, agent.EventToolResultsPruned:
-			fmt.Fprintf(output, "sk: %s\n", event.Text)
+			text = fmt.Sprintf("sk: %s\n", event.Text)
 		case agent.EventRunFinished:
 			if event.ToolLimitReached {
-				fmt.Fprintf(output, "sk: %s (tool iteration limit reached)\n", event.Status)
+				text = fmt.Sprintf("sk: %s (tool iteration limit reached)\n", event.Status)
 			} else {
-				fmt.Fprintf(output, "sk: %s\n", event.Status)
+				text = fmt.Sprintf("sk: %s\n", event.Status)
 			}
+		}
+		if text != "" {
+			fmt.Fprint(output, ui.TerminalText(output, text))
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,19 +97,23 @@ func jobControlPath(jobDir string) string {
 }
 
 func writeJSONAtomic(path string, value any, mode os.FileMode) (returnErr error) {
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+"-*")
+	directory, err := openJobDirectory(filepath.Dir(path), false)
 	if err != nil {
 		return err
 	}
-	temporaryPath := temporary.Name()
+	defer directory.Close()
+	temporary, err := createJobTemp(directory, filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	temporaryPath := filepath.Base(temporary.Name())
 	closed := false
 	defer func() {
 		if !closed {
 			returnErr = errors.Join(returnErr, temporary.Close())
 		}
 		if returnErr != nil {
-			_ = os.Remove(temporaryPath)
+			_ = directory.Remove(temporaryPath)
 		}
 	}()
 	if err := temporary.Chmod(mode); err != nil {
@@ -126,16 +131,32 @@ func writeJSONAtomic(path string, value any, mode os.FileMode) (returnErr error)
 		return err
 	}
 	closed = true
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := directory.Rename(temporaryPath, filepath.Base(path)); err != nil {
 		return err
 	}
 	return nil
 }
 
 func readJSONFile(path string, target any) error {
-	data, err := os.ReadFile(path)
+	file, err := openJobFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular job file", path)
+	}
+	// Durable metadata cannot reasonably exceed the complete worker launch.
+	data, err := io.ReadAll(io.LimitReader(file, maxJobWorkerSpecBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > maxJobWorkerSpecBytes {
+		return fmt.Errorf("job file is too large: %s", path)
 	}
 	return json.Unmarshal(data, target, json.RejectUnknownMembers(true))
 }
@@ -199,7 +220,12 @@ func validTerminalProcessStatus(status string) bool {
 }
 
 func jobDelivered(jobDir string) (bool, error) {
-	_, err := os.Stat(filepath.Join(jobDir, jobDeliveredFile))
+	directory, err := openJobDirectory(jobDir, false)
+	if err != nil {
+		return false, err
+	}
+	defer directory.Close()
+	_, err = directory.Stat(jobDeliveredFile)
 	switch {
 	case err == nil:
 		return true, nil
@@ -212,7 +238,7 @@ func jobDelivered(jobDir string) (bool, error) {
 
 func markJobDelivered(jobDir string) error {
 	path := filepath.Join(jobDir, jobDeliveredFile)
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := openJobFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil
 	}

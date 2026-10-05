@@ -228,7 +228,7 @@ type durableTailWriter struct {
 }
 
 func newDurableTailWriter(path string, limit int64) (*durableTailWriter, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	file, err := openJobFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -310,18 +310,23 @@ func (writer *durableTailWriter) compact() error {
 // sees either the complete old file or the complete new one; truncating the
 // live inode in place could otherwise expose a short, zero-filled snapshot.
 func (writer *durableTailWriter) replace(data []byte) (returnErr error) {
-	temporary, err := os.CreateTemp(filepath.Dir(writer.path), "."+filepath.Base(writer.path)+"-*")
+	directory, err := openJobDirectory(filepath.Dir(writer.path), false)
 	if err != nil {
 		return err
 	}
-	temporaryPath := temporary.Name()
+	defer directory.Close()
+	temporary, err := createJobTemp(directory, filepath.Base(writer.path))
+	if err != nil {
+		return err
+	}
+	temporaryPath := filepath.Base(temporary.Name())
 	renamed := false
 	defer func() {
 		if returnErr != nil {
 			_ = temporary.Close()
 		}
 		if !renamed {
-			_ = os.Remove(temporaryPath)
+			_ = directory.Remove(temporaryPath)
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
@@ -336,7 +341,7 @@ func (writer *durableTailWriter) replace(data []byte) (returnErr error) {
 			return io.ErrShortWrite
 		}
 	}
-	if err := os.Rename(temporaryPath, writer.path); err != nil {
+	if err := directory.Rename(temporaryPath, filepath.Base(writer.path)); err != nil {
 		return err
 	}
 	renamed = true

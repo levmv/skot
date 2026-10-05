@@ -215,13 +215,39 @@ func TestStorePreservesValidFinalRecordWithoutNewline(t *testing.T) {
 	}
 }
 
-func TestStoreDoesNotRepairCompleteMalformedRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	if err := os.WriteFile(path, []byte("not-json\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "decode journal record") {
-		t.Fatalf("malformed complete record error = %v", err)
+func TestStoreDoesNotModifyMalformedJournals(t *testing.T) {
+	for _, test := range []struct {
+		name, contents string
+	}{
+		{name: "complete malformed record", contents: "not-json\n"},
+		{name: "single line without newline", contents: "not-json"},
+		{name: "multiple lines without final newline", contents: "not-json\nunfinished"},
+		{
+			name: "corrupt record before incomplete tail",
+			contents: `{"sequence":1,"time":"2026-08-20T12:00:00Z","kind":"aux/test","data":{}}` +
+				"\nnot-json\nunfinished",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := Open(path)
+			if store != nil {
+				_ = store.Close()
+			}
+			if err == nil {
+				t.Error("opened a malformed journal")
+			}
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(contents) != test.contents {
+				t.Fatalf("journal contents changed: got %q, want %q", contents, test.contents)
+			}
+		})
 	}
 }
 

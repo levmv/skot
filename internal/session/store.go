@@ -223,10 +223,9 @@ func (store *Store) closeLocked(syncChanges bool) error {
 	return errors.Join(syncErr, closeErr)
 }
 
-// repairIncompleteTail terminates a valid final record or removes an invalid
-// fragment when the journal does not end in a newline. Complete but malformed
-// JSONL records remain errors in readRecords; repair is deliberately not a
-// general corruption recovery mechanism.
+// repairIncompleteTail terminates a valid final record or drops an incomplete
+// tail only after a nonempty, valid journal prefix. Malformed newline-terminated
+// records are never repaired.
 func repairIncompleteTail(file *os.File, maxRecordBytes int) (bool, error) {
 	info, err := file.Stat()
 	if err != nil {
@@ -247,7 +246,8 @@ func repairIncompleteTail(file *os.File, maxRecordBytes int) (bool, error) {
 	// also the source of truth for whether the tail is a complete record. Add
 	// the missing delimiter instead of discarding a record that reached disk in
 	// full before the process stopped.
-	if _, err := readRecords(file, maxRecordBytes); err == nil {
+	_, readErr := readRecords(file, maxRecordBytes)
+	if readErr == nil {
 		written, err := file.Write([]byte{'\n'})
 		if err == nil && written != 1 {
 			err = io.ErrShortWrite
@@ -272,17 +272,23 @@ func repairIncompleteTail(file *os.File, maxRecordBytes int) (bool, error) {
 		}
 		end = start
 	}
+	if truncateAt == 0 {
+		return false, readErr
+	}
+	if _, err := readRecords(io.NewSectionReader(file, 0, truncateAt), maxRecordBytes); err != nil {
+		return false, err
+	}
 	if err := file.Truncate(truncateAt); err != nil {
 		return false, fmt.Errorf("repair incomplete journal tail: %w", err)
 	}
 	return true, nil
 }
 
-func readRecords(file *os.File, maxRecordBytes int) ([]agent.Record, error) {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+func readRecords(reader io.ReadSeeker, maxRecordBytes int) ([]agent.Record, error) {
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek journal: %w", err)
 	}
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	initialBufferBytes := min(maxRecordBytes+1, initialJournalBufferBytes)
 	scanner.Buffer(make([]byte, initialBufferBytes), maxRecordBytes+1)
 	var records []agent.Record
@@ -307,7 +313,7 @@ func readRecords(file *os.File, maxRecordBytes int) ([]agent.Record, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read journal: %w", err)
 	}
-	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+	if _, err := reader.Seek(0, io.SeekEnd); err != nil {
 		return nil, fmt.Errorf("seek journal end: %w", err)
 	}
 	return records, nil

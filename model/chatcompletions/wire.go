@@ -472,7 +472,15 @@ func (backend *Backend) matchesProviderContext(providerContext *model.ProviderCo
 }
 
 type toolCallAccumulator struct {
-	calls []wireToolCall
+	// Keep builders at stable addresses as the slice grows.
+	calls []*toolCallBuffer
+}
+
+type toolCallBuffer struct {
+	id        string
+	kind      string
+	name      strings.Builder
+	arguments strings.Builder
 }
 
 const maxToolCallsPerCompletion = 1024
@@ -484,7 +492,7 @@ func (accumulator *toolCallAccumulator) merge(deltas []wireToolCall) error {
 			index = *delta.Index
 		} else if len(accumulator.calls) > 0 {
 			index = len(accumulator.calls) - 1
-			if delta.ID != "" && accumulator.calls[index].ID != "" && accumulator.calls[index].ID != delta.ID {
+			if delta.ID != "" && accumulator.calls[index].id != "" && accumulator.calls[index].id != delta.ID {
 				index = len(accumulator.calls)
 			}
 		}
@@ -495,17 +503,17 @@ func (accumulator *toolCallAccumulator) merge(deltas []wireToolCall) error {
 			return fmt.Errorf("tool call index %d exceeds limit %d", index, maxToolCallsPerCompletion)
 		}
 		for len(accumulator.calls) <= index {
-			accumulator.calls = append(accumulator.calls, wireToolCall{Type: "function"})
+			accumulator.calls = append(accumulator.calls, &toolCallBuffer{kind: "function"})
 		}
-		call := &accumulator.calls[index]
+		call := accumulator.calls[index]
 		if delta.ID != "" {
-			call.ID = delta.ID
+			call.id = delta.ID
 		}
 		if delta.Type != "" {
-			call.Type = delta.Type
+			call.kind = delta.Type
 		}
-		call.Function.Name += delta.Function.Name
-		call.Function.Arguments += delta.Function.Arguments
+		call.name.WriteString(delta.Function.Name)
+		call.arguments.WriteString(delta.Function.Arguments)
 	}
 	return nil
 }
@@ -513,14 +521,15 @@ func (accumulator *toolCallAccumulator) merge(deltas []wireToolCall) error {
 func (accumulator *toolCallAccumulator) snapshot() []wireToolCall {
 	result := make([]wireToolCall, 0, len(accumulator.calls))
 	for _, call := range accumulator.calls {
-		if call.ID == "" && call.Function.Name == "" && call.Function.Arguments == "" {
+		if call.id == "" && call.name.Len() == 0 && call.arguments.Len() == 0 {
 			continue
 		}
-		call.Index = nil
-		if call.Type == "" {
-			call.Type = "function"
-		}
-		result = append(result, call)
+		result = append(result, wireToolCall{
+			ID: call.id, Type: call.kind,
+			Function: wireFunctionCall{
+				Name: call.name.String(), Arguments: call.arguments.String(),
+			},
+		})
 	}
 	return result
 }

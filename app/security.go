@@ -76,7 +76,7 @@ func buildProcessSecurityState(ctx context.Context, state securityState, root, t
 	command := "if IFS= read -r _ < " + quotedProbe + " 2>/dev/null; then exit 42; fi; " +
 		"if : > " + quotedProbe + " 2>/dev/null; then exit 43; fi; " +
 		"if rm -f -- " + quotedProbe + " 2>/dev/null; then exit 44; fi; exit 0"
-	cmd, err := workspacetools.BoundaryBashCommand(command, root, probeBoundary)
+	cmd, err := workspacetools.BoundaryProbeCommand(command, root, probeBoundary)
 	if err != nil {
 		return unavailableBoundary(state, "boundary command failed: "+err.Error())
 	}

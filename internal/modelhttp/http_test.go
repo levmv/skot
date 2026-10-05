@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func TestPublicEndpointOmitsCredentials(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{" https://alice:password@gateway.example/v1?key=secret#private ", "https://gateway.example/v1"},
+		{"https:alice:password@gateway.example/v1", ""},
+		{"alice:password@gateway.example/v1", ""},
+		{"alice@gateway.example/v1", ""},
+	} {
+		if got := PublicEndpoint(test.input); got != test.want {
+			t.Errorf("PublicEndpoint(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
 func TestDefaultClientKeepsRedirectedRequestsWithinTheirOrigin(t *testing.T) {
 	for _, test := range []struct {
 		name, location string

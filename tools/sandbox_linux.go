@@ -120,15 +120,6 @@ func sandboxChildEnv(environment []string) []string {
 	return result
 }
 
-func systemBashPath() string {
-	for _, path := range []string{"/bin/bash", "/usr/bin/bash", "/run/current-system/sw/bin/bash"} {
-		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-			return path
-		}
-	}
-	return ""
-}
-
 var sandboxReadOnlyDirs = []string{
 	"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
 	"/etc", "/nix", "/opt", "/snap", "/run/systemd/resolve",

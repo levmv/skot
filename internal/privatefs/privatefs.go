@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 // InspectDirectory validates an optional directory without changing it. A
@@ -82,7 +84,8 @@ func TryRestrictPermissions(path string) {
 	if mode.Perm()&0o077 == 0 {
 		return
 	}
-	file, err := os.Open(path)
+	// A replacement FIFO must not block before the identity check below.
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return
 	}

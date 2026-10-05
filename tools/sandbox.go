@@ -2,6 +2,7 @@ package tools
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -92,8 +93,35 @@ func HardenSupervisor() { hardenSupervisor() }
 
 func BoundaryBackend() string { return sandboxBackend() }
 
-func BoundaryBashCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
-	return sandboxedBashCommand(command, workdir, boundary)
+// BoundaryProbeCommand prepares a filesystem check using system Bash with
+// a minimal environment and no shell startup files.
+func BoundaryProbeCommand(command, workdir string, boundary Boundary) (*exec.Cmd, error) {
+	bash := systemBashPath()
+	if bash == "" {
+		return nil, errors.New("system Bash is unavailable")
+	}
+	cmd, err := sandboxedProgramCommand(bash, []string{bash, "--noprofile", "--norc", "-c", command}, workdir, boundary, nil)
+	if err != nil {
+		return nil, err
+	}
+	environment := []string{"PATH=/usr/bin:/bin:/run/current-system/sw/bin"}
+	// Linux passes the command and filesystem policy through its sandbox wrapper.
+	for _, entry := range cmd.Env {
+		if strings.HasPrefix(entry, "SK_INTERNAL_") {
+			environment = append(environment, entry)
+		}
+	}
+	cmd.Env = environment
+	return cmd, nil
+}
+
+func systemBashPath() string {
+	for _, path := range []string{"/bin/bash", "/usr/bin/bash", "/run/current-system/sw/bin/bash"} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return path
+		}
+	}
+	return ""
 }
 
 // DefaultToolHomeRoot returns the disposable payload-data root. It is kept

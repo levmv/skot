@@ -18,6 +18,7 @@ import (
 	"github.com/levmv/skot/internal/canonicalpath"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/privatefs"
+	"golang.org/x/sys/unix"
 )
 
 const journalName = "events.jsonl"
@@ -132,15 +133,17 @@ func Resolve(home, workspace, prefix string) (Summary, error) {
 }
 
 func summarize(id, path, workspace string) (Summary, bool) {
-	file, err := os.Open(path)
+	// Do not wait on a FIFO before checking the opened object's type.
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return Summary{}, false
 	}
 	defer file.Close()
-	summary := Summary{ID: id}
-	if info, err := file.Stat(); err == nil {
-		summary.UpdatedAt = info.ModTime()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return Summary{}, false
 	}
+	summary := Summary{ID: id, UpdatedAt: info.ModTime()}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, initialJournalBufferBytes), productlimits.MaxJournalRecordBytes+1)
 	if !scanner.Scan() {

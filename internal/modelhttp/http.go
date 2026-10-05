@@ -38,7 +38,7 @@ func SetRequestHeaders(header, extra http.Header, sessionID string) {
 // request-only URL data before it is journaled or compared with saved state.
 func PublicEndpoint(value string) string {
 	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(value), "/"))
-	if err != nil {
+	if err != nil || parsed.Host == "" {
 		return ""
 	}
 	parsed.User = nil

@@ -44,10 +44,36 @@ func TestBoundaryNeedsBackendOnlyForActualRestrictions(t *testing.T) {
 	}
 }
 
-func TestBoundaryCommandRejectsUnknownScope(t *testing.T) {
-	_, err := BoundaryBashCommand("true", t.TempDir(), Boundary{Scope: Scope("unknown")})
+func TestBoundaryProbeCommandRejectsUnknownScope(t *testing.T) {
+	_, err := BoundaryProbeCommand("true", t.TempDir(), Boundary{Scope: Scope("unknown")})
 	if err == nil {
-		t.Fatal("BoundaryBashCommand accepted an unknown scope")
+		t.Fatal("BoundaryProbeCommand accepted an unknown scope")
+	}
+}
+
+func TestBoundaryProbeIgnoresAmbientShellState(t *testing.T) {
+	root, toolHome, protected := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, name := range []string{".bash_profile", ".profile", "startup.sh"} {
+		if err := os.WriteFile(filepath.Join(toolHome, name), []byte("exit 73\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("BASH_ENV", filepath.Join(toolHome, "startup.sh"))
+	t.Setenv("ENV", filepath.Join(toolHome, "startup.sh"))
+	t.Setenv("SK_TEST_PROBE_SECRET", "must-not-leak")
+	for _, scope := range []Scope{ScopeWorkspace, ScopeMachine} {
+		t.Run(string(scope), func(t *testing.T) {
+			cmd, err := BoundaryProbeCommand(`printf '%s' "${SK_TEST_PROBE_SECRET-unset}"`, root, Boundary{
+				Scope: scope, Workspace: root, ToolHome: toolHome, ProtectedPaths: []string{protected},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := cmd.CombinedOutput()
+			if err != nil || string(output) != "unset" {
+				t.Fatalf("probe inherited shell state: output %q, error %v", output, err)
+			}
+		})
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 
 func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	reasoningRaw := jsontext.Value(`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking "}],"encrypted_content":"ciphertext"}`)
-	messageRaw := jsontext.Value(`{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello"}]}`)
+	messageRaw := jsontext.Value(`{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"hello"}]}`)
 	var received struct {
 		Model        string           `json:"model"`
 		Instructions string           `json:"instructions"`
@@ -52,7 +52,7 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 			"response": map[string]any{
 				"id": "resp_1", "status": "completed", "output": []jsontext.Value{reasoningRaw, messageRaw},
 				"usage": map[string]any{
-					"input_tokens": 12, "input_tokens_details": map[string]any{"cached_tokens": 4},
+					"input_tokens": 12, "input_tokens_details": map[string]any{"cached_tokens": 4, "cache_write_tokens": 3},
 					"output_tokens": 5, "output_tokens_details": map[string]any{"reasoning_tokens": 3},
 					"total_tokens": 17,
 				},
@@ -84,7 +84,7 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 		t.Fatalf("user input = %#v, %v", user, err)
 	}
 	if response.StopReason != "stop" || response.Usage.Tokens.Known() != (model.TokenCounts{
-		InputTokens: 12, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17,
+		InputTokens: 12, CachedInputTokens: 4, CacheWriteInputTokens: 3, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 17,
 	}) {
 		t.Fatalf("response metadata = %#v", response)
 	}
@@ -92,7 +92,7 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 		len(response.Items[0].ProviderData) != 1 || response.Items[0].ProviderData[0].Kind != reasoningItemDataKind ||
 		string(response.Items[0].ProviderData[0].Data) != `{"id":"rs_1","encrypted_content":"ciphertext"}` ||
 		bytes.Contains(response.Items[0].ProviderData[0].Data, []byte("checking")) ||
-		response.Items[1].Kind != model.ItemAssistantText || response.Items[1].Text != "hello" {
+		response.Items[1].Kind != model.ItemAssistantText || response.Items[1].Text != "hello" || response.Items[1].Phase != "final_answer" {
 		t.Fatalf("response items = %#v", response.Items)
 	}
 	if !reflect.DeepEqual(events, []model.StreamEvent{
@@ -216,7 +216,7 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 		Items: []model.Item{
 			{Kind: model.ItemUserText, Text: "inspect"},
 			{Kind: model.ItemReasoning, ResponseID: "response_1", Text: "sanitized summary", ProviderContext: &model.ProviderContext{Backend: "responses.openai", Epoch: "epoch_1"}, ProviderData: []model.ProviderData{{Kind: reasoningItemDataKind, Data: reasoningState}}},
-			{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "calling tool"},
+			{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "calling tool", Phase: "commentary"},
 			{Kind: model.ItemToolCall, ResponseID: "response_1", ToolCall: &model.ToolCall{
 				ID: "skot_call_1", Name: "read_file", RawArguments: `{"path":"README.md"}`,
 				ProviderReferences: []model.ProviderReference{{
@@ -266,7 +266,7 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	if err := json.Unmarshal(request.Input[5], &output); err != nil {
 		t.Fatal(err)
 	}
-	if assistant.Role != "assistant" || assistant.Content != "calling tool" || assistant.Type != "" || assistant.Status != "" {
+	if assistant.Role != "assistant" || assistant.Content != "calling tool" || assistant.Phase != "commentary" || assistant.Type != "" || assistant.Status != "" {
 		t.Fatalf("assistant replay = %#v", assistant)
 	}
 	if call.ID != "fc_1" || call.CallID != "provider_call_1" || call.Name != "read_file" || call.Status != "completed" || output.CallID != "provider_call_1" || output.Output != "contents" {

@@ -115,8 +115,36 @@ type Route struct {
 }
 
 var Catalog = []Spec{
+	// Native GPT-6 routes use Responses for tool calling and the documented
+	// input limit (the full context window also includes output tokens).
+	// https://developers.openai.com/api/docs/guides/latest-model
+	{
+		URI: "openai/gpt-6.1-sol", Name: "GPT 6.1 Sol", API: Responses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
+		ResponsesTraits: &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto, PromptCacheKey: true},
+	},
+	{
+		URI: "openai/gpt-6-astra", Name: "GPT 6 Astra", API: Responses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
+		ResponsesTraits: &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto, PromptCacheKey: true},
+	},
+	{
+		URI: "openai/gpt-6-sol", Name: "GPT 6 Sol", API: Responses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+		ResponsesTraits: &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto, PromptCacheKey: true},
+	},
+	{
+		URI: "openai/gpt-6-luna", Name: "GPT 6 Luna", API: Responses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+		ResponsesTraits: &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto, PromptCacheKey: true},
+	},
 	// Subscription limits and efforts follow Codex model metadata, including
 	// max_context_window, rather than the public OpenAI API catalog.
+	// https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json
+	{
+		URI: "openai-codex/gpt-6.1-sol", Name: "ChatGPT · GPT 6.1 Sol", API: Responses,
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
 	{
 		URI: "openai-codex/gpt-6-astra", Name: "ChatGPT · GPT 6 Astra", API: Responses,
 		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
@@ -169,8 +197,18 @@ var Catalog = []Spec{
 		URI: "anthropic/claude-opus-5", Name: "Claude Opus 5", API: AnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
 	},
-	// Fable 5.1 binds thinking signatures to the preceding conversation context.
+	// These models bind thinking signatures to the preceding conversation context.
 	// https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
+	{
+		URI: "anthropic/claude-opus-5-5", Name: "Claude Opus 5.5", API: AnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		DropMismatchedThinking: true, Compatibility: Unverified,
+	},
+	{
+		URI: "anthropic/claude-sonnet-5-5", Name: "Claude Sonnet 5.5", API: AnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		DropMismatchedThinking: true, Compatibility: Unverified,
+	},
 	{
 		URI: "anthropic/claude-fable-5-1", Name: "Claude Fable 5.1", API: AnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},

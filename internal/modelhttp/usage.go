@@ -66,6 +66,7 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 		} `json:"prompt_tokens_details"`
 		InputDetails struct {
 			Cached *int `json:"cached_tokens"`
+			Write  *int `json:"cache_write_tokens"`
 		} `json:"input_tokens_details"`
 		CompletionDetails struct {
 			Reasoning *int `json:"reasoning_tokens"`
@@ -89,6 +90,7 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 	case "responses":
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.CachedInputTokens, tokens.ReasoningTokens = values.InputDetails.Cached, values.OutputDetails.Reasoning
+		tokens.CacheWriteInputTokens = values.InputDetails.Write
 	case "anthropic_messages":
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.CachedInputTokens, tokens.CacheWriteInputTokens = values.CacheReadInputTokens, values.CacheCreationInputTokens

@@ -169,7 +169,12 @@ func (login *Login) Wait() (Tokens, error) {
 }
 
 func Refresh(ctx context.Context, client *http.Client, refreshToken string) (Tokens, error) {
-	return exchange(ctx, client, url.Values{
+	if err := ctx.Err(); err != nil {
+		return Tokens{}, err
+	}
+	// Once sent, a refresh may rotate the token. Finish within exchange's timeout
+	// so the caller can save the replacement even if its request is cancelled.
+	return exchange(context.WithoutCancel(ctx), client, url.Values{
 		"grant_type": {"refresh_token"}, "client_id": {clientID}, "refresh_token": {refreshToken},
 	}, refreshToken)
 }

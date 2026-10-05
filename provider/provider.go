@@ -86,8 +86,9 @@ type Credential = state.CredentialProfile
 // CredentialStore may be implemented by the host application's storage.
 // Credential returns an owned snapshot, or a zero Credential when absent.
 // UpdateCredential must serialize updates to the same provider and persist the
-// callback's result before returning success. Its callback can refresh a token
-// over the network; it must not be retried after a successful refresh.
+// callback's result before returning success. Cancellation may stop waiting for
+// the lock, but must not discard a successful callback's result: an OAuth refresh
+// may already have rotated the token. Do not retry a successful callback.
 type CredentialStore interface {
 	Credential(provider string) (Credential, error)
 	UpdateCredential(context.Context, string, func(Credential) (Credential, error)) error

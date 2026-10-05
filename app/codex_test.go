@@ -243,6 +243,39 @@ func TestCodexRefreshIsSharedAcrossStoresAndMasksRotatedTokens(t *testing.T) {
 	}
 }
 
+func TestCodexRefreshPersistsRotatedTokensAfterCancellation(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := testCodexTokens()
+	expired.ExpiresAt = time.Now().Add(-time.Hour)
+	saveTestCodexTokens(t, store, expired)
+	refreshed := testCodexTokens()
+	refreshed.RefreshToken = "rotated-private-refresh"
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client := &http.Client{Transport: appRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		// The provider has received the refresh request when the user cancels.
+		cancel()
+		if err := request.Context().Err(); err != nil {
+			return nil, err
+		}
+		if _, bounded := request.Context().Deadline(); !bounded {
+			t.Error("refresh has no timeout")
+		}
+		body, _ := json.Marshal(map[string]any{"access_token": refreshed.AccessToken, "refresh_token": refreshed.RefreshToken, "expires_in": 3600})
+		return codexResponse(200, string(body)), nil
+	})}
+	if _, err := (modelconfig.CodexAuthorizer{Store: store, Client: client}).CurrentTokens(ctx); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := modelconfig.StoredCodexTokens(store)
+	if err != nil || saved.RefreshToken != refreshed.RefreshToken || saved.NeedsRefresh() {
+		t.Fatal("rotated credentials were not saved after cancellation")
+	}
+}
+
 func TestCodexRefreshKeepsTemporaryFailuresRetryable(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {

@@ -26,8 +26,11 @@ type Item struct {
 	// ProviderContext. Visible reasoning remains in Text.
 	ProviderData []ProviderData `json:"provider_data,omitempty"`
 	Text         string         `json:"text,omitempty"`
-	ToolCall     *ToolCall      `json:"tool_call,omitzero"`
-	ToolResult   *ToolResult    `json:"tool_result,omitzero"`
+	// Phase is the provider-reported assistant phase, such as "commentary" or
+	// "final_answer". Preserve it when replaying assistant text.
+	Phase      string      `json:"phase,omitempty"`
+	ToolCall   *ToolCall   `json:"tool_call,omitzero"`
+	ToolResult *ToolResult `json:"tool_result,omitzero"`
 	// Details hold application metadata and stay out of model input.
 	Details []Detail `json:"details,omitempty"`
 }

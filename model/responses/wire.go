@@ -95,6 +95,7 @@ type inputMessage struct {
 	Type    string `json:"type,omitempty"`
 	Role    string `json:"role"`
 	Status  string `json:"status,omitempty"`
+	Phase   string `json:"phase,omitempty"`
 	Content any    `json:"content"`
 }
 
@@ -133,6 +134,7 @@ type responseOutputItem struct {
 	Arguments        string                  `json:"arguments,omitempty"`
 	Status           string                  `json:"status,omitempty"`
 	Role             string                  `json:"role,omitempty"`
+	Phase            string                  `json:"phase,omitempty"`
 	EncryptedContent string                  `json:"encrypted_content,omitempty"`
 	Content          []responseOutputContent `json:"content,omitempty"`
 	Summary          []responseSummaryPart   `json:"summary,omitempty"`
@@ -230,7 +232,7 @@ func (backend *Backend) buildRequest(request model.Request) (responseRequest, er
 			// Assistant text is semantic history and intentionally carries no
 			// provider-owned message ID in model.Item. Responses accepts prior
 			// assistant output in the portable easy-input message form.
-			raw, err := marshalInputItem(inputMessage{Role: "assistant", Content: item.Text})
+			raw, err := marshalInputItem(inputMessage{Role: "assistant", Content: item.Text, Phase: item.Phase})
 			if err != nil {
 				return responseRequest{}, err
 			}
@@ -465,7 +467,7 @@ func (backend *Backend) parseResponse(response wireResponse) (model.Response, er
 				}
 			}
 			if text.Len() != 0 {
-				items = append(items, model.Item{Kind: model.ItemAssistantText, Text: text.String()})
+				items = append(items, model.Item{Kind: model.ItemAssistantText, Text: text.String(), Phase: output.Phase})
 			}
 		case "function_call":
 			// Skip all calls in an incomplete response; their arguments may be truncated.

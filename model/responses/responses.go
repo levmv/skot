@@ -3,7 +3,6 @@
 package responses
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -18,71 +17,39 @@ import (
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
 	modelapi "github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
-type Authorizer = modelhttp.Authorizer
-type AuthorizerFunc = modelhttp.AuthorizerFunc
-
-func BearerToken(token string) Authorizer {
-	return modelhttp.BearerToken(token)
-}
-
 type Config struct {
-	Provider        string
-	Model           string
-	APIModel        string
+	Connection      *transport.Connection
 	ReasoningEffort string
 	Traits          RouteTraits
-	BaseURL         string
-	HTTPClient      *http.Client
-	Authorizer      Authorizer
-	Header          http.Header
 }
 
 type Backend struct {
+	connection         *transport.Connection
 	provider           string
-	model              string
 	apiModel           string
 	reasoningEffort    string
 	traits             RouteTraits
-	endpoint           string
-	client             *http.Client
-	authorizer         Authorizer
-	header             http.Header
 	maxRequestBytes    int
 	maxCompletionBytes int
 }
 
 func New(config Config) (*Backend, error) {
-	provider := strings.TrimSpace(config.Provider)
-	model := strings.TrimSpace(config.Model)
-	apiModel := strings.TrimSpace(config.APIModel)
-	if apiModel == "" {
-		apiModel = model
+	if config.Connection == nil || config.Connection.API() != "responses" {
+		return nil, modelapi.MarkInvalidRequest(errors.New("a responses connection is required"))
 	}
+	provider := config.Connection.Provider()
+	apiModel := config.Connection.APIModel()
 	reasoningEffort := strings.ToLower(strings.TrimSpace(config.ReasoningEffort))
-	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if provider == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("provider is required"))
-	}
-	if model == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("model is required"))
-	}
-	if baseURL == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("base URL is required"))
-	}
 	if err := config.Traits.validate(); err != nil {
 		return nil, modelapi.MarkInvalidRequest(err)
 	}
-	if config.Authorizer == nil {
-		return nil, modelapi.MarkInvalidRequest(errors.New("authorizer is required"))
-	}
-	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Backend{
-		provider: provider, model: model, apiModel: apiModel,
+		connection: config.Connection,
+		provider:   provider, apiModel: apiModel,
 		reasoningEffort: reasoningEffort, traits: config.Traits,
-		endpoint: baseURL + "/responses", client: client,
-		authorizer: config.Authorizer, header: config.Header.Clone(),
 		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
 }
@@ -108,7 +75,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	defer usage.Attach(&result)
 	requestStarted := false
 	defer func() {
-		if requestStarted {
+		if requestStarted && !errors.Is(returnErr, modelapi.ErrRequestNotSent) {
 			returnErr = modelapi.MarkProviderFailure(returnErr)
 		} else {
 			returnErr = modelapi.MarkRequestNotSent(returnErr)
@@ -125,45 +92,33 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	if len(body) > backend.maxRequestBytes {
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("%w: responses request is %d bytes, limit is %d", modelapi.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
+	header := http.Header{"Accept": {"text/event-stream"}}
+	if request.SessionID != "" {
+		header.Set("X-Session-ID", request.SessionID)
+	}
+	requestStarted = true
+	response, err := backend.connection.Post(ctx, body, header)
+	if response != nil {
+		usage.SetRequestID(response.Header)
+	}
 	if err != nil {
-		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("create Responses request: %w", err))
-	}
-	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
-	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
-		err = fmt.Errorf("authorize %s request: %w", backend.provider, err)
-		// Refreshing credentials can fail transiently without invalidating them.
-		if errors.Is(err, modelapi.ErrProviderFailure) {
-			return modelapi.Response{}, err
+		if response != nil {
+			_ = response.Body.Close()
 		}
-		return modelapi.Response{}, modelapi.MarkInvalidRequest(err)
-	}
-	if err := ctx.Err(); err != nil {
 		return modelapi.Response{}, err
 	}
-
-	requestStarted = true
-	response, err := backend.client.Do(httpRequest)
-	if err != nil {
-		return modelapi.Response{}, fmt.Errorf("%s Responses request: %w", backend.provider, err)
-	}
-	defer response.Body.Close()
-	usage.SetRequestID(response.Header)
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return modelapi.Response{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Responses API", response)
-	}
-
-	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
+	stream := transport.OpenEventStream(ctx, response.Body, transport.StreamOptions{IdleTimeout: request.StreamIdleTimeout})
 	defer stream.Close()
 	var text, reasoning strings.Builder
 	completedOutput := make(map[int]jsontext.Value)
 	completionBytes := 0
 	for {
-		payload, readErr := stream.Next()
+		received, readErr := stream.Next()
+		payload := received.Data
 		if errors.Is(readErr, io.EOF) {
 			return modelapi.Response{}, fmt.Errorf("%s Responses stream ended before a terminal event", backend.provider)
 		}
-		if errors.Is(readErr, modelhttp.ErrEventTooLarge) || len(payload) > backend.maxCompletionBytes-completionBytes {
+		if errors.Is(readErr, transport.ErrEventTooLarge) || len(payload) > backend.maxCompletionBytes-completionBytes {
 			return partialStreamResponse(text.String(), reasoning.String()), nil
 		}
 		if readErr != nil {
@@ -206,7 +161,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 				return modelapi.Response{}, fmt.Errorf("%s Responses terminal event has no response", backend.provider)
 			}
 			if event.Response.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Response.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Response.Error)
 			}
 			eventStatus := strings.TrimPrefix(event.Type, "response.")
 			if eventStatus == "done" {
@@ -237,14 +192,14 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 			return backend.parseResponse(*event.Response)
 		case "response.failed":
 			if event.Response != nil && event.Response.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Response.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Response.Error)
 			}
 			return modelapi.Response{}, fmt.Errorf("%s Responses API failed", backend.provider)
 		case "error":
 			if event.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Error)
 			}
-			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, &apiError{Message: event.Message, Code: event.Code})
+			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, &apiError{Message: event.Message, Code: event.Code})
 		}
 	}
 }

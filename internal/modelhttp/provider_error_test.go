@@ -27,7 +27,7 @@ func TestDecodeProviderErrorFallbacks(t *testing.T) {
 				Status: "400 Bad Request", StatusCode: http.StatusBadRequest,
 				Header: http.Header{}, Body: io.NopCloser(strings.NewReader(test.body)),
 			}
-			err := DecodeProviderError("provider", "model", "API", response)
+			err := DecodeProviderError("provider", "model", response, []byte(test.body), nil)
 			if !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %q, want %q", err, test.want)
 			}
@@ -135,7 +135,8 @@ func TestDecodeProviderErrorUsesMetadataErrorType(t *testing.T) {
 		Status: "400 Bad Request", StatusCode: http.StatusBadRequest, Header: http.Header{},
 		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"opaque detail","type":"invalid_request_error","code":"invalid_prompt","metadata":{"error_type":"context_length_exceeded"}}}`)),
 	}
-	err := DecodeProviderError("openrouter", "model", "API", response)
+	body, _ := io.ReadAll(response.Body)
+	err := DecodeProviderError("openrouter", "model", response, body, nil)
 	var providerErr *model.ProviderError
 	if !errors.Is(err, model.ErrModelRequestTooLarge) || !errors.As(err, &providerErr) ||
 		providerErr.Kind != model.ProviderErrorRequestTooLarge || providerErr.Code != "invalid_prompt" ||

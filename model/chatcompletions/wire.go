@@ -172,48 +172,27 @@ type wireFunctionCall struct {
 }
 
 type streamChunk struct {
-	ID       string         `json:"id"`
-	Model    string         `json:"model"`
-	Provider string         `json:"provider"`
-	Choices  []streamChoice `json:"choices"`
-	Usage    jsontext.Value `json:"usage,omitzero"`
-	Error    *apiError      `json:"error,omitzero"`
+	completionFields
+	Choices []streamChoice `json:"choices"`
 }
 
 type streamChoice struct {
-	Index              int         `json:"index"`
-	Delta              streamDelta `json:"delta"`
-	FinishReason       string      `json:"finish_reason"`
-	NativeFinishReason string      `json:"native_finish_reason"`
-	Error              *apiError   `json:"error,omitzero"`
+	choiceFields
+	Delta streamDelta `json:"delta"`
 }
 
 type streamDelta struct {
 	Content          string         `json:"content,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ReasoningContent *string        `json:"reasoning_content,omitzero"`
+	Reasoning        string         `json:"reasoning,omitempty"`
 	ToolCalls        []wireToolCall `json:"tool_calls,omitempty"`
 }
 
-func (delta *streamDelta) UnmarshalJSON(data []byte) error {
-	type plain streamDelta
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
+func (delta streamDelta) reasoningText() string {
+	if delta.ReasoningContent != nil {
+		return *delta.ReasoningContent
 	}
-	*delta = streamDelta(decoded)
-	var alias struct {
-		ReasoningContent *string `json:"reasoning_content"`
-		Reasoning        string  `json:"reasoning"`
-	}
-	if err := json.Unmarshal(data, &alias); err != nil {
-		return err
-	}
-	if alias.ReasoningContent != nil {
-		delta.ReasoningContent = *alias.ReasoningContent
-		return nil
-	}
-	delta.ReasoningContent = alias.Reasoning
-	return nil
+	return delta.Reasoning
 }
 
 type apiError = modelhttp.ProviderErrorEnvelope
@@ -403,15 +382,6 @@ var finishReasons = map[string]string{
 
 func (backend *Backend) normalizeFinishReason(reason string) (string, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(reason))
-	// OpenRouter uses "error" for a failed generation, even when no error
-	// envelope accompanies it. Apply the ordinary in-band retry policy.
-	if trimmed == "error" {
-		return "", modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
-			Provider: backend.provider,
-			Model:    backend.model,
-			Message:  `generation ended with finish_reason "error"`,
-		})
-	}
 	normalized, known := finishReasons[trimmed]
 	if !known {
 		return "", modelhttp.UnsupportedCompletionReasonError(backend.provider, reason)

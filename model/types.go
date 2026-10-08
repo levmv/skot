@@ -136,8 +136,9 @@ type Info struct {
 	ContextWindowEstimated bool `json:"context_window_estimated,omitzero"`
 	MaxRequestBytes        int  `json:"max_request_bytes,omitzero"`
 	MaxCompletionBytes     int  `json:"max_completion_bytes,omitzero"`
-	// Endpoint identifies the effective provider endpoint without credentials.
-	// It does not configure requests or authorization.
+	// Endpoint reports the provider base URL without credentials, query, or
+	// fragment. Connection.Endpoint includes the generation API path as well.
+	// This field does not configure requests or authorization.
 	Endpoint string `json:"endpoint,omitempty"`
 }
 

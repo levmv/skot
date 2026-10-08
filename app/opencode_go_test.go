@@ -226,7 +226,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				route.BaseURL != "https://opencode.ai/zen/go/v1" {
 				t.Fatalf("route = %#v", route)
 			}
-			backend, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
+			backend, _, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -3,7 +3,6 @@
 package anthropic
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
 	modelapi "github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 const (
@@ -31,18 +31,8 @@ const ProviderStateContract modelapi.ProviderStateContract = "anthropic_messages
 
 type apiError = modelhttp.ProviderErrorEnvelope
 
-type Authorizer = modelhttp.Authorizer
-type AuthorizerFunc = modelhttp.AuthorizerFunc
-
-// APIKey returns the native Anthropic Messages authorizer.
-func APIKey(token string) Authorizer {
-	return modelhttp.HeaderToken("x-api-key", token)
-}
-
 type Config struct {
-	Provider string
-	Model    string
-	APIModel string
+	Connection *transport.Connection
 	// MaxTokens supplies the Messages output limit when Request.MaxOutputTokens
 	// is zero. Zero here selects a conservative compatibility default.
 	MaxTokens int
@@ -53,62 +43,38 @@ type Config struct {
 	// DropMismatchedThinking asks the API to drop thinking invalidated by context
 	// edits. It enables adaptive thinking and requires support for the binding beta.
 	DropMismatchedThinking bool
-	BaseURL                string
-	HTTPClient             *http.Client
-	Authorizer             Authorizer
-	Header                 http.Header
 }
 
 type Backend struct {
+	connection             *transport.Connection
 	provider               string
-	model                  string
 	apiModel               string
 	maxTokens              int
 	promptCache            bool
 	dropMismatchedThinking bool
-	endpoint               string
-	client                 *http.Client
-	authorizer             Authorizer
-	header                 http.Header
 	maxRequestBytes        int
 	maxCompletionBytes     int
 }
 
 func New(config Config) (*Backend, error) {
-	provider := strings.TrimSpace(config.Provider)
-	model := strings.TrimSpace(config.Model)
-	apiModel := strings.TrimSpace(config.APIModel)
-	if apiModel == "" {
-		apiModel = model
+	if config.Connection == nil || config.Connection.API() != "anthropic_messages" {
+		return nil, modelapi.MarkInvalidRequest(errors.New("an anthropic_messages connection is required"))
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if provider == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("provider is required"))
-	}
-	if model == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("model is required"))
-	}
-	if baseURL == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("base URL is required"))
-	}
+	provider := config.Connection.Provider()
+	apiModel := config.Connection.APIModel()
 	if config.MaxTokens < 0 {
 		return nil, modelapi.MarkInvalidRequest(errors.New("max tokens cannot be negative"))
-	}
-	if config.Authorizer == nil {
-		return nil, modelapi.MarkInvalidRequest(errors.New("authorizer is required"))
 	}
 	maxTokens := config.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = defaultMaxTokens
 	}
-	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Backend{
-		provider: provider, model: model, apiModel: apiModel, maxTokens: maxTokens,
+		connection: config.Connection,
+		provider:   provider, apiModel: apiModel, maxTokens: maxTokens,
 		promptCache:            config.PromptCache,
 		dropMismatchedThinking: config.DropMismatchedThinking,
-		endpoint:               baseURL + "/messages", client: client,
-		authorizer: config.Authorizer, header: config.Header.Clone(),
-		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
+		maxRequestBytes:        productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
 }
 
@@ -130,7 +96,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	defer usage.Attach(&result)
 	requestStarted := false
 	defer func() {
-		if requestStarted {
+		if requestStarted && !errors.Is(returnErr, modelapi.ErrRequestNotSent) {
 			returnErr = modelapi.MarkProviderFailure(returnErr)
 		} else {
 			returnErr = modelapi.MarkRequestNotSent(returnErr)
@@ -147,35 +113,26 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	if len(body) > backend.maxRequestBytes {
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("%w: messages request is %d bytes, limit is %d", modelapi.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("create Anthropic Messages request: %w", err))
+	header := http.Header{"Accept": {"text/event-stream"}}
+	if request.SessionID != "" {
+		header.Set("X-Session-ID", request.SessionID)
 	}
-	httpRequest.Header.Set("anthropic-version", anthropicVersion)
-	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
+	header.Set("anthropic-version", anthropicVersion)
 	if backend.dropMismatchedThinking {
-		betas := append(httpRequest.Header.Values("anthropic-beta"), thinkingBindingBeta)
-		httpRequest.Header.Set("anthropic-beta", strings.Join(betas, ","))
+		header.Set("anthropic-beta", thinkingBindingBeta)
 	}
-	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
-		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
+	requestStarted = true
+	response, err := backend.connection.Post(ctx, body, header)
+	if response != nil {
+		usage.SetRequestID(response.Header)
 	}
-	if err := ctx.Err(); err != nil {
+	if err != nil {
+		if response != nil {
+			_ = response.Body.Close()
+		}
 		return modelapi.Response{}, err
 	}
-
-	requestStarted = true
-	response, err := backend.client.Do(httpRequest)
-	if err != nil {
-		return modelapi.Response{}, fmt.Errorf("%s Anthropic Messages request: %w", backend.provider, err)
-	}
-	defer response.Body.Close()
-	usage.SetRequestID(response.Header)
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return modelapi.Response{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "Anthropic Messages API", response)
-	}
-
-	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
+	stream := transport.OpenEventStream(ctx, response.Body, transport.StreamOptions{IdleTimeout: request.StreamIdleTimeout})
 	defer stream.Close()
 	blocks := make(map[int]*streamBlock)
 	var stopReason string
@@ -183,11 +140,12 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	limited := false
 	terminal := false
 	for !terminal {
-		payload, readErr := stream.Next()
+		received, readErr := stream.Next()
+		payload := received.Data
 		if errors.Is(readErr, io.EOF) {
 			return modelapi.Response{}, fmt.Errorf("%s Anthropic Messages stream ended before message_stop", backend.provider)
 		}
-		if errors.Is(readErr, modelhttp.ErrEventTooLarge) {
+		if errors.Is(readErr, transport.ErrEventTooLarge) {
 			limited = true
 			break
 		}
@@ -276,7 +234,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 		case "message_stop":
 			terminal = true
 		case "error":
-			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, event.Error)
+			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Error)
 		case "ping":
 		default:
 			// Anthropic's versioning contract permits adding new stream events.

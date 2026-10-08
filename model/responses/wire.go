@@ -413,7 +413,7 @@ func (backend *Backend) matchesProviderContext(context *model.ProviderContext, e
 
 func (backend *Backend) parseResponse(response wireResponse) (model.Response, error) {
 	if response.Error != nil {
-		return model.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, response.Error)
+		return model.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, response.Error)
 	}
 	stopReason := "stop"
 	if response.Status == "incomplete" {

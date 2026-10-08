@@ -1,9 +1,8 @@
-// Package chatcompletions adapts the OpenAI-compatible Chat Completions
-// protocol to Skot's product-native model items.
+// Package chatcompletions provides an item-based Backend and a raw-response
+// Observer for Chat Completions. Both support one choice (n=1).
 package chatcompletions
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -15,37 +14,21 @@ import (
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
 	modelapi "github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
-type Authorizer = modelhttp.Authorizer
-type AuthorizerFunc = modelhttp.AuthorizerFunc
-
-func BearerToken(token string) Authorizer {
-	return modelhttp.BearerToken(token)
-}
-
 type Config struct {
-	Provider        string
-	Model           string
-	APIModel        string
+	Connection      *transport.Connection
 	ReasoningEffort string
 	Traits          RouteTraits
-	BaseURL         string
-	HTTPClient      *http.Client
-	Authorizer      Authorizer
-	Header          http.Header
 }
 
 type Backend struct {
+	connection         *transport.Connection
 	provider           string
-	model              string
 	apiModel           string
 	reasoningEffort    string
 	traits             RouteTraits
-	endpoint           string
-	client             *http.Client
-	authorizer         Authorizer
-	header             http.Header
 	maxRequestBytes    int
 	maxCompletionBytes int
 }
@@ -59,51 +42,32 @@ func (backend *Backend) backendID() string {
 func BackendID(provider string) string { return "chat_completions." + strings.TrimSpace(provider) }
 
 func New(config Config) (*Backend, error) {
-	provider := strings.TrimSpace(config.Provider)
-	model := strings.TrimSpace(config.Model)
-	apiModel := strings.TrimSpace(config.APIModel)
-	if apiModel == "" {
-		apiModel = model
+	if config.Connection == nil || config.Connection.API() != "chat_completions" {
+		return nil, modelapi.MarkInvalidRequest(errors.New("a chat_completions connection is required"))
 	}
+	provider := config.Connection.Provider()
+	apiModel := config.Connection.APIModel()
 	reasoningEffort := strings.ToLower(strings.TrimSpace(config.ReasoningEffort))
-	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
-	if provider == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("provider is required"))
-	}
-	if model == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("model is required"))
-	}
-	if baseURL == "" {
-		return nil, modelapi.MarkInvalidRequest(errors.New("base URL is required"))
-	}
 	if err := config.Traits.validate(reasoningEffort); err != nil {
 		return nil, modelapi.MarkInvalidRequest(err)
 	}
-	if config.Authorizer == nil {
-		return nil, modelapi.MarkInvalidRequest(errors.New("authorizer is required"))
-	}
-	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Backend{
+		connection:         config.Connection,
 		provider:           provider,
-		model:              model,
 		apiModel:           apiModel,
 		reasoningEffort:    reasoningEffort,
 		traits:             config.Traits,
-		endpoint:           baseURL + "/chat/completions",
-		client:             client,
-		authorizer:         config.Authorizer,
-		header:             config.Header.Clone(),
 		maxRequestBytes:    productlimits.MaxModelRequestBytes,
 		maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
 }
 
 func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (result modelapi.Response, returnErr error) {
-	var usage modelhttp.UsageAccumulator
-	defer usage.Attach(&result)
+	observer := NewObserver(backend.connection)
+	defer func() { result.Usage = observer.Usage() }()
 	requestStarted := false
 	defer func() {
-		if requestStarted {
+		if requestStarted && !errors.Is(returnErr, modelapi.ErrRequestNotSent) {
 			returnErr = modelapi.MarkProviderFailure(returnErr)
 		} else {
 			returnErr = modelapi.MarkRequestNotSent(returnErr)
@@ -120,30 +84,22 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	if len(body) > backend.maxRequestBytes {
 		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("%w: chat completion request is %d bytes, limit is %d", modelapi.ErrModelRequestTooLarge, len(body), backend.maxRequestBytes))
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.endpoint, bytes.NewReader(body))
+	header := http.Header{"Accept": {"text/event-stream"}}
+	if request.SessionID != "" {
+		header.Set("X-Session-ID", request.SessionID)
+	}
+	requestStarted = true
+	response, err := backend.connection.Post(ctx, body, header)
+	if response != nil {
+		observer.ObserveHeader(response.Header)
+	}
 	if err != nil {
-		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("create chat completion request: %w", err))
-	}
-	modelhttp.SetRequestHeaders(httpRequest.Header, backend.header, request.SessionID)
-	if err := backend.authorizer.Authorize(ctx, httpRequest); err != nil {
-		return modelapi.Response{}, modelapi.MarkInvalidRequest(fmt.Errorf("authorize %s request: %w", backend.provider, err))
-	}
-	if err := ctx.Err(); err != nil {
+		if response != nil {
+			_ = response.Body.Close()
+		}
 		return modelapi.Response{}, err
 	}
-
-	requestStarted = true
-	response, err := backend.client.Do(httpRequest)
-	if err != nil {
-		return modelapi.Response{}, fmt.Errorf("%s chat completion: %w", backend.provider, err)
-	}
-	defer response.Body.Close()
-	usage.SetRequestID(response.Header)
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return modelapi.Response{}, modelhttp.DecodeProviderError(backend.provider, backend.model, "API", response)
-	}
-
-	stream := modelhttp.OpenEventStream(ctx, response.Body, request.StreamIdleTimeout)
+	stream := transport.OpenEventStream(ctx, response.Body, transport.StreamOptions{IdleTimeout: request.StreamIdleTimeout})
 	defer stream.Close()
 	var text, reasoning strings.Builder
 	var calls toolCallAccumulator
@@ -151,12 +107,13 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	completionBytes := 0
 	limited := false
 	for {
-		payload, err := stream.Next()
+		event, err := stream.Next()
+		payload := event.Data
 		if errors.Is(err, io.EOF) {
+			if err := observer.End(stream.SawDone()); err != nil {
+				return modelapi.Response{}, err
+			}
 			if stopReason == "" {
-				if !stream.SawDone() {
-					return modelapi.Response{}, fmt.Errorf("%s stream ended before a finish reason", backend.provider)
-				}
 				// Some compatible gateways use the legacy sentinel as their only
 				// terminal signal. Keep accepting it, but do not let an empty value
 				// escape the adapter's closed completion-reason vocabulary.
@@ -164,7 +121,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 			}
 			break
 		}
-		if errors.Is(err, modelhttp.ErrEventTooLarge) {
+		if errors.Is(err, transport.ErrEventTooLarge) {
 			limited = true
 			break
 		}
@@ -180,36 +137,15 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 		if err := json.Unmarshal(payload, &chunk); err != nil {
 			return modelapi.Response{}, fmt.Errorf("decode %s stream chunk: %w", backend.provider, err)
 		}
-		if chunk.ID != "" {
-			usage.Snapshot.ResponseID = chunk.ID
-		}
-		if chunk.Model != "" {
-			usage.Snapshot.Model = chunk.Model
-		}
-		if chunk.Provider != "" {
-			usage.Snapshot.Provider = chunk.Provider
-		}
-		finalUsage := len(chunk.Choices) == 0
-		for _, choice := range chunk.Choices {
-			if choice.Index == 0 && choice.FinishReason != "" && choice.FinishReason != "null" {
-				finalUsage = true
-			}
-		}
-		if err := usage.Observe(chunk.Usage, "chat_completions", backend.provider, finalUsage); err != nil {
+		// Reject a failed generation before accepting output or tool calls;
+		// later usage or size limits must not hide the error.
+		if err := observer.observeChunk(chunk); err != nil {
 			return modelapi.Response{}, err
-		}
-		if chunk.Error != nil {
-			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, chunk.Error)
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 {
 				continue
 			}
-			if choice.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.model, choice.Error)
-			}
-			// Reject a failed generation before accepting its output or tool
-			// calls; a later usage chunk or size limit must not hide the error.
 			if choice.FinishReason != "" && choice.FinishReason != "null" {
 				normalized, err := backend.normalizeFinishReason(choice.FinishReason)
 				if err != nil {
@@ -220,9 +156,9 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 				}
 				stopReason = normalized
 			}
-			if choice.Delta.ReasoningContent != "" {
-				reasoning.WriteString(choice.Delta.ReasoningContent)
-				emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, choice.Delta.ReasoningContent)
+			if delta := choice.Delta.reasoningText(); delta != "" {
+				reasoning.WriteString(delta)
+				emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, delta)
 			}
 			if choice.Delta.Content != "" {
 				text.WriteString(choice.Delta.Content)

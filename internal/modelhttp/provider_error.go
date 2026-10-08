@@ -5,13 +5,11 @@ import (
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	productlimits "github.com/levmv/skot/internal/limits"
 	modelapi "github.com/levmv/skot/model"
 )
 
@@ -75,17 +73,9 @@ func NewProviderEnvelopeError(provider, model string, envelope *ProviderErrorEnv
 	})
 }
 
-// DecodeProviderError reads the common error envelope used by Skot's HTTP model
-// adapters. A structured message wins; an unrecognized bounded body is the
-// fallback, while an empty recognized envelope falls back to HTTP status text.
-func DecodeProviderError(provider, model, label string, response *http.Response) error {
-	body, err := io.ReadAll(io.LimitReader(response.Body, productlimits.MaxModelCompletionBytes+1))
-	if err != nil {
-		return fmt.Errorf("%s %s returned HTTP %s (read body: %w)", provider, label, response.Status, err)
-	}
-	if len(body) > productlimits.MaxModelCompletionBytes {
-		body = body[:productlimits.MaxModelCompletionBytes]
-	}
+// DecodeProviderError classifies a bounded HTTP error body even when reading it
+// failed. The caller owns reading, closing, and exposing the original body.
+func DecodeProviderError(provider, model string, response *http.Response, body []byte, readErr error) *modelapi.ProviderError {
 	var envelope struct {
 		Error *ProviderErrorEnvelope `json:"error"`
 	}
@@ -102,11 +92,15 @@ func DecodeProviderError(provider, model, label string, response *http.Response)
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return NewProviderError(ProviderErrorDetails{
+	classified := NewProviderError(ProviderErrorDetails{
 		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
 		Message: message, Code: code, Type: errorType,
 		RetryAfter: ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
 	})
+	if readErr != nil {
+		classified.Cause = fmt.Errorf("%w (read body: %w)", classified.Cause, readErr)
+	}
+	return classified
 }
 
 // UnsupportedCompletionReasonError reports a non-retryable protocol mismatch.
@@ -121,7 +115,7 @@ func UnsupportedCompletionReasonError(provider, reason string) error {
 
 // NewProviderError classifies failures by HTTP status and structured code/type.
 // The message is preserved for display, not used to decide whether to retry.
-func NewProviderError(details ProviderErrorDetails) error {
+func NewProviderError(details ProviderErrorDetails) *modelapi.ProviderError {
 	provider := strings.TrimSpace(details.Provider)
 	model := strings.TrimSpace(details.Model)
 	status := strings.TrimSpace(details.Status)

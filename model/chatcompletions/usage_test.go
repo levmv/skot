@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 func TestCompleteDistinguishesMissingZeroAndPartialUsage(t *testing.T) {
@@ -65,8 +66,15 @@ func TestCompleteKeepsOpenRouterReceiptWhenOutputIsRejected(t *testing.T) {
 				_, _ = io.WriteString(writer, `data: {"id":"gen-1","model":"actual-model","provider":"upstream","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":"broken"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
 				_, _ = io.WriteString(writer, `data: {"choices":[],"usage":{`+test.byok+`"prompt_tokens":12,"completion_tokens":5,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2},"completion_tokens_details":{"reasoning_tokens":3},"cost":`+amount+`,"cost_details":{"upstream_inference_cost":0}}}`+"\n\ndata: [DONE]\n\n")
 			}))
-			backend := newTestServerBackend(t, server, "")
-			backend.provider = "openrouter"
+			backend, err := New(Config{
+				Connection: newTestConnection(t, transport.Config{
+					API: "chat_completions", Provider: "openrouter", APIModel: "test-model",
+					Endpoint: server.URL + "/chat/completions", HTTPClient: server.Client(), Authorizer: transport.BearerToken("secret"),
+				}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			response, err := backend.Complete(t.Context(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}}}, nil)
 			if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
 				t.Fatalf("error = %v", err)

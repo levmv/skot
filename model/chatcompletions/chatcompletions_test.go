@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 func TestCompleteStreamsTextAndReasoning(t *testing.T) {
@@ -115,8 +116,8 @@ func TestStreamDeltaDecodesEitherReasoningField(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.raw), &delta); err != nil {
 				t.Fatal(err)
 			}
-			if delta.ReasoningContent != test.want {
-				t.Fatalf("reasoning = %q", delta.ReasoningContent)
+			if delta.reasoningText() != test.want {
+				t.Fatalf("reasoning = %q", delta.reasoningText())
 			}
 		})
 	}
@@ -312,10 +313,13 @@ func TestBuildRequestStripsReasoningFromOlderTurns(t *testing.T) {
 
 func TestBuildRequestKeepsDeepSeekReasoningFromAllTurns(t *testing.T) {
 	backend, err := New(Config{
-		Provider:   "deepseek",
-		Model:      "deepseek-flash",
-		BaseURL:    "http://example.invalid/v1",
-		Authorizer: BearerToken("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "deepseek",
+			Endpoint:   "http://example.invalid/v1/chat/completions",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "deepseek-flash",
+		}),
 		Traits: RouteTraits{
 			ReasoningReplay: ReasoningReplayAllTurns,
 		},
@@ -356,11 +360,14 @@ func TestBuildRequestKeepsDeepSeekReasoningFromAllTurns(t *testing.T) {
 
 func TestBuildRequestUsesSessionAsOpenAIPromptCacheKey(t *testing.T) {
 	backend, err := New(Config{
-		Provider:   "openai",
-		Model:      "gpt-test",
-		BaseURL:    "http://example.invalid/v1",
-		Authorizer: BearerToken("unused"),
-		Traits:     RouteTraits{PromptCacheKey: true},
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "openai",
+			Endpoint:   "http://example.invalid/v1/chat/completions",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "gpt-test",
+		}),
+		Traits: RouteTraits{PromptCacheKey: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +386,13 @@ func TestBuildRequestUsesSessionAsOpenAIPromptCacheKey(t *testing.T) {
 
 func TestBuildRequestDoesNotInferOptionalFieldsFromProviderName(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "openai", Model: "gpt-test", BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "openai",
+			Endpoint:   "http://example.invalid/v1/chat/completions",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "gpt-test",
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -394,9 +407,14 @@ func TestBuildRequestDoesNotInferOptionalFieldsFromProviderName(t *testing.T) {
 		t.Fatalf("undeclared prompt cache key = %q", request.PromptCacheKey)
 	}
 	if _, err := New(Config{
-		Provider: "openrouter", Model: "model", ReasoningEffort: "high",
-		BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
-	}); !errors.Is(err, model.ErrInvalidRequest) {
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "openrouter",
+			Endpoint:   "http://example.invalid/v1/chat/completions",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "model",
+		}),
+		ReasoningEffort: "high"}); !errors.Is(err, model.ErrInvalidRequest) {
 		t.Fatalf("undeclared reasoning effort error = %v", err)
 	}
 }
@@ -418,9 +436,14 @@ func TestBuildRequestMapsReasoningEffortByRouteTrait(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			backend, err := New(Config{
-				Provider: "test", Model: "model", ReasoningEffort: " " + strings.ToUpper(test.effort) + " ", Traits: RouteTraits{ReasoningEffort: test.encoding},
-				BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
-			})
+				Connection: newTestConnection(t, transport.Config{
+					API:        "chat_completions",
+					Provider:   "test",
+					Endpoint:   "http://example.invalid/v1/chat/completions",
+					Authorizer: transport.BearerToken("unused"),
+					APIModel:   "model",
+				}),
+				ReasoningEffort: " " + strings.ToUpper(test.effort) + " ", Traits: RouteTraits{ReasoningEffort: test.encoding}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -467,10 +490,12 @@ func TestBuildRequestOmitsDefaultReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestBuildRequestCanUseCanonicalAPIModelWithoutChangingSelection(t *testing.T) {
+func TestBuildRequestUsesCanonicalAPIModel(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "openrouter", Model: "free", APIModel: "openrouter/free",
-		BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API: "chat_completions", Provider: "openrouter", APIModel: "openrouter/free",
+			Endpoint: "http://example.invalid/v1/chat/completions", Authorizer: transport.BearerToken("unused"),
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -479,8 +504,8 @@ func TestBuildRequestCanUseCanonicalAPIModelWithoutChangingSelection(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Model != "openrouter/free" || backend.model != "free" {
-		t.Fatalf("wire/selection model = %q/%q", request.Model, backend.model)
+	if request.Model != "openrouter/free" {
+		t.Fatalf("wire model = %q", request.Model)
 	}
 }
 
@@ -557,8 +582,14 @@ func TestCompleteClassifiesDeepSeekQuotaCodeBeforeHTTP429(t *testing.T) {
 	client := server.Client()
 
 	backend, err := New(Config{
-		Provider: "deepseek", Model: "deepseek-v4-flash", BaseURL: server.URL,
-		HTTPClient: client, Authorizer: BearerToken("secret"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "deepseek",
+			Endpoint:   server.URL + "/chat/completions",
+			HTTPClient: client,
+			Authorizer: transport.BearerToken("secret"),
+			APIModel:   "deepseek-v4-flash",
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -688,12 +719,15 @@ func newTestBackendWithClient(t *testing.T, baseURL string, client *http.Client)
 	header := make(http.Header)
 	header.Set("X-Test", "yes")
 	backend, err := New(Config{
-		Provider:   "test",
-		Model:      "test-model",
-		BaseURL:    baseURL,
-		HTTPClient: client,
-		Authorizer: BearerToken("secret"),
-		Header:     header,
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "test",
+			Endpoint:   baseURL + "/chat/completions",
+			HTTPClient: client,
+			Authorizer: transport.BearerToken("secret"),
+			Header:     header,
+			APIModel:   "test-model",
+		}),
 		Traits: RouteTraits{
 			ReasoningEffort: ReasoningEffortTopLevel,
 			ReasoningReplay: ReasoningReplayCurrentTurn,
@@ -714,11 +748,14 @@ func newTestServerBackend(t *testing.T, server *httptest.Server, path string) *B
 func projectionTestBackend(t *testing.T, policy ReasoningReplayPolicy) *Backend {
 	t.Helper()
 	backend, err := New(Config{
-		Provider:   "deepseek",
-		Model:      "deepseek-v4-flash",
-		BaseURL:    "http://example.invalid/v1",
-		Authorizer: BearerToken("unused"),
-		Traits:     RouteTraits{ReasoningReplay: policy},
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "deepseek",
+			Endpoint:   "http://example.invalid/v1/chat/completions",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "deepseek-v4-flash",
+		}),
+		Traits: RouteTraits{ReasoningReplay: policy},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -850,8 +887,14 @@ func TestCompleteRejectsFailedGenerations(t *testing.T) {
 				fmt.Fprintf(writer, "data: %s\n\ndata: [DONE]\n\n", test.terminal)
 			}))
 			backend, err := New(Config{
-				Provider: "openrouter", Model: "google/gemini-3.8-flash", BaseURL: server.URL,
-				HTTPClient: server.Client(), Authorizer: BearerToken("secret"),
+				Connection: newTestConnection(t, transport.Config{
+					API:        "chat_completions",
+					Provider:   "openrouter",
+					Endpoint:   server.URL + "/chat/completions",
+					HTTPClient: server.Client(),
+					Authorizer: transport.BearerToken("secret"),
+					APIModel:   "google/gemini-3.8-flash",
+				}),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1029,11 +1072,26 @@ func TestCompleteRejectsEmptyFinishedResponse(t *testing.T) {
 // it, otherwise the value would be sent as an effort the provider never defined.
 func TestNewRejectsOffWithoutTheThinkingEncoding(t *testing.T) {
 	_, err := New(Config{
-		Provider: "deepseek", Model: "deepseek-v4-flash", BaseURL: "http://example.invalid/v1",
-		Authorizer: BearerToken("unused"), ReasoningEffort: "off",
-		Traits: RouteTraits{ReasoningEffort: ReasoningEffortTopLevel},
+		Connection: newTestConnection(t, transport.Config{
+			API:        "chat_completions",
+			Provider:   "deepseek",
+			Endpoint:   "http://example.invalid/v1/chat/completions",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "deepseek-v4-flash",
+		}),
+		ReasoningEffort: "off",
+		Traits:          RouteTraits{ReasoningEffort: ReasoningEffortTopLevel},
 	})
 	if err == nil || !strings.Contains(err.Error(), "thinking") {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func newTestConnection(t *testing.T, config transport.Config) *transport.Connection {
+	t.Helper()
+	connection, err := transport.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
 }

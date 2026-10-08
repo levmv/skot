@@ -61,7 +61,7 @@ func TestModelInferenceFollowsOnlyAllowedRedirects(t *testing.T) {
 				})}
 				route := testResolvedRoute(t, test.uri, "", "", 0)
 				route.API = test.api
-				backend, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
+				backend, _, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -179,7 +179,7 @@ func TestModelCatalogInvariants(t *testing.T) {
 			t.Errorf("explicit override for unsupported catalog URI %q has compatibility %q", spec.URI, route.Compatibility)
 		}
 		if modelconfig.KnownAPI(route.API) {
-			_, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true})
+			_, _, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true})
 			if err != nil {
 				t.Errorf("build catalog URI %q: %v", spec.URI, err)
 			}

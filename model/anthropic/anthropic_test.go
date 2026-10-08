@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
@@ -669,8 +670,13 @@ func TestCompleteRejectsMalformedStreamState(t *testing.T) {
 
 func TestBackendUsesStableReplayIdentity(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "test", Model: "display-model", APIModel: "wire-model",
-		BaseURL: "https://user:password@example.test/v1/?token=secret#fragment", Authorizer: APIKey("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "anthropic_messages",
+			Provider:   "test",
+			APIModel:   "wire-model",
+			Endpoint:   "https://user:password@example.test/v1/messages?token=secret#fragment",
+			Authorizer: transport.HeaderToken("x-api-key", "unused"),
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -682,8 +688,10 @@ func TestBackendUsesStableReplayIdentity(t *testing.T) {
 
 func TestBuildRequestUsesDefaultMaxTokens(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "test", Model: "display-model", APIModel: "wire-model",
-		BaseURL: "http://example.invalid", Authorizer: APIKey("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API: "anthropic_messages", Provider: "test", APIModel: "wire-model",
+			Endpoint: "http://example.invalid/messages", Authorizer: transport.HeaderToken("x-api-key", "unused"),
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -713,9 +721,14 @@ func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
 	}
 
 	backend, err := New(Config{
-		Provider: "test", Model: "test-model", MaxTokens: 1024, PromptCache: true,
-		BaseURL: "http://example.invalid/v1", Authorizer: APIKey("secret"),
-	})
+		Connection: newTestConnection(t, transport.Config{
+			API:        "anthropic_messages",
+			Provider:   "test",
+			Endpoint:   "http://example.invalid/v1/messages",
+			Authorizer: transport.HeaderToken("x-api-key", "secret"),
+			APIModel:   "test-model",
+		}),
+		MaxTokens: 1024, PromptCache: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,8 +772,11 @@ func breakpoints(request messagesRequest) int {
 
 func TestNewRejectsNegativeMaxTokens(t *testing.T) {
 	if _, err := New(Config{
-		Provider: "test", Model: "model", MaxTokens: -1,
-		BaseURL: "http://example.invalid", Authorizer: APIKey("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API: "anthropic_messages", Provider: "test", APIModel: "model",
+			Endpoint: "http://example.invalid/messages", Authorizer: transport.HeaderToken("x-api-key", "unused"),
+		}),
+		MaxTokens: -1,
 	}); !errors.Is(err, model.ErrInvalidRequest) {
 		t.Fatalf("negative max tokens error = %v", err)
 	}
@@ -773,8 +789,11 @@ func newTestBackend(t *testing.T, baseURL string) *Backend {
 func newTestBackendWithClient(t *testing.T, baseURL string, client *http.Client) *Backend {
 	t.Helper()
 	backend, err := New(Config{
-		Provider: "test", Model: "test-model", APIModel: "wire-model", MaxTokens: 131_072,
-		BaseURL: baseURL, HTTPClient: client, Authorizer: APIKey("secret"), Header: http.Header{"X-Test": []string{"yes"}},
+		Connection: newTestConnection(t, transport.Config{
+			API: "anthropic_messages", Provider: "test", APIModel: "wire-model", Endpoint: baseURL + "/messages",
+			HTTPClient: client, Authorizer: transport.HeaderToken("x-api-key", "secret"), Header: http.Header{"X-Test": {"yes"}},
+		}),
+		MaxTokens: 131_072,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -831,4 +850,13 @@ func TestNormalizedStopReasonsHaveExpectedCompletionClassification(t *testing.T)
 			t.Errorf("stop reason %q normalized to %q: incomplete = %v, want %v", provider, normalized, got, wantIncomplete)
 		}
 	}
+}
+
+func newTestConnection(t *testing.T, config transport.Config) *transport.Connection {
+	t.Helper()
+	connection, err := transport.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
 }

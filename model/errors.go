@@ -9,7 +9,7 @@ var (
 	// ErrInvalidRequest marks a request or configuration that cannot succeed
 	// when retried unchanged.
 	ErrInvalidRequest = errors.New("invalid request")
-	// ErrRequestNotSent marks a Complete failure before attempting to send the
+	// ErrRequestNotSent marks a Complete or transport.Post failure before sending the
 	// model request. Its absence does not prove delivery or a charge.
 	ErrRequestNotSent = errors.New("model request was not sent")
 	// ErrOutputLimitUnsupported means this route cannot honor MaxOutputTokens.
@@ -23,8 +23,8 @@ var (
 	// ErrModelRequestTooLarge reports that a logical model request must be
 	// reduced before another attempt can succeed.
 	ErrModelRequestTooLarge = errors.New("model request too large")
-	// ErrModelStreamIdle reports that an open model stream produced no payload
-	// within its configured idle interval.
+	// ErrModelStreamIdle reports that an open model stream produced no bytes
+	// within its configured idle interval while the consumer waited for an event.
 	ErrModelStreamIdle = errors.New("model stream idle timeout")
 )
 

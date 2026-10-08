@@ -21,7 +21,8 @@ race:
 
 format-check:
 	@set -eu; \
-	unformatted="$$($(GO) run cmd/gofmt -l $$(git ls-files '*.go'))"; \
+	unformatted="$$($(GO) run cmd/gofmt -l $$(git ls-files --cached --others --exclude-standard '*.go' | \
+		while IFS= read -r file; do if [ -f "$$file" ]; then printf '%s\n' "$$file"; fi; done))"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "The following Go files are not formatted:"; \
 		echo "$$unformatted"; \

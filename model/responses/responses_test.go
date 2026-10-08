@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
@@ -61,8 +62,6 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	}))
 
 	backend := newTestServerBackend(t, server, "/v1")
-	backend.header = make(http.Header)
-	backend.header.Set("X-Test", "yes")
 	var events []model.StreamEvent
 	response, err := backend.Complete(context.Background(), model.Request{
 		Instructions: "be brief", Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
@@ -202,9 +201,15 @@ func TestCompleteDoesNotPromoteUnfinishedStreamItems(t *testing.T) {
 
 func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "openai", Model: "gpt-test", ReasoningEffort: " HIGH ",
-		Traits:  RouteTraits{ReasoningSummary: ReasoningSummaryAuto},
-		BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "responses",
+			Provider:   "openai",
+			Endpoint:   "http://example.invalid/v1/responses",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "gpt-test",
+		}),
+		ReasoningEffort: " HIGH ",
+		Traits:          RouteTraits{ReasoningSummary: ReasoningSummaryAuto},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +284,13 @@ func TestBuildRequestReplaysOutputItemsAndToolIdentity(t *testing.T) {
 
 func TestBuildRequestLowersImageFunctionOutput(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "openai", Model: "gpt-test", BaseURL: "http://example.invalid/v1", Authorizer: BearerToken("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "responses",
+			Provider:   "openai",
+			Endpoint:   "http://example.invalid/v1/responses",
+			Authorizer: transport.BearerToken("unused"),
+			APIModel:   "gpt-test",
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -638,8 +649,13 @@ func TestCompleteRejectsStreamWithoutTerminalEvent(t *testing.T) {
 
 func TestBuildRequestUsesCanonicalAPIModel(t *testing.T) {
 	backend, err := New(Config{
-		Provider: "openai", Model: "gpt-test", APIModel: "wire-model",
-		BaseURL: "https://user:password@example.test/v1/?token=secret#fragment", Authorizer: BearerToken("unused"),
+		Connection: newTestConnection(t, transport.Config{
+			API:        "responses",
+			Provider:   "openai",
+			APIModel:   "wire-model",
+			Endpoint:   "https://user:password@example.test/v1/responses?token=secret#fragment",
+			Authorizer: transport.BearerToken("unused"),
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -657,8 +673,11 @@ func newTestBackend(t *testing.T, baseURL string) *Backend {
 func newTestBackendWithClient(t *testing.T, baseURL string, client *http.Client) *Backend {
 	t.Helper()
 	backend, err := New(Config{
-		Provider: "test", Model: "test-model", BaseURL: baseURL,
-		HTTPClient: client, Authorizer: BearerToken("secret"), Traits: RouteTraits{ReasoningSummary: ReasoningSummaryAuto},
+		Connection: newTestConnection(t, transport.Config{
+			API: "responses", Provider: "test", APIModel: "test-model", Endpoint: baseURL + "/responses",
+			Header: http.Header{"X-Test": {"yes"}}, HTTPClient: client, Authorizer: transport.BearerToken("secret"),
+		}),
+		Traits: RouteTraits{ReasoningSummary: ReasoningSummaryAuto},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -714,4 +733,13 @@ func TestParseResponseRejectsUnknownIncompleteReason(t *testing.T) {
 		!strings.Contains(err.Error(), "guardrail_intervened") {
 		t.Fatalf("unknown incomplete reason error = %v / %#v", err, providerErr)
 	}
+}
+
+func newTestConnection(t *testing.T, config transport.Config) *transport.Connection {
+	t.Helper()
+	connection, err := transport.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
 }

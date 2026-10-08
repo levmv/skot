@@ -147,13 +147,13 @@ func TestModelCanBeBuiltWithoutCredentialForInteractiveLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("DEEPSEEK_API_KEY", "")
-	if _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true}); err != nil {
+	if _, _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true}); err != nil {
 		t.Fatalf("interactive model build: %v", err)
 	}
-	if _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login deepseek") || !errors.Is(err, model.ErrInvalidRequest) {
+	if _, _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login deepseek") || !errors.Is(err, model.ErrInvalidRequest) {
 		t.Fatalf("one-shot missing credential error = %v", err)
 	}
-	if _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "https://gateway.example/v1", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err != nil {
+	if _, _, err := modelconfig.BuildBackend(testResolvedRoute(t, "deepseek/test", "", "https://gateway.example/v1", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err != nil {
 		t.Fatalf("custom endpoint model build: %v", err)
 	}
 }

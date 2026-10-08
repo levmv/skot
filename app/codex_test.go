@@ -110,7 +110,7 @@ data: {"type":"response.completed","response":{"status":"completed","output":[],
 
 `), nil
 	})}
-	backend, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "high", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
+	backend, _, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "high", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +136,10 @@ func TestCodexNeverFallsBackToAPIKeyOrCustomEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	route := testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0)
-	if _, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
+	if _, _, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true}); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
 		t.Fatalf("missing subscription error = %v", err)
 	}
-	backend, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true})
+	backend, _, err := modelconfig.BuildBackend(route, store, modelconfig.BackendOptions{UseEnvironment: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestCodexRefreshKeepsTemporaryFailuresRetryable(t *testing.T) {
 				response.Header.Set("Retry-After", "5")
 				return response, nil
 			})}
-			backend, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
+			backend, _, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -339,7 +339,7 @@ func TestCodexUsageLimitsAreNotRetriedAsTemporaryRateLimits(t *testing.T) {
 					}
 					return codexResponse(429, fmt.Sprintf(`{"error":{"type":%q,"message":"allowance unavailable"}}`, test.signal)), nil
 				})}
-				backend, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
+				backend, _, err := modelconfig.BuildBackend(testResolvedRoute(t, "openai-codex/gpt-6-astra", "", "", 0), store, modelconfig.BackendOptions{UseEnvironment: true, HTTPClient: client})
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -184,7 +184,7 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 	if err != nil {
 		return model.MarkInvalidRequest(err)
 	}
-	backend, err := modelconfig.BuildBackend(route, application.config.settings, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, Masker: application.config.masker})
+	backend, _, err := modelconfig.BuildBackend(route, application.config.settings, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, Masker: application.config.masker})
 	if err != nil {
 		return err
 	}

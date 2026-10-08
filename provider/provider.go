@@ -1,5 +1,6 @@
-// Package provider configures model backends, including protocol selection and
-// authentication. Each Backend.Complete call makes one generation attempt;
+// Package provider configures model connections and backends, including protocol
+// selection and authentication. Use Model.Connection for raw protocol requests,
+// or Model.Backend for item-based calls. Each call makes one generation attempt;
 // the caller manages retries, tool execution, and conversation history.
 package provider
 
@@ -11,6 +12,7 @@ import (
 	"github.com/levmv/skot/internal/modelconfig"
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 // Config selects a provider/model using the same catalog and protocol defaults
@@ -34,14 +36,15 @@ type Config struct {
 	HTTPClient *http.Client
 }
 
-// Model pairs a configured backend with its resolved metadata.
-// Use Backend for model calls, or pass both fields to agent.New.
+// Model provides a resolved route for either raw protocol requests through
+// Connection or item-based calls through Backend. Pass Backend and Info to agent.New.
 type Model struct {
-	Backend model.Backend
-	Info    model.Info
+	Connection *transport.Connection
+	Backend    model.Backend
+	Info       model.Info
 }
 
-// Open resolves a model and prepares its backend. It may fetch OpenRouter
+// Open resolves a model and prepares its connection and backend. It may fetch OpenRouter
 // context-window metadata. The returned Model does not need to be closed.
 func Open(ctx context.Context, config Config) (*Model, error) {
 	if err := ctx.Err(); err != nil {
@@ -69,14 +72,14 @@ func Open(ctx context.Context, config Config) (*Model, error) {
 	if err != nil {
 		return nil, model.MarkInvalidRequest(err)
 	}
-	backend, err := modelconfig.BuildBackend(route, config.Credentials, modelconfig.BackendOptions{
+	backend, connection, err := modelconfig.BuildBackend(route, config.Credentials, modelconfig.BackendOptions{
 		RequireCredential: true, HTTPClient: config.HTTPClient, APIKey: config.APIKey,
 		UseEnvironment: config.Credentials == nil,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Model{Backend: backend, Info: info}, nil
+	return &Model{Connection: connection, Backend: backend, Info: info}, nil
 }
 
 // Credential is an opaque provider credential. Preserve its payload unchanged

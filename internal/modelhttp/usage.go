@@ -16,6 +16,7 @@ import (
 type UsageAccumulator struct {
 	Snapshot model.Usage
 	fields   map[string]jsontext.Value
+	raw      jsontext.Value
 }
 
 func (usage *UsageAccumulator) Attach(response *model.Response) {
@@ -111,6 +112,7 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 		tokens.TotalTokens = &total
 	}
 	usage.Snapshot.Tokens = tokens
+	usage.raw = merged
 	usage.Snapshot.Status = model.UsagePartial
 	if final {
 		usage.Snapshot.Status = model.UsageFinal
@@ -136,4 +138,9 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 		}
 	}
 	return nil
+}
+
+// RawUsage returns an owned encoding of the fields used to normalize usage.
+func (usage *UsageAccumulator) RawUsage() jsontext.Value {
+	return bytes.Clone(usage.raw)
 }

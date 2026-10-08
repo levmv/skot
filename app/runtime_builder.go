@@ -151,7 +151,7 @@ func (builder runtimeBuilder) modelForRoute(route modelconfig.Route, options mod
 	}
 	options.Masker = builder.masker
 	options.UseEnvironment = true
-	backend, err := modelconfig.BuildBackend(route, builder.credentials, options)
+	backend, _, err := modelconfig.BuildBackend(route, builder.credentials, options)
 	if err != nil {
 		return model.Info{}, nil, err
 	}

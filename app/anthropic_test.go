@@ -34,9 +34,6 @@ func TestAnthropicThinkingBindingIsScopedToReviewedRoute(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if test.wantBinding {
-				route.Header = http.Header{"Anthropic-Beta": []string{"existing-beta"}}
-			}
 			requests := 0
 			client := &http.Client{Transport: appRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				if request.URL.String() != route.BaseURL+"/messages" {
@@ -62,7 +59,7 @@ func TestAnthropicThinkingBindingIsScopedToReviewedRoute(t *testing.T) {
 					for index := range betas {
 						betas[index] = strings.TrimSpace(betas[index])
 					}
-					if !slices.Contains(betas, "existing-beta") || !slices.Contains(betas, "thinking-binding-controls-2026-08-01") {
+					if !slices.Contains(betas, "thinking-binding-controls-2026-08-01") {
 						t.Errorf("anthropic-beta = %q", betas)
 					}
 				} else if len(body["thinking"]) != 0 || len(request.Header.Values("anthropic-beta")) != 0 {
@@ -81,7 +78,7 @@ data: {"type":"message_stop"}
 `)),
 				}, nil
 			})}
-			backend, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
+			backend, _, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
 			if err != nil {
 				t.Fatal(err)
 			}

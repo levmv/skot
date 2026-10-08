@@ -17,23 +17,6 @@ func MarshalRequestJSON(value any) ([]byte, error) {
 	return json.Marshal(value, json.Deterministic(true))
 }
 
-// SetRequestHeaders sets common headers for streaming JSON model requests.
-func SetRequestHeaders(header, extra http.Header, sessionID string) {
-	header.Set("Content-Type", "application/json")
-	header.Set("Accept", "text/event-stream")
-	for name, values := range extra {
-		for _, value := range values {
-			header.Add(name, value)
-		}
-	}
-	if header.Get("User-Agent") == "" {
-		header.Set("User-Agent", "Skot")
-	}
-	if sessionID != "" {
-		header.Set("X-Session-ID", sessionID)
-	}
-}
-
 // PublicEndpoint canonicalizes an adapter base URL and removes credentials and
 // request-only URL data before it is journaled or compared with saved state.
 func PublicEndpoint(value string) string {

@@ -141,7 +141,9 @@ func pruneToolResult(content model.Content, headBytes, tailBytes int) model.Cont
 			)})
 		}
 	}
-	return projected
+	// Pruning leaves only text. Coalesce parts so splitting a retained text
+	// segment around an omission cannot exceed Content's part limit.
+	return model.TextContent(projected.Text())
 }
 
 func toolResultTextPruning(content string, headBytes, tailBytes int) (headEnd, tailStart int, marker string, ok bool) {

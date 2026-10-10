@@ -10,7 +10,7 @@ import (
 	productlimits "github.com/levmv/skot/internal/limits"
 )
 
-// Content is the provider-neutral, model-visible payload of a tool result.
+// Content is the provider-neutral payload of a user message or tool result.
 // Text-only content is encoded as a JSON string; content containing images
 // is encoded as an array of tagged parts.
 type Content []ContentPart
@@ -29,6 +29,7 @@ type ContentPart struct {
 }
 
 // ImageContent contains PNG or JPEG bytes and their dimensions.
+// Package imageinput prepares source images for use here.
 type ImageContent struct {
 	MediaType string `json:"media_type"`
 	Data      []byte `json:"data"`
@@ -36,12 +37,7 @@ type ImageContent struct {
 	Height    int    `json:"height"`
 }
 
-const (
-	maxContentParts   = 64
-	maxContentImages  = 16
-	maxImageDimension = 32_768
-	maxImagePixels    = 100_000_000
-)
+const maxContentParts = 64
 
 func TextContent(text string) Content {
 	return Content{{Kind: ContentPartText, Text: text}}
@@ -56,6 +52,9 @@ func ImageToolContent(text string, image ImageContent) Content {
 
 // Text concatenates text parts in order, ignoring images.
 func (content Content) Text() string {
+	if len(content) == 1 && content[0].Kind == ContentPartText {
+		return content[0].Text
+	}
 	var text strings.Builder
 	for _, part := range content {
 		if part.Kind == ContentPartText {
@@ -152,49 +151,60 @@ func (content *Content) UnmarshalJSON(data []byte) error {
 
 // NormalizeContent validates text and image parts and returns an owned copy.
 func NormalizeContent(content Content) (Content, error) {
-	if len(content) > maxContentParts {
-		return nil, fmt.Errorf("content has %d parts, limit is %d", len(content), maxContentParts)
+	if err := ValidateContent(content); err != nil {
+		return nil, err
 	}
-	normalized := make(Content, len(content))
+	normalized := content.Clone()
+	for _, part := range normalized {
+		if part.Image != nil {
+			part.Image.MediaType = strings.ToLower(strings.TrimSpace(part.Image.MediaType))
+		}
+	}
+	return normalized, nil
+}
+
+// ValidateContent checks part structure, declared dimensions, media types, and
+// size limits without copying or decoding image bytes.
+func ValidateContent(content Content) error {
+	if len(content) > maxContentParts {
+		return fmt.Errorf("content has %d parts, limit is %d", len(content), maxContentParts)
+	}
 	images := 0
 	imageBytes := 0
 	for index, part := range content {
 		switch part.Kind {
 		case ContentPartText:
 			if part.Image != nil {
-				return nil, fmt.Errorf("content part %d has both text and image values", index)
+				return fmt.Errorf("content part %d has both text and image values", index)
 			}
-			normalized[index] = ContentPart{Kind: ContentPartText, Text: part.Text}
 		case ContentPartImage:
 			images++
-			if images > maxContentImages {
-				return nil, fmt.Errorf("content has %d images, limit is %d", images, maxContentImages)
+			if images > productlimits.MaxRequestImages {
+				return fmt.Errorf("%w: content has %d images, limit is %d", ErrModelRequestTooLarge, images, productlimits.MaxRequestImages)
 			}
 			if part.Image == nil || part.Text != "" {
-				return nil, fmt.Errorf("content part %d has an invalid image value", index)
+				return fmt.Errorf("content part %d has an invalid image value", index)
 			}
 			image := *part.Image
 			image.MediaType = strings.ToLower(strings.TrimSpace(image.MediaType))
 			switch image.MediaType {
 			case "image/png", "image/jpeg":
 			default:
-				return nil, fmt.Errorf("content part %d has unsupported media type %q", index, image.MediaType)
+				return fmt.Errorf("content part %d has unsupported media type %q", index, image.MediaType)
 			}
-			if len(image.Data) == 0 || len(image.Data) > productlimits.MaxContentImageBytes {
-				return nil, fmt.Errorf("content part %d image bytes are outside the 1..%d limit", index, productlimits.MaxContentImageBytes)
+			if len(image.Data) == 0 {
+				return fmt.Errorf("content part %d has no image bytes", index)
 			}
 			if imageBytes > productlimits.MaxContentImageBytes-len(image.Data) {
-				return nil, fmt.Errorf("content image bytes exceed the %d-byte aggregate limit", productlimits.MaxContentImageBytes)
+				return fmt.Errorf("%w: content image bytes exceed the %d-byte aggregate limit", ErrModelRequestTooLarge, productlimits.MaxContentImageBytes)
 			}
 			imageBytes += len(image.Data)
-			if image.Width <= 0 || image.Height <= 0 || image.Width > maxImageDimension || image.Height > maxImageDimension || image.Width > maxImagePixels/image.Height {
-				return nil, fmt.Errorf("content part %d has invalid image dimensions %dx%d", index, image.Width, image.Height)
+			if image.Width <= 0 || image.Height <= 0 || image.Width > productlimits.MaxImageDimension || image.Height > productlimits.MaxImageDimension || image.Width > productlimits.MaxImagePixels/image.Height {
+				return fmt.Errorf("content part %d has invalid image dimensions %dx%d", index, image.Width, image.Height)
 			}
-			image.Data = append([]byte(nil), image.Data...)
-			normalized[index] = ContentPart{Kind: ContentPartImage, Image: &image}
 		default:
-			return nil, fmt.Errorf("content part %d has unsupported type %q", index, part.Kind)
+			return fmt.Errorf("content part %d has unsupported type %q", index, part.Kind)
 		}
 	}
-	return normalized, nil
+	return nil
 }

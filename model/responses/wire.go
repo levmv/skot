@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/internal/modelinput"
 	"github.com/levmv/skot/model"
 )
 
@@ -114,7 +115,7 @@ type functionCallOutputItem struct {
 	Output any    `json:"output"`
 }
 
-type functionCallOutputPart struct {
+type inputContentPart struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
@@ -196,6 +197,9 @@ type streamEvent struct {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (responseRequest, error) {
+	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
+		return responseRequest{}, err
+	}
 	if request.MaxOutputTokens < 0 {
 		return responseRequest{}, errors.New("max output tokens cannot be negative")
 	}
@@ -214,7 +218,7 @@ func (backend *Backend) buildRequest(request model.Request) (responseRequest, er
 	for index, item := range request.Items {
 		switch item.Kind {
 		case model.ItemUserText:
-			raw, err := marshalInputItem(inputMessage{Role: "user", Content: item.Text})
+			raw, err := marshalInputItem(inputMessage{Role: "user", Content: responsesContent(item.UserContent())})
 			if err != nil {
 				return responseRequest{}, err
 			}
@@ -281,7 +285,7 @@ func (backend *Backend) buildRequest(request model.Request) (responseRequest, er
 				callID = item.ToolResult.CallID
 			}
 			raw, err := marshalInputItem(functionCallOutputItem{
-				Type: "function_call_output", CallID: callID, Output: responsesToolResultContent(item.ToolResult.Content),
+				Type: "function_call_output", CallID: callID, Output: responsesContent(item.ToolResult.Content),
 			})
 			if err != nil {
 				return responseRequest{}, err
@@ -325,22 +329,22 @@ func (backend *Backend) buildRequest(request model.Request) (responseRequest, er
 	return wireRequest, nil
 }
 
-func responsesToolResultContent(content model.Content) any {
+func responsesContent(content model.Content) any {
 	if !content.HasImage() {
 		return content.Text()
 	}
-	parts := make([]functionCallOutputPart, 0, len(content))
+	parts := make([]inputContentPart, 0, len(content))
 	for _, part := range content {
 		switch part.Kind {
 		case model.ContentPartText:
 			if part.Text != "" {
-				parts = append(parts, functionCallOutputPart{Type: "input_text", Text: part.Text})
+				parts = append(parts, inputContentPart{Type: "input_text", Text: part.Text})
 			}
 		case model.ContentPartImage:
 			if part.Image != nil {
-				parts = append(parts, functionCallOutputPart{
+				parts = append(parts, inputContentPart{
 					Type:     "input_image",
-					ImageURL: "data:" + part.Image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(part.Image.Data),
+					ImageURL: "data:" + strings.ToLower(strings.TrimSpace(part.Image.MediaType)) + ";base64," + base64.StdEncoding.EncodeToString(part.Image.Data),
 				})
 			}
 		}

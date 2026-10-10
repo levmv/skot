@@ -26,6 +26,10 @@ type Item struct {
 	// ProviderContext. Visible reasoning remains in Text.
 	ProviderData []ProviderData `json:"provider_data,omitempty"`
 	Text         string         `json:"text,omitempty"`
+	// Content holds ordered user text and images, including image-only messages.
+	// It is valid only for ItemUserText with empty Text; nil uses Text.
+	// Tool results use ToolResult.Content.
+	Content Content `json:"content,omitzero"`
 	// Phase is the provider-reported assistant phase, such as "commentary" or
 	// "final_answer". Preserve it when replaying assistant text.
 	Phase      string      `json:"phase,omitempty"`
@@ -33,6 +37,15 @@ type Item struct {
 	ToolResult *ToolResult `json:"tool_result,omitzero"`
 	// Details hold application metadata and stay out of model input.
 	Details []Detail `json:"details,omitempty"`
+}
+
+// UserContent returns Content when non-nil, otherwise Text as one part.
+// It borrows Content, including image bytes; use Clone for an independent copy.
+func (item Item) UserContent() Content {
+	if item.Content != nil {
+		return item.Content
+	}
+	return TextContent(item.Text)
 }
 
 // ProviderContext binds an item's opaque state to a backend and replay epoch.
@@ -108,8 +121,10 @@ type Request struct {
 	ProviderEpoch string
 	Instructions  string
 	Summary       string
-	Items         []Item
-	Tools         []ToolSpec
+	// Items carries conversation history. Built-in backends allow at most
+	// 16 images and 16 MiB of image data across user messages and tool results.
+	Items []Item
+	Tools []ToolSpec
 	// MaxOutputTokens requests a provider-side generation limit. Zero keeps the
 	// route default; negative values are invalid. OpenAI, Anthropic, and DeepSeek
 	// count reasoning within this limit; compatible services may count differently.

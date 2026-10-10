@@ -306,9 +306,9 @@ func TestBuildRequestLowersImageFunctionOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output struct {
-		Type   string                   `json:"type"`
-		CallID string                   `json:"call_id"`
-		Output []functionCallOutputPart `json:"output"`
+		Type   string             `json:"type"`
+		CallID string             `json:"call_id"`
+		Output []inputContentPart `json:"output"`
 	}
 	if err := json.Unmarshal(request.Input[len(request.Input)-1], &output); err != nil {
 		t.Fatal(err)

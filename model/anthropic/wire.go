@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/levmv/skot/internal/modelinput"
 	"github.com/levmv/skot/model"
 )
 
@@ -37,6 +38,7 @@ type message struct {
 type contentBlock struct {
 	Type         string         `json:"type"`
 	Text         string         `json:"text,omitempty"`
+	Source       *imageSource   `json:"source,omitzero"`
 	Thinking     *string        `json:"thinking,omitzero"`
 	Signature    string         `json:"signature,omitempty"`
 	Data         jsontext.Value `json:"data,omitzero"`
@@ -128,6 +130,9 @@ type thinkingBlockState struct {
 }
 
 func (backend *Backend) buildRequest(request model.Request) (messagesRequest, error) {
+	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
+		return messagesRequest{}, err
+	}
 	if request.MaxOutputTokens < 0 {
 		return messagesRequest{}, errors.New("max output tokens cannot be negative")
 	}
@@ -192,7 +197,10 @@ func (backend *Backend) buildMessages(request model.Request) ([]message, error) 
 	for index := 0; index < len(request.Items); {
 		item := request.Items[index]
 		switch item.Kind {
-		case model.ItemUserText, model.ItemBoundaryText:
+		case model.ItemUserText:
+			messages = appendBlocks(messages, "user", anthropicUserContent(item.UserContent()))
+			index++
+		case model.ItemBoundaryText:
 			messages = appendMessage(messages, "user", contentBlock{Type: "text", Text: item.Text})
 			index++
 		case model.ItemAssistantText, model.ItemReasoning, model.ItemToolCall:
@@ -255,6 +263,28 @@ func (backend *Backend) buildMessages(request model.Request) ([]message, error) 
 	return messages, nil
 }
 
+func anthropicUserContent(content model.Content) []contentBlock {
+	if !content.HasImage() {
+		return []contentBlock{{Type: "text", Text: content.Text()}}
+	}
+	blocks := make([]contentBlock, 0, len(content))
+	for _, part := range content {
+		switch part.Kind {
+		case model.ContentPartText:
+			if part.Text != "" {
+				blocks = append(blocks, contentBlock{Type: "text", Text: part.Text})
+			}
+		case model.ContentPartImage:
+			blocks = append(blocks, contentBlock{Type: "image", Source: anthropicImageSource(*part.Image)})
+		}
+	}
+	return blocks
+}
+
+func anthropicImageSource(image model.ImageContent) *imageSource {
+	return &imageSource{Type: "base64", MediaType: strings.ToLower(strings.TrimSpace(image.MediaType)), Data: image.Data}
+}
+
 func anthropicToolResultContent(content model.Content) any {
 	if !content.HasImage() {
 		return content.Text()
@@ -268,9 +298,7 @@ func anthropicToolResultContent(content model.Content) any {
 			}
 		case model.ContentPartImage:
 			if part.Image != nil {
-				blocks = append(blocks, toolResultContentBlock{Type: "image", Source: &imageSource{
-					Type: "base64", MediaType: part.Image.MediaType, Data: part.Image.Data,
-				}})
+				blocks = append(blocks, toolResultContentBlock{Type: "image", Source: anthropicImageSource(*part.Image)})
 			}
 		}
 	}

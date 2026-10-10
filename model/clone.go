@@ -10,6 +10,7 @@ func cloneItems(items []Item) []Item {
 
 // Clone returns an independent copy, including opaque state and image bytes.
 func (item Item) Clone() Item {
+	item.Content = item.Content.Clone()
 	if item.ProviderContext != nil {
 		context := *item.ProviderContext
 		item.ProviderContext = &context

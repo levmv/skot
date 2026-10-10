@@ -260,28 +260,6 @@ func TestReadConvertsWebPToJPEG(t *testing.T) {
 	}
 }
 
-func TestJPEGNormalizationCompositesTransparencyOnWhite(t *testing.T) {
-	source := image.NewNRGBA(image.Rect(0, 0, 64, 16))
-	for y := range 16 {
-		for x := 32; x < 64; x++ {
-			source.Set(x, y, color.Black)
-		}
-	}
-	data, _, _, err := normalizeImage(context.Background(), source, "jpeg", 64, 16)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	whiteR, whiteG, whiteB, _ := decoded.At(4, 8).RGBA()
-	blackR, blackG, blackB, _ := decoded.At(60, 8).RGBA()
-	if whiteR < 0xe000 || whiteG < 0xe000 || whiteB < 0xe000 || blackR > 0x2000 || blackG > 0x2000 || blackB > 0x2000 {
-		t.Fatalf("JPEG matte colors = white(%x,%x,%x) black(%x,%x,%x)", whiteR, whiteG, whiteB, blackR, blackG, blackB)
-	}
-}
-
 func TestReadRejectsCorruptImage(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "broken.png")

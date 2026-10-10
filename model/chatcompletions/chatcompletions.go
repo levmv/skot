@@ -18,19 +18,22 @@ import (
 )
 
 type Config struct {
-	Connection      *transport.Connection
-	ReasoningEffort string
-	Traits          RouteTraits
+	// ImageInputUnsupported rejects images locally on routes known not to accept them.
+	ImageInputUnsupported bool
+	Connection            *transport.Connection
+	ReasoningEffort       string
+	Traits                RouteTraits
 }
 
 type Backend struct {
-	connection         *transport.Connection
-	provider           string
-	apiModel           string
-	reasoningEffort    string
-	traits             RouteTraits
-	maxRequestBytes    int
-	maxCompletionBytes int
+	imageInputUnsupported bool
+	connection            *transport.Connection
+	provider              string
+	apiModel              string
+	reasoningEffort       string
+	traits                RouteTraits
+	maxRequestBytes       int
+	maxCompletionBytes    int
 }
 
 func (backend *Backend) backendID() string {
@@ -52,13 +55,14 @@ func New(config Config) (*Backend, error) {
 		return nil, modelapi.MarkInvalidRequest(err)
 	}
 	return &Backend{
-		connection:         config.Connection,
-		provider:           provider,
-		apiModel:           apiModel,
-		reasoningEffort:    reasoningEffort,
-		traits:             config.Traits,
-		maxRequestBytes:    productlimits.MaxModelRequestBytes,
-		maxCompletionBytes: productlimits.MaxModelCompletionBytes,
+		imageInputUnsupported: config.ImageInputUnsupported,
+		connection:            config.Connection,
+		provider:              provider,
+		apiModel:              apiModel,
+		reasoningEffort:       reasoningEffort,
+		traits:                config.Traits,
+		maxRequestBytes:       productlimits.MaxModelRequestBytes,
+		maxCompletionBytes:    productlimits.MaxModelCompletionBytes,
 	}, nil
 }
 

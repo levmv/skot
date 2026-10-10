@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/levmv/skot/internal/modelhttp"
+	"github.com/levmv/skot/internal/modelinput"
 	"github.com/levmv/skot/model"
 )
 
@@ -198,6 +199,9 @@ func (delta streamDelta) reasoningText() string {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (chatRequest, error) {
+	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
+		return chatRequest{}, err
+	}
 	if request.MaxOutputTokens < 0 {
 		return chatRequest{}, errors.New("max output tokens cannot be negative")
 	}
@@ -268,7 +272,7 @@ func (backend *Backend) buildMessages(request model.Request) ([]chatMessage, err
 		item := request.Items[index]
 		switch item.Kind {
 		case model.ItemUserText:
-			messages = append(messages, chatMessage{Role: "user", Content: textChatContent(item.Text)})
+			messages = append(messages, chatMessage{Role: "user", Content: userChatContent(item.UserContent())})
 			index++
 
 		case model.ItemBoundaryText:
@@ -355,8 +359,26 @@ func (backend *Backend) buildMessages(request model.Request) ([]chatMessage, err
 	return messages, nil
 }
 
+func userChatContent(content model.Content) chatContent {
+	if !content.HasImage() {
+		return textChatContent(content.Text())
+	}
+	parts := make([]chatContentPart, 0, len(content))
+	for _, part := range content {
+		switch part.Kind {
+		case model.ContentPartText:
+			if part.Text != "" {
+				parts = append(parts, chatContentPart{Type: "text", Text: part.Text})
+			}
+		case model.ContentPartImage:
+			parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: imageDataURL(*part.Image)}})
+		}
+	}
+	return chatContent{Parts: parts}
+}
+
 func imageDataURL(image model.ImageContent) string {
-	return "data:" + image.MediaType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	return "data:" + strings.ToLower(strings.TrimSpace(image.MediaType)) + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
 // finishReasons is closed: unknown values are rejected. Gateway aliases

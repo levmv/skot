@@ -33,6 +33,8 @@ type apiError = modelhttp.ProviderErrorEnvelope
 
 type Config struct {
 	Connection *transport.Connection
+	// ImageInputUnsupported rejects images locally on routes known not to accept them.
+	ImageInputUnsupported bool
 	// MaxTokens supplies the Messages output limit when Request.MaxOutputTokens
 	// is zero. Zero here selects a conservative compatibility default.
 	MaxTokens int
@@ -46,6 +48,7 @@ type Config struct {
 }
 
 type Backend struct {
+	imageInputUnsupported  bool
 	connection             *transport.Connection
 	provider               string
 	apiModel               string
@@ -70,8 +73,9 @@ func New(config Config) (*Backend, error) {
 		maxTokens = defaultMaxTokens
 	}
 	return &Backend{
-		connection: config.Connection,
-		provider:   provider, apiModel: apiModel, maxTokens: maxTokens,
+		imageInputUnsupported: config.ImageInputUnsupported,
+		connection:            config.Connection,
+		provider:              provider, apiModel: apiModel, maxTokens: maxTokens,
 		promptCache:            config.PromptCache,
 		dropMismatchedThinking: config.DropMismatchedThinking,
 		maxRequestBytes:        productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,

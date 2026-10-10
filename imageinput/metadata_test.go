@@ -1,4 +1,4 @@
-package tools
+package imageinput
 
 import (
 	"bytes"
@@ -8,9 +8,6 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -45,8 +42,7 @@ func TestApplyImageOrientation(t *testing.T) {
 	}
 }
 
-func TestReadAppliesEXIFOrientation(t *testing.T) {
-	root := t.TempDir()
+func TestPrepareAppliesEXIFOrientation(t *testing.T) {
 	source := image.NewNRGBA(image.Rect(0, 0, 80, 40))
 	for y := 0; y < source.Bounds().Dy(); y++ {
 		for x := 0; x < source.Bounds().Dx(); x++ {
@@ -62,22 +58,14 @@ func TestReadAppliesEXIFOrientation(t *testing.T) {
 		t.Fatal(err)
 	}
 	withOrientation := insertJPEGSegment(encoded.Bytes(), 0xe1, append([]byte("Exif\x00\x00"), littleEndianOrientation(6)...))
-	path := filepath.Join(root, "rotated.jpeg")
-	if err := os.WriteFile(path, withOrientation, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	workspaceTools, _, err := NewWorkspaceTools(root)
+	output, err := Prepare(t.Context(), withOrientation, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := runTool(workspaceTools, "read", `{"path":"rotated.jpeg"}`)
-	if err != nil {
-		t.Fatal(err)
+	if output.SourceWidth != 40 || output.SourceHeight != 80 {
+		t.Fatalf("oriented source = %dx%d", output.SourceWidth, output.SourceHeight)
 	}
-	if !strings.Contains(output.Content.Text(), "source_size: 40x80") || len(output.Content) != 2 || output.Content[1].Image == nil {
-		t.Fatalf("oriented result = %#v", output.Content)
-	}
-	part := output.Content[1].Image
+	part := output.Image
 	if part.Width != 40 || part.Height != 80 || bytes.Contains(part.Data, []byte("Exif\x00\x00")) {
 		t.Fatalf("oriented image = %#v", part)
 	}
@@ -92,46 +80,38 @@ func TestReadAppliesEXIFOrientation(t *testing.T) {
 	}
 }
 
-func TestReadStripsNonvisualMetadataWithoutReencodingCleanPixels(t *testing.T) {
-	root := t.TempDir()
+func TestPrepareStripsMetadataBeforeApplyingByteLimit(t *testing.T) {
 	source := image.NewNRGBA(image.Rect(0, 0, 32, 16))
-
-	var cleanJPEG bytes.Buffer
+	var cleanJPEG, cleanPNG bytes.Buffer
 	if err := jpeg.Encode(&cleanJPEG, source, &jpeg.Options{Quality: 92}); err != nil {
 		t.Fatal(err)
 	}
-	decoratedJPEG := insertJPEGSegment(cleanJPEG.Bytes(), 0xfe, []byte("private comment"))
-	if err := os.WriteFile(filepath.Join(root, "metadata.jpeg"), decoratedJPEG, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var cleanPNG bytes.Buffer
 	if err := png.Encode(&cleanPNG, source); err != nil {
 		t.Fatal(err)
 	}
-	decoratedPNG := insertPNGChunkAfterIHDR(cleanPNG.Bytes(), "tEXt", []byte("Comment\x00private comment"))
-	if err := os.WriteFile(filepath.Join(root, "metadata.png"), decoratedPNG, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	workspaceTools, _, err := NewWorkspaceTools(root)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, test := range []struct {
-		path  string
-		clean []byte
+		name             string
+		clean, decorated []byte
 	}{
-		{path: "metadata.jpeg", clean: cleanJPEG.Bytes()},
-		{path: "metadata.png", clean: cleanPNG.Bytes()},
+		{"jpeg", cleanJPEG.Bytes(), insertJPEGSegment(cleanJPEG.Bytes(), 0xfe, []byte("private comment"))},
+		{"png", cleanPNG.Bytes(), insertPNGChunkAfterIHDR(cleanPNG.Bytes(), "tEXt", []byte("Comment\x00private comment"))},
 	} {
-		output, err := runTool(workspaceTools, "read", `{"path":"`+test.path+`"}`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(output.Content) != 2 || output.Content[1].Image == nil || !bytes.Equal(output.Content[1].Image.Data, test.clean) {
-			t.Fatalf("%s metadata was not stripped losslessly: %#v", test.path, output.Content)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			for _, data := range [][]byte{test.clean, test.decorated} {
+				before := bytes.Clone(data)
+				output, err := Prepare(t.Context(), data, Options{MaxBytes: len(test.clean)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(output.Image.Data, test.clean) {
+					t.Fatal("suitable raster was recompressed")
+				}
+				output.Image.Data[0] ^= 0xff
+				if !bytes.Equal(data, before) {
+					t.Fatal("prepared image aliases input bytes")
+				}
+			}
+		})
 	}
 }
 
@@ -169,4 +149,26 @@ func insertPNGChunkAfterIHDR(data []byte, chunkType string, payload []byte) []by
 	output = append(output, data[:firstChunkEnd]...)
 	output = append(output, chunk...)
 	return append(output, data[firstChunkEnd:]...)
+}
+
+func TestJPEGNormalizationCompositesTransparencyOnWhite(t *testing.T) {
+	source := image.NewNRGBA(image.Rect(0, 0, 64, 16))
+	for y := range 16 {
+		for x := 32; x < 64; x++ {
+			source.Set(x, y, color.Black)
+		}
+	}
+	data, _, _, err := normalizeImage(t.Context(), source, "jpeg", 64, 16, Options{MaxSide: 2000, MaxBytes: 8 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	whiteR, whiteG, whiteB, _ := decoded.At(4, 8).RGBA()
+	blackR, blackG, blackB, _ := decoded.At(60, 8).RGBA()
+	if whiteR < 0xe000 || whiteG < 0xe000 || whiteB < 0xe000 || blackR > 0x2000 || blackG > 0x2000 || blackB > 0x2000 {
+		t.Fatalf("JPEG matte colors = white(%x,%x,%x) black(%x,%x,%x)", whiteR, whiteG, whiteB, blackR, blackG, blackB)
+	}
 }

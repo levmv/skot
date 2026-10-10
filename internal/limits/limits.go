@@ -10,10 +10,12 @@ const (
 	// model completion, including text, reasoning, and tool-call JSON.
 	MaxModelCompletionBytes = 16 << 20
 
-	// MaxContentImageBytes bounds the aggregate decoded image payload carried by
-	// one semantic content value. Provider requests may contain several such
-	// values and remain subject to MaxModelRequestBytes after wire encoding.
+	// MaxContentImageBytes bounds aggregate image file bytes in one content value
+	// and across all user messages and tool results of one model request.
 	MaxContentImageBytes = 16 << 20
+	MaxRequestImages     = 16
+	MaxImageDimension    = 32_768
+	MaxImagePixels       = 100_000_000
 
 	// MaxModelRequestBytes bounds one fully assembled provider request. Session
 	// history itself remains unbounded and is managed by compaction/pruning.

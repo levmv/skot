@@ -78,6 +78,9 @@ func (current ReplayContext) AcceptResponse(response Response) (Response, error)
 		if len(item.Details) != 0 {
 			return response, fmt.Errorf("%s item has product-owned details", item.Kind)
 		}
+		if item.Content != nil {
+			return response, fmt.Errorf("%s response item has user content", item.Kind)
+		}
 		switch item.Kind {
 		case ItemAssistantText:
 			if len(item.ProviderData) != 0 || item.ToolCall != nil || item.ToolResult != nil {

@@ -100,18 +100,21 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 	switch route.API {
 	case ChatCompletions:
 		backend, err = chatcompletions.New(chatcompletions.Config{
-			Connection:      connection,
-			ReasoningEffort: route.ReasoningEffort, Traits: route.ChatTraits,
+			ImageInputUnsupported: route.ImageInputUnsupported,
+			Connection:            connection,
+			ReasoningEffort:       route.ReasoningEffort, Traits: route.ChatTraits,
 		})
 	case Responses:
 		backend, err = responsemodel.New(responsemodel.Config{
-			Connection:      connection,
-			ReasoningEffort: route.ReasoningEffort, Traits: route.ResponsesTraits,
+			ImageInputUnsupported: route.ImageInputUnsupported,
+			Connection:            connection,
+			ReasoningEffort:       route.ReasoningEffort, Traits: route.ResponsesTraits,
 		})
 	case AnthropicMessages:
 		backend, err = anthropic.New(anthropic.Config{
-			Connection: connection,
-			MaxTokens:  route.MaxOutputTokens, PromptCache: route.PromptCache,
+			ImageInputUnsupported: route.ImageInputUnsupported,
+			Connection:            connection,
+			MaxTokens:             route.MaxOutputTokens, PromptCache: route.PromptCache,
 			DropMismatchedThinking: route.DropMismatchedThinking,
 		})
 	default:

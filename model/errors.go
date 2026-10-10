@@ -15,6 +15,9 @@ var (
 	// ErrOutputLimitUnsupported means this route cannot honor MaxOutputTokens.
 	// Complete also classifies this as ErrInvalidRequest.
 	ErrOutputLimitUnsupported = errors.New("output token limit is not supported by this route")
+	// ErrImageInputUnsupported means this route is known not to accept images.
+	// Complete also classifies this as ErrInvalidRequest and ErrRequestNotSent.
+	ErrImageInputUnsupported = errors.New("image input is not supported by this route")
 	// ErrProviderFailure marks a transport, protocol, or provider-side failure
 	// whose recovery depends on provider or external state rather than changing
 	// the invocation. Provider failures are not necessarily worth retrying

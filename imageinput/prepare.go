@@ -16,7 +16,6 @@ import (
 
 	"github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/model"
-	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
 
@@ -46,7 +45,7 @@ type Result struct {
 // without recompression. JPEG transparency is composited on white.
 //
 // Source dimensions are checked before full decoding. Cancellation is checked
-// between processing steps; a running codec or resize operation is not interrupted.
+// between processing steps and during resizing; a running codec is not interrupted.
 // The result never aliases data.
 func Prepare(ctx context.Context, data []byte, options Options) (Result, error) {
 	if err := ctx.Err(); err != nil {
@@ -155,10 +154,12 @@ func normalizeImage(ctx context.Context, source image.Image, format string, sour
 			return nil, 0, 0, err
 		}
 		resized := source
-		if width != sourceWidth || height != sourceHeight || source.Bounds().Min.X != 0 || source.Bounds().Min.Y != 0 {
-			target := image.NewNRGBA(image.Rect(0, 0, width, height))
-			xdraw.CatmullRom.Scale(target, target.Bounds(), source, source.Bounds(), xdraw.Src, nil)
-			resized = target
+		if width != sourceWidth || height != sourceHeight {
+			var err error
+			resized, err = resizeImage(ctx, source, width, height)
+			if err != nil {
+				return nil, 0, 0, err
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, 0, 0, err
@@ -215,8 +216,20 @@ func encodeNormalizedImage(ctx context.Context, source image.Image, format strin
 }
 
 func imageOnWhite(source image.Image) image.Image {
+	// Opaque NRGBA and RGBA have identical pixel layouts. Reuse our decoded or
+	// resized pixels and let the JPEG encoder use its allocation-free RGBA path.
+	switch source := source.(type) {
+	case *image.NRGBA:
+		if source.Opaque() {
+			return &image.RGBA{Pix: source.Pix, Stride: source.Stride, Rect: source.Rect}
+		}
+	case *image.RGBA:
+		if source.Opaque() {
+			return source
+		}
+	}
 	bounds := source.Bounds()
-	target := image.NewNRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	target := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
 	stddraw.Draw(target, target.Bounds(), image.NewUniform(color.White), image.Point{}, stddraw.Src)
 	stddraw.Draw(target, target.Bounds(), source, bounds.Min, stddraw.Over)
 	return target

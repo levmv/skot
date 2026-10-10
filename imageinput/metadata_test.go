@@ -58,7 +58,7 @@ func TestPrepareAppliesEXIFOrientation(t *testing.T) {
 		t.Fatal(err)
 	}
 	withOrientation := insertJPEGSegment(encoded.Bytes(), 0xe1, append([]byte("Exif\x00\x00"), littleEndianOrientation(6)...))
-	output, err := Prepare(t.Context(), withOrientation, Options{})
+	output, err := Prepare(t.Context(), withOrientation, Options{MaxSide: 40})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,15 +66,15 @@ func TestPrepareAppliesEXIFOrientation(t *testing.T) {
 		t.Fatalf("oriented source = %dx%d", output.SourceWidth, output.SourceHeight)
 	}
 	part := output.Image
-	if part.Width != 40 || part.Height != 80 || bytes.Contains(part.Data, []byte("Exif\x00\x00")) {
+	if part.Width != 20 || part.Height != 40 || bytes.Contains(part.Data, []byte("Exif\x00\x00")) {
 		t.Fatalf("oriented image = %#v", part)
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(part.Data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	topR, _, topB, _ := decoded.At(20, 20).RGBA()
-	bottomR, _, bottomB, _ := decoded.At(20, 60).RGBA()
+	topR, _, topB, _ := decoded.At(10, 10).RGBA()
+	bottomR, _, bottomB, _ := decoded.At(10, 30).RGBA()
 	if topR <= topB || bottomB <= bottomR {
 		t.Fatalf("orientation colors = top(%x,%x) bottom(%x,%x)", topR, topB, bottomR, bottomB)
 	}
@@ -152,13 +152,17 @@ func insertPNGChunkAfterIHDR(data []byte, chunkType string, payload []byte) []by
 }
 
 func TestJPEGNormalizationCompositesTransparencyOnWhite(t *testing.T) {
-	source := image.NewNRGBA(image.Rect(0, 0, 64, 16))
-	for y := range 16 {
-		for x := 32; x < 64; x++ {
-			source.Set(x, y, color.Black)
+	source := image.NewNRGBA(image.Rect(0, 0, 96, 24))
+	for y := range 24 {
+		for x := 32; x < 96; x++ {
+			pixel := color.NRGBA{A: 255}
+			if x < 64 {
+				pixel = color.NRGBA{R: 255, A: 128}
+			}
+			source.SetNRGBA(x, y, pixel)
 		}
 	}
-	data, _, _, err := normalizeImage(t.Context(), source, "jpeg", 64, 16, Options{MaxSide: 2000, MaxBytes: 8 << 20})
+	data, width, height, err := normalizeImage(t.Context(), source, "jpeg", 96, 24, Options{MaxSide: 48, MaxBytes: 8 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +170,13 @@ func TestJPEGNormalizationCompositesTransparencyOnWhite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	whiteR, whiteG, whiteB, _ := decoded.At(4, 8).RGBA()
-	blackR, blackG, blackB, _ := decoded.At(60, 8).RGBA()
+	whiteR, whiteG, whiteB, _ := decoded.At(width/6, height/2).RGBA()
+	redR, redG, redB, _ := decoded.At(width/2, height/2).RGBA()
+	blackR, blackG, blackB, _ := decoded.At(5*width/6, height/2).RGBA()
 	if whiteR < 0xe000 || whiteG < 0xe000 || whiteB < 0xe000 || blackR > 0x2000 || blackG > 0x2000 || blackB > 0x2000 {
 		t.Fatalf("JPEG matte colors = white(%x,%x,%x) black(%x,%x,%x)", whiteR, whiteG, whiteB, blackR, blackG, blackB)
+	}
+	if redR < 0xe000 || redG < 0x6000 || redG > 0xa000 || redB < 0x6000 || redB > 0xa000 {
+		t.Fatalf("translucent red on white = (%x,%x,%x)", redR, redG, redB)
 	}
 }

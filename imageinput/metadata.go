@@ -306,7 +306,7 @@ func keepPNGChunk(chunkType string) bool {
 }
 
 type orientedImage struct {
-	source      image.Image
+	source      image.RGBA64Image
 	orientation int
 	bounds      image.Rectangle
 }
@@ -320,7 +320,7 @@ func applyImageOrientation(source image.Image, orientation int) image.Image {
 	if orientation >= 5 {
 		width, height = height, width
 	}
-	return orientedImage{source: source, orientation: orientation, bounds: image.Rect(0, 0, width, height)}
+	return orientedImage{source: rgba64Source(source), orientation: orientation, bounds: image.Rect(0, 0, width, height)}
 }
 
 func (oriented orientedImage) ColorModel() color.Model { return oriented.source.ColorModel() }
@@ -331,6 +331,19 @@ func (oriented orientedImage) At(x, y int) color.Color {
 	if !image.Pt(x, y).In(oriented.bounds) {
 		return color.NRGBA{}
 	}
+	point := oriented.sourcePoint(x, y)
+	return oriented.source.At(point.X, point.Y)
+}
+
+func (oriented orientedImage) RGBA64At(x, y int) color.RGBA64 {
+	if !image.Pt(x, y).In(oriented.bounds) {
+		return color.RGBA64{}
+	}
+	point := oriented.sourcePoint(x, y)
+	return oriented.source.RGBA64At(point.X, point.Y)
+}
+
+func (oriented orientedImage) sourcePoint(x, y int) image.Point {
 	sourceBounds := oriented.source.Bounds()
 	width, height := sourceBounds.Dx(), sourceBounds.Dy()
 	var sourceX, sourceY int
@@ -352,5 +365,5 @@ func (oriented orientedImage) At(x, y int) color.Color {
 	default:
 		sourceX, sourceY = x, y
 	}
-	return oriented.source.At(sourceBounds.Min.X+sourceX, sourceBounds.Min.Y+sourceY)
+	return image.Pt(sourceBounds.Min.X+sourceX, sourceBounds.Min.Y+sourceY)
 }

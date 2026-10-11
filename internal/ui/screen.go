@@ -270,6 +270,8 @@ type screenModel struct {
 	operation            activeOperation
 	credentialOperation  activeOperation
 	scope                scopeSwitchState
+	programOutcome       string
+	programStatus        *programStatusReporter
 
 	renderer       *inlineRenderer
 	theme          string
@@ -341,6 +343,18 @@ func RunScreen(ctx context.Context, runtime Agent, config Config, in, out *os.Fi
 	defer func() {
 		if _, err := io.WriteString(out, ansi.ResetModeFocusEvent); err != nil {
 			returnErr = errors.Join(returnErr, fmt.Errorf("disable terminal focus reporting: %w", err))
+		}
+	}()
+	// This writer is installed only for the interactive terminal, and all
+	// reports run on the same event loop as the inline renderer.
+	model.programStatus = &programStatusReporter{out: out}
+	if err := model.programStatus.report(model.terminalProgramStatus()); err != nil {
+		return fmt.Errorf("report terminal status: %w", err)
+	}
+	defer func() {
+		status := programStatus{state: programResultState(returnErr, "clear")}
+		if err := model.programStatus.report(status); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("report terminal status: %w", err))
 		}
 	}()
 
@@ -459,7 +473,15 @@ func (m screenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.quitting {
 		return m, nil
 	}
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.PasteMsg:
+		m.programOutcome = ""
+	}
 	next, cmd := m.update(msg)
+	if err := next.programStatus.report(next.terminalProgramStatus()); err != nil {
+		cmd = next.quit(fmt.Errorf("report terminal status: %w", err))
+		return next, cmd
+	}
 	if next.quitting {
 		return next, cmd
 	}
@@ -495,6 +517,9 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		return m, command
 	case credentialDoneMsg:
 		m.finishCredentialUpdate(msg)
+		if msg.err != nil {
+			m.programOutcome = programResultState(msg.err, "idle")
+		}
 		m.refreshTranscript()
 		return m, nil
 	case tea.FocusMsg:
@@ -571,26 +596,34 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 	case shellDoneMsg:
 		m.refreshSessionStatus()
 		m.finishShell(msg.result, msg.err, time.Now())
+		m.programOutcome = shellProgramResultState(msg.result, msg.err)
 		m.refreshTranscript()
 		return m, nil
 	case scopeDoneMsg:
 		m.finishScopeSwitch(msg)
+		if msg.err != nil {
+			m.programOutcome = programResultState(msg.err, "idle")
+		}
 		cmd := m.continueSessionAction()
 		m.refreshTranscript()
 		return m, cmd
 	case compactionDoneMsg:
 		cmd := m.finishCompaction(msg)
+		m.programOutcome = programResultState(msg.err, "done")
 		m.refreshTranscript()
 		return m, cmd
 	case sessionClearedMsg:
 		m.finishClearSession(msg)
+		m.programOutcome = programResultState(msg.err, "idle")
 		m.refreshTranscript()
 		return m, nil
 	case resumeSessionMsg:
+		m.programOutcome = ""
 		m.resumeSession(msg.idOrPrefix)
 		m.refreshTranscript()
 		return m, nil
 	case agentDoneMsg:
+		m.programOutcome = programResultState(msg.err, "done")
 		if msg.err == nil {
 			m.finishModelRetryNotice()
 		} else {

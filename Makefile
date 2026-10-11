@@ -33,7 +33,9 @@ mod-check:
 	$(GO) mod tidy -diff
 
 staticcheck:
-	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+	# Pin Go 1.27.2 export-format support until the next Staticcheck release.
+	# https://github.com/dominikh/go-tools/issues/1832
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@v0.7.0-0.dev.0.20261009230814-452d5bb86b45 ./...
 
 check: test vet format-check mod-check staticcheck race
 

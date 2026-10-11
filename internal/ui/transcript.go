@@ -70,9 +70,10 @@ type renderedScreenBlock struct {
 // and live agent events. Terminal I/O and Agent calls remain with screenModel;
 // cache invalidation stays local to this state.
 type transcriptState struct {
-	blocks         []screenBlock
-	currentAttempt string
-	root           string
+	blocks             []screenBlock
+	currentAttempt     string
+	assistantSanitizer terminalTextSanitizer
+	root               string
 	// preserveToolTailHeight asks the next rendered refresh to retain the
 	// physical rows released when a live tool tail becomes stable.
 	preserveToolTailHeight bool
@@ -153,6 +154,7 @@ func (m *screenModel) appendBlock(block screenBlock) {
 }
 
 func (transcript *transcriptState) clear() {
+	transcript.startAttempt("")
 	transcript.blocks = nil
 	transcript.lines = nil
 	transcript.renderCache = nil

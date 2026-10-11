@@ -24,6 +24,7 @@ func TestAnthropicThinkingBindingIsScopedToReviewedRoute(t *testing.T) {
 		{name: "native Fable", uri: "anthropic/claude-fable-5-1", wantBinding: true},
 		{name: "native Opus 5.5", uri: "anthropic/claude-opus-5-5", wantBinding: true},
 		{name: "native Sonnet 5.5", uri: "anthropic/claude-sonnet-5-5", wantBinding: true},
+		{name: "native Haiku 5.5", uri: "anthropic/claude-haiku-5-5", wantBinding: true},
 		{name: "native Opus", uri: "anthropic/claude-opus-5"},
 		{name: "undeclared Claude", uri: "anthropic/claude-unreleased"},
 		{name: "custom Fable endpoint", uri: "anthropic/claude-fable-5-1", baseURL: "https://gateway.example/v1"},

@@ -198,6 +198,7 @@ func (m *screenModel) finishBrowserLogin(message browserLoginDoneMsg) tea.Cmd {
 		return m.startCredentialUpdate(provider, false, pending, message.login.Complete)
 	}
 	m.cancelLogin()
+	m.programOutcome = programResultState(err, "idle")
 	if errors.Is(err, context.DeadlineExceeded) {
 		m.addBlock(screenBlockError, "login timed out; retry /login "+provider)
 	} else {

@@ -208,10 +208,14 @@ func (m *screenModel) resetModelRetryGroup() {
 
 func (transcript *transcriptState) startAttempt(attemptID string) {
 	transcript.currentAttempt = attemptID
+	transcript.assistantSanitizer = terminalTextSanitizer{}
 }
 
 func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
-	delta = sanitizeTerminalText(delta)
+	if transcript.currentAttempt != attemptID {
+		transcript.startAttempt(attemptID)
+	}
+	delta = transcript.assistantSanitizer.append(delta)
 	if delta == "" {
 		return
 	}
@@ -227,6 +231,7 @@ func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
 }
 
 func (transcript *transcriptState) finishAssistant(text string) {
+	transcript.assistantSanitizer = terminalTextSanitizer{}
 	text = sanitizeTerminalText(text)
 	if strings.TrimSpace(text) == "" {
 		return
@@ -250,6 +255,9 @@ func (transcript *transcriptState) finishAssistant(text string) {
 // providers routinely open a response with a whitespace-only delta, and
 // announcing the removal of a blank block explains nothing.
 func (transcript *transcriptState) discardAttempt(attemptID string) bool {
+	if transcript.currentAttempt == attemptID {
+		transcript.assistantSanitizer = terminalTextSanitizer{}
+	}
 	for index, block := range slices.Backward(transcript.blocks) {
 		if block.kind != screenBlockAssistant || block.attemptID != attemptID {
 			continue

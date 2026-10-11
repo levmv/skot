@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/x/term"
 )
@@ -40,68 +39,93 @@ func shouldUseStyle(out io.Writer) bool {
 // and workspace text before it reaches a human terminal. JSON output does not
 // use this path; encoding/json safely escapes control bytes for consumers.
 func sanitizeTerminalText(text string) string {
-	text = strings.ToValidUTF8(text, "�")
+	var sanitizer terminalTextSanitizer
+	return sanitizer.append(strings.ToValidUTF8(text, "�"))
+}
+
+type terminalTextState uint8
+
+const (
+	terminalTextPlain terminalTextState = iota
+	terminalTextEscape
+	terminalTextEscapeIntermediate
+	terminalTextCSI
+	terminalTextOSC
+	terminalTextString
+	terminalTextOSCEscape
+	terminalTextStringEscape
+)
+
+// A stream owns one sanitizer until its attempt ends. The runtime emits valid
+// UTF-8 deltas; only terminal-control state needs to survive between them.
+// Even an unterminated control string uses constant memory.
+type terminalTextSanitizer struct {
+	state terminalTextState
+}
+
+func (sanitizer *terminalTextSanitizer) append(text string) string {
 	var out strings.Builder
 	out.Grow(len(text))
-	for index := 0; index < len(text); {
-		if text[index] == 0x1b {
-			index = skipEscapeSequence(text, index)
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(text[index:])
-		if size <= 0 {
-			size = 1
-		}
-		switch {
-		case r == '\n' || r == '\t':
-			out.WriteRune(r)
-		case r < 0x20 || r == 0x7f || r >= 0x80 && r <= 0x9f:
-			// Drop C0/C1 controls, including BEL, CR, backspace, and their
-			// single-codepoint CSI/OSC forms.
-		default:
-			out.WriteRune(r)
-		}
-		index += size
-	}
-	return out.String()
-}
-
-func skipEscapeSequence(text string, start int) int {
-	index := start + 1
-	if index >= len(text) {
-		return index
-	}
-	switch text[index] {
-	case '[': // CSI: parameters/intermediates followed by one final byte.
-		index++
-		for index < len(text) {
-			value := text[index]
-			index++
-			if value >= 0x40 && value <= 0x7e {
-				break
+	for _, r := range text {
+		switch sanitizer.state {
+		case terminalTextOSC, terminalTextString, terminalTextOSCEscape, terminalTextStringEscape:
+			osc := sanitizer.state == terminalTextOSC || sanitizer.state == terminalTextOSCEscape
+			escaped := sanitizer.state == terminalTextOSCEscape || sanitizer.state == terminalTextStringEscape
+			switch {
+			case r == 0x9c || escaped && r == '\\' || osc && r == '\a':
+				sanitizer.state = terminalTextPlain
+			case r == 0x1b:
+				sanitizer.state = terminalTextStringEscape
+				if osc {
+					sanitizer.state = terminalTextOSCEscape
+				}
+			default:
+				sanitizer.state = terminalTextString
+				if osc {
+					sanitizer.state = terminalTextOSC
+				}
+			}
+		case terminalTextEscape:
+			switch r {
+			case '[':
+				sanitizer.state = terminalTextCSI
+			case ']':
+				sanitizer.state = terminalTextOSC
+			case 'P', 'X', '^', '_':
+				sanitizer.state = terminalTextString
+			case 0x1b:
+			default:
+				sanitizer.state = terminalTextPlain
+				if r >= 0x20 && r <= 0x2f {
+					sanitizer.state = terminalTextEscapeIntermediate
+				}
+			}
+		case terminalTextCSI, terminalTextEscapeIntermediate:
+			finalMin := rune(0x40)
+			if sanitizer.state == terminalTextEscapeIntermediate {
+				finalMin = 0x30
+			}
+			if r == 0x1b {
+				sanitizer.state = terminalTextEscape
+			} else if r >= finalMin && r <= 0x7e {
+				sanitizer.state = terminalTextPlain
+			}
+		case terminalTextPlain:
+			switch r {
+			case 0x1b:
+				sanitizer.state = terminalTextEscape
+			case 0x9b:
+				sanitizer.state = terminalTextCSI
+			case 0x9d:
+				sanitizer.state = terminalTextOSC
+			case 0x90, 0x98, 0x9e, 0x9f:
+				sanitizer.state = terminalTextString
+			default:
+				if r == '\n' || r == '\t' || r >= 0x20 && !(r >= 0x7f && r <= 0x9f) {
+					out.WriteRune(r)
+				}
 			}
 		}
-		return index
-	case ']': // OSC: BEL or ST terminates the payload.
-		return skipStringEscape(text, index+1, true)
-	case 'P', 'X', '^', '_': // DCS, SOS, PM, APC: terminated by ST.
-		return skipStringEscape(text, index+1, false)
-	default:
-		// Two-byte ESC Fe sequences and charset selectors are harmlessly
-		// removed with their introducer.
-		return min(index+1, len(text))
 	}
-}
-
-func skipStringEscape(text string, index int, allowBEL bool) int {
-	for index < len(text) {
-		if allowBEL && text[index] == '\a' {
-			return index + 1
-		}
-		if text[index] == 0x1b && index+1 < len(text) && text[index+1] == '\\' {
-			return index + 2
-		}
-		index++
-	}
-	return index
+	return out.String()
 }

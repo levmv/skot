@@ -210,6 +210,11 @@ var Catalog = []Spec{
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{
+		URI: "anthropic/claude-haiku-5-5", Name: "Claude Haiku 5.5", API: AnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		DropMismatchedThinking: true, Compatibility: Unverified,
+	},
+	{
 		URI: "anthropic/claude-fable-5-1", Name: "Claude Fable 5.1", API: AnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
 		DropMismatchedThinking: true, Compatibility: Unverified,

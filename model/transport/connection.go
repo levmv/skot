@@ -86,7 +86,8 @@ func (c *Connection) Endpoint() string { return modelhttp.PublicEndpoint(c.endpo
 // to Skot, and authorization runs last. Headers are not filtered; pass only
 // those intended for the upstream provider. Keep body unchanged until the
 // response is closed. Close every returned response body or transfer it to
-// EventStream.
+// EventStream. Closing a live body also cancels its HTTP request, promptly
+// interrupting blocked reads.
 //
 // Errors before Do carry model.ErrRequestNotSent; its absence does not prove
 // delivery. Non-2xx returns both response and *model.ProviderError. Its in-memory
@@ -101,7 +102,13 @@ func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	requestCtx, cancelRequest := context.WithCancel(ctx)
+	defer func() {
+		if returnErr != nil {
+			cancelRequest()
+		}
+	}()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, model.MarkInvalidRequest(fmt.Errorf("create %s request: %w", c.provider, err))
 	}
@@ -126,6 +133,7 @@ func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) 
 	if err != nil {
 		return response, fmt.Errorf("%s request: %w", c.provider, err)
 	}
+	response.Body = &cancelOnCloseBody{ReadCloser: response.Body, cancel: cancelRequest}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		return response, nil
 	}
@@ -137,6 +145,18 @@ func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) 
 	}
 	response.Body = io.NopCloser(&errorBody{reader: bytes.NewReader(data), err: readErr})
 	return response, modelhttp.DecodeProviderError(c.provider, c.apiModel, response, data, readErr)
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (body *cancelOnCloseBody) Close() error {
+	// Cancel before Close to interrupt active reads and prevent net/http from
+	// draining a response that may never reach EOF.
+	body.cancel()
+	return body.ReadCloser.Close()
 }
 
 func replaceHeaders(target, source http.Header) {

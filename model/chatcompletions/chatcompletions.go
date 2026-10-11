@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
@@ -34,6 +35,17 @@ type Backend struct {
 	traits                RouteTraits
 	maxRequestBytes       int
 	maxCompletionBytes    int
+}
+
+// DefaultDrainOptions returns the backend's limits for trailing SSE events.
+// They allow late usage while bounding streams that keep sending heartbeat
+// comments after a validated finish reason for choice 0.
+func DefaultDrainOptions() transport.DrainOptions {
+	return transport.DrainOptions{
+		MinComments: 2,
+		QuietPeriod: 5 * time.Second,
+		MaxDuration: 45 * time.Second,
+	}
 }
 
 func (backend *Backend) backendID() string {
@@ -113,7 +125,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	for {
 		event, err := stream.Next()
 		payload := event.Data
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, io.EOF) || errors.Is(err, transport.ErrDrainComplete) {
 			if err := observer.End(stream.SawDone()); err != nil {
 				return modelapi.Response{}, err
 			}
@@ -159,6 +171,9 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 					return modelapi.Response{}, err
 				}
 				stopReason = normalized
+				if err := stream.BeginDrain(DefaultDrainOptions()); err != nil {
+					return modelapi.Response{}, err
+				}
 			}
 			if delta := choice.Delta.reasoningText(); delta != "" {
 				reasoning.WriteString(delta)

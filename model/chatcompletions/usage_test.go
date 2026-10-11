@@ -2,15 +2,74 @@ package chatcompletions
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/levmv/skot/model"
 	"github.com/levmv/skot/model/transport"
 )
+
+func TestCompleteDrainsParkedStreamsWithoutLosingUsageOrErrors(t *testing.T) {
+	const partial = `{"choices":[{"index":0,"delta":{}}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`
+	const answer = `{"choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}`
+	const usage = `{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}`
+	for _, test := range []struct {
+		name, before, after string
+		failure             bool
+		status              model.UsageStatus
+		output              int
+	}{
+		{name: "late final usage", after: usage, status: model.UsageFinal, output: 3},
+		{name: "missing usage", status: model.UsageUnavailable},
+		{name: "partial stays partial", before: partial, status: model.UsagePartial, output: 2},
+		{name: "error after final usage", after: usage, failure: true, status: model.UsageFinal, output: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					writer.Header().Set("Content-Type", "text/event-stream")
+					if test.before != "" {
+						_, _ = io.WriteString(writer, "data: "+test.before+"\n\n")
+					}
+					_, _ = io.WriteString(writer, "data: "+answer+"\n\n: ping\n: ping\n\n")
+					writer.(http.Flusher).Flush()
+					if test.after != "" {
+						synctest.Sleep(4 * time.Second)
+						_, _ = io.WriteString(writer, "data: "+test.after+"\n\n: ping\n: ping\n\n")
+						writer.(http.Flusher).Flush()
+					}
+					if test.failure {
+						synctest.Sleep(time.Second)
+						_, _ = io.WriteString(writer, `data: {"error":{"code":429,"message":"busy"}}`+"\n\n")
+						writer.(http.Flusher).Flush()
+					}
+					<-request.Context().Done()
+				}))
+				response, err := newTestServerBackend(t, server, "").Complete(t.Context(), model.Request{
+					Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
+				}, nil)
+				if test.failure {
+					var providerErr *model.ProviderError
+					if !errors.As(err, &providerErr) || !strings.Contains(err.Error(), "busy") {
+						t.Fatalf("trailing provider error = %v", err)
+					}
+				} else if err != nil || len(response.Items) != 1 || response.Items[0].Text != "answer" || response.StopReason != "stop" {
+					t.Fatalf("completion = %#v, %v", response, err)
+				}
+				if response.Usage.Status != test.status || response.Usage.Tokens.Known().OutputTokens != test.output ||
+					(response.Usage.Tokens.InputTokens == nil) != (test.status == model.UsageUnavailable) {
+					t.Fatalf("usage = %#v", response.Usage)
+				}
+			})
+		})
+	}
+}
 
 func TestCompleteDistinguishesMissingZeroAndPartialUsage(t *testing.T) {
 	const answer = `{"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]}`

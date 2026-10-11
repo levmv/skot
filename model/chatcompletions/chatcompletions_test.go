@@ -661,6 +661,24 @@ func TestCompleteKeepsStreamAliveThroughComments(t *testing.T) {
 	synctest.Test(t, testCompleteKeepsStreamAliveThroughComments)
 }
 
+func TestCompleteWaitsForChoiceZeroBeforeDraining(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(writer, `data: {"choices":[{"index":1,"finish_reason":"stop"}]}`+"\n\n: ping\n: ping\n\n")
+			writer.(http.Flusher).Flush()
+			synctest.Sleep(6 * time.Second)
+			_, _ = io.WriteString(writer, `data: {"choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+		}))
+		response, err := newTestServerBackend(t, server, "").Complete(t.Context(), model.Request{
+			Items: []model.Item{{Kind: model.ItemUserText, Text: "hi"}},
+		}, nil)
+		if err != nil || len(response.Items) != 1 || response.Items[0].Text != "answer" || response.StopReason != "stop" {
+			t.Fatalf("completion = %#v, %v", response, err)
+		}
+	})
+}
+
 func testCompleteKeepsStreamAliveThroughComments(t *testing.T) {
 	interval := 10 * time.Millisecond
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

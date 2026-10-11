@@ -98,7 +98,7 @@ read:
 	for {
 		var event transport.Event
 		event, err = stream.Next()
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, io.EOF) || errors.Is(err, transport.ErrDrainComplete) {
 			err = observer.End(stream.SawDone())
 			break
 		}
@@ -112,6 +112,14 @@ read:
 		remaining -= len(event.Data)
 		if err = observer.ObserveChunk(event.Data); err != nil {
 			break
+		}
+		// Enable drain only after validating choice 0's finish reason.
+		// Providers with other finish reasons need their own validation here.
+		switch observer.FinishReason() {
+		case "stop", "length", "tool_calls", "function_call", "content_filter":
+			if err = stream.BeginDrain(chatcompletions.DefaultDrainOptions()); err != nil {
+				break read
+			}
 		}
 		if event.Name != "" {
 			if _, err = fmt.Fprintf(client, "event: %s\n", event.Name); err != nil {

@@ -274,7 +274,8 @@ func TestEventStreamCloseReleasesBodyOnEveryExit(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "consumer stopped":
-					// Fill the queue so Close must also interrupt dispatch.
+					// Close must release an upstream writer even when the
+					// consumer has stopped requesting events.
 					go func() { _, _ = io.WriteString(writer, strings.Repeat("data: one\n\n", 4)) }()
 					if _, err := stream.Next(); err != nil {
 						t.Fatal(err)
@@ -299,6 +300,232 @@ func TestEventStreamCloseReleasesBodyOnEveryExit(t *testing.T) {
 				}
 				if _, err := io.WriteString(writer, "more"); !errors.Is(err, io.ErrClosedPipe) {
 					t.Fatalf("writer = %v", err)
+				}
+			})
+		})
+	}
+}
+
+func TestEventStreamDrainTiming(t *testing.T) {
+	type write struct {
+		at   time.Duration
+		text string
+	}
+	for _, test := range []struct {
+		name   string
+		writes []write
+		want   []string
+		end    time.Duration
+	}{
+		{name: "two quick comments then silence", writes: []write{{time.Second, ": ping\n: ping\n\n"}}, end: 5 * time.Second},
+		{name: "spaced comments", writes: []write{{15 * time.Second, ": ping\n\n"}, {30 * time.Second, ": ping\n\n"}}, end: 30 * time.Second},
+		{name: "usage between comments", writes: []write{
+			{time.Second, ": ping\n\n"}, {3 * time.Second, "data: usage\n\n"},
+			{4 * time.Second, ": ping\n\n"}, {5 * time.Second, ": ping\n\n"},
+		}, want: []string{"usage"}, end: 8 * time.Second},
+		{name: "usage after two comments", writes: []write{
+			{time.Second, ": ping\n: ping\n\n"}, {4 * time.Second, "data: usage\n\n"}, {5 * time.Second, ": ping\n: ping\n\n"},
+		}, want: []string{"usage"}, end: 9 * time.Second},
+		{name: "empty data resets waiting", writes: []write{
+			{time.Second, ": ping\n: ping\n\n"}, {4 * time.Second, "data:\n\n"}, {5 * time.Second, ": ping\n: ping\n\n"},
+		}, end: 9 * time.Second},
+		{name: "silence reaches absolute limit", end: 45 * time.Second},
+		{name: "one comment reaches absolute limit", writes: []write{{time.Second, ": ping\n\n"}}, end: 45 * time.Second},
+		{name: "data cannot extend absolute limit", writes: []write{
+			{10 * time.Second, "data: a\n\n"}, {20 * time.Second, "data: b\n\n"},
+			{30 * time.Second, "data: c\n\n"}, {40 * time.Second, "data: d\n\n"},
+		}, want: []string{"a", "b", "c", "d"}, end: 45 * time.Second},
+		{name: "comments inside an unfinished event", writes: []write{
+			{time.Second, "data: first\n: ping\n: ping\n"}, {10 * time.Second, "data: second\n\n"}, {11 * time.Second, ": ping\n: ping\n\n"},
+		}, want: []string{"first\nsecond"}, end: 15 * time.Second},
+		{name: "unfinished data line", writes: []write{
+			{time.Second, ": ping\n: ping\n\n"}, {4 * time.Second, "data: us"},
+			{8 * time.Second, "age\n\n"}, {9 * time.Second, ": ping\n: ping\n\n"},
+		}, want: []string{"usage"}, end: 13 * time.Second},
+		{name: "unfinished event reaches absolute limit", writes: []write{
+			{time.Second, "data: partial\n: ping\n: ping\n"},
+		}, end: 45 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reader, writer := io.Pipe()
+				defer writer.Close()
+				stream := OpenEventStream(t.Context(), reader, StreamOptions{IdleTimeout: 45 * time.Second})
+				defer stream.Close()
+				started := time.Now()
+				go func() {
+					// Earlier heartbeats must not count toward trailing drain.
+					if _, err := io.WriteString(writer, ": before\n: before\n\ndata: finish\n\n"); err != nil {
+						return
+					}
+					for _, write := range test.writes {
+						synctest.Sleep(write.at - time.Since(started))
+						if _, err := io.WriteString(writer, write.text); err != nil {
+							return
+						}
+					}
+				}()
+				if event, err := stream.Next(); err != nil || string(event.Data) != "finish" {
+					t.Fatalf("finish event = %q, %v", event.Data, err)
+				}
+				if err := stream.BeginDrain(DrainOptions{MinComments: 2, QuietPeriod: 5 * time.Second, MaxDuration: 45 * time.Second}); err != nil {
+					t.Fatal(err)
+				}
+				var got []string
+				for {
+					event, err := stream.Next()
+					if err != nil {
+						if !errors.Is(err, ErrDrainComplete) || stream.SawDone() || time.Since(started) != test.end {
+							t.Fatalf("end after %s: %v, SawDone=%t", time.Since(started), err, stream.SawDone())
+						}
+						break
+					}
+					got = append(got, string(event.Data))
+					// A caller may see the same finish reason after every chunk.
+					// Re-arming must not replace any of the original options.
+					if err := stream.BeginDrain(DrainOptions{MinComments: 100, QuietPeriod: time.Hour, MaxDuration: time.Hour}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !reflect.DeepEqual(got, test.want) {
+					t.Fatalf("events = %q, want %q", got, test.want)
+				}
+				if _, err := io.WriteString(writer, "more"); !errors.Is(err, io.ErrClosedPipe) {
+					t.Fatalf("body still open after drain: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func TestEventStreamDrainKeepsBufferedTail(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reader, writer := io.Pipe()
+		defer writer.Close()
+		stream := OpenEventStream(t.Context(), reader, StreamOptions{})
+		defer stream.Close()
+		go func() {
+			_, _ = io.WriteString(writer, "data: finish\n\ndata: usage\n\n: ping\n: ping\n\n")
+		}()
+		if _, err := stream.Next(); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait() // Let any eager reader consume the buffered comments.
+		if err := stream.BeginDrain(DrainOptions{MinComments: 2, QuietPeriod: 5 * time.Second, MaxDuration: 45 * time.Second}); err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		if event, err := stream.Next(); err != nil || string(event.Data) != "usage" {
+			t.Fatalf("trailing event = %q, %v", event.Data, err)
+		}
+		if _, err := stream.Next(); !errors.Is(err, ErrDrainComplete) || time.Since(started) != 5*time.Second || stream.SawDone() {
+			t.Fatalf("end after %s: %v, SawDone=%t", time.Since(started), err, stream.SawDone())
+		}
+	})
+}
+
+func TestEventStreamDrainPreservesTerminationCause(t *testing.T) {
+	for _, test := range []struct {
+		name, text string
+		readErr    error
+		deadline   time.Duration
+		idle       time.Duration
+		wantErr    error
+		wantDone   bool
+	}{
+		{name: "done", text: "data: [DONE]\n\n", wantErr: io.EOF, wantDone: true},
+		{name: "EOF", readErr: io.EOF, wantErr: io.EOF},
+		{name: "read error", readErr: io.ErrUnexpectedEOF, wantErr: io.ErrUnexpectedEOF},
+		{name: "earlier idle", idle: 3 * time.Second, wantErr: model.ErrModelStreamIdle},
+		{name: "parent at quiet deadline", text: ": ping\n: ping\n\n", deadline: 5 * time.Second, wantErr: context.DeadlineExceeded},
+		{name: "parent at absolute deadline", deadline: 45 * time.Second, wantErr: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := t.Context()
+				if test.deadline > 0 {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, test.deadline)
+					defer cancel()
+				}
+				reader, writer := io.Pipe()
+				defer writer.Close()
+				stream := OpenEventStream(ctx, reader, StreamOptions{IdleTimeout: test.idle})
+				defer stream.Close()
+				if err := stream.BeginDrain(DrainOptions{MinComments: 2, QuietPeriod: 5 * time.Second, MaxDuration: 45 * time.Second}); err != nil {
+					t.Fatal(err)
+				}
+				go func() {
+					synctest.Sleep(time.Second)
+					if test.text != "" {
+						_, _ = io.WriteString(writer, test.text)
+					}
+					if test.readErr != nil {
+						_ = writer.CloseWithError(test.readErr)
+					}
+				}()
+				if _, err := stream.Next(); !errors.Is(err, test.wantErr) || stream.SawDone() != test.wantDone {
+					t.Fatalf("end = %v, SawDone=%t", err, stream.SawDone())
+				}
+			})
+		})
+	}
+}
+
+func TestEventStreamDrainPreservesReadyResult(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		readErr error
+		cancel  bool
+	}{
+		{name: "usage"},
+		{name: "read error", readErr: io.ErrUnexpectedEOF},
+		{name: "cancellation overrides ready usage", cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				reader, writer := io.Pipe()
+				defer writer.Close()
+				stream := OpenEventStream(ctx, reader, StreamOptions{})
+				defer stream.Close()
+				if err := stream.BeginDrain(DrainOptions{MinComments: 2, QuietPeriod: 5 * time.Second, MaxDuration: 45 * time.Second}); err != nil {
+					t.Fatal(err)
+				}
+				go func() {
+					if test.readErr != nil {
+						_ = writer.CloseWithError(test.readErr)
+					} else {
+						_, _ = io.WriteString(writer, "data: usage\n\n")
+					}
+				}()
+				// Stage the point in Next after requesting a read but before
+				// receiving its result. Both the result and timer are then ready
+				// when the consumer resumes, without relying on scheduling luck.
+				stream.requests <- struct{}{}
+				synctest.Wait()
+				synctest.Sleep(45 * time.Second)
+				if test.cancel {
+					cancel()
+				}
+				event, err := stream.Next()
+				switch {
+				case test.cancel:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("cancelled end = %v", err)
+					}
+				case test.readErr != nil:
+					if !errors.Is(err, test.readErr) {
+						t.Fatalf("upstream end = %v", err)
+					}
+				default:
+					if err != nil || string(event.Data) != "usage" {
+						t.Fatalf("ready event = %q, %v", event.Data, err)
+					}
+					if _, err := stream.Next(); !errors.Is(err, ErrDrainComplete) || stream.SawDone() {
+						t.Fatalf("local end = %v, SawDone=%t", err, stream.SawDone())
+					}
 				}
 			})
 		})

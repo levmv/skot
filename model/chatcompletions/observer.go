@@ -116,7 +116,7 @@ func (o *Observer) observe(fields completionFields, choice *choiceFields, noChoi
 	return nil
 }
 
-// End checks completion after SSE EOF: a finish reason or [DONE] is required.
+// End requires a finish reason or [DONE] when SSE reading ends.
 // It does not promote partial usage to final. JSON uses ObserveResponse instead.
 func (o *Observer) End(sawDone bool) error {
 	if o.finishReason == "" && !sawDone {

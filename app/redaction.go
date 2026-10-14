@@ -8,6 +8,8 @@ import (
 	"github.com/levmv/skot/internal/modelconfig"
 )
 
+// secretMasker replaces known authentication credentials. Ordinary configuration
+// values must not be registered: they can also occur in tool arguments and text.
 type secretMasker struct {
 	mu       sync.RWMutex
 	secrets  []string

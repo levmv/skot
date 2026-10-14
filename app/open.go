@@ -148,7 +148,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	builtInOptions := toolpolicy.BuiltInOptions{
 		DefaultIncludesLS: landlockProtectedPathsNeedBuiltInLS(workspacetools.BoundaryBackend(), layers.protection.Paths()),
 	}
-	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, masker, catalog, processes, builtInOptions)
+	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, catalog, processes, builtInOptions)
 	if err != nil {
 		return resources.fail(model.MarkInvalidRequest(err))
 	}

@@ -990,9 +990,6 @@ func TestOpenLoadsProgramToolsIntoExactToolSetsAndRecordsResolvedRuntime(t *test
 	if strings.Contains(string(encoded), "journal-secret") {
 		t.Fatalf("environment value reached snapshot: %s", encoded)
 	}
-	if got := application.config.masker.Redact("token=journal-secret"); got != "token=[REDACTED]" {
-		t.Fatalf("program environment was not registered for redaction: %q", got)
-	}
 	if err := application.SwitchToolSet(context.Background(), toolpolicy.ToolSetReadOnly); err != nil {
 		t.Fatal(err)
 	}

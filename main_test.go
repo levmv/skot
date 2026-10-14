@@ -1256,11 +1256,12 @@ func TestRunExecutesProviderToolCallWithProductOwnedIdentity(t *testing.T) {
 func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
+	t.Setenv("DEEPSEEK_API_KEY", "provider-key-fixture")
 	toolsDocument := `{"tools":[{
 	  "name":"lookup","description":"lookup an entry",
-	  "command":["sh","-c","cat; printf '\\nsecret=%s\\n' \"$LOOKUP_TOKEN\"; printf 'diagnostic\\n' >&2"],
+	  "command":["sh","-c","cat; printf '\\nlabel=%s\\n' \"$LOOKUP_LABEL\"; printf 'provider=provider-key-fixture\\ndiagnostic\\n' >&2"],
 	  "background":"auto","parallel_safe":true,
-	  "env":{"LOOKUP_TOKEN":"program-secret"},
+	  "env":{"DEBUG":"1","FEATURE":"false","MODE":"prod","LOOKUP_LABEL":"program-value"},
 	  "parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}
 	}]}`
 	if err := os.WriteFile(filepath.Join(home, "tools.json"), []byte(toolsDocument), 0o600); err != nil {
@@ -1283,7 +1284,7 @@ func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 				"index": 0,
 				"delta": map[string]any{"tool_calls": []any{map[string]any{
 					"index": 0, "id": "provider_call_lookup", "type": "function",
-					"function": map[string]any{"name": "lookup", "arguments": `{"query":"books","background":false}`},
+					"function": map[string]any{"name": "lookup", "arguments": `{"query":"product-v1","background":false}`},
 				}}},
 				"finish_reason": "tool_calls",
 			}}})
@@ -1317,13 +1318,13 @@ func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 		t.Fatalf("messages = %#v", messages)
 	}
 	toolResult := messages[2].Content
-	for _, want := range []string{`{"query":"books"}`, "stderr:\ndiagnostic", "secret=[REDACTED]", "status: completed"} {
+	for _, want := range []string{`{"query":"product-v1"}`, "stderr:\nprovider=[REDACTED]\ndiagnostic", "label=program-value", "status: completed"} {
 		if !strings.Contains(toolResult, want) {
 			t.Fatalf("tool result = %q, want %q", toolResult, want)
 		}
 	}
-	if strings.Contains(toolResult, "program-secret") || strings.Contains(toolResult, "background") {
-		t.Fatalf("tool result leaked private or synthetic input: %q", toolResult)
+	if strings.Contains(toolResult, "provider-key-fixture") || strings.Contains(toolResult, "background") {
+		t.Fatalf("tool result leaked provider credentials or synthetic input: %q", toolResult)
 	}
 	journal, err := session.Open(journalPath)
 	if err != nil {
@@ -1338,7 +1339,7 @@ func TestRunExecutesConfiguredProgramToolEndToEnd(t *testing.T) {
 	if err != nil || state.Configured == nil || len(state.Configured.Environment.ProgramTools) != 1 {
 		t.Fatalf("configured state = %#v, %v", state.Configured, err)
 	}
-	if encoded, err := json.Marshal(state.Configured); err != nil || strings.Contains(string(encoded), "program-secret") {
+	if encoded, err := json.Marshal(state.Configured); err != nil || strings.Contains(string(encoded), "program-value") {
 		t.Fatalf("snapshot leaked program environment: %s, %v", encoded, err)
 	}
 }

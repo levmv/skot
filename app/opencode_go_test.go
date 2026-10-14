@@ -38,7 +38,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 	}{
 		{
 			name: "chat completions all-turn replay", uri: "opencode-go/deepseek-flash", effort: "low",
-			path: "/zen/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
+			path: "/inference/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
 			request:             openCodeGoReplayRequest(),
 			wantReplayReasoning: "tool reasoningplain reasoning",
 			checkReplay:         true,
@@ -57,7 +57,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "chat completions default thinking replay", uri: "opencode-go/mimo-v2.6-pro",
-			path: "/zen/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
+			path: "/inference/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
 			request:             openCodeGoReplayRequest(),
 			wantReplayReasoning: "tool reasoningplain reasoning",
 			checkReplay:         true,
@@ -76,7 +76,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "chat completions current-turn replay", uri: "opencode-go/kimi-k3", effort: "max",
-			path: "/zen/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
+			path: "/inference/go/v1/chat/completions", protocol: modelconfig.ChatCompletions,
 			request:     openCodeGoReplayRequest(),
 			checkReplay: true,
 			writeBody: func(writer io.Writer) {
@@ -91,7 +91,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "responses reasoning controls", uri: "opencode-go/gpt-5.6-luna", effort: "high",
-			path: "/zen/go/v1/responses", protocol: modelconfig.Responses,
+			path: "/inference/go/v1/responses", protocol: modelconfig.Responses,
 			request: model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "reply ok"}}},
 			writeBody: func(writer io.Writer) {
 				fmt.Fprint(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
@@ -119,7 +119,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 		},
 		{
 			name: "anthropic messages", uri: "opencode-go/minimax-m3",
-			path: "/zen/go/v1/messages", protocol: modelconfig.AnthropicMessages,
+			path: "/inference/go/v1/messages", protocol: modelconfig.AnthropicMessages,
 			request: model.Request{
 				Instructions: "be brief", Items: []model.Item{{Kind: model.ItemUserText, Text: "reply ok"}},
 			},
@@ -223,7 +223,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 				t.Fatal(err)
 			}
 			if route.API != test.protocol || route.Compatibility != modelconfig.Supported ||
-				route.BaseURL != "https://opencode.ai/zen/go/v1" {
+				route.BaseURL != "https://opencode.ai/inference/go/v1" {
 				t.Fatalf("route = %#v", route)
 			}
 			backend, _, err := modelconfig.BuildBackend(route, nil, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, HTTPClient: client})
@@ -234,7 +234,7 @@ func TestOpenCodeGoRoutesUseDeclaredProtocolTraitsEndpointAndCredential(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			if endpoint := info.Endpoint; endpoint != "https://opencode.ai/zen/go/v1" {
+			if endpoint := info.Endpoint; endpoint != "https://opencode.ai/inference/go/v1" {
 				t.Fatalf("backend endpoint = %q", endpoint)
 			}
 			response, err := backend.Complete(context.Background(), test.request, nil)

@@ -45,7 +45,7 @@ var Providers = map[string]ProviderSpec{
 	"openai":           {BaseURL: "https://api.openai.com/v1", DefaultAPI: ChatCompletions},
 	codexauth.Provider: {BaseURL: codexauth.BaseURL, DefaultAPI: Responses},
 	"opencode-go": {
-		BaseURL: "https://opencode.ai/zen/go/v1", DefaultAPI: ChatCompletions,
+		BaseURL: "https://opencode.ai/inference/go/v1", DefaultAPI: ChatCompletions,
 		RequireDeclaredModel: true,
 	},
 	"ollama": {BaseURL: "http://localhost:11434/v1", Credentialless: true, DefaultAPI: ChatCompletions},

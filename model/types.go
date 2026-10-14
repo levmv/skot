@@ -187,5 +187,14 @@ type Backend interface {
 	ProjectModelItems([]Item) []Item
 }
 
+// ResponseStateReconciler is an optional backend capability for replay state
+// bound to response content. Hosts that sanitize responses call it on an owned
+// copy of the sanitized items before accepting or storing them. It may discard
+// incompatible provider state and empty reasoning placeholders, but must keep
+// semantic content, tool calls, and their order. It must not retain the slice.
+type ResponseStateReconciler interface {
+	ReconcileResponseState([]Item) []Item
+}
+
 // ProviderStateContract identifies how an adapter stores and replays opaque data.
 type ProviderStateContract string

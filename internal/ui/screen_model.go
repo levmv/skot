@@ -137,11 +137,12 @@ const (
 	modelAPIChatCompletions   = "chat_completions"
 	modelAPIResponses         = "responses"
 	modelAPIAnthropicMessages = "anthropic_messages"
+	modelAPIGemini            = "gemini"
 )
 
 func modelAPIPickerItems(choices []ModelChoice, provider string) []pickerItem {
-	items := make([]pickerItem, 0, 3)
-	for _, protocol := range []string{modelAPIChatCompletions, modelAPIResponses, modelAPIAnthropicMessages} {
+	items := make([]pickerItem, 0, 4)
+	for _, protocol := range []string{modelAPIChatCompletions, modelAPIResponses, modelAPIAnthropicMessages, modelAPIGemini} {
 		items = append(items, pickerItem{
 			value: protocol, label: modelProtocolLabel(protocol),
 			description: modelAPIExamples(choices, provider, protocol),
@@ -253,6 +254,8 @@ func modelProtocolLabel(protocol string) string {
 		return "Open Responses"
 	case modelAPIAnthropicMessages:
 		return "Anthropic Messages"
+	case modelAPIGemini:
+		return "Gemini"
 	default:
 		return strings.ReplaceAll(strings.TrimSpace(protocol), "_", " ")
 	}

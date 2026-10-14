@@ -14,6 +14,13 @@ type diagnosticBackend struct {
 	api API
 }
 
+func (backend diagnosticBackend) ReconcileResponseState(items []model.Item) []model.Item {
+	if reconciler, ok := backend.Backend.(model.ResponseStateReconciler); ok {
+		return reconciler.ReconcileResponseState(items)
+	}
+	return items
+}
+
 func (backend diagnosticBackend) Complete(ctx context.Context, request model.Request, emit func(model.StreamEvent)) (model.Response, error) {
 	response, err := backend.Backend.Complete(ctx, request, emit)
 	if err == nil || !errors.Is(err, model.ErrProviderFailure) || providerFailureHasIndependentExplanation(err) {

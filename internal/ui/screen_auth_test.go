@@ -488,14 +488,14 @@ func TestModelPickerAsksForProtocolOnlyWhenTheRouteNeedsOne(t *testing.T) {
 	model := testScreenModel(t, fake)
 	model.composer.setValue("/model opencode-go/ox-alpha-free")
 	model, _ = model.submitInput()
-	if model.picker.kind != pickerModelAPI || len(model.picker.items) != 3 || model.picker.pendingModel.uri != "opencode-go/ox-alpha-free" {
+	if model.picker.kind != pickerModelAPI || len(model.picker.items) != 4 || model.picker.pendingModel.uri != "opencode-go/ox-alpha-free" {
 		t.Fatalf("protocol picker = %#v", model.picker)
 	}
 	if model.picker.items[2].value != "anthropic_messages" || model.picker.items[2].description != "like minimax-m3" {
 		t.Fatalf("protocol rows = %#v", model.picker.items)
 	}
 	if model.picker.items[0].label != "OpenAI Chat Completions" || model.picker.items[1].label != "Open Responses" ||
-		model.picker.items[2].label != "Anthropic Messages" {
+		model.picker.items[2].label != "Anthropic Messages" || model.picker.items[3].label != "Gemini" {
 		t.Fatalf("protocol labels = %#v", model.picker.items)
 	}
 	model, _ = model.handleKey(tea.KeyPressMsg{Text: "3", Code: '3', BaseCode: '3'})

@@ -8,6 +8,7 @@ import (
 	modelapi "github.com/levmv/skot/model"
 	"github.com/levmv/skot/model/anthropic"
 	"github.com/levmv/skot/model/chatcompletions"
+	"github.com/levmv/skot/model/google"
 	responsemodel "github.com/levmv/skot/model/responses"
 )
 
@@ -223,8 +224,23 @@ var Catalog = []Spec{
 	{URI: "openrouter/~x-ai/grok-latest", Name: "Grok Latest"},
 	{URI: "openrouter/~moonshotai/kimi-latest", Name: "Kimi Latest"},
 	{URI: "openrouter/~google/gemini-pro-latest", Name: "Gemini Pro Latest"},
+	{
+		URI: "google/gemini-4-argon", Name: "Gemini 4 Argon", API: Gemini,
+		ContextWindow:    1_048_576,
+		ReasoningEfforts: []string{"", "low", "medium", "high"},
+	},
+	{
+		URI: "google/gemini-3.8-flash", Name: "Gemini 3.8 Flash", API: Gemini,
+		ContextWindow:    1_048_576,
+		ReasoningEfforts: []string{"", "low", "medium", "high"},
+	},
 	// Protocols: https://opencode.ai/docs/go/#endpoints
 	// Limits and effort vocabularies: https://models.dev/api.json (opencode-go).
+	{
+		URI: "opencode-go/gemini-4-argon-contributor", Name: "OpenCode Go · Gemini 4 Argon Contributor", API: Gemini,
+		ContextWindow:    1_048_576,
+		ReasoningEfforts: []string{"", "low", "medium", "high"},
+	},
 	{
 		URI: "opencode-go/gpt-6-luna", Name: "OpenCode Go · GPT 6 Luna", API: Responses,
 		ContextWindow:    922_000,
@@ -551,6 +567,8 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		stateContract = responsesTraits.ProviderStateContract()
 	case AnthropicMessages:
 		stateContract = anthropic.ProviderStateContract
+	case Gemini:
+		stateContract = google.ProviderStateContract
 	}
 	return Route{
 		URI: provider + "/" + model, Provider: provider, Model: model, APIModel: apiModel, API: api,

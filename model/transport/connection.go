@@ -49,7 +49,7 @@ func New(config Config) (*Connection, error) {
 	config.APIModel = strings.TrimSpace(config.APIModel)
 	config.Endpoint = strings.TrimSpace(config.Endpoint)
 	switch config.API {
-	case "chat_completions", "responses", "anthropic_messages":
+	case "chat_completions", "responses", "anthropic_messages", "gemini":
 	default:
 		return nil, model.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", config.API))
 	}

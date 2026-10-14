@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 
 	"github.com/levmv/skot/model"
@@ -36,6 +37,7 @@ func (usage *UsageAccumulator) SetRequestID(header http.Header) {
 // Observe updates the fields present in each usage snapshot; nested values are
 // replaced whole. protocol identifies token semantics;
 // provider identifies explicitly supported monetary extensions.
+// Invalid snapshots leave both the report and the fields used by later merges intact.
 func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider string, final bool) error {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil
@@ -44,15 +46,22 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return fmt.Errorf("decode usage: %w", err)
 	}
-	if usage.fields == nil {
-		usage.fields = make(map[string]jsontext.Value)
+	mergedFields := maps.Clone(usage.fields)
+	if mergedFields == nil {
+		mergedFields = make(map[string]jsontext.Value)
 	}
-	maps.Copy(usage.fields, fields)
-	merged, err := json.Marshal(usage.fields, json.Deterministic(true))
+	maps.Copy(mergedFields, fields)
+	merged, err := json.Marshal(mergedFields, json.Deterministic(true))
 	if err != nil {
 		return err
 	}
 	var values struct {
+		GooglePrompt             int  `json:"promptTokenCount"`
+		GoogleCandidates         int  `json:"candidatesTokenCount"`
+		GoogleThoughts           int  `json:"thoughtsTokenCount"`
+		GoogleCached             int  `json:"cachedContentTokenCount"`
+		GoogleToolPrompt         int  `json:"toolUsePromptTokenCount"`
+		GoogleTotal              *int `json:"totalTokenCount"`
 		PromptTokens             *int `json:"prompt_tokens"`
 		CompletionTokens         *int `json:"completion_tokens"`
 		InputTokens              *int `json:"input_tokens"`
@@ -81,6 +90,21 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 	}
 	tokens := model.ReportedTokens{TotalTokens: values.TotalTokens}
 	switch protocol {
+	case "gemini":
+		// GenerateContent's proto3 counters omit zero values. Once a usage
+		// object is present, missing counters default to zero; in particular,
+		// a thinking-only response can omit candidatesTokenCount entirely.
+		// google/ai/generativelanguage/v1beta/generative_service.proto: UsageMetadata
+		tokens.InputTokens, err = sumUsageTokens("input", &values.GooglePrompt, &values.GoogleToolPrompt)
+		if err != nil {
+			return err
+		}
+		tokens.OutputTokens, err = sumUsageTokens("output", &values.GoogleCandidates, &values.GoogleThoughts)
+		if err != nil {
+			return err
+		}
+		tokens.CachedInputTokens, tokens.ReasoningTokens = new(values.GoogleCached), new(values.GoogleThoughts)
+		tokens.TotalTokens = values.GoogleTotal
 	case "chat_completions":
 		tokens.InputTokens, tokens.OutputTokens = values.PromptTokens, values.CompletionTokens
 		tokens.CachedInputTokens = values.PromptDetails.Cached
@@ -96,21 +120,24 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.CachedInputTokens, tokens.CacheWriteInputTokens = values.CacheReadInputTokens, values.CacheCreationInputTokens
 		if tokens.InputTokens != nil {
-			input := *tokens.InputTokens
-			for _, extra := range []*int{tokens.CachedInputTokens, tokens.CacheWriteInputTokens} {
-				if extra != nil {
-					input += *extra
-				}
+			tokens.InputTokens, err = sumUsageTokens("input", tokens.InputTokens, tokens.CachedInputTokens, tokens.CacheWriteInputTokens)
+			if err != nil {
+				return err
 			}
-			tokens.InputTokens = &input
 		}
 	default:
 		return fmt.Errorf("unsupported usage protocol %q", protocol)
 	}
-	if tokens.InputTokens != nil && tokens.OutputTokens != nil {
-		total := *tokens.InputTokens + *tokens.OutputTokens
-		tokens.TotalTokens = &total
+	if err := validateUsageTokens(tokens); err != nil {
+		return err
 	}
+	if tokens.InputTokens != nil && tokens.OutputTokens != nil {
+		tokens.TotalTokens, err = sumUsageTokens("total", tokens.InputTokens, tokens.OutputTokens)
+		if err != nil {
+			return err
+		}
+	}
+	usage.fields = mergedFields
 	usage.Snapshot.Tokens = tokens
 	usage.raw = merged
 	usage.Snapshot.Status = model.UsagePartial
@@ -135,6 +162,48 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 			if cost.raw.Kind() == '0' {
 				usage.Snapshot.Costs = append(usage.Snapshot.Costs, model.ReportedCost{Kind: cost.kind, Amount: string(bytes.TrimSpace(cost.raw)), Currency: "USD"})
 			}
+		}
+	}
+	return nil
+}
+
+func sumUsageTokens(name string, counts ...*int) (*int, error) {
+	total := 0
+	for _, count := range counts {
+		if count == nil {
+			continue
+		}
+		if *count < 0 {
+			return nil, fmt.Errorf("invalid usage: negative %s token count", name)
+		}
+		if *count > math.MaxInt-total {
+			return nil, fmt.Errorf("invalid usage: %s token count overflows int", name)
+		}
+		total += *count
+	}
+	return &total, nil
+}
+
+func validateUsageTokens(tokens model.ReportedTokens) error {
+	for _, counter := range []struct {
+		name, parent string
+		count, limit *int
+	}{
+		{"input", "", tokens.InputTokens, nil},
+		{"output", "", tokens.OutputTokens, nil},
+		{"total", "", tokens.TotalTokens, nil},
+		{"cached input", "input", tokens.CachedInputTokens, tokens.InputTokens},
+		{"cache write input", "input", tokens.CacheWriteInputTokens, tokens.InputTokens},
+		{"reasoning", "output", tokens.ReasoningTokens, tokens.OutputTokens},
+	} {
+		if counter.count == nil {
+			continue
+		}
+		if *counter.count < 0 {
+			return fmt.Errorf("invalid usage: negative %s token count", counter.name)
+		}
+		if counter.limit != nil && *counter.count > *counter.limit {
+			return fmt.Errorf("invalid usage: %s tokens exceed %s tokens", counter.name, counter.parent)
 		}
 	}
 	return nil

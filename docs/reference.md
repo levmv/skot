@@ -38,7 +38,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | --- | --- | --- |
 | `-model provider/model` | `SK_MODEL` | Select a model. Default: `deepseek/deepseek-flash`. |
 | `-reasoning-effort value` | `SK_REASONING_EFFORT` | Select a route-supported effort such as `default`, `off`, `high`, or `max`. Accepted values depend on the route. |
-| `-model-api api` | `SK_MODEL_API` | Override the protocol with `chat_completions`, `responses`, or `anthropic_messages`. |
+| `-model-api api` | `SK_MODEL_API` | Override the protocol with `chat_completions`, `responses`, `anthropic_messages`, or `gemini`. |
 | `-base-url url` | `SK_BASE_URL` | Override the provider API base URL. |
 | `-context-window tokens` | — | Override model context metadata; `0` uses route metadata. |
 | `-retry-budget duration` | `SK_RETRY_BUDGET` | Time allowed for a model request, including retries and the delays between them. Default: `15m`. |
@@ -91,6 +91,7 @@ the currently available route list and switch models. You can also enter any
 | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
+| Google Gemini | `GEMINI_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | ChatGPT subscription (`openai-codex`) | Browser login with `/login openai-codex` |
 | OpenRouter | `OPENROUTER_API_KEY` |

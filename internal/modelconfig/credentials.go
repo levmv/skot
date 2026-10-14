@@ -43,6 +43,7 @@ var CredentialCatalog = []CredentialSpec{
 	{Name: codexauth.Provider, Description: "ChatGPT subscription", Capabilities: CredentialModel},
 	{Name: "anthropic", Environment: "ANTHROPIC_API_KEY", Description: "model provider", CredentialURL: "https://platform.claude.com/settings/keys", Capabilities: CredentialModel},
 	{Name: "opencode-go", Environment: "OPENCODE_API_KEY", Description: "OpenCode Go subscription", CredentialURL: "https://opencode.ai/auth", Capabilities: CredentialModel},
+	{Name: "google", Environment: "GEMINI_API_KEY", Description: "model provider", CredentialURL: "https://aistudio.google.com/api-keys", Capabilities: CredentialModel},
 	{Name: "keenable", Environment: "KEENABLE_API_KEY", Description: "web search and fetch", CredentialURL: "https://app.keenable.ai", Capabilities: CredentialWebSearch | CredentialWebFetch},
 	{Name: "tavily", Environment: "TAVILY_API_KEY", Description: "web search", CredentialURL: "https://app.tavily.com", Capabilities: CredentialWebSearch},
 	{Name: "firecrawl", Environment: "FIRECRAWL_API_KEY", Description: "web fetch", CredentialURL: "https://www.firecrawl.dev/app/api-keys", Capabilities: CredentialWebFetch},
@@ -79,6 +80,20 @@ func (authorizer APIKeyAuthorizer) Authorize(_ context.Context, request *http.Re
 	}
 	if token != "" {
 		request.Header.Set("x-api-key", token)
+	}
+	setProviderSessionHeader(request, authorizer.Provider)
+	return nil
+}
+
+type GoogleAuthorizer BearerAuthorizer
+
+func (authorizer GoogleAuthorizer) Authorize(_ context.Context, request *http.Request) error {
+	token, err := BearerAuthorizer(authorizer).token()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		request.Header.Set("x-goog-api-key", token)
 	}
 	setProviderSessionHeader(request, authorizer.Provider)
 	return nil

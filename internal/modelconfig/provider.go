@@ -26,6 +26,7 @@ const (
 	ChatCompletions   API = "chat_completions"
 	Responses         API = "responses"
 	AnthropicMessages API = "anthropic_messages"
+	Gemini            API = "gemini"
 )
 
 var Providers = map[string]ProviderSpec{
@@ -43,6 +44,7 @@ var Providers = map[string]ProviderSpec{
 		},
 	},
 	"openai":           {BaseURL: "https://api.openai.com/v1", DefaultAPI: ChatCompletions},
+	"google":           {BaseURL: "https://generativelanguage.googleapis.com/v1beta", DefaultAPI: Gemini},
 	codexauth.Provider: {BaseURL: codexauth.BaseURL, DefaultAPI: Responses},
 	"opencode-go": {
 		BaseURL: "https://opencode.ai/inference/go/v1", DefaultAPI: ChatCompletions,
@@ -76,13 +78,13 @@ func ParseAPI(value string) (API, error) {
 	if api == "" || KnownAPI(api) {
 		return api, nil
 	}
-	return "", fmt.Errorf("unsupported model API %q; expected %s, %s, or %s", strings.TrimSpace(value),
-		ChatCompletions, Responses, AnthropicMessages)
+	return "", fmt.Errorf("unsupported model API %q; expected %s, %s, %s, or %s", strings.TrimSpace(value),
+		ChatCompletions, Responses, AnthropicMessages, Gemini)
 }
 
 func KnownAPI(api API) bool {
 	switch api {
-	case ChatCompletions, Responses, AnthropicMessages:
+	case ChatCompletions, Responses, AnthropicMessages, Gemini:
 		return true
 	default:
 		return false

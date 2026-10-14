@@ -46,9 +46,9 @@ export DEEPSEEK_API_KEY=...
 sk "inspect the workspace and run the tests"
 ```
 
-Skot works with DeepSeek, Anthropic, OpenAI, OpenRouter, OpenCode Go, and
-Ollama. Models are named `provider/model`; `/model` lists and switches them
-mid-session.
+Skot works with DeepSeek, Anthropic, Google Gemini, OpenAI, OpenRouter,
+OpenCode Go, and Ollama. Models are named `provider/model`; `/model` lists and
+switches them mid-session.
 
 Data lives in `~/.skot` by default. Set `SK_HOME` or pass `-home` to move it.
 

@@ -1215,6 +1215,9 @@ func canonicalDetachedJobIDs(ids []string, sanitize func(string) string) []strin
 
 func (runtime *Runtime) sanitizeModelResponse(response modelapi.Response) modelapi.Response {
 	response.Items = runtime.sanitizeItems(response.Items)
+	if reconciler, ok := runtime.backend.(modelapi.ResponseStateReconciler); ok {
+		response.Items = reconciler.ReconcileResponseState(response.Items)
+	}
 	return response
 }
 
@@ -1223,8 +1226,9 @@ func (runtime *Runtime) sanitizeItems(items []modelapi.Item) []modelapi.Item {
 	for index := range sanitized {
 		sanitized[index].Text = runtime.sanitize(sanitized[index].Text)
 		sanitized[index].Details = runtime.sanitizeDetails(sanitized[index].Details)
-		// ProviderData is signed/encrypted opaque state. Mutating bytes would
-		// corrupt it, so cloning is the only sanitization operation applied.
+		// ProviderData may contain signed/encrypted state: never edit its bytes.
+		// The backend can discard state bound to changed semantic content in
+		// ReconcileResponseState, before the response is accepted or stored.
 		if sanitized[index].ToolCall != nil {
 			sanitized[index].ToolCall.RawArguments = runtime.sanitize(sanitized[index].ToolCall.RawArguments)
 		}

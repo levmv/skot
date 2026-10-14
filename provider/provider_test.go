@@ -31,6 +31,7 @@ func TestOutputTokenLimit(t *testing.T) {
 		{"ollama/test", "", "max_tokens", 0},
 		{"openai/test", "responses", "max_output_tokens", 0},
 		{"anthropic/claude-opus-5", "", "max_tokens", 128_000},
+		{"google/gemini-4-argon", "", "maxOutputTokens", 0},
 	} {
 		t.Run(test.uri+"/"+test.api, func(t *testing.T) {
 			var received map[string]jsontext.Value
@@ -61,11 +62,17 @@ func TestOutputTokenLimit(t *testing.T) {
 				if received == nil || errors.Is(err, model.ErrRequestNotSent) {
 					t.Fatalf("sent request: received=%s, error=%v", received, err)
 				}
+				// Merge Gemini's nested generationConfig into the fields checked below.
+				if config, ok := received["generationConfig"]; ok {
+					if err := json.Unmarshal(config, &received); err != nil {
+						t.Fatal(err)
+					}
+				}
 				want := limit
 				if want == 0 {
 					want = test.defaultLimit
 				}
-				for _, field := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens"} {
+				for _, field := range []string{"max_tokens", "max_completion_tokens", "max_output_tokens", "maxOutputTokens"} {
 					if field != test.field || want == 0 {
 						if _, exists := received[field]; exists {
 							t.Fatalf("unexpected %s: %s", field, received[field])
@@ -83,7 +90,7 @@ func TestOutputTokenLimit(t *testing.T) {
 }
 
 func TestRequestNotSentDistinguishesCancellationFromTransportFailure(t *testing.T) {
-	for _, api := range []string{"chat_completions", "responses", "anthropic_messages"} {
+	for _, api := range []string{"chat_completions", "responses", "anthropic_messages", "gemini"} {
 		t.Run(api, func(t *testing.T) {
 			calls := 0
 			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

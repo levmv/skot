@@ -35,6 +35,8 @@ type ProviderErrorEnvelope struct {
 	// Compatible gateways use unrelated metadata shapes, so keep the value raw.
 	// ErrorType recognizes OpenRouter's string metadata.error_type when present.
 	Metadata jsontext.Value `json:"metadata,omitzero"`
+	// Google-compatible endpoints put typed google.rpc details here.
+	Details jsontext.Value `json:"details,omitzero"`
 }
 
 func (envelope *ProviderErrorEnvelope) messageText() string {
@@ -80,11 +82,13 @@ func DecodeProviderError(provider, model string, response *http.Response, body [
 		Error *ProviderErrorEnvelope `json:"error"`
 	}
 	message, code, errorType := "", "", ""
+	retryAfter := ParseRetryAfter(response.Header.Get("Retry-After"), time.Now())
 	structured := jsonv2.Unmarshal(body, &envelope) == nil && envelope.Error != nil
 	if structured {
 		message = envelope.Error.messageText()
 		code = ErrorCode(envelope.Error.Code)
 		errorType = envelope.Error.errorType()
+		retryAfter = max(retryAfter, GoogleRetryDelay(envelope.Error.Details))
 	}
 	if message == "" && !structured {
 		message = strings.TrimSpace(string(body))
@@ -95,7 +99,7 @@ func DecodeProviderError(provider, model string, response *http.Response, body [
 	classified := NewProviderError(ProviderErrorDetails{
 		Provider: provider, Model: model, Status: response.Status, StatusCode: response.StatusCode,
 		Message: message, Code: code, Type: errorType,
-		RetryAfter: ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()),
+		RetryAfter: retryAfter,
 	})
 	if readErr != nil {
 		classified.Cause = fmt.Errorf("%w (read body: %w)", classified.Cause, readErr)

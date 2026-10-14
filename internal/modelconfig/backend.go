@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	productlimits "github.com/levmv/skot/internal/limits"
@@ -11,6 +12,7 @@ import (
 	"github.com/levmv/skot/model"
 	"github.com/levmv/skot/model/anthropic"
 	"github.com/levmv/skot/model/chatcompletions"
+	"github.com/levmv/skot/model/google"
 	responsemodel "github.com/levmv/skot/model/responses"
 	"github.com/levmv/skot/model/transport"
 )
@@ -32,6 +34,8 @@ func Info(route Route) (model.Info, error) {
 		backendID = responsemodel.BackendID(route.Provider)
 	case AnthropicMessages:
 		backendID = anthropic.BackendID(route.Provider)
+	case Gemini:
+		backendID = google.BackendID(route.Provider)
 	default:
 		return model.Info{}, fmt.Errorf("unsupported model API %q", route.API)
 	}
@@ -62,10 +66,15 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 			return nil, nil, model.MarkInvalidRequest(missingProviderCredentialError(route.Provider, route.URI))
 		}
 	}
-	var authorizer transport.Authorizer = BearerAuthorizer{
+	apiModel := route.APIModel
+	if apiModel == "" {
+		apiModel = route.Model
+	}
+	bearer := BearerAuthorizer{
 		Store: credentials, Provider: route.Provider, ModelURI: route.URI, AllowMissing: route.CustomEndpoint || route.Credentialless, APIKey: options.APIKey,
 		UseEnvironment: options.UseEnvironment,
 	}
+	var authorizer transport.Authorizer = bearer
 	if route.Provider == "openai-codex" {
 		if route.CustomEndpoint || route.API != Responses {
 			return nil, nil, model.MarkInvalidRequest(errors.New("openai-codex requires the ChatGPT Codex endpoint and Responses API"))
@@ -79,14 +88,10 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 		path = "/responses"
 	case AnthropicMessages:
 		path = "/messages"
-		authorizer = APIKeyAuthorizer{
-			Store: credentials, Provider: route.Provider, ModelURI: route.URI, AllowMissing: route.CustomEndpoint || route.Credentialless, APIKey: options.APIKey,
-			UseEnvironment: options.UseEnvironment,
-		}
-	}
-	apiModel := route.APIModel
-	if apiModel == "" {
-		apiModel = route.Model
+		authorizer = APIKeyAuthorizer(bearer)
+	case Gemini:
+		path = "/models/" + url.PathEscape(apiModel) + ":streamGenerateContent?alt=sse"
+		authorizer = GoogleAuthorizer(bearer)
 	}
 	connection, err := transport.New(transport.Config{
 		API: string(route.API), Provider: route.Provider, APIModel: apiModel,
@@ -116,6 +121,11 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 			Connection:            connection,
 			MaxTokens:             route.MaxOutputTokens, PromptCache: route.PromptCache,
 			DropMismatchedThinking: route.DropMismatchedThinking,
+		})
+	case Gemini:
+		backend, err = google.New(google.Config{
+			Connection: connection, ReasoningEffort: route.ReasoningEffort,
+			ImageInputUnsupported: route.ImageInputUnsupported,
 		})
 	default:
 		return nil, nil, model.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))

@@ -20,8 +20,8 @@ import (
 type Config struct {
 	URI             string
 	ReasoningEffort string
-	// API overrides the route's protocol: chat_completions, responses, or
-	// anthropic_messages. Usually the model catalog supplies it.
+	// API overrides the route's protocol: chat_completions, responses,
+	// anthropic_messages, or gemini. Usually the catalog supplies it.
 	API           string
 	BaseURL       string
 	ContextWindow int

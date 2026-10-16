@@ -1,5 +1,6 @@
 // Package provider configures model connections and backends, including protocol
-// selection and authentication. Use Model.Connection for raw protocol requests,
+// selection and authentication. Open uses Skot's catalog; New uses explicit
+// configuration from the caller. Use Model.Connection for raw protocol requests,
 // or Model.Backend for item-based calls. Each call makes one generation attempt;
 // the caller manages retries, tool execution, and conversation history.
 package provider

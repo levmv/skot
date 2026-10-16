@@ -128,7 +128,8 @@ func TestCompleteKeepsOpenRouterReceiptWhenOutputIsRejected(t *testing.T) {
 			backend, err := New(Config{
 				Connection: newTestConnection(t, transport.Config{
 					API: "chat_completions", Provider: "openrouter", APIModel: "test-model",
-					Endpoint: server.URL + "/chat/completions", HTTPClient: server.Client(), Authorizer: transport.BearerToken("secret"),
+					ResponseProfile: model.ResponseProfileOpenRouter,
+					Endpoint:        server.URL + "/chat/completions", HTTPClient: server.Client(), Authorizer: transport.BearerToken("secret"),
 				}),
 			})
 			if err != nil {

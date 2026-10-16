@@ -68,6 +68,7 @@ type responseRequest struct {
 	Instructions    *string          `json:"instructions,omitzero"`
 	Input           []jsontext.Value `json:"input"`
 	Tools           []responseTool   `json:"tools,omitempty"`
+	ToolChoice      model.ToolChoice `json:"tool_choice,omitempty"`
 	Reasoning       *reasoningConfig `json:"reasoning,omitzero"`
 	Store           bool             `json:"store"`
 	Stream          bool             `json:"stream"`
@@ -197,6 +198,9 @@ type streamEvent struct {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (responseRequest, error) {
+	if err := request.ToolChoice.Validate(); err != nil {
+		return responseRequest{}, err
+	}
 	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
 		return responseRequest{}, err
 	}
@@ -310,6 +314,7 @@ func (backend *Backend) buildRequest(request model.Request) (responseRequest, er
 	wireRequest := responseRequest{
 		Model: backend.apiModel, Input: input,
 		Tools: tools, Store: false, Stream: true,
+		ToolChoice:      request.ToolChoice,
 		MaxOutputTokens: request.MaxOutputTokens,
 	}
 	if backend.traits.EncryptedReasoning {
@@ -417,7 +422,7 @@ func (backend *Backend) matchesProviderContext(context *model.ProviderContext, e
 
 func (backend *Backend) parseResponse(response wireResponse) (model.Response, error) {
 	if response.Error != nil {
-		return model.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, response.Error)
+		return model.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, backend.connection.ResponseProfile(), response.Error)
 	}
 	stopReason := "stop"
 	if response.Status == "incomplete" {

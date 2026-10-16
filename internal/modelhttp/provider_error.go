@@ -16,14 +16,18 @@ import (
 // ProviderErrorDetails is the protocol-neutral classification input shared by
 // HTTP and in-band provider failures.
 type ProviderErrorDetails struct {
-	Provider   string
-	Model      string
-	Status     string
-	StatusCode int
-	Message    string
-	Code       string
-	Type       string
-	RetryAfter time.Duration
+	Provider        string
+	Model           string
+	Status          string
+	StatusCode      int
+	Message         string
+	Code            string
+	Type            string
+	RetryAfter      time.Duration
+	ResponseProfile modelapi.ResponseProfile
+	// InBandStatusCode is a protocol-defined upstream status used only for
+	// classification. StatusCode is reserved for an actual HTTP error response.
+	InBandStatusCode int
 }
 
 // ProviderErrorEnvelope is the common structured error object used by the
@@ -33,7 +37,7 @@ type ProviderErrorEnvelope struct {
 	Type    string `json:"type,omitempty"`
 	Code    any    `json:"code,omitzero"`
 	// Compatible gateways use unrelated metadata shapes, so keep the value raw.
-	// ErrorType recognizes OpenRouter's string metadata.error_type when present.
+	// A nonempty string metadata.error_type takes precedence over Type.
 	Metadata jsontext.Value `json:"metadata,omitzero"`
 	// Google-compatible endpoints put typed google.rpc details here.
 	Details jsontext.Value `json:"details,omitzero"`
@@ -61,17 +65,18 @@ func (envelope *ProviderErrorEnvelope) errorType() string {
 
 // NewProviderEnvelopeError converts an in-band provider error, which has no
 // HTTP status, into the same classified error used for HTTP responses.
-func NewProviderEnvelopeError(provider, model string, envelope *ProviderErrorEnvelope) error {
+func NewProviderEnvelopeError(provider, model string, profile modelapi.ResponseProfile, envelope *ProviderErrorEnvelope) error {
 	code := ""
 	if envelope != nil {
 		code = ErrorCode(envelope.Code)
 	}
 	return NewProviderError(ProviderErrorDetails{
-		Provider: provider,
-		Model:    model,
-		Message:  envelope.messageText(),
-		Code:     code,
-		Type:     envelope.errorType(),
+		Provider:        provider,
+		Model:           model,
+		Message:         envelope.messageText(),
+		Code:            code,
+		Type:            envelope.errorType(),
+		ResponseProfile: profile,
 	})
 }
 
@@ -108,8 +113,6 @@ func DecodeProviderError(provider, model string, response *http.Response, body [
 }
 
 // UnsupportedCompletionReasonError reports a non-retryable protocol mismatch.
-// Its empty provider-error kind lets diagnostics add a compatibility hint for
-// unverified routes.
 func UnsupportedCompletionReasonError(provider, reason string) error {
 	return &modelapi.ProviderError{
 		Cause: modelapi.MarkProviderFailure(fmt.Errorf(
@@ -136,16 +139,19 @@ func NewProviderError(details ProviderErrorDetails) *modelapi.ProviderError {
 	code := strings.ToLower(strings.TrimSpace(details.Code))
 	errorType := strings.ToLower(strings.TrimSpace(details.Type))
 	statusForPolicy := details.StatusCode
+	if statusForPolicy == 0 {
+		statusForPolicy = details.InBandStatusCode
+	}
 	// OpenRouter's numeric in-band code is an upstream HTTP status. Use it for
 	// recovery without reporting a transport failure; other providers' numeric
 	// codes have no shared meaning.
 	// https://openrouter.ai/docs/api_reference/errors-and-debugging#mid-stream-errors
-	if statusForPolicy == 0 && strings.EqualFold(provider, "openrouter") {
+	if statusForPolicy == 0 && details.ResponseProfile == modelapi.ResponseProfileOpenRouter {
 		if status, err := strconv.Atoi(code); err == nil && status >= 400 && status < 600 {
 			statusForPolicy = status
 		}
 	}
-	kind := classifyProviderError(provider, statusForPolicy, code, errorType)
+	kind := classifyProviderError(statusForPolicy, code, errorType)
 	summary := providerErrorSummary(provider, model, kind)
 	var cause error
 	if status == "" {
@@ -164,34 +170,23 @@ func NewProviderError(details ProviderErrorDetails) *modelapi.ProviderError {
 	}
 }
 
-func classifyProviderError(provider string, status int, code, errorType string) modelapi.ProviderErrorKind {
-	// NewProviderError normalizes both structured signals before classification.
-	if isRequestTooLargeSignal(code) || isRequestTooLargeSignal(errorType) {
-		return modelapi.ProviderErrorRequestTooLarge
-	}
-	if strings.EqualFold(strings.TrimSpace(provider), "openai-codex") {
-		for _, signal := range []string{code, errorType} {
-			switch signal {
-			case "usage_limit_reached":
-				return modelapi.ProviderErrorQuota
-			case "usage_not_included":
-				return modelapi.ProviderErrorSubscription
-			}
+func classifyProviderError(status int, code, errorType string) modelapi.ProviderErrorKind {
+	// A specific code wins over a general type. These structured signals are
+	// shared by compatible APIs; connection names and message prose are not policy.
+	for _, signal := range []string{code, errorType} {
+		switch signal {
+		case "request_too_large", "context_length_exceeded":
+			return modelapi.ProviderErrorRequestTooLarge
+		case "insufficient_quota", "usage_limit_reached":
+			return modelapi.ProviderErrorQuota
+		case "usage_not_included":
+			return modelapi.ProviderErrorSubscription
+		case "rate_limit_exceeded":
+			return modelapi.ProviderErrorRateLimit
 		}
 	}
 	if code == "invalid_request_error" || errorType == "invalid_request_error" {
 		return modelapi.ProviderErrorRequest
-	}
-	// DeepSeek's stable quota signal wins over HTTP 429, which otherwise means
-	// a temporary rate limit. Do not add message fragments here: prose is not a
-	// routing contract.
-	if strings.EqualFold(strings.TrimSpace(provider), "deepseek") &&
-		(code == "insufficient_quota" || errorType == "insufficient_quota") {
-		return modelapi.ProviderErrorQuota
-	}
-	// Responses can report a rate limit inside an HTTP 200 event stream.
-	if code == "rate_limit_exceeded" || errorType == "rate_limit_exceeded" {
-		return modelapi.ProviderErrorRateLimit
 	}
 	// Anthropic's context-window overflow shares the generic 400
 	// invalid_request_error used by ordinary invalid requests. Treating that pair
@@ -215,15 +210,6 @@ func classifyProviderError(provider string, status int, code, errorType string) 
 			return modelapi.ProviderErrorUnavailable
 		}
 		return ""
-	}
-}
-
-func isRequestTooLargeSignal(value string) bool {
-	switch value {
-	case "request_too_large", "context_length_exceeded":
-		return true
-	default:
-		return false
 	}
 }
 

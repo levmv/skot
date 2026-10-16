@@ -77,6 +77,40 @@ func TestPostPreservesBodyAndIsolatesHeaders(t *testing.T) {
 	}
 }
 
+func TestPostWithoutAuthorizerUsesOnlyExplicitHeaders(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "ambient-key")
+	for _, test := range []struct {
+		name, token string
+	}{
+		{"anonymous", ""},
+		{"explicit header", "Bearer caller-key"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection, err := New(Config{
+				API: "responses", Provider: "openai", APIModel: "test", Endpoint: "https://example.test/responses",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					if got := request.Header.Get("Authorization"); got != test.token {
+						t.Fatalf("authorization = %q, want %q", got, test.token)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			header := make(http.Header)
+			if test.token != "" {
+				header.Set("Authorization", test.token)
+			}
+			response, err := connection.Post(t.Context(), []byte(`{}`), header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+		})
+	}
+}
+
 func TestPostDistinguishesPreDispatchAndNetworkFailures(t *testing.T) {
 	refresh := model.MarkProviderFailure(errors.New("refresh unavailable"))
 	for _, test := range []struct {

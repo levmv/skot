@@ -166,7 +166,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 			return modelapi.Response{}, fmt.Errorf("decode %s Anthropic Messages stream event: %w", backend.provider, err)
 		}
 		finalUsage := event.Type == "message_delta" && event.Delta.StopReason != ""
-		if err := usage.Observe(event.Usage, "anthropic_messages", backend.provider, finalUsage); err != nil {
+		if err := usage.Observe(event.Usage, "anthropic_messages", backend.connection.ResponseProfile(), finalUsage); err != nil {
 			return modelapi.Response{}, err
 		}
 		switch event.Type {
@@ -178,7 +178,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 				if event.Message.Model != "" {
 					usage.Snapshot.Model = event.Message.Model
 				}
-				if err := usage.Observe(event.Message.Usage, "anthropic_messages", backend.provider, false); err != nil {
+				if err := usage.Observe(event.Message.Usage, "anthropic_messages", backend.connection.ResponseProfile(), false); err != nil {
 					return modelapi.Response{}, err
 				}
 				if event.Message.StopReason != nil {
@@ -238,7 +238,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 		case "message_stop":
 			terminal = true
 		case "error":
-			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Error)
+			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, backend.connection.ResponseProfile(), event.Error)
 		case "ping":
 		default:
 			// Anthropic's versioning contract permits adding new stream events.

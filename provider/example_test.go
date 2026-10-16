@@ -41,3 +41,18 @@ func ExampleOpen() {
 	// set to ToolCall.ID, then prepare the next request.
 	fmt.Printf("saved %d items\n", len(items))
 }
+
+func ExampleNew() {
+	selected, err := provider.New(provider.ExplicitConfig{
+		Provider: "my-gateway", Model: "exact-upstream-model",
+		API: provider.Responses, BaseURL: "https://gateway.example/v1",
+		ContextWindow: 128_000, ReasoningEffort: "medium", APIKey: "caller-key",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Construction is offline. Complete and Connection.Post use the same route.
+	// Use ReplayContext as in ExampleOpen to continue a conversation.
+	fmt.Println(selected.Connection.API(), selected.Connection.APIModel())
+	// Output: responses exact-upstream-model
+}

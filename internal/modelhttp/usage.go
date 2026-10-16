@@ -36,9 +36,9 @@ func (usage *UsageAccumulator) SetRequestID(header http.Header) {
 
 // Observe updates the fields present in each usage snapshot; nested values are
 // replaced whole. protocol identifies token semantics;
-// provider identifies explicitly supported monetary extensions.
+// profile identifies explicitly supported monetary extensions.
 // Invalid snapshots leave both the report and the fields used by later merges intact.
-func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider string, final bool) error {
+func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol string, profile model.ResponseProfile, final bool) error {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil
 	}
@@ -145,7 +145,7 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol, provider st
 		usage.Snapshot.Status = model.UsageFinal
 	}
 	usage.Snapshot.Costs = nil
-	if provider == "openrouter" {
+	if profile == model.ResponseProfileOpenRouter {
 		// Unsupported monetary values do not invalidate token counts or output.
 		var costs map[string]jsontext.Value
 		// With OpenRouter credits, upstream inference overlaps account_charge.

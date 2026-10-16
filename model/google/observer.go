@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/levmv/skot/internal/modelhttp"
@@ -28,6 +29,7 @@ type Observer struct {
 	usage           modelhttp.UsageAccumulator
 	retryAfter      time.Duration
 	failure         error
+	profile         model.ResponseProfile
 }
 
 // NewObserver starts observation for a non-nil Gemini connection. candidateCount
@@ -36,6 +38,7 @@ type Observer struct {
 func NewObserver(connection *transport.Connection, candidateCount int) *Observer {
 	return &Observer{
 		provider: connection.Provider(), model: connection.APIModel(),
+		profile:        connection.ResponseProfile(),
 		candidateCount: max(1, candidateCount), finishReasons: make(map[int]string),
 	}
 }
@@ -108,12 +111,17 @@ func (o *Observer) observe(fields responseFields, candidates iter.Seq[candidateF
 			o.finishReasons[candidate.Index] = candidate.FinishReason
 		}
 	}
-	usageErr := o.usage.Observe(fields.Usage, "gemini", o.provider, response || o.Complete())
+	usageErr := o.usage.Observe(fields.Usage, "gemini", o.profile, response || o.Complete())
 	var providerErr error
 	if fields.Error != nil {
+		code := ""
+		if fields.Error.Code != 0 {
+			code = strconv.Itoa(fields.Error.Code)
+		}
 		providerErr = modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{
 			Provider: o.provider, Model: o.model,
-			StatusCode: fields.Error.Code, Message: fields.Error.Message, Type: fields.Error.Status,
+			InBandStatusCode: fields.Error.Code, Code: code,
+			Message: fields.Error.Message, Type: fields.Error.Status,
 			RetryAfter: max(o.retryAfter, modelhttp.GoogleRetryDelay(fields.Error.Details)),
 		})
 	}

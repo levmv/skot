@@ -32,15 +32,19 @@ var (
 )
 
 // ProviderError carries structured metadata for retry and fallback decisions.
-// Retryable indicates whether an unchanged request is worth retrying immediately.
+// Retryable indicates whether an unchanged request may succeed on retry.
+// RetryAfter is the provider's requested delay, when available.
 type ProviderError struct {
-	Cause      error
+	Cause error
+	// StatusCode is the actual HTTP error status, or zero for in-band errors.
 	StatusCode int
 	Kind       ProviderErrorKind
-	// Code is the provider's structured error code when one was present in the
-	// response. Callers must not infer billing or quota values from Cause text.
+	// Code is the provider's structured error code, trimmed and lowercased.
+	// Numeric codes are kept as strings. Callers must not infer billing or quota
+	// values from Cause text.
 	Code string
-	// Type is the provider's structured error type when distinct from Code.
+	// Type is the trimmed, lowercased structured error type. More specific
+	// gateway metadata.error_type takes precedence over the outer type field.
 	Type       string
 	Retryable  bool
 	RetryAfter time.Duration

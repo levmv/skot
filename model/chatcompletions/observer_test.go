@@ -148,7 +148,7 @@ func TestObserverRetainsLastUsageAfterMalformedSnapshot(t *testing.T) {
 
 func newObserver(t *testing.T) *chatcompletions.Observer {
 	t.Helper()
-	connection, err := transport.New(transport.Config{API: "chat_completions", Provider: "openrouter", APIModel: "test-model", Endpoint: "https://example.test/chat/completions", Authorizer: transport.BearerToken("unused")})
+	connection, err := transport.New(transport.Config{API: "chat_completions", Provider: "openrouter", APIModel: "test-model", Endpoint: "https://example.test/chat/completions", Authorizer: transport.BearerToken("unused"), ResponseProfile: model.ResponseProfileOpenRouter})
 	if err != nil {
 		t.Fatal(err)
 	}

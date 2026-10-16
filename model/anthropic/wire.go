@@ -12,13 +12,16 @@ import (
 )
 
 type messagesRequest struct {
-	Model     string           `json:"model"`
-	MaxTokens int              `json:"max_tokens"`
-	System    string           `json:"system,omitempty"`
-	Messages  []message        `json:"messages"`
-	Tools     []toolDefinition `json:"tools,omitempty"`
-	Thinking  *thinkingConfig  `json:"thinking,omitzero"`
-	Stream    bool             `json:"stream"`
+	Model      string           `json:"model"`
+	MaxTokens  int              `json:"max_tokens"`
+	System     string           `json:"system,omitempty"`
+	Messages   []message        `json:"messages"`
+	Tools      []toolDefinition `json:"tools,omitempty"`
+	ToolChoice struct {
+		Type model.ToolChoice `json:"type"`
+	} `json:"tool_choice,omitzero"`
+	Thinking *thinkingConfig `json:"thinking,omitzero"`
+	Stream   bool            `json:"stream"`
 }
 
 type thinkingConfig struct {
@@ -130,6 +133,9 @@ type thinkingBlockState struct {
 }
 
 func (backend *Backend) buildRequest(request model.Request) (messagesRequest, error) {
+	if err := request.ToolChoice.Validate(); err != nil {
+		return messagesRequest{}, err
+	}
 	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
 		return messagesRequest{}, err
 	}
@@ -165,6 +171,7 @@ func (backend *Backend) buildRequest(request model.Request) (messagesRequest, er
 		Model: backend.apiModel, MaxTokens: backend.maxTokens, System: system,
 		Messages: messages, Tools: tools, Stream: true,
 	}
+	wireRequest.ToolChoice.Type = request.ToolChoice
 	if request.MaxOutputTokens > 0 {
 		wireRequest.MaxTokens = request.MaxOutputTokens
 	}

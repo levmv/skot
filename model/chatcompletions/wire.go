@@ -85,6 +85,7 @@ type chatRequest struct {
 	Model               string           `json:"model"`
 	Messages            []chatMessage    `json:"messages"`
 	Tools               []chatTool       `json:"tools,omitempty"`
+	ToolChoice          model.ToolChoice `json:"tool_choice,omitempty"`
 	Stream              bool             `json:"stream"`
 	StreamOptions       *streamOptions   `json:"stream_options,omitzero"`
 	PromptCacheKey      string           `json:"prompt_cache_key,omitempty"`
@@ -199,6 +200,9 @@ func (delta streamDelta) reasoningText() string {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (chatRequest, error) {
+	if err := request.ToolChoice.Validate(); err != nil {
+		return chatRequest{}, err
+	}
 	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
 		return chatRequest{}, err
 	}
@@ -230,6 +234,7 @@ func (backend *Backend) buildRequest(request model.Request) (chatRequest, error)
 		Model:         backend.apiModel,
 		Messages:      messages,
 		Tools:         tools,
+		ToolChoice:    request.ToolChoice,
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}

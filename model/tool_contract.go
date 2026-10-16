@@ -8,6 +8,25 @@ import (
 	"strings"
 )
 
+// ToolChoice controls whether the model may make new tool calls.
+type ToolChoice string
+
+const (
+	ToolChoiceAuto ToolChoice = "auto"
+	ToolChoiceNone ToolChoice = "none"
+)
+
+// Validate rejects tool selection modes that the built-in adapters cannot send.
+// The zero value preserves the provider's default behavior.
+func (choice ToolChoice) Validate() error {
+	switch choice {
+	case "", ToolChoiceAuto, ToolChoiceNone:
+		return nil
+	default:
+		return fmt.Errorf("unsupported tool choice %q", choice)
+	}
+}
+
 // NormalizeToolSpecs validates named tools with object argument schemas and
 // returns an owned copy.
 func NormalizeToolSpecs(input []ToolSpec) ([]ToolSpec, error) {

@@ -125,6 +125,10 @@ type Request struct {
 	// 16 images and 16 MiB of image data across user messages and tool results.
 	Items []Item
 	Tools []ToolSpec
+	// ToolChoice controls new tool calls while retaining Tools and tool history.
+	// The zero value leaves selection to the provider; ToolChoiceNone requests
+	// an answer without further calls. The caller decides which calls to execute.
+	ToolChoice ToolChoice
 	// MaxOutputTokens requests a provider-side generation limit. Zero keeps the
 	// route default; negative values are invalid. OpenAI, Anthropic, and DeepSeek
 	// count reasoning within this limit; compatible services may count differently.

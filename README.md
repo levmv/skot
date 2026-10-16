@@ -118,6 +118,35 @@ See the [complete user reference](docs/reference.md). Run `sk -help` for CLI
 syntax, type `/` in the interactive UI for commands, or use `/help` for keyboard
 shortcuts.
 
+## Go packages
+
+Skot's reusable packages live under `github.com/levmv/skot`.
+
+| Package | Purpose |
+| --- | --- |
+| [app](app/) | The Skot application: sessions, settings, model selection, credentials, and tools, ready for a frontend. |
+| [agent](agent/) | The model and tool execution loop, with a persistent journal, retries, context management, and compaction. |
+| [tools](tools/) | Reusable workspace, process, and web tools, plus filesystem access policies and process management. |
+| [provider](provider/) | Model configuration and authentication, exposing both a portable backend and a raw protocol connection. |
+| [model](model/) | Shared requests, responses, conversation items, tool definitions, usage, errors, and conversation replay across models. |
+| [model/transport](model/transport/) | HTTP requests, authorization, and server-sent event streams for callers that control the protocol body. |
+| [model/chatcompletions](model/chatcompletions/) | Chat Completions backend and an observer for raw responses. |
+| [model/responses](model/responses/) | OpenAI Responses backend. |
+| [model/anthropic](model/anthropic/) | Anthropic Messages backend. |
+| [model/google](model/google/) | Gemini GenerateContent backend and an observer for raw responses. |
+| [web](web/) | Standalone web search and page fetching through supported services or direct HTTP fetching. |
+| [imageinput](imageinput/) | Image preparation for model input: decoding, orientation, resizing, and metadata removal. |
+
+For an application with its own conversation storage and execution loop, start
+with `provider` and `model`. `provider.Open` uses Skot's model catalog and provider
+defaults; `provider.New` accepts explicit configuration. Each backend call makes
+one generation attempt; the caller manages retries, tool execution, and history.
+Use `agent` for Skot's execution loop with your own backend, journal, and tools,
+or `app` for the assembled application with Skot's settings and session handling.
+
+Examples: [model calls](provider/example_test.go) and
+[raw protocol requests](provider/raw_example_test.go).
+
 ## Credits
 
 Special thanks to [Valerii Ishchenko](https://github.com/valeriyischenko) for

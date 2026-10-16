@@ -20,11 +20,12 @@ type Observer struct {
 	provider, model string
 	usage           modelhttp.UsageAccumulator
 	finishReason    string
+	profile         model.ResponseProfile
 }
 
 // NewObserver starts observation for a non-nil Chat Completions connection.
 func NewObserver(connection *transport.Connection) *Observer {
-	return &Observer{provider: connection.Provider(), model: connection.APIModel()}
+	return &Observer{provider: connection.Provider(), model: connection.APIModel(), profile: connection.ResponseProfile()}
 }
 
 // ObserveHeader records x-request-id, falling back to request-id.
@@ -89,15 +90,15 @@ func (o *Observer) observe(fields completionFields, choice *choiceFields, noChoi
 	if finished {
 		o.finishReason = choice.FinishReason
 	}
-	if err := o.usage.Observe(fields.Usage, "chat_completions", o.provider, response || noChoices || finished); err != nil {
+	if err := o.usage.Observe(fields.Usage, "chat_completions", o.profile, response || noChoices || finished); err != nil {
 		return model.MarkProviderFailure(err)
 	}
 	if fields.Error != nil {
-		return modelhttp.NewProviderEnvelopeError(o.provider, o.model, fields.Error)
+		return modelhttp.NewProviderEnvelopeError(o.provider, o.model, o.profile, fields.Error)
 	}
 	if choice != nil {
 		if choice.Error != nil {
-			return modelhttp.NewProviderEnvelopeError(o.provider, o.model, choice.Error)
+			return modelhttp.NewProviderEnvelopeError(o.provider, o.model, o.profile, choice.Error)
 		}
 		if strings.EqualFold(strings.TrimSpace(choice.FinishReason), "error") {
 			var err error = modelhttp.NewProviderError(modelhttp.ProviderErrorDetails{

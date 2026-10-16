@@ -906,12 +906,13 @@ func TestCompleteRejectsFailedGenerations(t *testing.T) {
 			}))
 			backend, err := New(Config{
 				Connection: newTestConnection(t, transport.Config{
-					API:        "chat_completions",
-					Provider:   "openrouter",
-					Endpoint:   server.URL + "/chat/completions",
-					HTTPClient: server.Client(),
-					Authorizer: transport.BearerToken("secret"),
-					APIModel:   "google/gemini-3.8-flash",
+					API:             "chat_completions",
+					Provider:        "openrouter",
+					ResponseProfile: model.ResponseProfileOpenRouter,
+					Endpoint:        server.URL + "/chat/completions",
+					HTTPClient:      server.Client(),
+					Authorizer:      transport.BearerToken("secret"),
+					APIModel:        "google/gemini-3.8-flash",
 				}),
 			})
 			if err != nil {

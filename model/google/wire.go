@@ -93,6 +93,11 @@ type generateRequest struct {
 		Functions []functionDeclaration `json:"functionDeclarations"`
 	} `json:"tools,omitempty"`
 	GenerationConfig generationConfig `json:"generationConfig"`
+	ToolConfig       struct {
+		FunctionCallingConfig struct {
+			Mode string `json:"mode"`
+		} `json:"functionCallingConfig"`
+	} `json:"toolConfig,omitzero"`
 }
 
 type generationConfig struct {
@@ -106,6 +111,9 @@ type generationConfig struct {
 
 func (backend *Backend) buildRequest(request model.Request) (generateRequest, error) {
 	var result generateRequest
+	if err := request.ToolChoice.Validate(); err != nil {
+		return result, err
+	}
 	if err := modelinput.ValidateContent(request, backend.imageInputUnsupported); err != nil {
 		return result, err
 	}
@@ -115,6 +123,12 @@ func (backend *Backend) buildRequest(request model.Request) (generateRequest, er
 	result.GenerationConfig = generationConfig{CandidateCount: 1, MaxOutputTokens: request.MaxOutputTokens}
 	result.GenerationConfig.ThinkingConfig.ThinkingLevel = backend.reasoningEffort
 	result.GenerationConfig.ThinkingConfig.IncludeThoughts = true
+	switch request.ToolChoice {
+	case model.ToolChoiceAuto:
+		result.ToolConfig.FunctionCallingConfig.Mode = "AUTO"
+	case model.ToolChoiceNone:
+		result.ToolConfig.FunctionCallingConfig.Mode = "NONE"
+	}
 	instructions := request.Instructions
 	if request.Summary != "" {
 		if instructions != "" {

@@ -153,7 +153,8 @@ func TestObserverRetainsUsageOnErrors(t *testing.T) {
 				err = observer.ObserveChunk(body)
 			}
 			var providerErr *model.ProviderError
-			if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorRateLimit || !providerErr.Retryable || providerErr.RetryAfter != 2*time.Second {
+			if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorRateLimit || !providerErr.Retryable || providerErr.RetryAfter != 2*time.Second ||
+				providerErr.StatusCode != 0 || providerErr.Code != "429" {
 				t.Fatalf("provider error=%v", err)
 			}
 			if err := observer.End(nil); !errors.As(err, &providerErr) {

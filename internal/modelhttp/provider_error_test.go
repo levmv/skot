@@ -157,20 +157,26 @@ func TestErrorCodeAcceptsOnlyScalarWireCodes(t *testing.T) {
 	}
 }
 
-func TestDeepSeekStructuredQuotaSignalRefinesHTTP429(t *testing.T) {
+func TestStructuredLimitSignalsOverrideGenericRequestType(t *testing.T) {
 	for _, test := range []struct {
 		name, code, errorType string
+		status                int
+		kind                  model.ProviderErrorKind
+		retryable             bool
 	}{
-		{name: "code", code: "insufficient_quota"},
-		{name: "type", errorType: "INSUFFICIENT_QUOTA"},
+		{name: "quota code", status: 429, code: "insufficient_quota", errorType: "invalid_request_error", kind: model.ProviderErrorQuota},
+		{name: "quota type", status: 429, errorType: "INSUFFICIENT_QUOTA", kind: model.ProviderErrorQuota},
+		{name: "usage limit", status: 429, code: "USAGE_LIMIT_REACHED", errorType: "invalid_request_error", kind: model.ProviderErrorQuota},
+		{name: "stream subscription", code: "usage_not_included", errorType: "invalid_request_error", kind: model.ProviderErrorSubscription},
+		{name: "stream rate limit", code: "rate_limit_exceeded", errorType: "invalid_request_error", kind: model.ProviderErrorRateLimit, retryable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := NewProviderError(ProviderErrorDetails{
-				Provider: "deepseek", Model: "deepseek-v4-flash", StatusCode: http.StatusTooManyRequests,
+				Provider: "compatible", Model: "model", StatusCode: test.status,
 				Code: test.code, Type: test.errorType, Message: "opaque provider detail",
 			})
 			var providerErr *model.ProviderError
-			if !errors.As(err, &providerErr) || providerErr.Kind != model.ProviderErrorQuota || providerErr.Retryable ||
+			if !errors.As(err, &providerErr) || providerErr.Kind != test.kind || providerErr.Retryable != test.retryable ||
 				providerErr.Code != strings.ToLower(test.code) || providerErr.Type != strings.ToLower(test.errorType) {
 				t.Fatalf("metadata = %#v", providerErr)
 			}

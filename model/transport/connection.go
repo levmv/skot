@@ -1,6 +1,7 @@
 // Package transport sends prepared model requests and reads SSE.
-// provider.Open supplies a configured Connection; callers choose request fields,
-// limits, and retries. Chat Completions responses can use chatcompletions.Observer.
+// provider.Open and provider.New supply a configured Connection; callers choose
+// request fields, limits, and retries. The chatcompletions and google packages
+// provide observers for raw protocol responses.
 package transport
 
 import (
@@ -24,9 +25,13 @@ type Config struct {
 	Provider string
 	APIModel string
 	Endpoint string
+	// ResponseProfile selects response extensions; Provider is only an identity.
+	ResponseProfile model.ResponseProfile
 	// Nil uses a client with a five-minute response-header timeout.
 	// Bound body reading with a context deadline or Client.Timeout.
 	HTTPClient *http.Client
+	// Authorizer runs after route and call headers. Nil leaves authorization
+	// to explicitly supplied headers, without looking up credentials.
 	Authorizer Authorizer
 	Header     http.Header
 }
@@ -39,6 +44,7 @@ type Connection struct {
 	client                  *http.Client
 	authorizer              Authorizer
 	header                  http.Header
+	responseProfile         model.ResponseProfile
 }
 
 // New copies Header and limits redirects to the same origin and method,
@@ -56,12 +62,14 @@ func New(config Config) (*Connection, error) {
 	if config.Provider == "" || config.APIModel == "" {
 		return nil, model.MarkInvalidRequest(errors.New("provider and API model are required"))
 	}
+	switch config.ResponseProfile {
+	case "", model.ResponseProfileOpenRouter:
+	default:
+		return nil, model.MarkInvalidRequest(fmt.Errorf("unsupported response profile %q", config.ResponseProfile))
+	}
 	endpoint, err := url.Parse(config.Endpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return nil, model.MarkInvalidRequest(errors.New("endpoint must be an absolute HTTP or HTTPS URL"))
-	}
-	if config.Authorizer == nil {
-		return nil, model.MarkInvalidRequest(errors.New("authorizer is required"))
 	}
 	header := make(http.Header)
 	replaceHeaders(header, config.Header)
@@ -69,6 +77,7 @@ func New(config Config) (*Connection, error) {
 		api: config.API, provider: config.Provider, apiModel: config.APIModel,
 		endpoint: config.Endpoint, client: modelhttp.ModelClient(config.HTTPClient),
 		authorizer: config.Authorizer, header: header,
+		responseProfile: config.ResponseProfile,
 	}, nil
 }
 
@@ -76,6 +85,9 @@ func New(config Config) (*Connection, error) {
 func (c *Connection) API() string      { return c.api }
 func (c *Connection) Provider() string { return c.provider }
 func (c *Connection) APIModel() string { return c.apiModel }
+
+// ResponseProfile reports the response extensions selected for this connection.
+func (c *Connection) ResponseProfile() model.ResponseProfile { return c.responseProfile }
 
 // Endpoint returns the full generation URL, including the API path, without
 // credentials, query, or fragment. model.Info.Endpoint reports the base URL.
@@ -118,12 +130,14 @@ func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) 
 	if request.Header.Get("User-Agent") == "" {
 		request.Header.Set("User-Agent", "Skot")
 	}
-	if err := c.authorizer.Authorize(ctx, request); err != nil {
-		err = fmt.Errorf("authorize %s request: %w", c.provider, err)
-		if !errors.Is(err, model.ErrProviderFailure) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			err = model.MarkInvalidRequest(err)
+	if c.authorizer != nil {
+		if err := c.authorizer.Authorize(ctx, request); err != nil {
+			err = fmt.Errorf("authorize %s request: %w", c.provider, err)
+			if !errors.Is(err, model.ErrProviderFailure) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				err = model.MarkInvalidRequest(err)
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

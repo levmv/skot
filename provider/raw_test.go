@@ -14,7 +14,7 @@ import (
 func TestOpenExposesRawChatConnection(t *testing.T) {
 	// Post must not apply the backend's wire-model substitution or defaults.
 	const request = `{"model":"caller-model","messages":[{"role":"user","content":"hello"}],"extension":9007199254740993}`
-	const reply = `{"choices":[{"index":0,"message":{"role":"assistant","content":"hello","extension":9007199254740993}}],"usage":{"prompt_tokens":5,"completion_tokens":3}}`
+	const reply = `{"choices":[{"index":0,"message":{"role":"assistant","content":"hello","extension":9007199254740993}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"cost":0.02}}`
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer caller-key" {
 			t.Errorf("route = %s, authorization = %q", r.URL.Path, r.Header.Get("Authorization"))
@@ -54,5 +54,8 @@ func TestOpenExposesRawChatConnection(t *testing.T) {
 	usage := observer.Usage()
 	if string(body) != reply || usage.Status != model.UsageFinal || usage.Tokens.Known().TotalTokens != 8 || usage.RequestID != "req-1" {
 		t.Fatalf("reply = %s, usage = %#v", body, usage)
+	}
+	if len(usage.Costs) != 1 || usage.Costs[0].Currency != "USD" || usage.Costs[0].Amount != "0.02" {
+		t.Fatalf("catalog route lost OpenRouter costs: %+v", usage.Costs)
 	}
 }

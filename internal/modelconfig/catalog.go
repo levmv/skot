@@ -113,6 +113,7 @@ type Route struct {
 	ResponsesTraits        responsemodel.RouteTraits
 	Compatibility          Compatibility
 	ProviderStateContract  modelapi.ProviderStateContract
+	ResponseProfile        modelapi.ResponseProfile
 }
 
 var Catalog = []Spec{
@@ -559,18 +560,7 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 			apiModel = canonicalOpenRouterModelID(model)
 		}
 	}
-	stateContract := modelapi.ProviderStateContract("")
-	switch api {
-	case ChatCompletions:
-		stateContract = traits.ProviderStateContract()
-	case Responses:
-		stateContract = responsesTraits.ProviderStateContract()
-	case AnthropicMessages:
-		stateContract = anthropic.ProviderStateContract
-	case Gemini:
-		stateContract = google.ProviderStateContract
-	}
-	return Route{
+	route := Route{
 		URI: provider + "/" + model, Provider: provider, Model: model, APIModel: apiModel, API: api,
 		BaseURL: baseURL, Header: header, Credentialless: providerDescription.Credentialless,
 		CustomEndpoint: customEndpoint, ImageInputUnsupported: imageInputUnsupported,
@@ -579,8 +569,30 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		DropMismatchedThinking: dropMismatchedThinking,
 		ReasoningEffort:        reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,
-		Compatibility: compatibility, ProviderStateContract: stateContract,
-	}, nil
+		Compatibility: compatibility,
+	}
+	if provider == "openrouter" {
+		route.ResponseProfile = modelapi.ResponseProfileOpenRouter
+	}
+	route.ProviderStateContract = route.StateContract()
+	return route, nil
+}
+
+// StateContract returns the adapter's replay contract for the selected
+// protocol and traits.
+func (route Route) StateContract() modelapi.ProviderStateContract {
+	switch route.API {
+	case ChatCompletions:
+		return route.ChatTraits.ProviderStateContract()
+	case Responses:
+		return route.ResponsesTraits.ProviderStateContract()
+	case AnthropicMessages:
+		return anthropic.ProviderStateContract
+	case Gemini:
+		return google.ProviderStateContract
+	default:
+		return ""
+	}
 }
 
 func unsupportedModelRouteError(uri string, api API) error {

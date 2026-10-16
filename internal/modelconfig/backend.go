@@ -66,10 +66,6 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 			return nil, nil, model.MarkInvalidRequest(missingProviderCredentialError(route.Provider, route.URI))
 		}
 	}
-	apiModel := route.APIModel
-	if apiModel == "" {
-		apiModel = route.Model
-	}
 	bearer := BearerAuthorizer{
 		Store: credentials, Provider: route.Provider, ModelURI: route.URI, AllowMissing: route.CustomEndpoint || route.Credentialless, APIKey: options.APIKey,
 		UseEnvironment: options.UseEnvironment,
@@ -82,21 +78,37 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 		authorizer = CodexAuthorizer{Store: credentials, ModelURI: route.URI, Client: options.HTTPClient, Masker: options.Masker}
 		options.HTTPClient = CodexHTTPClient(options.HTTPClient)
 	}
+	switch route.API {
+	case AnthropicMessages:
+		authorizer = APIKeyAuthorizer(bearer)
+	case Gemini:
+		authorizer = GoogleAuthorizer(bearer)
+	}
+	return BuildConfiguredBackend(route, options.HTTPClient, authorizer)
+}
+
+// BuildConfiguredBackend assembles a fully specified route without consulting
+// the catalog, credentials, or environment. Both public construction paths and
+// the application use this assembly after choosing their configuration.
+func BuildConfiguredBackend(route Route, client *http.Client, authorizer transport.Authorizer) (model.Backend, *transport.Connection, error) {
+	apiModel := route.APIModel
+	if apiModel == "" {
+		apiModel = route.Model
+	}
 	path := "/chat/completions"
 	switch route.API {
 	case Responses:
 		path = "/responses"
 	case AnthropicMessages:
 		path = "/messages"
-		authorizer = APIKeyAuthorizer(bearer)
 	case Gemini:
 		path = "/models/" + url.PathEscape(apiModel) + ":streamGenerateContent?alt=sse"
-		authorizer = GoogleAuthorizer(bearer)
 	}
 	connection, err := transport.New(transport.Config{
 		API: string(route.API), Provider: route.Provider, APIModel: apiModel,
 		Endpoint:   strings.TrimRight(strings.TrimSpace(route.BaseURL), "/") + path,
-		HTTPClient: options.HTTPClient, Authorizer: authorizer, Header: route.Header,
+		HTTPClient: client, Authorizer: authorizer, Header: route.Header,
+		ResponseProfile: route.ResponseProfile,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize connection: %w", err)
@@ -133,5 +145,5 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize model: %w", err)
 	}
-	return addRouteDiagnostics(backend, route), connection, nil
+	return backend, connection, nil
 }

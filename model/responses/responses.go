@@ -144,7 +144,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 				usage.Snapshot.Provider = event.Response.Provider
 			}
 			terminal := event.Type == "response.completed" || event.Type == "response.incomplete" || event.Type == "response.done" || event.Type == "response.failed"
-			if err := usage.Observe(event.Response.Usage, "responses", backend.provider, terminal); err != nil {
+			if err := usage.Observe(event.Response.Usage, "responses", backend.connection.ResponseProfile(), terminal); err != nil {
 				return modelapi.Response{}, err
 			}
 		}
@@ -165,7 +165,7 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 				return modelapi.Response{}, fmt.Errorf("%s Responses terminal event has no response", backend.provider)
 			}
 			if event.Response.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Response.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, backend.connection.ResponseProfile(), event.Response.Error)
 			}
 			eventStatus := strings.TrimPrefix(event.Type, "response.")
 			if eventStatus == "done" {
@@ -196,14 +196,14 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 			return backend.parseResponse(*event.Response)
 		case "response.failed":
 			if event.Response != nil && event.Response.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Response.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, backend.connection.ResponseProfile(), event.Response.Error)
 			}
 			return modelapi.Response{}, fmt.Errorf("%s Responses API failed", backend.provider)
 		case "error":
 			if event.Error != nil {
-				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, event.Error)
+				return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, backend.connection.ResponseProfile(), event.Error)
 			}
-			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, &apiError{Message: event.Message, Code: event.Code})
+			return modelapi.Response{}, modelhttp.NewProviderEnvelopeError(backend.provider, backend.apiModel, backend.connection.ResponseProfile(), &apiError{Message: event.Message, Code: event.Code})
 		}
 	}
 }

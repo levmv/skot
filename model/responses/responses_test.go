@@ -103,6 +103,43 @@ func TestCompleteStreamsAndPreservesEncryptedReasoning(t *testing.T) {
 	}
 }
 
+func TestCompleteStreamsAssistantMessagePhases(t *testing.T) {
+	commentary := jsontext.Value(`{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking."}]}`)
+	answer := jsontext.Value(`{"id":"msg_2","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}`)
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		// The first phase is known before its text, the second only after it.
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_item.added", "output_index": 0, "item": jsontext.Value(`{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[]}`)})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_text.delta", "output_index": 0, "delta": "Checking."})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_item.done", "output_index": 0, "item": commentary})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_item.added", "output_index": 1, "item": jsontext.Value(`{"id":"msg_2","type":"message","role":"assistant","content":[]}`)})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_text.delta", "output_index": 1, "delta": "Done."})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.output_item.done", "output_index": 1, "item": answer})
+		writeSSEEvent(t, writer, map[string]any{"type": "response.completed", "response": map[string]any{
+			"status": "completed", "output": []jsontext.Value{commentary, answer},
+		}})
+	}))
+	var events []model.StreamEvent
+	response, err := newTestServerBackend(t, server, "").Complete(t.Context(), model.Request{}, func(event model.StreamEvent) { events = append(events, event) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(events, []model.StreamEvent{
+		{Kind: model.EventTextMetadata, BlockID: "output-0", Phase: "commentary"},
+		{Kind: model.EventTextDelta, Text: "Checking.", BlockID: "output-0", Phase: "commentary"},
+		{Kind: model.EventTextDelta, Text: "Done.", BlockID: "output-1"},
+		{Kind: model.EventTextMetadata, BlockID: "output-1", Phase: "final_answer"},
+	}) {
+		t.Fatalf("events = %#v", events)
+	}
+	if !reflect.DeepEqual(response.Items, []model.Item{
+		{Kind: model.ItemAssistantText, Text: "Checking.", Phase: "commentary"},
+		{Kind: model.ItemAssistantText, Text: "Done.", Phase: "final_answer"},
+	}) {
+		t.Fatalf("response items = %#v", response.Items)
+	}
+}
+
 func TestCompleteAssemblesFinishedItemsWithCompactTerminalResponse(t *testing.T) {
 	output := []jsontext.Value{
 		jsontext.Value(`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking"}],"encrypted_content":"ciphertext"}`),

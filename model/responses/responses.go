@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	productlimits "github.com/levmv/skot/internal/limits"
@@ -115,6 +116,9 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 	defer stream.Close()
 	var text, reasoning strings.Builder
 	completedOutput := make(map[int]jsontext.Value)
+	// Responses reports an output_index with every message event; it keys the
+	// stream blocks of assistant messages.
+	phases := make(map[int]string)
 	completionBytes := 0
 	for {
 		received, readErr := stream.Next()
@@ -149,17 +153,24 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 			}
 		}
 		switch event.Type {
+		case "response.output_item.added":
+			reportMessagePhase(emit, phases, event.OutputIndex, event.Item)
 		case "response.output_item.done":
 			if event.OutputIndex == nil || *event.OutputIndex < 0 || len(event.Item) == 0 {
 				return modelapi.Response{}, fmt.Errorf("%s Responses output item is missing its index or content", backend.provider)
 			}
 			completedOutput[*event.OutputIndex] = event.Item
+			reportMessagePhase(emit, phases, event.OutputIndex, event.Item)
 		case "response.output_text.delta", "response.refusal.delta":
 			text.WriteString(event.Delta)
-			emitModelEvent(emit, modelapi.EventTextDelta, event.Delta)
+			delta := modelapi.StreamEvent{Kind: modelapi.EventTextDelta, Text: event.Delta}
+			if event.OutputIndex != nil {
+				delta.BlockID, delta.Phase = messageBlockID(*event.OutputIndex), phases[*event.OutputIndex]
+			}
+			emitModelEvent(emit, delta)
 		case "response.reasoning_summary_text.delta":
 			reasoning.WriteString(event.Delta)
-			emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, event.Delta)
+			emitModelEvent(emit, modelapi.StreamEvent{Kind: modelapi.EventReasoningSummaryDelta, Text: event.Delta})
 		case "response.completed", "response.incomplete", "response.done":
 			if event.Response == nil {
 				return modelapi.Response{}, fmt.Errorf("%s Responses terminal event has no response", backend.provider)
@@ -219,8 +230,24 @@ func partialStreamResponse(text, reasoning string) modelapi.Response {
 	return modelapi.Response{Items: items, StopReason: modelapi.StopReasonOutputLimit}
 }
 
-func emitModelEvent(emit func(modelapi.StreamEvent), kind modelapi.StreamEventKind, text string) {
-	if emit != nil && text != "" {
-		emit(modelapi.StreamEvent{Kind: kind, Text: text})
+func emitModelEvent(emit func(modelapi.StreamEvent), event modelapi.StreamEvent) {
+	if emit != nil && event.Text != "" {
+		emit(event)
 	}
 }
+
+// reportMessagePhase reports the phase of an added or finished assistant
+// message when it first becomes known or changes. An absent phase keeps the
+// earlier one. Malformed items are left to parseResponse.
+func reportMessagePhase(emit func(modelapi.StreamEvent), phases map[int]string, index *int, raw jsontext.Value) {
+	var item responseOutputItem
+	if index == nil || json.Unmarshal(raw, &item) != nil || item.Type != "message" || item.Phase == "" || phases[*index] == item.Phase {
+		return
+	}
+	phases[*index] = item.Phase
+	if emit != nil {
+		emit(modelapi.StreamEvent{Kind: modelapi.EventTextMetadata, BlockID: messageBlockID(*index), Phase: item.Phase})
+	}
+}
+
+func messageBlockID(outputIndex int) string { return "output-" + strconv.Itoa(outputIndex) }

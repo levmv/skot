@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const (
@@ -77,9 +78,17 @@ type SearchRequest struct {
 }
 
 type SearchResult struct {
-	Title   string
-	URL     string
+	Title string
+	URL   string
+	// Snippet is at most 1,200 runes; longer text is cut without a marker.
 	Snippet string
+	// PublishedAt is the reported publication time in UTC. Zero means unknown;
+	// Keenable and Exa report it.
+	PublishedAt time.Time
+	// IndexedAt is when the provider captured the page behind Snippet, in UTC.
+	// A snippet may be years older than the live page. Zero means unknown;
+	// only Keenable reports it.
+	IndexedAt time.Time
 }
 
 type SearchResponse struct {
@@ -93,6 +102,9 @@ type FetchResponse struct {
 	URL   string
 	Title string
 	Text  string
+	// PublishedAt is the reported publication time in UTC. Zero means unknown;
+	// Keenable and Exa report it.
+	PublishedAt time.Time
 	// Truncated is set when direct HTTP fetching reaches its read limit.
 	// Content limits applied by a service are not reflected here.
 	Truncated bool
@@ -100,8 +112,8 @@ type FetchResponse struct {
 }
 
 // Search makes one API call to Keenable, Tavily (basic search), or Exa.
-// It preserves the returned titles, URLs, and snippets. An empty result is
-// returned with any reported usage.
+// It preserves the returned titles, URLs, and dates, and bounds snippets.
+// An empty result is returned with any reported usage.
 func (client *Client) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
 	request.Query = strings.TrimSpace(request.Query)
 	if request.Query == "" {
@@ -111,16 +123,34 @@ func (client *Client) Search(ctx context.Context, request SearchRequest) (Search
 		request.Limit = defaultResults
 	}
 	request.Limit = min(request.Limit, maxResults)
+	var response SearchResponse
+	var err error
 	switch client.provider {
 	case "keenable":
-		return client.searchKeenable(ctx, request)
+		response, err = client.searchKeenable(ctx, request)
 	case "tavily":
-		return client.searchTavily(ctx, request)
+		response, err = client.searchTavily(ctx, request)
 	case "exa":
-		return client.searchExa(ctx, request)
+		response, err = client.searchExa(ctx, request)
 	default:
 		return SearchResponse{}, fmt.Errorf("%s does not support web search", client.provider)
 	}
+	// Providers treat a requested snippet length as a hint, if they take one.
+	for index := range response.Results {
+		response.Results[index].Snippet = truncateRunes(response.Results[index].Snippet, searchSnippetChars)
+	}
+	return response, err
+}
+
+func truncateRunes(text string, limit int) string {
+	count := 0
+	for index := range text {
+		if count == limit {
+			return text[:index]
+		}
+		count++
+	}
+	return text
 }
 
 // Fetch reads one public HTTP(S) page through Keenable, Firecrawl, Exa, or

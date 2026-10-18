@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/levmv/skot/internal/webtext"
 )
@@ -40,9 +42,10 @@ func (client *Client) fetchKeenable(ctx context.Context, request FetchRequest) (
 	}
 	setKeenableHeaders(httpRequest, client.apiKey)
 	var payload struct {
-		URL     string `json:"url"`
-		Title   string `json:"title"`
-		Content string `json:"content"`
+		URL         string         `json:"url"`
+		Title       string         `json:"title"`
+		Content     string         `json:"content"`
+		PublishedAt jsontext.Value `json:"published_at"`
 	}
 	result.Usage, err = client.doJSON(httpRequest, &payload)
 	if err != nil {
@@ -52,7 +55,10 @@ func (client *Client) fetchKeenable(ctx context.Context, request FetchRequest) (
 	if resultURL == "" {
 		resultURL = request.URL
 	}
-	return FetchResponse{Usage: result.Usage, URL: resultURL, Title: payload.Title, Text: payload.Content}, nil
+	return FetchResponse{
+		Usage: result.Usage, URL: resultURL, Title: payload.Title, Text: payload.Content,
+		PublishedAt: reportedTime(payload.PublishedAt),
+	}, nil
 }
 
 func (client *Client) searchKeenable(ctx context.Context, request SearchRequest) (result SearchResponse, err error) {
@@ -76,10 +82,12 @@ func (client *Client) searchKeenable(ctx context.Context, request SearchRequest)
 	setKeenableHeaders(httpRequest, client.apiKey)
 	var payload struct {
 		Results []struct {
-			Title       string `json:"title"`
-			URL         string `json:"url"`
-			Description string `json:"description"`
-			Snippet     string `json:"snippet"`
+			Title       string         `json:"title"`
+			URL         string         `json:"url"`
+			Description string         `json:"description"`
+			Snippet     string         `json:"snippet"`
+			PublishedAt jsontext.Value `json:"published_at"`
+			AcquiredAt  jsontext.Value `json:"acquired_at"`
 		} `json:"results"`
 	}
 	result.Usage, err = client.doJSON(httpRequest, &payload)
@@ -92,9 +100,28 @@ func (client *Client) searchKeenable(ctx context.Context, request SearchRequest)
 		if strings.TrimSpace(snippet) == "" {
 			snippet = entry.Description
 		}
-		result.Results = append(result.Results, SearchResult{Title: entry.Title, URL: entry.URL, Snippet: snippet})
+		result.Results = append(result.Results, SearchResult{
+			Title: entry.Title, URL: entry.URL, Snippet: snippet,
+			PublishedAt: reportedTime(entry.PublishedAt), IndexedAt: reportedTime(entry.AcquiredAt),
+		})
 	}
 	return result, nil
+}
+
+// reportedTime accepts RFC 3339 strings and Keenable's Unix seconds from fetch.
+// Other values are an unknown date rather than a failure, so an optional date
+// never costs the page or results.
+func reportedTime(value jsontext.Value) time.Time {
+	var text string
+	if json.Unmarshal(value, &text) == nil {
+		parsed, _ := time.Parse(time.RFC3339, text)
+		return parsed.UTC()
+	}
+	var seconds int64
+	if json.Unmarshal(value, &seconds) == nil && seconds > 0 {
+		return time.Unix(seconds, 0).UTC()
+	}
+	return time.Time{}
 }
 
 func (client *Client) fetchFirecrawl(ctx context.Context, request FetchRequest) (result FetchResponse, err error) {
@@ -174,9 +201,10 @@ func (client *Client) fetchExa(ctx context.Context, request FetchRequest) (resul
 	httpRequest.Header.Set("x-api-key", client.apiKey)
 	var payload struct {
 		Results []struct {
-			Title string `json:"title"`
-			URL   string `json:"url"`
-			Text  string `json:"text"`
+			Title         string         `json:"title"`
+			URL           string         `json:"url"`
+			Text          string         `json:"text"`
+			PublishedDate jsontext.Value `json:"publishedDate"`
 		} `json:"results"`
 		Statuses []struct {
 			Status string `json:"status"`
@@ -202,7 +230,10 @@ func (client *Client) fetchExa(ctx context.Context, request FetchRequest) (resul
 	if resultURL == "" {
 		resultURL = request.URL
 	}
-	return FetchResponse{Usage: result.Usage, URL: resultURL, Title: page.Title, Text: page.Text}, nil
+	return FetchResponse{
+		Usage: result.Usage, URL: resultURL, Title: page.Title, Text: page.Text,
+		PublishedAt: reportedTime(page.PublishedDate),
+	}, nil
 }
 
 func (client *Client) searchTavily(ctx context.Context, request SearchRequest) (result SearchResponse, err error) {
@@ -241,10 +272,19 @@ func (client *Client) searchTavily(ctx context.Context, request SearchRequest) (
 }
 
 func (client *Client) searchExa(ctx context.Context, request SearchRequest) (result SearchResponse, err error) {
-	body, err := json.Marshal(struct {
+	// Search returns no page content unless asked; highlights are its snippets.
+	var exaRequest struct {
 		Query      string `json:"query"`
 		NumResults int    `json:"numResults"`
-	}{request.Query, request.Limit}, json.Deterministic(true))
+		Contents   struct {
+			Highlights struct {
+				MaxCharacters int `json:"maxCharacters"`
+			} `json:"highlights"`
+		} `json:"contents"`
+	}
+	exaRequest.Query, exaRequest.NumResults = request.Query, request.Limit
+	exaRequest.Contents.Highlights.MaxCharacters = searchSnippetChars
+	body, err := json.Marshal(exaRequest, json.Deterministic(true))
 	if err != nil {
 		return result, err
 	}
@@ -257,9 +297,10 @@ func (client *Client) searchExa(ctx context.Context, request SearchRequest) (res
 	httpRequest.Header.Set("x-api-key", client.apiKey)
 	var payload struct {
 		Results []struct {
-			Title string `json:"title"`
-			URL   string `json:"url"`
-			Text  string `json:"text"`
+			Title         string         `json:"title"`
+			URL           string         `json:"url"`
+			Highlights    []string       `json:"highlights"`
+			PublishedDate jsontext.Value `json:"publishedDate"`
 		} `json:"results"`
 	}
 	result.Usage, err = client.doJSON(httpRequest, &payload)
@@ -268,7 +309,10 @@ func (client *Client) searchExa(ctx context.Context, request SearchRequest) (res
 	}
 	result.Results = make([]SearchResult, 0, len(payload.Results))
 	for _, entry := range payload.Results {
-		result.Results = append(result.Results, SearchResult{Title: entry.Title, URL: entry.URL, Snippet: entry.Text})
+		result.Results = append(result.Results, SearchResult{
+			Title: entry.Title, URL: entry.URL, Snippet: strings.Join(entry.Highlights, " … "),
+			PublishedAt: reportedTime(entry.PublishedDate),
+		})
 	}
 	return result, nil
 }

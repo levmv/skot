@@ -19,7 +19,6 @@ const (
 	webMaxTextBytes         = 96 * 1024
 	webDefaultResults       = 5
 	webMaxResults           = 20
-	webSearchSnippetChars   = 1_200
 	webSearchAttemptTimeout = 20 * time.Second
 	webFetchDetailKind      = "web_fetch_result"
 	webSearchDetailKind     = "web_search_result"
@@ -91,6 +90,9 @@ func (handler *webTools) fetch(ctx context.Context, raw string) (agent.ToolOutpu
 	fmt.Fprintf(&content, "url: %s\n", result.URL)
 	if result.Title != "" {
 		fmt.Fprintf(&content, "title: %s\n", result.Title)
+	}
+	if !result.PublishedAt.IsZero() {
+		fmt.Fprintf(&content, "published: %s\n", result.PublishedAt.Format(time.RFC3339))
 	}
 	if result.Truncated {
 		content.WriteString("truncated: true\n")
@@ -272,10 +274,11 @@ func normalizeWebSearchResults(results []web.SearchResult, limit int) []web.Sear
 			continue
 		}
 		seen[resultURL] = struct{}{}
-		normalized = append(normalized, web.SearchResult{
-			Title: webtext.Compact(result.Title, 500), URL: resultURL,
-			Snippet: webtext.Compact(result.Snippet, webSearchSnippetChars),
-		})
+		result.Title = webtext.Compact(result.Title, 500)
+		result.URL = resultURL
+		// web.Search bounds snippets; folding whitespace only shortens them.
+		result.Snippet = webtext.Compact(result.Snippet, len(result.Snippet))
+		normalized = append(normalized, result)
 		if len(normalized) == limit {
 			break
 		}
@@ -293,6 +296,12 @@ func formatWebSearch(query, provider string, results []web.SearchResult) string 
 			title = webtext.Compact(result.URL, 500)
 		}
 		fmt.Fprintf(&out, "%d. %s\nurl: %s\n", index+1, title, result.URL)
+		if !result.PublishedAt.IsZero() {
+			fmt.Fprintf(&out, "published: %s\n", result.PublishedAt.Format(time.RFC3339))
+		}
+		if !result.IndexedAt.IsZero() {
+			fmt.Fprintf(&out, "indexed: %s\n", result.IndexedAt.Format(time.RFC3339))
+		}
 		if result.Snippet != "" {
 			fmt.Fprintf(&out, "snippet: %s\n", result.Snippet)
 		}

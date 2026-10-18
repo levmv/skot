@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/web"
@@ -74,10 +75,11 @@ func (provider testSearchProvider) Search(context.Context, web.SearchRequest) (w
 }
 
 func TestSearchWebFallsBackNormalizesAndDeduplicates(t *testing.T) {
+	published := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
 	results, provider, err := searchWeb(context.Background(), web.SearchRequest{Query: " durable agents ", Limit: 2}, []webSearchProvider{
 		testSearchProvider{name: "first", err: errors.New("rate limited")},
 		testSearchProvider{name: "second", results: []web.SearchResult{
-			{Title: " One ", URL: "https://example.test/one", Snippet: "a\n b"},
+			{Title: " One ", URL: "https://example.test/one", Snippet: "a\n b", PublishedAt: published},
 			{Title: "duplicate", URL: "https://example.test/one"},
 			{Title: "bad", URL: "file:///tmp/data"},
 			{Title: "Two", URL: "https://example.test/two"},
@@ -86,7 +88,7 @@ func TestSearchWebFallsBackNormalizesAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if provider != "second" || len(results) != 2 || results[0].Title != "One" || results[0].Snippet != "a b" || results[1].URL != "https://example.test/two" {
+	if provider != "second" || len(results) != 2 || results[0].Title != "One" || results[0].Snippet != "a b" || !results[0].PublishedAt.Equal(published) || results[1].URL != "https://example.test/two" {
 		t.Fatalf("provider=%q results=%#v", provider, results)
 	}
 }

@@ -66,25 +66,67 @@ func TestKeenableUsesPublicOrAuthenticatedAPI(t *testing.T) {
 					if body.Query != "agent search" || body.MaxResults != 2 || body.SnippetMaxLength != searchSnippetChars {
 						t.Fatalf("request body = %#v", body)
 					}
-					return jsonResponse(200, `{"results":[{"title":" One ","url":"`+resultURL+`","description":"a\n b"},{"title":"duplicate","url":"`+resultURL+`"}]}`), nil
+					return jsonResponse(200, `{"results":[{"title":" One ","url":"`+resultURL+`","description":"a\n b","published_at":"2026-01-15T13:30:00+03:00"},{"title":"duplicate","url":"`+resultURL+`","acquired_at":"2026-01-16T08:12:34Z"}]}`), nil
 				}
 				if request.Method != http.MethodGet || request.URL.Query().Get("url") != "https://example.com/a?b=c" || request.URL.Query().Get("max_chars") != strconv.Itoa(fetchMaxCharacters) {
 					t.Fatalf("fetch request: %s %s", request.Method, request.URL)
 				}
-				return jsonResponse(200, `{"url":"`+resultURL+`","title":"Fetched","content":"`+pageText+`"}`), nil
+				return jsonResponse(200, `{"url":"`+resultURL+`","title":"Fetched","content":"`+pageText+`","published_at":1768473000}`), nil
 			})}})
 			if err != nil {
 				t.Fatal(err)
 			}
+			published := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
 			search, err := client.Search(ctx, SearchRequest{Query: " agent search ", Limit: 2})
 			if err != nil || len(search.Results) != 2 || search.Results[0].Title != " One " || search.Results[0].Snippet != "a\n b" || search.Results[0].URL != resultURL || search.Results[1].URL != resultURL {
 				t.Fatalf("search = %#v, error = %v", search, err)
 			}
+			// Indexing time is not a publication date.
+			indexed := time.Date(2026, 1, 16, 8, 12, 34, 0, time.UTC)
+			if first, second := search.Results[0], search.Results[1]; first.PublishedAt != published || !first.IndexedAt.IsZero() || !second.PublishedAt.IsZero() || second.IndexedAt != indexed {
+				t.Fatalf("search dates = %#v", search.Results)
+			}
 			page, err := client.Fetch(ctx, FetchRequest{URL: "https://example.com/a?b=c"})
-			if err != nil || page.URL != resultURL || page.Title != "Fetched" || page.Truncated || page.Text != pageText {
-				t.Fatalf("fetch URL=%q, title=%q, truncated=%v, size=%d, error=%v", page.URL, page.Title, page.Truncated, len(page.Text), err)
+			if err != nil || page.URL != resultURL || page.Title != "Fetched" || page.Truncated || page.Text != pageText || page.PublishedAt != published {
+				t.Fatalf("fetch URL=%q, title=%q, published=%v, truncated=%v, size=%d, error=%v", page.URL, page.Title, page.PublishedAt, page.Truncated, len(page.Text), err)
 			}
 		})
+	}
+}
+
+func TestExaSearchSnippetsAndDates(t *testing.T) {
+	long := strings.Repeat("я", searchSnippetChars)
+	client, err := NewClient(Config{Provider: "exa", APIKey: "exa-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/search" {
+			var body struct {
+				Contents struct {
+					Highlights struct {
+						MaxCharacters int `json:"maxCharacters"`
+					} `json:"highlights"`
+				} `json:"contents"`
+			}
+			if err := json.UnmarshalRead(request.Body, &body); err != nil || body.Contents.Highlights.MaxCharacters != searchSnippetChars {
+				t.Fatalf("search must request highlights: %#v, %v", body, err)
+			}
+			return jsonResponse(200, `{"results":[{"title":"Dated","url":"https://example.com/a","highlights":["first","second"],"publishedDate":"2026-08-20T19:42:50.000Z"},{"title":"Undated","url":"https://example.com/b","highlights":["`+long+`ещё"]}]}`), nil
+		}
+		return jsonResponse(200, `{"results":[{"title":"Page","url":"https://example.com/a","text":"body","publishedDate":"2026-08-20T19:42:50.000Z"}]}`), nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := time.Date(2026, 8, 20, 19, 42, 50, 0, time.UTC)
+	search, err := client.Search(t.Context(), SearchRequest{Query: "go"})
+	if err != nil || len(search.Results) != 2 || search.Results[0].Snippet != "first … second" || search.Results[0].PublishedAt != published || !search.Results[1].PublishedAt.IsZero() {
+		t.Fatalf("search = %#v, error = %v", search, err)
+	}
+	// Exa overshoots its maxCharacters; the bound counts runes, not bytes.
+	if search.Results[1].Snippet != long {
+		t.Fatalf("long snippet has %d bytes", len(search.Results[1].Snippet))
+	}
+	page, err := client.Fetch(t.Context(), FetchRequest{URL: "https://example.com/a"})
+	if err != nil || page.PublishedAt != published {
+		t.Fatalf("fetch published = %v, error = %v", page.PublishedAt, err)
 	}
 }
 

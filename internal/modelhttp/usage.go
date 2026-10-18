@@ -77,12 +77,16 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol string, prof
 		InputDetails struct {
 			Cached *int `json:"cached_tokens"`
 			Write  *int `json:"cache_write_tokens"`
+			Text   *int `json:"text_tokens"`
+			Image  *int `json:"image_tokens"`
 		} `json:"input_tokens_details"`
 		CompletionDetails struct {
 			Reasoning *int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
 		OutputDetails struct {
 			Reasoning *int `json:"reasoning_tokens"`
+			Text      *int `json:"text_tokens"`
+			Image     *int `json:"image_tokens"`
 		} `json:"output_tokens_details"`
 	}
 	if err := json.Unmarshal(merged, &values); err != nil {
@@ -116,6 +120,10 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol string, prof
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.CachedInputTokens, tokens.ReasoningTokens = values.InputDetails.Cached, values.OutputDetails.Reasoning
 		tokens.CacheWriteInputTokens = values.InputDetails.Write
+	case "openai_images":
+		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
+		tokens.InputTextTokens, tokens.InputImageTokens = values.InputDetails.Text, values.InputDetails.Image
+		tokens.OutputTextTokens, tokens.OutputImageTokens = values.OutputDetails.Text, values.OutputDetails.Image
 	case "anthropic_messages":
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.CachedInputTokens, tokens.CacheWriteInputTokens = values.CacheReadInputTokens, values.CacheCreationInputTokens
@@ -194,7 +202,11 @@ func validateUsageTokens(tokens model.ReportedTokens) error {
 		{"total", "", tokens.TotalTokens, nil},
 		{"cached input", "input", tokens.CachedInputTokens, tokens.InputTokens},
 		{"cache write input", "input", tokens.CacheWriteInputTokens, tokens.InputTokens},
+		{"input text", "input", tokens.InputTextTokens, tokens.InputTokens},
+		{"input image", "input", tokens.InputImageTokens, tokens.InputTokens},
 		{"reasoning", "output", tokens.ReasoningTokens, tokens.OutputTokens},
+		{"output text", "output", tokens.OutputTextTokens, tokens.OutputTokens},
+		{"output image", "output", tokens.OutputImageTokens, tokens.OutputTokens},
 	} {
 		if counter.count == nil {
 			continue

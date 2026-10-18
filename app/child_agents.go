@@ -655,8 +655,12 @@ func subtractModelUsage(total, previous modelapi.TokenCounts) modelapi.TokenCoun
 		InputTokens:           max(0, total.InputTokens-previous.InputTokens),
 		CachedInputTokens:     max(0, total.CachedInputTokens-previous.CachedInputTokens),
 		CacheWriteInputTokens: max(0, total.CacheWriteInputTokens-previous.CacheWriteInputTokens),
+		InputTextTokens:       max(0, total.InputTextTokens-previous.InputTextTokens),
+		InputImageTokens:      max(0, total.InputImageTokens-previous.InputImageTokens),
 		OutputTokens:          max(0, total.OutputTokens-previous.OutputTokens),
 		ReasoningTokens:       max(0, total.ReasoningTokens-previous.ReasoningTokens),
+		OutputTextTokens:      max(0, total.OutputTextTokens-previous.OutputTextTokens),
+		OutputImageTokens:     max(0, total.OutputImageTokens-previous.OutputImageTokens),
 		TotalTokens:           max(0, total.TotalTokens-previous.TotalTokens),
 	}
 }

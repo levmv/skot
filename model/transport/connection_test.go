@@ -319,7 +319,7 @@ func TestPostMarksConnectionFailuresBeforeSending(t *testing.T) {
 			connection, _ := testBuiltinConnection(t, server.URL)
 			if mode == "TLS verification with copied client" {
 				// Internal routes such as Codex tighten the client's redirect policy.
-				client := *connection.client
+				client := *connection.route.Client()
 				client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 				connection = testConnection(t, Config{Endpoint: server.URL, HTTPClient: &client})
 			}
@@ -440,7 +440,7 @@ func testConnection(t *testing.T, config Config) *Connection {
 func testBuiltinConnection(t *testing.T, endpoint string) (*Connection, *http.Transport) {
 	t.Helper()
 	connection := testConnection(t, Config{Endpoint: endpoint})
-	transport := modelhttp.BuiltinTransport(connection.client.Transport)
+	transport := modelhttp.BuiltinTransport(connection.route.Client().Transport)
 	// Configure the owned transport before use for deterministic local faults.
 	transport.Proxy = nil
 	t.Cleanup(transport.CloseIdleConnections)

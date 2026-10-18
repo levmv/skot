@@ -5,16 +5,12 @@
 package transport
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptrace"
 	"net/url"
 	"strings"
-	"sync/atomic"
 
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
@@ -47,13 +43,8 @@ type Config struct {
 // HTTPClient must also be safe for concurrent use.
 type Connection struct {
 	api, provider, apiModel string
-	endpoint                string
-	client                  *http.Client
-	ownsTransport           bool
-	authorizer              Authorizer
-	header                  http.Header
+	route                   modelhttp.Route
 	responseProfile         model.ResponseProfile
-	requestEncoding         RequestEncoding
 }
 
 // New copies Header and limits redirects to the same origin and method,
@@ -85,15 +76,27 @@ func New(config Config) (*Connection, error) {
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return nil, model.MarkInvalidRequest(errors.New("endpoint must be an absolute HTTP or HTTPS URL"))
 	}
-	header := make(http.Header)
-	replaceHeaders(header, config.Header)
-	client := modelhttp.ModelClient(config.HTTPClient)
+	route := modelhttp.Route{
+		Provider: config.Provider, Model: config.APIModel, Endpoint: config.Endpoint,
+		Authorizer: config.Authorizer, MaxErrorBodyBytes: productlimits.MaxModelCompletionBytes,
+	}
+	if encoding := config.RequestEncoding; encoding != "" {
+		route.Encode = func(ctx context.Context, header http.Header, body []byte) ([]byte, error) {
+			if header.Get("Content-Encoding") != "" {
+				return body, nil
+			}
+			body, err := encodeBody(ctx, encoding, body)
+			if err != nil {
+				return nil, err
+			}
+			header.Set("Content-Encoding", string(encoding))
+			return body, nil
+		}
+	}
 	return &Connection{
 		api: config.API, provider: config.Provider, apiModel: config.APIModel,
-		endpoint: config.Endpoint, client: client,
-		ownsTransport: modelhttp.BuiltinTransport(client.Transport) != nil,
-		authorizer:    config.Authorizer, header: header,
-		responseProfile: config.ResponseProfile, requestEncoding: config.RequestEncoding,
+		route:           modelhttp.NewRoute(route, config.HTTPClient, config.Header),
+		responseProfile: config.ResponseProfile,
 	}, nil
 }
 
@@ -107,7 +110,7 @@ func (c *Connection) ResponseProfile() model.ResponseProfile { return c.response
 
 // Endpoint returns the full generation URL, including the API path, without
 // credentials, query, or fragment. model.Info.Endpoint reports the base URL.
-func (c *Connection) Endpoint() string { return modelhttp.PublicEndpoint(c.endpoint) }
+func (c *Connection) Endpoint() string { return modelhttp.PublicEndpoint(c.route.Endpoint) }
 
 // Post makes one Client.Do call without retrying. Call headers replace route
 // headers; Content-Type is application/json, User-Agent defaults to Skot, and
@@ -124,116 +127,10 @@ func (c *Connection) Endpoint() string { return modelhttp.PublicEndpoint(c.endpo
 // Its absence does not prove delivery. Non-2xx returns both response and
 // *model.ProviderError. Its in-memory Body ends with ErrBodyTruncated or the
 // original read error if incomplete.
-func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) (response *http.Response, returnErr error) {
-	started := false
-	defer func() {
-		if !started {
-			returnErr = model.MarkRequestNotSent(returnErr)
-		}
-	}()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	requestCtx, cancelRequest := context.WithCancel(ctx)
-	defer func() {
-		if returnErr != nil {
-			cancelRequest()
-		}
-	}()
-	requestHeader := c.header.Clone()
-	replaceHeaders(requestHeader, header)
-	if c.requestEncoding != "" && requestHeader.Get("Content-Encoding") == "" {
-		var err error
-		body, err = encodeBody(ctx, c.requestEncoding, body)
-		if err != nil {
-			return nil, err
-		}
-		requestHeader.Set("Content-Encoding", string(c.requestEncoding))
-	}
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, model.MarkInvalidRequest(fmt.Errorf("create %s request: %w", c.provider, err))
-	}
-	request.Header = requestHeader
-	request.Header.Set("Content-Type", "application/json")
-	if request.Header.Get("User-Agent") == "" {
-		request.Header.Set("User-Agent", "Skot")
-	}
-	if c.authorizer != nil {
-		if err := c.authorizer.Authorize(ctx, request); err != nil {
-			err = fmt.Errorf("authorize %s request: %w", c.provider, err)
-			if !errors.Is(err, model.ErrProviderFailure) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				err = model.MarkInvalidRequest(err)
-			}
-			return nil, err
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	var connected atomic.Bool
-	if c.ownsTransport {
-		// Redirects reuse this context. Our transport reports GotConn before
-		// writing any request, after proxy CONNECT and TLS have succeeded.
-		request = request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
-			GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
-		}))
-	}
-	started = true
-	response, err = c.client.Do(request)
-	if err != nil {
-		if c.ownsTransport && !connected.Load() {
-			// Backends skip provider classification for unsent requests, but a
-			// connection failure still is one.
-			err = model.MarkRequestNotSent(model.MarkProviderFailure(err))
-		}
-		return response, fmt.Errorf("%s request: %w", c.provider, err)
-	}
-	response.Body = &cancelOnCloseBody{ReadCloser: response.Body, cancel: cancelRequest}
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
-		return response, nil
-	}
-	data, readErr := io.ReadAll(io.LimitReader(response.Body, productlimits.MaxModelCompletionBytes+1))
-	_ = response.Body.Close()
-	if len(data) > productlimits.MaxModelCompletionBytes {
-		data = data[:productlimits.MaxModelCompletionBytes]
-		readErr = ErrBodyTruncated
-	}
-	response.Body = io.NopCloser(&errorBody{reader: bytes.NewReader(data), err: readErr})
-	return response, modelhttp.DecodeProviderError(c.provider, c.apiModel, response, data, readErr)
-}
-
-type cancelOnCloseBody struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (body *cancelOnCloseBody) Close() error {
-	// Cancel before Close to interrupt active reads and prevent net/http from
-	// draining a response that may never reach EOF.
-	body.cancel()
-	return body.ReadCloser.Close()
-}
-
-func replaceHeaders(target, source http.Header) {
-	for name, values := range source {
-		target[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
-	}
+func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) (*http.Response, error) {
+	return modelhttp.Post(ctx, c.route, body, header)
 }
 
 // ErrBodyTruncated means an HTTP error body exceeded Skot's 16 MiB limit.
 // Do not forward that partial body as a complete provider response.
-var ErrBodyTruncated = errors.New("provider error body exceeds the local output limit")
-
-type errorBody struct {
-	reader *bytes.Reader
-	err    error
-}
-
-func (body *errorBody) Read(p []byte) (int, error) {
-	n, err := body.reader.Read(p)
-	if err == io.EOF && body.err != nil {
-		err = body.err
-	}
-	return n, err
-}
+var ErrBodyTruncated = modelhttp.ErrBodyTruncated

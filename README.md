@@ -136,6 +136,7 @@ Skot's reusable packages live under `github.com/levmv/skot`.
 | [model/google](model/google/) | Gemini GenerateContent backend and an observer for raw responses. |
 | [web](web/) | Standalone web search and page fetching through supported services or direct HTTP fetching. |
 | [imageinput](imageinput/) | Image preparation for model input: decoding, orientation, resizing, and metadata removal. |
+| [images](images/) | Standalone image generation and editing through the OpenAI and OpenRouter image APIs, with usage and costs. |
 
 For an application with its own conversation storage and execution loop, start
 with `provider` and `model`. `provider.Open` uses Skot's model catalog and provider

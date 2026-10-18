@@ -710,6 +710,7 @@ func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	childReceived := make(chan struct{})
 	var parentRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body chatRequestForTest
@@ -725,6 +726,7 @@ func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if prompt == "child work" {
+			close(childReceived)
 			<-request.Context().Done()
 			return
 		}
@@ -739,6 +741,13 @@ func TestRunKeepsOneShotSessionForChildAgent(t *testing.T) {
 				"finish_reason": "tool_calls",
 			}}})
 		} else {
+			// Finishing the parent closes the application and cancels the child.
+			// Let its request body arrive before shutdown can interrupt decoding.
+			select {
+			case <-childReceived:
+			case <-time.After(5 * time.Second):
+				t.Error("child model request did not arrive")
+			}
 			writeSSEChunk(t, writer, map[string]any{"choices": []any{map[string]any{
 				"index": 0, "delta": map[string]any{"content": "delegated"}, "finish_reason": "stop",
 			}}})

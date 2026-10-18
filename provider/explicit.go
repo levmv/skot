@@ -60,6 +60,9 @@ type ExplicitConfig struct {
 	// connection-error classification; see [transport.Config].
 	HTTPClient *http.Client
 	Header     http.Header
+	// RequestEncoding compresses request bodies; empty sends plain JSON. See
+	// [transport.RequestEncoding] before enabling it.
+	RequestEncoding transport.RequestEncoding
 }
 
 // AnthropicOptions controls Messages extensions and its required output limit.
@@ -107,6 +110,7 @@ func New(config ExplicitConfig) (*Model, error) {
 		API: api, BaseURL: baseURL, Header: config.Header,
 		ContextWindow: config.ContextWindow, ReasoningEffort: effort,
 		ResponseProfile: config.ResponseProfile, ImageInputUnsupported: config.ImageInputUnsupported,
+		RequestEncoding: config.RequestEncoding,
 	}
 	if api == ChatCompletions {
 		route.ChatTraits.ReasoningEffort = chatcompletions.ReasoningEffortTopLevel

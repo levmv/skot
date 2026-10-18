@@ -21,6 +21,7 @@ import (
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/ui"
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -80,7 +81,11 @@ func main() {
 	workspacetools.HardenSupervisor()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if err := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+	err := transport.SetZstdConcurrency(1)
+	if err == nil {
+		err = run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintf(os.Stderr, "sk: %s\n", ui.TerminalText(os.Stderr, err.Error()))
 		os.Exit(exitCodeFor(err))
 	}

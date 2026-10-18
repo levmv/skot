@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/codexauth"
 	"github.com/levmv/skot/internal/modelconfig"
@@ -82,6 +83,14 @@ func TestCodexSubscriptionUsesOwnEndpointCredentialAndToolCalls(t *testing.T) {
 		if request.URL.String() != codexauth.BaseURL+"/responses" || request.Header.Get("Authorization") != "Bearer "+tokens.AccessToken || request.Header.Get("ChatGPT-Account-Id") != "account-1" || request.Header.Get("originator") != "skot" || request.Header.Get("session-id") != "session-1" || request.Header.Get("x-openai-internal-codex-residency") != "eu" {
 			t.Fatal("subscription request used the wrong destination or credentials")
 		}
+		if request.Header.Get("Content-Encoding") != "zstd" {
+			t.Fatalf("Codex request encoding = %q, want zstd", request.Header.Get("Content-Encoding"))
+		}
+		decoder, err := zstd.NewReader(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer decoder.Close()
 		var body struct {
 			Model          string   `json:"model"`
 			Instructions   *string  `json:"instructions"`
@@ -96,7 +105,7 @@ func TestCodexSubscriptionUsesOwnEndpointCredentialAndToolCalls(t *testing.T) {
 			} `json:"tools"`
 			Input []jsontext.Value `json:"input"`
 		}
-		if err := json.UnmarshalRead(request.Body, &body); err != nil {
+		if err := json.UnmarshalRead(decoder, &body); err != nil {
 			t.Fatal(err)
 		}
 		if body.Model != "gpt-6-astra" || body.Instructions == nil || *body.Instructions != "" || body.Store == nil || *body.Store || !body.Stream || len(body.Include) != 1 || body.Include[0] != "reasoning.encrypted_content" || body.PromptCacheKey != "session-1" || len(body.Tools) != 1 || body.Tools[0].Type != "function" || body.Tools[0].Name != "read" || body.Tools[0].Strict || len(body.Input) != 1 {

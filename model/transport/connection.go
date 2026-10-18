@@ -39,6 +39,8 @@ type Config struct {
 	// to explicitly supplied headers, without looking up credentials.
 	Authorizer Authorizer
 	Header     http.Header
+	// RequestEncoding compresses request bodies. Empty sends them unchanged.
+	RequestEncoding RequestEncoding
 }
 
 // Connection is immutable and supports concurrent calls. Its Authorizer and
@@ -51,6 +53,7 @@ type Connection struct {
 	authorizer              Authorizer
 	header                  http.Header
 	responseProfile         model.ResponseProfile
+	requestEncoding         RequestEncoding
 }
 
 // New copies Header and limits redirects to the same origin and method,
@@ -73,6 +76,11 @@ func New(config Config) (*Connection, error) {
 	default:
 		return nil, model.MarkInvalidRequest(fmt.Errorf("unsupported response profile %q", config.ResponseProfile))
 	}
+	switch config.RequestEncoding {
+	case "", RequestEncodingGzip, RequestEncodingZstd:
+	default:
+		return nil, model.MarkInvalidRequest(fmt.Errorf("unsupported request encoding %q", config.RequestEncoding))
+	}
 	endpoint, err := url.Parse(config.Endpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return nil, model.MarkInvalidRequest(errors.New("endpoint must be an absolute HTTP or HTTPS URL"))
@@ -85,7 +93,7 @@ func New(config Config) (*Connection, error) {
 		endpoint: config.Endpoint, client: client,
 		ownsTransport: modelhttp.BuiltinTransport(client.Transport) != nil,
 		authorizer:    config.Authorizer, header: header,
-		responseProfile: config.ResponseProfile,
+		responseProfile: config.ResponseProfile, requestEncoding: config.RequestEncoding,
 	}, nil
 }
 
@@ -101,13 +109,14 @@ func (c *Connection) ResponseProfile() model.ResponseProfile { return c.response
 // credentials, query, or fragment. model.Info.Endpoint reports the base URL.
 func (c *Connection) Endpoint() string { return modelhttp.PublicEndpoint(c.endpoint) }
 
-// Post makes one Client.Do call without changing body or retrying. Call headers
-// replace route headers; Content-Type is application/json, User-Agent defaults
-// to Skot, and authorization runs last. Headers are not filtered; pass only
-// those intended for the upstream provider. Keep body unchanged until the
-// response is closed. Close every returned response body or transfer it to
-// EventStream. Closing a live body also cancels its HTTP request, promptly
-// interrupting blocked reads.
+// Post makes one Client.Do call without retrying. Call headers replace route
+// headers; Content-Type is application/json, User-Agent defaults to Skot, and
+// authorization runs last. Headers are not filtered; pass only those intended
+// for the upstream provider. Post compresses body with the configured
+// RequestEncoding unless the headers already set Content-Encoding; otherwise
+// it sends body unchanged. Keep body unchanged until the response is closed.
+// Close every returned response body or transfer it to EventStream. Closing a
+// live body also cancels its HTTP request, promptly interrupting blocked reads.
 //
 // Errors before Do carry model.ErrRequestNotSent. With the built-in transport,
 // this also covers connection failures before any request in the redirect chain
@@ -131,12 +140,21 @@ func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) 
 			cancelRequest()
 		}
 	}()
+	requestHeader := c.header.Clone()
+	replaceHeaders(requestHeader, header)
+	if c.requestEncoding != "" && requestHeader.Get("Content-Encoding") == "" {
+		var err error
+		body, err = encodeBody(ctx, c.requestEncoding, body)
+		if err != nil {
+			return nil, err
+		}
+		requestHeader.Set("Content-Encoding", string(c.requestEncoding))
+	}
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, model.MarkInvalidRequest(fmt.Errorf("create %s request: %w", c.provider, err))
 	}
-	request.Header = c.header.Clone()
-	replaceHeaders(request.Header, header)
+	request.Header = requestHeader
 	request.Header.Set("Content-Type", "application/json")
 	if request.Header.Get("User-Agent") == "" {
 		request.Header.Set("User-Agent", "Skot")

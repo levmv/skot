@@ -108,7 +108,7 @@ func BuildConfiguredBackend(route Route, client *http.Client, authorizer transpo
 		API: string(route.API), Provider: route.Provider, APIModel: apiModel,
 		Endpoint:   strings.TrimRight(strings.TrimSpace(route.BaseURL), "/") + path,
 		HTTPClient: client, Authorizer: authorizer, Header: route.Header,
-		ResponseProfile: route.ResponseProfile,
+		ResponseProfile: route.ResponseProfile, RequestEncoding: route.RequestEncoding,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize connection: %w", err)

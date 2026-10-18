@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/klauspost/compress v1.20.2
 	github.com/landlock-lsm/go-landlock v0.10.1
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.60.0

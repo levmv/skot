@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/levmv/skot/internal/modelhttp"
 	"github.com/levmv/skot/model"
 )
@@ -80,6 +82,41 @@ func TestPostPreservesBodyAndIsolatesHeaders(t *testing.T) {
 	wg.Wait()
 	if string(body) != `{"model":"caller-model","extra":9007199254740993,"nullable":null}` {
 		t.Fatalf("input body changed: %s", body)
+	}
+}
+
+func TestPostEncodesBodyUnlessCallerSetsEncoding(t *testing.T) {
+	body := []byte(`{"input":"` + strings.Repeat("compressible ", 64) + `"}`)
+	for _, test := range []struct {
+		name     string
+		encoding RequestEncoding
+		header   http.Header
+		want     string
+	}{
+		{name: "gzip", encoding: RequestEncodingGzip, want: "gzip"},
+		{name: "zstd", encoding: RequestEncodingZstd, want: "zstd"},
+		{name: "caller encoding", encoding: RequestEncodingZstd, header: http.Header{"Content-Encoding": {"identity"}}, want: "identity"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection := testConnection(t, Config{
+				RequestEncoding: test.encoding,
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					encoding := request.Header.Get("Content-Encoding")
+					if encoding != test.want {
+						t.Errorf("content encoding = %q, want %q", encoding, test.want)
+					}
+					if got, err := decodeRequestBody(encoding, request.Body); err != nil || !bytes.Equal(got, body) {
+						t.Errorf("decoded body = %q, %v", got, err)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+				})},
+			})
+			response, err := connection.Post(t.Context(), body, test.header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+		})
 	}
 }
 
@@ -422,4 +459,23 @@ type trackedBody struct {
 func (body *trackedBody) Close() error {
 	body.closes.Add(1)
 	return body.ReadCloser.Close()
+}
+
+func decodeRequestBody(encoding string, body io.Reader) ([]byte, error) {
+	switch encoding {
+	case "gzip":
+		reader, err := gzip.NewReader(body)
+		if err != nil {
+			return nil, err
+		}
+		return io.ReadAll(reader)
+	case "zstd":
+		decoder, err := zstd.NewReader(body)
+		if err != nil {
+			return nil, err
+		}
+		defer decoder.Close()
+		return io.ReadAll(decoder)
+	}
+	return io.ReadAll(body)
 }

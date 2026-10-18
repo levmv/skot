@@ -10,6 +10,7 @@ import (
 	"github.com/levmv/skot/model/chatcompletions"
 	"github.com/levmv/skot/model/google"
 	responsemodel "github.com/levmv/skot/model/responses"
+	"github.com/levmv/skot/model/transport"
 )
 
 const FallbackContextWindow = 128 * 1024
@@ -114,6 +115,7 @@ type Route struct {
 	Compatibility          Compatibility
 	ProviderStateContract  modelapi.ProviderStateContract
 	ResponseProfile        modelapi.ResponseProfile
+	RequestEncoding        transport.RequestEncoding
 }
 
 var Catalog = []Spec{
@@ -516,10 +518,12 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(providerDescription.BaseURL), "/")
 	header := providerDescription.Header.Clone()
+	requestEncoding := providerDescription.RequestEncoding
 	customEndpoint := strings.TrimSpace(overrides.BaseURL) != ""
 	if customEndpoint {
 		baseURL = strings.TrimRight(strings.TrimSpace(overrides.BaseURL), "/")
 		header = nil
+		requestEncoding = ""
 		compatibility = Unverified
 		// Cache extensions and cross-turn replay are route claims. A custom
 		// compatible endpoint starts from the conservative generic behavior.
@@ -569,7 +573,7 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		DropMismatchedThinking: dropMismatchedThinking,
 		ReasoningEffort:        reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,
-		Compatibility: compatibility,
+		Compatibility: compatibility, RequestEncoding: requestEncoding,
 	}
 	if provider == "openrouter" {
 		route.ResponseProfile = modelapi.ResponseProfileOpenRouter

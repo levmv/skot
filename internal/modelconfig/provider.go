@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/levmv/skot/internal/codexauth"
+	"github.com/levmv/skot/model/transport"
 )
 
 type ProviderSpec struct {
@@ -18,6 +19,12 @@ type ProviderSpec struct {
 	// leave it off so Skot does not compete for the few breakpoints allowed.
 	PromptCache          bool
 	RequireDeclaredModel bool
+	// RequestEncoding is set only for endpoints verified to decode it. Codex
+	// decodes gzip and zstd, and its official client sends zstd. DeepSeek,
+	// OpenRouter, and OpenCode Go reject a compressed body with an ordinary 400
+	// rather than 415 and do not advertise Accept-Encoding, so there is nothing
+	// to negotiate.
+	RequestEncoding transport.RequestEncoding
 }
 
 type API string
@@ -45,7 +52,7 @@ var Providers = map[string]ProviderSpec{
 	},
 	"openai":           {BaseURL: "https://api.openai.com/v1", DefaultAPI: ChatCompletions},
 	"google":           {BaseURL: "https://generativelanguage.googleapis.com/v1beta", DefaultAPI: Gemini},
-	codexauth.Provider: {BaseURL: codexauth.BaseURL, DefaultAPI: Responses},
+	codexauth.Provider: {BaseURL: codexauth.BaseURL, DefaultAPI: Responses, RequestEncoding: transport.RequestEncodingZstd},
 	"opencode-go": {
 		BaseURL: "https://opencode.ai/inference/go/v1", DefaultAPI: ChatCompletions,
 		RequireDeclaredModel: true,

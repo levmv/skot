@@ -318,10 +318,12 @@ func TestPostMarksConnectionFailuresBeforeSending(t *testing.T) {
 			server.StartTLS()
 			connection, _ := testBuiltinConnection(t, server.URL)
 			if mode == "TLS verification with copied client" {
+				client := NewHTTPClient(HTTPClientConfig{})
+				t.Cleanup(client.CloseIdleConnections)
 				// Internal routes such as Codex tighten the client's redirect policy.
-				client := *connection.route.Client()
-				client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-				connection = testConnection(t, Config{Endpoint: server.URL, HTTPClient: &client})
+				copy := *client
+				copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+				connection = testConnection(t, Config{Endpoint: server.URL, HTTPClient: &copy})
 			}
 			_, err := connection.Post(t.Context(), []byte(`{}`), nil)
 			var verification *tls.CertificateVerificationError
@@ -341,12 +343,13 @@ func TestPostMarksConnectionFailuresBeforeSending(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 		}))
 		proxy.Start()
-		connection, transport := testBuiltinConnection(t, "https://example.test/responses")
 		proxyURL, err := url.Parse(proxy.URL)
 		if err != nil {
 			t.Fatal(err)
 		}
-		transport.Proxy = http.ProxyURL(proxyURL)
+		client := NewHTTPClient(HTTPClientConfig{Proxy: http.ProxyURL(proxyURL)})
+		t.Cleanup(client.CloseIdleConnections)
+		connection := testConnection(t, Config{Endpoint: "https://example.test/responses", HTTPClient: client})
 		response, err := connection.Post(t.Context(), []byte(`{}`), nil)
 		if response != nil || !errors.Is(err, model.ErrRequestNotSent) || connects.Load() != 1 {
 			t.Fatalf("response=%v error=%v CONNECTs=%d", response, err, connects.Load())
@@ -382,7 +385,9 @@ func TestPostDoesNotMarkFailuresAfterSending(t *testing.T) {
 				}
 			}))
 			server.Start()
-			connection, _ := testBuiltinConnection(t, server.URL)
+			client := NewHTTPClient(HTTPClientConfig{})
+			t.Cleanup(client.CloseIdleConnections)
+			connection := testConnection(t, Config{Endpoint: server.URL, HTTPClient: client})
 			response, err := connection.Post(ctx, []byte("model request"), nil)
 			if response != nil {
 				response.Body.Close()

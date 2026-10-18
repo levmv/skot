@@ -58,8 +58,10 @@ type Config struct {
 	Authorizer transport.Authorizer
 	// Nil uses Skot's transport, which waits up to five minutes for response
 	// headers. Without a preview callback the provider may send them only once
-	// the image is ready: for longer generations, supply a client whose
-	// transport sets ResponseHeaderTimeout, and bound the call with its context.
+	// the image is ready. Use [transport.NewHTTPClient] to increase
+	// ResponseHeaderTimeout or customize the proxy and connection pool while
+	// retaining model.ErrRequestNotSent classification. Bound the whole call
+	// with its context.
 	HTTPClient *http.Client
 	// Header is copied and sent with every request; authorization runs after it.
 	Header http.Header

@@ -25,10 +25,11 @@ type Config struct {
 	Endpoint string
 	// ResponseProfile selects response extensions; Provider is only an identity.
 	ResponseProfile model.ResponseProfile
-	// Nil uses Skot's own transport with a five-minute response-header timeout
-	// and classification of connection failures as model.ErrRequestNotSent.
-	// Supply a client explicitly to use a custom transport; Skot cannot infer
-	// whether that transport sent a request before returning an error.
+	// Nil uses Skot's transport with environment proxy settings and a
+	// five-minute response-header timeout. Use [NewHTTPClient] to customize
+	// proxy, pool, and timeout settings while retaining classification of
+	// connection failures as model.ErrRequestNotSent. With other transports,
+	// Skot cannot infer whether a request was sent before an error.
 	// Bound body reading with a context deadline or Client.Timeout.
 	HTTPClient *http.Client
 	// Authorizer runs after route and call headers. Nil leaves authorization

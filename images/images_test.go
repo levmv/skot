@@ -3,6 +3,7 @@ package images_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/levmv/skot/images"
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 )
 
 func TestGenerateOpenAIImagesAndEdits(t *testing.T) {
@@ -167,6 +169,27 @@ func TestGenerateKeepsAvailableResultsOnFailure(t *testing.T) {
 				t.Fatalf("usage = %+v", response.Usage)
 			}
 		})
+	}
+}
+
+func TestGenerateClassifiesConnectionFailuresBeforeSending(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("image request reached the server")
+	}))
+	server.StartTLS()
+	httpClient := transport.NewHTTPClient(transport.HTTPClientConfig{})
+	t.Cleanup(httpClient.CloseIdleConnections)
+	client, err := images.New(images.Config{
+		API: images.OpenAIImages, Provider: "test", Model: "test-image", BaseURL: server.URL, HTTPClient: httpClient,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Generate(t.Context(), images.Request{Prompt: "room"}, nil)
+	var verification *tls.CertificateVerificationError
+	if !errors.Is(err, model.ErrRequestNotSent) || !errors.Is(err, model.ErrProviderFailure) ||
+		!errors.As(err, &verification) || errors.Is(err, model.ErrInvalidRequest) {
+		t.Fatalf("connection error = %v", err)
 	}
 }
 

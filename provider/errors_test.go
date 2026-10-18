@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/model/transport"
 	"github.com/levmv/skot/provider"
 )
 
@@ -18,10 +19,12 @@ func TestConnectionFailurePreservesNotSentAcrossBackends(t *testing.T) {
 		t.Error("model request reached the server")
 	}))
 	server.StartTLS()
+	client := transport.NewHTTPClient(transport.HTTPClientConfig{})
+	t.Cleanup(client.CloseIdleConnections)
 	for _, api := range []provider.API{provider.ChatCompletions, provider.Responses, provider.AnthropicMessages, provider.Gemini} {
 		t.Run(string(api), func(t *testing.T) {
 			config := explicitTestConfig(api)
-			config.BaseURL = server.URL
+			config.BaseURL, config.HTTPClient = server.URL, client
 			selected, err := provider.New(config)
 			if err != nil {
 				t.Fatal(err)

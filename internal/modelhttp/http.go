@@ -34,35 +34,64 @@ func PublicEndpoint(value string) string {
 // DefaultClient allows long generations and follows only same-origin
 // redirects that preserve the request method and body.
 func DefaultClient() *http.Client {
+	return NewClient(ClientConfig{Proxy: http.ProxyFromEnvironment})
+}
+
+// ClientConfig holds the settings exposed by transport.HTTPClientConfig.
+type ClientConfig struct {
+	Proxy                 func(*http.Request) (*url.URL, error)
+	MaxIdleConnsPerHost   int
+	MaxConnsPerHost       int
+	ResponseHeaderTimeout time.Duration
+}
+
+// NewClient constructs an owned transport with explicit network settings.
+func NewClient(config ClientConfig) *http.Client {
+	headerTimeout := config.ResponseHeaderTimeout
+	if headerTimeout == 0 {
+		headerTimeout = 5 * time.Minute
+	}
 	// Own the transport rather than clone http.DefaultTransport, which the
 	// application may have wrapped or reconfigured. Inferring unsent requests
 	// from httptrace hooks needs standard protocol handling.
 	return &http.Client{
 		CheckRedirect: checkModelRedirect,
-		Transport: &builtinTransport{&http.Transport{
-			Proxy: http.ProxyFromEnvironment,
+		Transport: &builtinTransport{base: &http.Transport{
+			Proxy: config.Proxy,
 			DialContext: (&net.Dialer{
 				Timeout: 30 * time.Second, KeepAlive: 30 * time.Second,
 			}).DialContext,
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   config.MaxIdleConnsPerHost,
+			MaxConnsPerHost:       config.MaxConnsPerHost,
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: time.Second,
-			ResponseHeaderTimeout: 5 * time.Minute,
+			ResponseHeaderTimeout: max(headerTimeout, 0),
 		}},
 	}
 }
 
 // Keep the transport's provenance when an internal caller copies the client,
 // for example to tighten the Codex redirect policy.
-type builtinTransport struct{ *http.Transport }
+// Do not embed *http.Transport: its promoted RegisterProtocol method would let
+// callers bypass GotConn without losing our send-state classification.
+type builtinTransport struct{ base *http.Transport }
+
+func (transport *builtinTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport.base.RoundTrip(request)
+}
+
+func (transport *builtinTransport) CloseIdleConnections() {
+	transport.base.CloseIdleConnections()
+}
 
 // BuiltinTransport returns our standard transport, or nil for caller-supplied
 // transports whose protocol handlers and delivery behavior are unknown.
 func BuiltinTransport(transport http.RoundTripper) *http.Transport {
 	if builtin, ok := transport.(*builtinTransport); ok {
-		return builtin.Transport
+		return builtin.base
 	}
 	return nil
 }

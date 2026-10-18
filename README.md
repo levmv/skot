@@ -145,9 +145,6 @@ one generation attempt; the caller manages retries, tool execution, and history.
 Use `agent` for Skot's execution loop with your own backend, journal, and tools,
 or `app` for the assembled application with Skot's settings and session handling.
 
-Skot supports gzip and zstd request compression; the built-in Codex provider
-uses zstd automatically.
-
 Examples: [model calls](provider/example_test.go) and
 [raw protocol requests](provider/raw_example_test.go).
 

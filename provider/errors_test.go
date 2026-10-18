@@ -1,15 +1,40 @@
 package provider_test
 
 import (
+	"crypto/tls"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/levmv/skot/model"
 	"github.com/levmv/skot/provider"
 )
+
+func TestConnectionFailurePreservesNotSentAcrossBackends(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("model request reached the server")
+	}))
+	server.StartTLS()
+	for _, api := range []provider.API{provider.ChatCompletions, provider.Responses, provider.AnthropicMessages, provider.Gemini} {
+		t.Run(string(api), func(t *testing.T) {
+			config := explicitTestConfig(api)
+			config.BaseURL = server.URL
+			selected, err := provider.New(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = selected.Backend.Complete(t.Context(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hello"}}}, nil)
+			var verification *tls.CertificateVerificationError
+			if !errors.Is(err, model.ErrRequestNotSent) || !errors.As(err, &verification) ||
+				errors.Is(err, model.ErrInvalidRequest) || !errors.Is(err, model.ErrProviderFailure) {
+				t.Fatalf("connection error = %v", err)
+			}
+		})
+	}
+}
 
 func TestProviderErrorsAgreeAcrossConstructionAndTransportPaths(t *testing.T) {
 	for _, test := range []struct {

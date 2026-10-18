@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/modelhttp"
@@ -27,7 +29,10 @@ type Config struct {
 	Endpoint string
 	// ResponseProfile selects response extensions; Provider is only an identity.
 	ResponseProfile model.ResponseProfile
-	// Nil uses a client with a five-minute response-header timeout.
+	// Nil uses Skot's own transport with a five-minute response-header timeout
+	// and classification of connection failures as model.ErrRequestNotSent.
+	// Supply a client explicitly to use a custom transport; Skot cannot infer
+	// whether that transport sent a request before returning an error.
 	// Bound body reading with a context deadline or Client.Timeout.
 	HTTPClient *http.Client
 	// Authorizer runs after route and call headers. Nil leaves authorization
@@ -42,6 +47,7 @@ type Connection struct {
 	api, provider, apiModel string
 	endpoint                string
 	client                  *http.Client
+	ownsTransport           bool
 	authorizer              Authorizer
 	header                  http.Header
 	responseProfile         model.ResponseProfile
@@ -73,10 +79,12 @@ func New(config Config) (*Connection, error) {
 	}
 	header := make(http.Header)
 	replaceHeaders(header, config.Header)
+	client := modelhttp.ModelClient(config.HTTPClient)
 	return &Connection{
 		api: config.API, provider: config.Provider, apiModel: config.APIModel,
-		endpoint: config.Endpoint, client: modelhttp.ModelClient(config.HTTPClient),
-		authorizer: config.Authorizer, header: header,
+		endpoint: config.Endpoint, client: client,
+		ownsTransport: modelhttp.BuiltinTransport(client.Transport) != nil,
+		authorizer:    config.Authorizer, header: header,
 		responseProfile: config.ResponseProfile,
 	}, nil
 }
@@ -101,9 +109,12 @@ func (c *Connection) Endpoint() string { return modelhttp.PublicEndpoint(c.endpo
 // EventStream. Closing a live body also cancels its HTTP request, promptly
 // interrupting blocked reads.
 //
-// Errors before Do carry model.ErrRequestNotSent; its absence does not prove
-// delivery. Non-2xx returns both response and *model.ProviderError. Its in-memory
-// Body ends with ErrBodyTruncated or the original read error if incomplete.
+// Errors before Do carry model.ErrRequestNotSent. With the built-in transport,
+// this also covers connection failures before any request in the redirect chain
+// acquired a connection, including DNS, dial, TLS, and proxy CONNECT failures.
+// Its absence does not prove delivery. Non-2xx returns both response and
+// *model.ProviderError. Its in-memory Body ends with ErrBodyTruncated or the
+// original read error if incomplete.
 func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) (response *http.Response, returnErr error) {
 	started := false
 	defer func() {
@@ -142,9 +153,22 @@ func (c *Connection) Post(ctx context.Context, body []byte, header http.Header) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	var connected atomic.Bool
+	if c.ownsTransport {
+		// Redirects reuse this context. Our transport reports GotConn before
+		// writing any request, after proxy CONNECT and TLS have succeeded.
+		request = request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
+		}))
+	}
 	started = true
 	response, err = c.client.Do(request)
 	if err != nil {
+		if c.ownsTransport && !connected.Load() {
+			// Backends skip provider classification for unsent requests, but a
+			// connection failure still is one.
+			err = model.MarkRequestNotSent(model.MarkProviderFailure(err))
+		}
 		return response, fmt.Errorf("%s request: %w", c.provider, err)
 	}
 	response.Body = &cancelOnCloseBody{ReadCloser: response.Body, cancel: cancelRequest}

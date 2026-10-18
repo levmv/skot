@@ -3,19 +3,25 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"testing/iotest"
 	"time"
 
+	"github.com/levmv/skot/internal/modelhttp"
 	"github.com/levmv/skot/model"
 )
 
@@ -156,8 +162,9 @@ func TestPostDistinguishesPreDispatchAndNetworkFailures(t *testing.T) {
 			}
 		})
 	}
-	t.Run("network failure", func(t *testing.T) {
-		failure := io.ErrUnexpectedEOF
+	t.Run("custom transport failure", func(t *testing.T) {
+		// A custom transport may return a dial-like error after sending.
+		failure := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 		calls := 0
 		connection := testConnection(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			calls++
@@ -249,6 +256,134 @@ func TestPostPreservesCallerRedirectPolicy(t *testing.T) {
 	}
 }
 
+func TestPostMarksConnectionFailuresBeforeSending(t *testing.T) {
+	t.Run("dial refused", func(t *testing.T) {
+		connection, transport := testBuiltinConnection(t, "")
+		cause := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+		transport.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, cause }
+		var getting atomic.Int32
+		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+			GetConn: func(string) { getting.Add(1) },
+		})
+		response, err := connection.Post(ctx, []byte(`{}`), nil)
+		var urlErr *url.Error
+		if response != nil || !errors.Is(err, model.ErrRequestNotSent) || !errors.Is(err, model.ErrProviderFailure) ||
+			!errors.Is(err, cause) || !errors.As(err, &urlErr) || getting.Load() != 1 {
+			t.Fatalf("response=%v error=%v GetConn=%d", response, err, getting.Load())
+		}
+	})
+
+	for _, mode := range []string{"TLS verification", "TLS verification with copied client"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("model request reached the server")
+			}))
+			server.StartTLS()
+			connection, _ := testBuiltinConnection(t, server.URL)
+			if mode == "TLS verification with copied client" {
+				// Internal routes such as Codex tighten the client's redirect policy.
+				client := *connection.client
+				client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+				connection = testConnection(t, Config{Endpoint: server.URL, HTTPClient: &client})
+			}
+			_, err := connection.Post(t.Context(), []byte(`{}`), nil)
+			var verification *tls.CertificateVerificationError
+			if !errors.Is(err, model.ErrRequestNotSent) || !errors.As(err, &verification) {
+				t.Fatalf("TLS error = %v", err)
+			}
+		})
+	}
+
+	t.Run("proxy CONNECT rejected", func(t *testing.T) {
+		var connects atomic.Int32
+		proxy := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodConnect {
+				t.Errorf("proxy method = %s", r.Method)
+			}
+			connects.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		proxy.Start()
+		connection, transport := testBuiltinConnection(t, "https://example.test/responses")
+		proxyURL, err := url.Parse(proxy.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+		response, err := connection.Post(t.Context(), []byte(`{}`), nil)
+		if response != nil || !errors.Is(err, model.ErrRequestNotSent) || connects.Load() != 1 {
+			t.Fatalf("response=%v error=%v CONNECTs=%d", response, err, connects.Load())
+		}
+	})
+}
+
+func TestPostDoesNotMarkFailuresAfterSending(t *testing.T) {
+	for _, mode := range []string{"disconnect", "cancel", "HTTP error"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var requests atomic.Int32
+			server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil || string(body) != "model request" {
+					t.Errorf("request body = %q, %v", body, err)
+				}
+				requests.Add(1)
+				switch mode {
+				case "disconnect":
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					conn.Close()
+				case "cancel":
+					cancel()
+					<-r.Context().Done()
+				case "HTTP error":
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}
+			}))
+			server.Start()
+			connection, _ := testBuiltinConnection(t, server.URL)
+			response, err := connection.Post(ctx, []byte("model request"), nil)
+			if response != nil {
+				response.Body.Close()
+			}
+			if err == nil || errors.Is(err, model.ErrRequestNotSent) || requests.Load() != 1 {
+				t.Fatalf("error=%v requests=%d", err, requests.Load())
+			}
+		})
+	}
+}
+
+func TestPostKeepsSendStateAcrossRedirectsButNotCalls(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/target", http.StatusTemporaryRedirect)
+	}))
+	server.Start()
+	connection, transport := testBuiltinConnection(t, server.URL)
+	transport.DisableKeepAlives = true
+	dial := transport.DialContext
+	cause := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	var dials atomic.Int32
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if dials.Add(1) == 1 {
+			return dial(ctx, network, address)
+		}
+		return nil, cause
+	}
+	_, err := connection.Post(t.Context(), []byte(`{}`), nil)
+	if !errors.Is(err, cause) || errors.Is(err, model.ErrRequestNotSent) || dials.Load() != 2 {
+		t.Fatalf("redirect error=%v dials=%d", err, dials.Load())
+	}
+	// A new attempt must not inherit the preceding attempt's send state.
+	_, err = connection.Post(t.Context(), []byte(`{}`), nil)
+	if !errors.Is(err, cause) || !errors.Is(err, model.ErrRequestNotSent) {
+		t.Fatalf("next attempt error = %v", err)
+	}
+}
+
 func testConnection(t *testing.T, config Config) *Connection {
 	t.Helper()
 	config.API, config.Provider, config.APIModel = "chat_completions", "test", "test-model"
@@ -263,6 +398,16 @@ func testConnection(t *testing.T, config Config) *Connection {
 		t.Fatal(err)
 	}
 	return connection
+}
+
+func testBuiltinConnection(t *testing.T, endpoint string) (*Connection, *http.Transport) {
+	t.Helper()
+	connection := testConnection(t, Config{Endpoint: endpoint})
+	transport := modelhttp.BuiltinTransport(connection.client.Transport)
+	// Configure the owned transport before use for deterministic local faults.
+	transport.Proxy = nil
+	t.Cleanup(transport.CloseIdleConnections)
+	return connection, transport
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

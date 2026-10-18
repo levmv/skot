@@ -4,6 +4,7 @@ package modelhttp
 
 import (
 	"encoding/json/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -33,13 +34,37 @@ func PublicEndpoint(value string) string {
 // DefaultClient allows long generations and follows only same-origin
 // redirects that preserve the request method and body.
 func DefaultClient() *http.Client {
-	client := &http.Client{CheckRedirect: checkModelRedirect}
-	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
-		cloned := transport.Clone()
-		cloned.ResponseHeaderTimeout = 5 * time.Minute
-		client.Transport = cloned
+	// Own the transport rather than clone http.DefaultTransport, which the
+	// application may have wrapped or reconfigured. Inferring unsent requests
+	// from httptrace hooks needs standard protocol handling.
+	return &http.Client{
+		CheckRedirect: checkModelRedirect,
+		Transport: &builtinTransport{&http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout: 30 * time.Second, KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			ResponseHeaderTimeout: 5 * time.Minute,
+		}},
 	}
-	return client
+}
+
+// Keep the transport's provenance when an internal caller copies the client,
+// for example to tighten the Codex redirect policy.
+type builtinTransport struct{ *http.Transport }
+
+// BuiltinTransport returns our standard transport, or nil for caller-supplied
+// transports whose protocol handlers and delivery behavior are unknown.
+func BuiltinTransport(transport http.RoundTripper) *http.Transport {
+	if builtin, ok := transport.(*builtinTransport); ok {
+		return builtin.Transport
+	}
+	return nil
 }
 
 // ModelClient applies the model redirect policy without mutating a supplied

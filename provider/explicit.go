@@ -56,6 +56,8 @@ type ExplicitConfig struct {
 	// With neither, Skot adds no authorization. It never looks up credentials.
 	APIKey     string
 	Authorizer transport.Authorizer
+	// Nil uses Skot's built-in transport. A supplied client retains its own
+	// connection-error classification; see [transport.Config].
 	HTTPClient *http.Client
 	Header     http.Header
 }

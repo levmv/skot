@@ -15,6 +15,26 @@ func TestSanitizeTerminalTextRemovesCSIAndStringControls(t *testing.T) {
 	}
 }
 
+func TestAnswerTextRendersMarkdownOnlyForStyledOutput(t *testing.T) {
+	answer := "## Result\nUse **this**:\n```sh\ngo test ./...\n```"
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("SK_COLOR", "")
+	if got := AnswerText(&strings.Builder{}, answer); got != answer {
+		t.Fatalf("unstyled answer = %q, want original Markdown", got)
+	}
+
+	t.Setenv("SK_COLOR", "always")
+	got := AnswerText(&strings.Builder{}, answer)
+	if strings.Contains(got, "## ") || strings.Contains(got, "**") || strings.Contains(got, "```") {
+		t.Fatalf("styled answer kept Markdown markers: %q", got)
+	}
+	for _, want := range []string{"Result", "this", "go test ./..."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("styled answer missed %q: %q", want, got)
+		}
+	}
+}
+
 func TestAssistantStreamSanitizesAcrossChunks(t *testing.T) {
 	type chunk struct{ text, want string }
 	for _, test := range []struct {

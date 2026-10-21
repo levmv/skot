@@ -21,6 +21,20 @@ func TerminalText(out io.Writer, text string) string {
 	return text
 }
 
+// AnswerText formats a final one-shot answer for out. Styled output gets the
+// transcript's Markdown rendering; pipes, files, NO_COLOR, and SK_COLOR=never
+// keep the model's Markdown unchanged.
+func AnswerText(out io.Writer, text string) string {
+	if !shouldUseStyle(out) {
+		return TerminalText(out, text)
+	}
+	width := 0
+	if file, ok := out.(*os.File); ok && IsTerminalFile(file) {
+		width, _, _ = term.GetSize(file.Fd())
+	}
+	return renderAnswerMarkdown(text, width)
+}
+
 func shouldUseStyle(out io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false

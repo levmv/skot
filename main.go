@@ -281,7 +281,7 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 			return errors.Join(runErr, fmt.Errorf("write JSON result: %w", err))
 		}
 	} else if runErr == nil || result.Answer != "" {
-		if _, err := fmt.Fprintln(stdout, ui.TerminalText(stdout, result.Answer)); err != nil {
+		if _, err := fmt.Fprintln(stdout, ui.AnswerText(stdout, result.Answer)); err != nil {
 			return errors.Join(runErr, fmt.Errorf("write answer: %w", err))
 		}
 	}

@@ -40,6 +40,16 @@ func (renderer markdownRenderer) renderMarkdownLines(text string, tableWidth int
 	return renderer.renderLines(input, &fence, max(1, tableWidth))
 }
 
+// renderAnswerMarkdown leaves prose wrapping to the terminal so copied lines
+// stay intact; only tables are fitted to width. Without a known width they keep
+// their natural size.
+func renderAnswerMarkdown(text string, width int) string {
+	// A one-shot run cannot ask the terminal for its background without reading
+	// stdin. The light palette's accent also stays legible on dark backgrounds.
+	renderer := newMarkdownRenderer(true, terminalPaletteFor(false))
+	return strings.Join(renderer.renderMarkdownLines(text, width), "\n")
+}
+
 type markdownFence struct {
 	marker byte
 	length int

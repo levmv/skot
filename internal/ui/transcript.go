@@ -25,12 +25,15 @@ const (
 )
 
 type screenBlock struct {
-	kind       screenBlockKind
-	text       string
-	attemptID  string
-	duration   time.Duration
-	tool       *toolBlock
-	completion *processResultMeta
+	kind      screenBlockKind
+	text      string
+	attemptID string
+	// printedPrefix is already printed source. It supplies Markdown context
+	// when only a continuation of this block can still be rendered.
+	printedPrefix string
+	duration      time.Duration
+	tool          *toolBlock
+	completion    *processResultMeta
 }
 
 type toolBlock struct {
@@ -73,7 +76,10 @@ type transcriptState struct {
 	blocks             []screenBlock
 	currentAttempt     string
 	assistantSanitizer terminalTextSanitizer
-	root               string
+	// Delay whitespace-only openings so they cannot end a live tool group or
+	// push blank transcript rows into scrollback before meaningful text arrives.
+	assistantPrefix string
+	root            string
 	// preserveToolTailHeight asks the next rendered refresh to retain the
 	// physical rows released when a live tool tail becomes stable.
 	preserveToolTailHeight bool
@@ -535,7 +541,7 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 	case screenBlockUser:
 		return m.renderUserBlock(block.text)
 	case screenBlockAssistant:
-		return m.renderAssistantBlock(block.text)
+		return m.renderAssistantContinuation(block.printedPrefix, block.text)
 	case screenBlockTool:
 		if block.tool == nil {
 			return m.renderErrorNotice("invalid tool block")
@@ -616,9 +622,13 @@ func (m screenModel) renderScopeChangeText(text string) string {
 }
 
 func (m screenModel) renderAssistantBlock(text string) []string {
+	return m.renderAssistantContinuation("", text)
+}
+
+func (m screenModel) renderAssistantContinuation(prefix, text string) []string {
 	lines := []string{m.marked(" ", "")}
 	marked := false
-	for _, rendered := range m.markdown.renderMarkdownLines(text, m.contentWidth()) {
+	for _, rendered := range m.markdown.renderMarkdownContinuation(prefix, text, m.contentWidth()) {
 		for _, line := range wrapDisplayLine(rendered, m.contentWidth()) {
 			marker := " "
 			if !marked && strings.TrimSpace(line) != "" {
@@ -698,5 +708,9 @@ func (m screenModel) padded(lines []string) []string {
 }
 
 func (m screenModel) marked(marker, text string) string {
-	return marker + strings.Repeat(" ", transcriptGutter-1) + text
+	gutter := m.transcriptGutterWidth()
+	if gutter == 0 {
+		return text
+	}
+	return marker + strings.Repeat(" ", gutter-1) + text
 }

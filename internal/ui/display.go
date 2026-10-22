@@ -243,6 +243,10 @@ func (m screenModel) compactToolGroupEnd(index int) int {
 }
 
 func (m screenModel) renderCompactToolSummary(start, end int) []string {
+	hint := ""
+	if !m.suppressToolHint && m.firstCompactToolSummary(start) {
+		hint = m.moreDetailShortcutLabel() + " for more detail"
+	}
 	tools := 0
 	changedPaths := make(map[string]struct{})
 	for index := start; index <= end; index++ {
@@ -263,8 +267,8 @@ func (m screenModel) renderCompactToolSummary(start, end int) []string {
 		summary += " · " + duration
 	}
 	styled := m.summaryStyle.Render(summary)
-	if m.firstCompactToolSummary(start) {
-		styled += m.mutedStyle.Render("  (" + m.moreDetailShortcutLabel() + " for more detail)")
+	if hint != "" {
+		styled += m.mutedStyle.Render("  (" + hint + ")")
 	}
 	return m.wrappedMarked(m.mutedStyle.Render("•"), styled)
 }

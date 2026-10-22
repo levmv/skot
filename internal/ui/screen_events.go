@@ -209,6 +209,7 @@ func (m *screenModel) resetModelRetryGroup() {
 func (transcript *transcriptState) startAttempt(attemptID string) {
 	transcript.currentAttempt = attemptID
 	transcript.assistantSanitizer = terminalTextSanitizer{}
+	transcript.assistantPrefix = ""
 }
 
 func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
@@ -227,11 +228,21 @@ func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
 			return
 		}
 	}
+	delta = transcript.assistantPrefix + delta
+	if strings.TrimSpace(delta) == "" {
+		transcript.assistantPrefix = delta
+		return
+	}
+	transcript.assistantPrefix = ""
+	// Blocks supply their own vertical padding; keep indentation, but do not
+	// turn a provider's opening newlines into extra blank transcript rows.
+	delta = strings.TrimLeft(delta, "\n")
 	transcript.appendBlock(screenBlock{kind: screenBlockAssistant, text: delta, attemptID: attemptID})
 }
 
 func (transcript *transcriptState) finishAssistant(text string) {
 	transcript.assistantSanitizer = terminalTextSanitizer{}
+	transcript.assistantPrefix = ""
 	text = sanitizeTerminalText(text)
 	if strings.TrimSpace(text) == "" {
 		return
@@ -257,6 +268,7 @@ func (transcript *transcriptState) finishAssistant(text string) {
 func (transcript *transcriptState) discardAttempt(attemptID string) bool {
 	if transcript.currentAttempt == attemptID {
 		transcript.assistantSanitizer = terminalTextSanitizer{}
+		transcript.assistantPrefix = ""
 	}
 	for index, block := range slices.Backward(transcript.blocks) {
 		if block.kind != screenBlockAssistant || block.attemptID != attemptID {

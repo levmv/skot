@@ -187,8 +187,8 @@ const (
 type StreamEvent struct {
 	Kind StreamEventKind
 	Text string
-	// BlockID groups the text of one assistant message within a Complete call.
-	// Empty means the backend does not attribute text to messages.
+	// BlockID groups one assistant text block within a Complete call.
+	// Empty means the backend does not attribute text to blocks.
 	BlockID string
 	// Phase is the provider-reported phase of BlockID, such as "commentary"
 	// or "final_answer". Empty means it is not known yet.

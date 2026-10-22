@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	productlimits "github.com/levmv/skot/internal/limits"
@@ -201,6 +202,12 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 				block.arguments.Write(event.ContentBlock.Input)
 			}
 			blocks[event.Index] = block
+			switch block.kind {
+			case "text":
+				emitModelEvent(emit, modelapi.EventTextDelta, event.ContentBlock.Text, event.Index)
+			case "thinking":
+				emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, event.ContentBlock.Thinking, event.Index)
+			}
 		case "content_block_delta":
 			block := blocks[event.Index]
 			if block == nil {
@@ -210,12 +217,12 @@ func (backend *Backend) Complete(ctx context.Context, request modelapi.Request, 
 			case "text_delta":
 				if block.kind == "text" {
 					block.text.WriteString(event.Delta.Text)
-					emitModelEvent(emit, modelapi.EventTextDelta, event.Delta.Text)
+					emitModelEvent(emit, modelapi.EventTextDelta, event.Delta.Text, event.Index)
 				}
 			case "thinking_delta":
 				if block.kind == "thinking" {
 					block.reasoning.WriteString(event.Delta.Thinking)
-					emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, event.Delta.Thinking)
+					emitModelEvent(emit, modelapi.EventReasoningSummaryDelta, event.Delta.Thinking, event.Index)
 				}
 			case "signature_delta":
 				if block.kind == "thinking" {
@@ -354,9 +361,13 @@ func (backend *Backend) responseItems(blocks map[int]*streamBlock, stopReason st
 	return items, nil
 }
 
-func emitModelEvent(emit func(modelapi.StreamEvent), kind modelapi.StreamEventKind, value string) {
+func emitModelEvent(emit func(modelapi.StreamEvent), kind modelapi.StreamEventKind, value string, blockIndex int) {
 	if emit != nil && value != "" {
-		emit(modelapi.StreamEvent{Kind: kind, Text: value})
+		event := modelapi.StreamEvent{Kind: kind, Text: value}
+		if kind == modelapi.EventTextDelta {
+			event.BlockID = "content-" + strconv.Itoa(blockIndex)
+		}
+		emit(event)
 	}
 }
 

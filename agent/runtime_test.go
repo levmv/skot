@@ -82,6 +82,42 @@ func TestRuntimeDirectResponse(t *testing.T) {
 	}
 }
 
+func TestRuntimeStreamsSeparateAssistantMessages(t *testing.T) {
+	for _, test := range []struct{ name, trailing, leading string }{
+		{name: "no separator"},
+		{name: "trailing newline", trailing: "\n"},
+		{name: "leading newline", leading: "\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend := modelFunc(func(_ context.Context, _ modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, BlockID: "commentary", Text: "Check"})
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, BlockID: "commentary", Text: "ing." + test.trailing})
+				emit(modelapi.StreamEvent{Kind: modelapi.EventReasoningSummaryDelta, Text: "thinking"})
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, BlockID: "answer", Text: ""})
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, BlockID: "answer", Text: test.leading + "Do"})
+				emit(modelapi.StreamEvent{Kind: modelapi.EventTextDelta, BlockID: "answer", Text: "ne."})
+				return modelapi.Response{Items: []modelapi.Item{
+					{Kind: modelapi.ItemAssistantText, Text: "Checking."},
+					{Kind: modelapi.ItemAssistantText, Text: "Done."},
+				}}, nil
+			})
+			runtime := newTestRuntime(t, Config{Backend: backend, Journal: &memoryJournal{}})
+			var streamed strings.Builder
+			result, err := runtime.Run(t.Context(), "review", func(event Event) {
+				if event.Kind == EventTextDelta {
+					streamed.WriteString(event.Text)
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := streamed.String(); got != "Checking.\nDone." || got != result.Answer {
+				t.Fatalf("streamed = %q, answer = %q", got, result.Answer)
+			}
+		})
+	}
+}
+
 func TestRuntimeWithoutAvailableModelCanBeInspectedAndReconfigured(t *testing.T) {
 	journal := &memoryJournal{}
 	unavailable := modelapi.Info{

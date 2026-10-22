@@ -465,7 +465,8 @@ sk "review this change"
 } | SK_TOOLS=read-only sk
 ```
 
-The ordinary answer is written to stdout. Progress, diagnostics, resume hints,
+Styled terminals show live text and tool activity unless `-v` is set.
+Redirected stdout contains only the final answer; diagnostics, resume hints,
 and verbose events go to stderr. `-retry-budget`,
 `-stream-idle-timeout`, and `-max-tool-iterations` limit retries, stalled
 streams, and repeated tool calls.

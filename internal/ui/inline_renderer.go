@@ -1,12 +1,17 @@
 package ui
 
 import (
+	"errors"
 	"io"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+// Output-only callers must commit their displayed source and retry with just
+// the unseen suffix when a frame can no longer be edited in place.
+var errInlineHistoryChange = errors.New("inline frame would rewrite terminal history")
 
 // The normal terminal buffer is an append-only medium once rows enter
 // scrollback: cursor addressing can only edit rows still on screen. Rendering
@@ -61,6 +66,9 @@ func (f rendererFrame) line(index int) string {
 // resize, but two independent renderers cannot safely own adjacent rows.
 type inlineRenderer struct {
 	out io.Writer
+	// Output-only runs share the transcript renderer without taking ownership
+	// of stdin or deleting the shell's existing scrollback on a rebuild.
+	outputOnly bool
 
 	previousTranscript []string
 	previousDynamic    []string
@@ -101,7 +109,11 @@ func (r *inlineRenderer) RenderFrame(frame inlineFrame, width, height int) error
 		// Bubble Tea still decodes input under WithoutRenderer. These modes shape
 		// the key and paste reports it receives, and Stop must reset them together.
 		keyboardFlags := ansi.KittyDisambiguateEscapeCodes | ansi.KittyReportAlternateKeys
-		if err := r.write(ansi.SetModeBracketedPaste + ansi.SetModifyOtherKeys2 + ansi.KittyKeyboard(keyboardFlags, 1) + ansi.RequestKittyKeyboard + ansi.ResetModeTextCursorEnable); err != nil {
+		setup := ansi.ResetModeTextCursorEnable
+		if !r.outputOnly {
+			setup = ansi.SetModeBracketedPaste + ansi.SetModifyOtherKeys2 + ansi.KittyKeyboard(keyboardFlags, 1) + ansi.RequestKittyKeyboard + setup
+		}
+		if err := r.write(setup); err != nil {
 			return err
 		}
 		r.started = true
@@ -202,6 +214,9 @@ func changedLineRange(previous, next rendererFrame, start int) (int, int) {
 }
 
 func (r *inlineRenderer) fullRender(lines rendererFrame, cursor *tea.Cursor, width, height int, clear bool) error {
+	if clear && r.outputOnly {
+		return errInlineHistoryChange
+	}
 	var buffer strings.Builder
 	buffer.WriteString(ansi.SetModeSynchronizedOutput)
 	buffer.WriteString(ansi.ResetModeTextCursorEnable)
@@ -226,7 +241,7 @@ func (r *inlineRenderer) fullRender(lines rendererFrame, cursor *tea.Cursor, wid
 	}
 	renderCursorRow := max(0, lines.len()-1)
 	viewportTop := max(0, lines.len()-height)
-	hardwareCursorRow := appendCursorPosition(&buffer, cursor, lines.len(), renderCursorRow)
+	hardwareCursorRow := r.appendCursorPosition(&buffer, cursor, lines.len(), renderCursorRow)
 	buffer.WriteString(ansi.ResetModeSynchronizedOutput)
 	if err := r.write(buffer.String()); err != nil {
 		return err
@@ -306,7 +321,7 @@ func (r *inlineRenderer) differentialRender(lines rendererFrame, cursor *tea.Cur
 		buffer.WriteString(ansi.CursorUp(extraLines))
 	}
 	viewportTop = max(previousViewportTop, finalCursorRow-height+1)
-	hardwareCursorRow = appendCursorPosition(&buffer, cursor, lines.len(), finalCursorRow)
+	hardwareCursorRow = r.appendCursorPosition(&buffer, cursor, lines.len(), finalCursorRow)
 	buffer.WriteString(ansi.ResetModeSynchronizedOutput)
 	if err := r.write(buffer.String()); err != nil {
 		return err
@@ -400,7 +415,7 @@ func (r *inlineRenderer) renderDeletion(lines rendererFrame, cursor *tea.Cursor,
 		}
 	}
 	buffer.WriteString(ansi.CursorUp(extraLines))
-	hardwareCursorRow := appendCursorPosition(&buffer, cursor, lines.len(), targetRow)
+	hardwareCursorRow := r.appendCursorPosition(&buffer, cursor, lines.len(), targetRow)
 	buffer.WriteString(ansi.ResetModeSynchronizedOutput)
 	if err := r.write(buffer.String()); err != nil {
 		return err
@@ -412,11 +427,36 @@ func (r *inlineRenderer) renderDeletion(lines rendererFrame, cursor *tea.Cursor,
 
 func (r *inlineRenderer) positionCursor(cursor *tea.Cursor, totalLines int) error {
 	var buffer strings.Builder
-	hardwareCursorRow := appendCursorPosition(&buffer, cursor, totalLines, r.hardwareCursorRow)
+	hardwareCursorRow := r.appendCursorPosition(&buffer, cursor, totalLines, r.hardwareCursorRow)
 	if err := r.write(buffer.String()); err != nil {
 		return err
 	}
 	r.hardwareCursorRow = hardwareCursorRow
+	return nil
+}
+
+func (r *inlineRenderer) appendCursorPosition(buffer *strings.Builder, cursor *tea.Cursor, totalLines, currentRow int) int {
+	if r.outputOnly && totalLines > 0 {
+		// Park at column zero of the final (status) row, not after its text.
+		// Native resize reflow then keeps the cursor before that text, allowing
+		// commitOutput to clear it without trusting any old row coordinates.
+		targetRow := totalLines - 1
+		writeVerticalMove(buffer, targetRow-currentRow)
+		buffer.WriteByte('\r')
+		buffer.WriteString(ansi.ResetModeTextCursorEnable)
+		return targetRow
+	}
+	return appendCursorPosition(buffer, cursor, totalLines, currentRow)
+}
+
+// commitOutput leaves the displayed transcript in native terminal history and
+// removes only the status at the parked cursor. No vertical addressing is safe
+// here: a resize may already have reflowed or scrolled the previous frame.
+func (r *inlineRenderer) commitOutput() error {
+	if err := r.write(ansi.SetModeSynchronizedOutput + "\r" + ansi.ResetStyle + "\x1b[J" + ansi.ResetModeSynchronizedOutput); err != nil {
+		return err
+	}
+	r.forgetFrame()
 	return nil
 }
 
@@ -464,10 +504,12 @@ func (r *inlineRenderer) Stop() error {
 		writeVerticalMove(&buffer, targetRow-r.hardwareCursorRow)
 		buffer.WriteString("\r\n")
 	}
-	buffer.WriteString("\x1b[0 q")
-	buffer.WriteString(ansi.ResetModifyOtherKeys)
-	buffer.WriteString(ansi.KittyKeyboard(0, 1))
-	buffer.WriteString(ansi.ResetModeBracketedPaste)
+	if !r.outputOnly {
+		buffer.WriteString("\x1b[0 q")
+		buffer.WriteString(ansi.ResetModifyOtherKeys)
+		buffer.WriteString(ansi.KittyKeyboard(0, 1))
+		buffer.WriteString(ansi.ResetModeBracketedPaste)
+	}
 	buffer.WriteString(ansi.SetModeTextCursorEnable)
 	return r.write(buffer.String())
 }

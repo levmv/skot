@@ -156,13 +156,58 @@ func TestCompleteStreamsContentToolsAndUsage(t *testing.T) {
 		if err := json.Unmarshal(call.ProviderReferences[0].Data, &providerID); err != nil || providerID != "toolu_provider_1" {
 			t.Fatalf("provider ID = %q, error = %v", providerID, err)
 		}
+		if len(events) != 2 {
+			t.Fatalf("events = %#v", events)
+		}
 		if got := events; !reflect.DeepEqual(got, []model.StreamEvent{
 			{Kind: model.EventReasoningSummaryDelta, Text: "checking "},
-			{Kind: model.EventTextDelta, Text: "hello"},
+			{Kind: model.EventTextDelta, Text: "hello", BlockID: events[1].BlockID},
 		}) {
 			t.Fatalf("events = %#v", got)
 		}
 	})
+}
+
+func TestCompleteStreamsInitialTextAndDistinctBlocks(t *testing.T) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range []map[string]any{
+			{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": "Do not "}},
+			{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": "delete this file."}},
+			{"type": "content_block_stop", "index": 0},
+			{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "text", "text": "Keep it."}},
+			{"type": "content_block_stop", "index": 1},
+			{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}},
+			{"type": "message_stop"},
+		} {
+			writeSSEEvent(t, writer, event)
+		}
+	}))
+	var events []model.StreamEvent
+	response, err := newTestServerBackend(t, server, "").Complete(t.Context(), model.Request{}, func(event model.StreamEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantText := []string{"Do not ", "delete this file.", "Keep it."}
+	if len(events) != len(wantText) {
+		t.Fatalf("events = %#v", events)
+	}
+	for index, event := range events {
+		if event.Kind != model.EventTextDelta || event.Text != wantText[index] {
+			t.Fatalf("text event %d = %#v, want %q", index, event, wantText[index])
+		}
+	}
+	if events[0].BlockID == "" || events[0].BlockID != events[1].BlockID || events[2].BlockID == "" || events[2].BlockID == events[0].BlockID {
+		t.Fatalf("text block identities were lost: %#v", events)
+	}
+	if !reflect.DeepEqual(response.Items, []model.Item{
+		{Kind: model.ItemAssistantText, Text: events[0].Text + events[1].Text},
+		{Kind: model.ItemAssistantText, Text: events[2].Text},
+	}) {
+		t.Fatalf("streamed text differs from accepted blocks: %#v", response.Items)
+	}
 }
 
 func TestBuildRequestMapsHistoryAndProviderToolID(t *testing.T) {

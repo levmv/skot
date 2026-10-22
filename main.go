@@ -245,9 +245,14 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 	}
 	var observer *runEventObserver
 	var emit agent.EmitFunc
+	var progress *ui.AnswerProgress
 	if measureUsage {
 		observer = &runEventObserver{verbose: verboseEmitter(config.verbose, stderr)}
 		emit = observer.emit
+	} else if progress = ui.NewAnswerProgress(stdout, application.Root()); progress != nil {
+		// Verbose and JSON runs write their own output while the run works.
+		emit = progress.Emit
+		defer progress.Finish("")
 	}
 	startedAt := time.Now()
 	sessionWasResumable := application.SessionID() != ""
@@ -279,6 +284,10 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 		}
 		if err := writeJSONResult(stdout, result, usage, application.SessionID(), metadata, runErr); err != nil {
 			return errors.Join(runErr, fmt.Errorf("write JSON result: %w", err))
+		}
+	} else if progress != nil {
+		if err := progress.Finish(result.Answer); err != nil {
+			return errors.Join(runErr, fmt.Errorf("write answer: %w", err))
 		}
 	} else if runErr == nil || result.Answer != "" {
 		if _, err := fmt.Fprintln(stdout, ui.AnswerText(stdout, result.Answer)); err != nil {

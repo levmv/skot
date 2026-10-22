@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 )
@@ -27,17 +28,43 @@ func newMarkdownRenderer(useStyle bool, palette terminalPalette) markdownRendere
 }
 
 func (renderer markdownRenderer) renderMarkdownLines(text string, tableWidth int) []string {
+	return renderer.renderMarkdownContinuation("", text, tableWidth)
+}
+
+// A committed prefix supplies parser context without contributing output.
+// Resizes can split a fence, an inline marker, or a line at any source byte.
+func (renderer markdownRenderer) renderMarkdownContinuation(prefix, text string, tableWidth int) []string {
 	text = sanitizeTerminalText(text)
 	if text == "" {
 		return nil
 	}
 	trimmed := strings.TrimSuffix(text, "\n")
-	if trimmed == "" {
-		return []string{""}
-	}
 	input := strings.Split(trimmed, "\n")
 	var fence markdownFence
-	return renderer.renderLines(input, &fence, max(1, tableWidth))
+	prefix = sanitizeTerminalText(prefix)
+	for {
+		line, rest, ok := strings.Cut(prefix, "\n")
+		if !ok {
+			break
+		}
+		fence.consume(line)
+		prefix = rest
+	}
+	if prefix == "" {
+		return renderer.renderLines(input, &fence, max(1, tableWidth))
+	}
+	// Parse the complete first line, but emit only its unseen source suffix.
+	// In particular, a mid-line '#' must not become a heading after a resize.
+	line := prefix + input[0]
+	var out []string
+	if !fence.consume(line) {
+		if fence.active() {
+			out = append(out, renderer.style(input[0], renderer.codeStyle))
+		} else {
+			out = append(out, renderer.renderLineFrom(line, len(prefix)))
+		}
+	}
+	return append(out, renderer.renderLines(input[1:], &fence, max(1, tableWidth))...)
 }
 
 // renderAnswerMarkdown leaves prose wrapping to the terminal so copied lines
@@ -56,6 +83,20 @@ type markdownFence struct {
 }
 
 func (fence markdownFence) active() bool { return fence.marker != 0 && fence.length >= 3 }
+
+// consume reports fence delimiter lines, which change context but have no ink.
+func (fence *markdownFence) consume(line string) bool {
+	if fence.active() {
+		if closesMarkdownFence(line, *fence) {
+			*fence = markdownFence{}
+			return true
+		}
+	} else if opened, ok := openingMarkdownFence(line); ok {
+		*fence = opened
+		return true
+	}
+	return false
+}
 
 func openingMarkdownFence(line string) (markdownFence, bool) {
 	trimmed := strings.TrimLeft(line, " ")
@@ -91,17 +132,12 @@ func closesMarkdownFence(line string, fence markdownFence) bool {
 func (renderer markdownRenderer) renderLines(input []string, fence *markdownFence, width int) []string {
 	out := make([]string, 0, len(input))
 	for index := 0; index < len(input); {
-		if fence.active() {
-			if closesMarkdownFence(input[index], *fence) {
-				*fence = markdownFence{}
-			} else {
-				out = append(out, renderer.style(input[index], renderer.codeStyle))
-			}
+		if fence.consume(input[index]) {
 			index++
 			continue
 		}
-		if opened, ok := openingMarkdownFence(input[index]); ok {
-			*fence = opened
+		if fence.active() {
+			out = append(out, renderer.style(input[index], renderer.codeStyle))
 			index++
 			continue
 		}
@@ -121,20 +157,29 @@ func (renderer markdownRenderer) renderLines(input []string, fence *markdownFenc
 }
 
 func (renderer markdownRenderer) renderLine(line string) string {
+	return renderer.renderLineFrom(line, 0)
+}
+
+func (renderer markdownRenderer) renderLineFrom(line string, skip int) string {
 	if !renderer.useStyle {
-		return line
+		return line[skip:]
 	}
 	base := lipgloss.NewStyle()
 	trimmed := strings.TrimLeft(line, " \t")
 	indent := line[:len(line)-len(trimmed)]
 	if level, text, ok := parseHeading(trimmed); ok {
+		if skip > len(indent) {
+			content := trimmed[level+1:]
+			start := len(indent) + level + 1 + len(content) - len(strings.TrimLeftFunc(content, unicode.IsSpace))
+			skip = len(indent) + max(0, skip-start)
+		}
 		line = indent + text
 		base = renderer.accentStyle
 		if level < 3 {
 			base = base.Bold(true)
 		}
 	}
-	return renderer.renderInlineMarkdownMarkers(line, base)
+	return renderer.renderInlineMarkdownMarkersFrom(line, base, skip)
 }
 
 func (renderer markdownRenderer) renderTable(lines []string, maxWidth int) []string {
@@ -304,12 +349,17 @@ func parseHeading(line string) (int, string, bool) {
 }
 
 func (renderer markdownRenderer) renderInlineMarkdownMarkers(text string, base lipgloss.Style) string {
+	return renderer.renderInlineMarkdownMarkersFrom(text, base, 0)
+}
+
+func (renderer markdownRenderer) renderInlineMarkdownMarkersFrom(text string, base lipgloss.Style, skip int) string {
 	var builder strings.Builder
 	segmentStart := 0
 	bold := false
 	code := false
 	flush := func(end int) {
-		if end <= segmentStart {
+		start := max(segmentStart, skip)
+		if end <= start {
 			return
 		}
 		style := base
@@ -319,7 +369,7 @@ func (renderer markdownRenderer) renderInlineMarkdownMarkers(text string, base l
 		if bold {
 			style = style.Bold(true)
 		}
-		builder.WriteString(style.Render(text[segmentStart:end]))
+		builder.WriteString(style.Render(text[start:end]))
 	}
 	for index := 0; index < len(text); {
 		if !code && strings.HasPrefix(text[index:], "**") {

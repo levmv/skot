@@ -273,13 +273,14 @@ type screenModel struct {
 	programOutcome       string
 	programStatus        *programStatusReporter
 
-	renderer       *inlineRenderer
-	theme          string
-	displayProfile string
-	themePending   bool
-	themeQuery     uint64
-	darkTheme      bool
-	useStyle       bool
+	renderer         *inlineRenderer
+	theme            string
+	displayProfile   string
+	suppressToolHint bool
+	themePending     bool
+	themeQuery       uint64
+	darkTheme        bool
+	useStyle         bool
 
 	mutedStyle   lipgloss.Style
 	summaryStyle lipgloss.Style
@@ -683,7 +684,7 @@ func (m screenModel) inlineFrame() inlineFrame {
 	if editorDynamicStart >= 0 {
 		if editorCursor := m.editorCursor(); editorCursor != nil {
 			copy := *editorCursor
-			copy.Position.X += transcriptGutter
+			copy.Position.X += m.transcriptGutterWidth()
 			copy.Position.Y += len(m.transcript.lines) + editorDynamicStart
 			cursor = &copy
 		}
@@ -725,7 +726,7 @@ func (m screenModel) baseInlineDynamic() ([]string, int) {
 	editorDynamicStart := -1
 	if maintenance := m.maintenanceOperation(); maintenance.isMaintenance() {
 		elapsed := formatTurnDuration(time.Since(maintenance.startedAt))
-		dynamic = append(dynamic, strings.Repeat(" ", transcriptGutter)+m.mutedStyle.Render(maintenance.label()+" ("+elapsed+" · esc to interrupt)"))
+		dynamic = append(dynamic, m.marked(" ", m.mutedStyle.Render(maintenance.label()+" ("+elapsed+" · esc to interrupt)")))
 		if maintenance.kind == operationCompaction {
 			if queued := m.queuedLine(); queued != "" {
 				dynamic = append(dynamic, queued)
@@ -749,7 +750,7 @@ func (m screenModel) baseInlineDynamic() ([]string, int) {
 		dynamic = append(dynamic, m.markedEditorLines()...)
 		dynamic = append(dynamic, m.renderCommandSuggestions()...)
 	}
-	dynamic = append(dynamic, "", strings.Repeat(" ", transcriptGutter)+m.footerLine())
+	dynamic = append(dynamic, "", m.marked(" ", m.footerLine()))
 
 	return dynamic, editorDynamicStart
 }
@@ -761,7 +762,7 @@ func (m screenModel) markedEditorLines() []string {
 		if index == 0 {
 			marker = userMarker
 		}
-		lines[index] = marker + strings.Repeat(" ", transcriptGutter-1) + line
+		lines[index] = m.marked(marker, line)
 	}
 	return lines
 }
@@ -785,7 +786,7 @@ func (m screenModel) workingLine() string {
 		return ""
 	}
 	elapsed := formatTurnDuration(time.Since(m.operation.startedAt))
-	return strings.Repeat(" ", transcriptGutter) + m.mutedStyle.Render("Working ("+elapsed+" · esc to interrupt)")
+	return m.marked(" ", m.mutedStyle.Render("Working ("+elapsed+" · esc to interrupt)"))
 }
 
 func (m screenModel) queuedLine() string {
@@ -800,4 +801,17 @@ func (m screenModel) queuedLine() string {
 	return m.marked(" ", m.mutedStyle.Render(text))
 }
 
-func (m screenModel) contentWidth() int { return max(1, max(20, m.width)-transcriptGutter-1) }
+func (m screenModel) contentWidth() int {
+	width := m.width
+	if width <= 0 {
+		width = 20
+	}
+	return max(1, width-m.transcriptGutterWidth()-1)
+}
+
+func (m screenModel) transcriptGutterWidth() int {
+	if m.width <= 0 {
+		return transcriptGutter
+	}
+	return min(transcriptGutter, max(0, m.width-2))
+}

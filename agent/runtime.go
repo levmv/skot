@@ -840,10 +840,21 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 		emitEvent(emit, Event{Kind: EventModelAttemptStarted, RunID: runID, AttemptID: attemptID})
 		var response modelapi.Response
 		if err = requestCtx.Err(); err == nil {
+			var textBlockID, lastText string
 			response, err = runtime.backend.Complete(requestCtx, request, func(event modelapi.StreamEvent) {
 				switch event.Kind {
 				case modelapi.EventTextDelta, modelapi.EventReasoningSummaryDelta:
-					emitEvent(emit, Event{Kind: EventKind(event.Kind), RunID: runID, AttemptID: attemptID, Text: runtime.sanitize(event.Text)})
+					text := runtime.sanitize(event.Text)
+					if event.Kind == modelapi.EventTextDelta && text != "" {
+						// Agent text is a flat stream. Preserve the message boundaries
+						// that responseText also separates in the accepted answer.
+						if event.BlockID != "" && textBlockID != "" && event.BlockID != textBlockID &&
+							!strings.HasSuffix(lastText, "\n") && !strings.HasPrefix(text, "\n") {
+							text = "\n" + text
+						}
+						textBlockID, lastText = event.BlockID, text
+					}
+					emitEvent(emit, Event{Kind: EventKind(event.Kind), RunID: runID, AttemptID: attemptID, Text: text})
 				}
 			})
 		}

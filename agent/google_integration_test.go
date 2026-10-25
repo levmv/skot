@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,8 +38,8 @@ func TestGoogleRedactionPreservesToolHistoryAcrossResume(t *testing.T) {
 				{"thought": true, "text": thought[:len(thought)/2]},
 				{"thought": true, "text": thought[len(thought)/2:]},
 				{"text": text[:len(text)/2]},
-				{"text": text[len(text)/2:]},
-				{"functionCall": map[string]any{"id": "native-call", "name": "inspect", "args": map[string]string{"value": argument}}, "thoughtSignature": signature},
+				{"text": text[len(text)/2:], "futureMetadata": map[string]any{"tag": "opaque"}},
+				{"functionCall": map[string]any{"id": "native-call", "name": "inspect", "args": map[string]any{"value": argument}}, "thoughtSignature": signature},
 				{"text": "", "thoughtSignature": emptySignature},
 			}
 			requests := 0
@@ -62,6 +63,19 @@ func TestGoogleRedactionPreservesToolHistoryAcrossResume(t *testing.T) {
 					}
 					stream.WriteString("data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n")
 				} else {
+					if !redacted {
+						var wire struct {
+							Contents []struct {
+								Parts []map[string]any `json:"parts"`
+							} `json:"contents"`
+						}
+						if err := json.Unmarshal(body, &wire); err != nil {
+							t.Fatal(err)
+						}
+						if len(wire.Contents) < 2 || !reflect.DeepEqual(wire.Contents[1].Parts, parts) {
+							t.Fatalf("request %d changed signed response parts: %s", requests, body)
+						}
+					}
 					for _, original := range []string{signature, emptySignature} {
 						if strings.Contains(string(body), original) == redacted {
 							t.Fatalf("request %d: original signature retention disagrees with redaction", requests)
@@ -72,15 +86,17 @@ func TestGoogleRedactionPreservesToolHistoryAcrossResume(t *testing.T) {
 					visibleRedaction := changedField == "text" || changedField == "arguments"
 					if strings.Contains(string(body), "skip_thought_signature_validator") != redacted ||
 						strings.Contains(string(body), "[REDACTED]") != visibleRedaction ||
-						strings.Count(string(body), `"id":"native-call"`) != 2 {
+						strings.Count(string(body), `"id":"native-call"`) != 2 ||
+						!strings.Contains(string(body), `"output":"observed"`) {
 						t.Fatalf("request %d lost sanitized tool history: %s", requests, body)
 					}
 					stream.WriteString("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Done\"}]},\"finishReason\":\"STOP\"}]}\n\n")
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream.String()))}, nil
 			})}
-			selected, err := provider.Open(t.Context(), provider.Config{
-				URI: "google/gemini-4-argon", APIKey: "fixture", HTTPClient: client,
+			selected, err := provider.New(provider.ExplicitConfig{
+				Provider: "test", Model: "test-model", API: provider.Gemini,
+				BaseURL: "https://example.test/v1", ContextWindow: 128_000, HTTPClient: client,
 			})
 			if err != nil {
 				t.Fatal(err)

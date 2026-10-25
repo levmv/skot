@@ -237,12 +237,17 @@ var Catalog = []Spec{
 		ContextWindow:    1_048_576,
 		ReasoningEfforts: []string{"", "low", "medium", "high"},
 	},
-	// Protocols: https://opencode.ai/docs/go/#endpoints
+	// Availability: https://opencode.ai/inference/go/v1/models (2026-10-25).
+	// Protocols: https://opencode.ai/v2/docs/console/go/#endpoints
 	// Limits and effort vocabularies: https://models.dev/api.json (opencode-go).
 	{
-		URI: "opencode-go/gemini-4-argon-contributor", Name: "OpenCode Go · Gemini 4 Argon Contributor", API: Gemini,
+		URI: "opencode-go/gemini-4-argon", Name: "OpenCode Go · Gemini 4 Argon", API: Gemini,
 		ContextWindow:    1_048_576,
 		ReasoningEfforts: []string{"", "low", "medium", "high"},
+	},
+	{
+		URI: "opencode-go/claude-haiku-5-5", Name: "OpenCode Go · Claude Haiku 5.5", API: AnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
 	},
 	{
 		URI: "opencode-go/gpt-6-luna", Name: "OpenCode Go · GPT 6 Luna", API: Responses,
@@ -265,15 +270,6 @@ var Catalog = []Spec{
 		},
 	},
 	{
-		URI: "opencode-go/deepseek-v4-flash", Name: "OpenCode Go · DeepSeek V4 Flash", ContextWindow: 1_000_000,
-		ImageInputUnsupported: true,
-		ReasoningEfforts:      []string{"", "low", "high", "max"},
-		ChatTraits: &chatcompletions.RouteTraits{
-			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
-			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
-		},
-	},
-	{
 		URI: "opencode-go/deepseek-v4-pro", Name: "OpenCode Go · DeepSeek V4 Pro", ContextWindow: 1_000_000,
 		ImageInputUnsupported: true,
 		ReasoningEfforts:      []string{"", "high", "max"},
@@ -283,11 +279,11 @@ var Catalog = []Spec{
 		},
 	},
 	{
-		URI: "opencode-go/deepseek-v4-flash-vision-exp", Name: "OpenCode Go · DeepSeek V4 Flash Vision Exp",
-		ContextWindow: 1_000_000, ReasoningEfforts: []string{"", "off", "low", "high", "max"},
+		URI: "opencode-go/kimi-k3.1-pro", Name: "OpenCode Go · Kimi K3.1 Pro", ContextWindow: 1_048_576,
+		ReasoningEfforts: []string{"", "low", "high", "max"},
 		ChatTraits: &chatcompletions.RouteTraits{
-			ReasoningEffort: chatcompletions.ReasoningEffortThinking,
-			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
 		},
 	},
 	{
@@ -366,8 +362,17 @@ var Catalog = []Spec{
 		ChatTraits:            &chatcompletions.RouteTraits{},
 	},
 	{
-		URI: "opencode-go/longcat-2.5-preview-free", Name: "OpenCode Go · LongCat 2.5 Preview Free", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+		URI: "opencode-go/iceman-contributor-free", Name: "OpenCode Go · Iceman Contributor Free", ContextWindow: 262_144,
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+	},
+	{
+		URI: "opencode-go/step-5-preview", Name: "OpenCode Go · Step 5 Preview", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "low", "medium", "high"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
+		},
 	},
 	// MiMo thinks by default and expects reasoning_content back across turns.
 	// https://mimo.mi.com/docs/en-US/usage-guide/passing-back-reasoning_content
@@ -388,13 +393,20 @@ var Catalog = []Spec{
 	},
 	{
 		URI: "opencode-go/mimo-v2.5-pro", Name: "OpenCode Go · MiMo V2.5 Pro", ContextWindow: 1_048_576,
-		ReasoningEfforts: []string{""},
-		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{""},
+		ChatTraits:            &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
 	},
+	// Beam requires reasoning_content on every prior assistant message.
+	// https://developers.reflection.ai/reasoning#reasoning-in-multi-turn-conversations
 	{
-		URI: "opencode-go/space-bunny-free", Name: "OpenCode Go · Space Bunny Free", ContextWindow: 524_288,
-		ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
-		ChatTraits:       &chatcompletions.RouteTraits{ReasoningEffort: chatcompletions.ReasoningEffortTopLevel},
+		URI: "opencode-go/beam-free", Name: "OpenCode Go · Beam Free", ContextWindow: 1_048_576,
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "low", "medium", "high", "xhigh", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
+		},
 	},
 	{
 		URI: "opencode-go/hy4-preview", Name: "OpenCode Go · Hy4 preview", ContextWindow: 1_024_000,
@@ -406,9 +418,21 @@ var Catalog = []Spec{
 	},
 	{
 		URI: "opencode-go/hy3", Name: "OpenCode Go · Hy3", ContextWindow: 192_000,
-		ReasoningEfforts: []string{"", "none", "low", "high"},
+		ImageInputUnsupported: true,
+		ReasoningEfforts:      []string{"", "none", "low", "high"},
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+		},
+	},
+	// M3.1 Flash uses Chat Completions and preserves reasoning_content across
+	// turns, unlike the older MiniMax routes below which use Messages.
+	// https://platform.minimax.io/docs/api-reference/text-openai-api
+	{
+		URI: "opencode-go/minimax-m3.1-flash", Name: "OpenCode Go · MiniMax M3.1 Flash", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
+			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
 	{
@@ -417,7 +441,7 @@ var Catalog = []Spec{
 	},
 	{
 		URI: "opencode-go/minimax-m2.7", Name: "OpenCode Go · MiniMax M2.7", API: AnthropicMessages,
-		ContextWindow: 204_800, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
+		ContextWindow: 204_800, MaxOutputTokens: 131_072, ImageInputUnsupported: true, ReasoningEfforts: []string{""},
 	},
 	{
 		URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: AnthropicMessages,

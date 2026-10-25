@@ -31,7 +31,7 @@ func TestOutputTokenLimit(t *testing.T) {
 		{"ollama/test", "", "max_tokens", 0},
 		{"openai/test", "responses", "max_output_tokens", 0},
 		{"anthropic/claude-opus-5", "", "max_tokens", 128_000},
-		{"google/gemini-4-argon", "", "maxOutputTokens", 0},
+		{"google/test-model", "", "maxOutputTokens", 0},
 	} {
 		t.Run(test.uri+"/"+test.api, func(t *testing.T) {
 			var received map[string]jsontext.Value

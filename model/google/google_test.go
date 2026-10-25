@@ -78,6 +78,33 @@ func TestGenerationFailures(t *testing.T) {
 	}
 }
 
+func TestStreamingSeparatesThoughtsAndRetainsTrailingUsage(t *testing.T) {
+	backend := newBackend(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return googleResponse(`data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"Thinking"}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":"Done"}]},"finishReason":"STOP"}]}
+
+data: {"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":3}}
+
+`), nil
+	})})
+	var text, thoughts string
+	response, err := backend.Complete(t.Context(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hello"}}}, func(event model.StreamEvent) {
+		switch event.Kind {
+		case model.EventTextDelta:
+			text += event.Text
+		case model.EventReasoningSummaryDelta:
+			thoughts += event.Text
+		}
+	})
+	if err != nil || text != "Done" || thoughts != "Thinking" {
+		t.Fatalf("text=%q thoughts=%q error=%v", text, thoughts, err)
+	}
+	if response.Usage.Status != model.UsageFinal || response.Usage.Tokens.Known().TotalTokens != 15 {
+		t.Fatalf("lost usage after STOP: %+v", response.Usage)
+	}
+}
+
 func TestDefaultThinkingLevel(t *testing.T) {
 	backend := newBackend(t, &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		var body struct {

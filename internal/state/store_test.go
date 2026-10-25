@@ -1,6 +1,8 @@
 package state
 
 import (
+	"bytes"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -114,20 +116,35 @@ func TestStoreRejectsUnknownConfigFields(t *testing.T) {
 }
 
 func TestStoreRejectsSymlinkedCredentials(t *testing.T) {
-	home := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "outside.json")
-	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(home, "auth.json")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	if _, err := Open(home); err == nil {
-		t.Fatal("symlinked credentials were accepted")
+	for _, name := range []string{"store.bin", "auth.json"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			outsideHome := t.TempDir()
+			outside := filepath.Join(outsideHome, name)
+			if name == "auth.json" {
+				if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				source, err := OpenCredentials(outsideHome)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := source.SetAPIKey(t.Context(), "example", "outside-key"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(outside, filepath.Join(home, name)); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			if _, err := Open(home); err == nil {
+				t.Fatal("symlinked credentials were accepted")
+			}
+		})
 	}
 }
 
-func TestStoreKeepsNamedCredentialsSeparateFromSettings(t *testing.T) {
+func TestStoreKeepsCredentialsOpaqueAndPortable(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"protected_paths":[".env"]}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -139,24 +156,54 @@ func TestStoreKeepsNamedCredentialsSeparateFromSettings(t *testing.T) {
 	if err := store.SetAPIKey(t.Context(), " DeepSeek ", " secret-token "); err != nil {
 		t.Fatal(err)
 	}
-	token, ok, err := store.APIKey("deepseek")
-	if err != nil || !ok || token != "secret-token" {
-		t.Fatalf("API key = %q, %v, %v", token, ok, err)
+	const payload = `{"access_token":"access-fixture","refresh_token":"refresh-fixture"}`
+	if err := store.UpdateCredential(t.Context(), "subscription", func(CredentialProfile) (CredentialProfile, error) {
+		return CredentialProfile{Provider: "subscription", Kind: "oauth", Payload: []byte(payload)}, nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	configRaw, err := os.ReadFile(filepath.Join(home, "config.json"))
+	entries, err := os.ReadDir(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	authRaw, err := os.ReadFile(filepath.Join(home, "auth.json"))
-	if err != nil {
-		t.Fatal(err)
+	for _, entry := range entries {
+		raw, err := os.ReadFile(filepath.Join(home, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"secret-token", "access-fixture", "refresh-fixture"} {
+			if bytes.Contains(raw, []byte(secret)) {
+				t.Fatalf("plaintext credential in %s", entry.Name())
+			}
+		}
 	}
-	if strings.Contains(string(configRaw), "secret-token") || !strings.Contains(string(authRaw), `"kind": "api_key"`) || !strings.Contains(string(authRaw), `"deepseek": "deepseek"`) {
-		t.Fatalf("config/auth separation failed: config=%s auth=%s", configRaw, authRaw)
-	}
-	info, err := os.Stat(filepath.Join(home, "auth.json"))
+	path := filepath.Join(home, "store.bin")
+	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("auth mode = %v, %v", info, err)
+		t.Fatalf("store mode = %v, %v", info, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(copyHome, "store.bin"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := OpenCredentials(copyHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, ok, err := restored.APIKey("deepseek"); err != nil || !ok || token != "secret-token" {
+		t.Fatalf("restored API key = %q, %v, %v", token, ok, err)
+	}
+	profile, err := restored.Credential("subscription")
+	if err != nil || profile.Kind != "oauth" {
+		t.Fatalf("restored OAuth profile = %+v, %v", profile, err)
+	}
+	var tokens map[string]string
+	if err := json.Unmarshal(profile.Payload, &tokens); err != nil || tokens["access_token"] != "access-fixture" || tokens["refresh_token"] != "refresh-fixture" {
+		t.Fatalf("restored OAuth tokens = %v, %v", tokens, err)
 	}
 	if err := store.DeleteAPIKey(t.Context(), "deepseek"); err != nil {
 		t.Fatal(err)

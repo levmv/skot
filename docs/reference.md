@@ -129,7 +129,7 @@ directory. It contains:
 - `config.json` — global configuration: custom tool sets, child-model
   allowlist, and protected paths;
 - `interactive.json` — UI state and interactive preferences managed by Skot;
-- `auth.json` — credentials managed by `/login` and `/logout`;
+- `store.bin` — credentials managed by `/login` and `/logout`;
 - `tools.json` — the default custom program tool catalog;
 - `sessions/` — managed session journals and child-agent state.
 
@@ -172,8 +172,6 @@ Workspace-specific model, reasoning effort, tool set, and filesystem settings
 workspace path. Symlink aliases share preferences, while separate clones and
 worktrees do not. Skot manages these preferences in `interactive.json`;
 headless runs do not read them.
-
-Use `/login` rather than editing `auth.json` directly.
 
 ## Sessions and interactive use
 

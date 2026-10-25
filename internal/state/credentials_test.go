@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -72,7 +73,7 @@ func TestCredentialLockRejectsSymlinks(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(home, "auth.lock")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(home, "store.lock")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetAPIKey(t.Context(), "openai", "key"); err == nil {
@@ -80,5 +81,89 @@ func TestCredentialLockRejectsSymlinks(t *testing.T) {
 	}
 	if data, err := os.ReadFile(outside); err != nil || string(data) != "keep" {
 		t.Fatal("modified the lock symlink target")
+	}
+}
+
+func TestCorruptCredentialStoreIsNotOverwritten(t *testing.T) {
+	for _, damage := range []string{"truncated", "modified"} {
+		t.Run(damage, func(t *testing.T) {
+			home := t.TempDir()
+			store, err := OpenCredentials(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SetAPIKey(t.Context(), "example", "existing-key"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, "store.bin")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if damage == "truncated" {
+				raw = raw[:1]
+			} else {
+				raw[len(raw)-1] ^= 1
+			}
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			legacy := filepath.Join(home, "auth.json")
+			if err := os.WriteFile(legacy, []byte(`{"profiles":{},"defaults":{}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := OpenCredentials(home); err == nil {
+				t.Fatal("opened a damaged store or fell back to plaintext")
+			}
+			if _, err := os.Stat(legacy); err != nil {
+				t.Fatal("failed migration removed the legacy store")
+			}
+			if err := store.SetAPIKey(t.Context(), "other", "new-key"); err == nil {
+				t.Fatal("replaced a damaged store during login")
+			}
+			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, raw) {
+				t.Fatal("damaged store was overwritten")
+			}
+		})
+	}
+}
+
+func TestCredentialMigrationRemovesPlaintextAndPreservesNewerTokens(t *testing.T) {
+	for _, existingStore := range []bool{false, true} {
+		name := "legacy only"
+		if existingStore {
+			name = "already published"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			want := "legacy-key"
+			if existingStore {
+				store, err := OpenCredentials(home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = "refreshed-key"
+				if err := store.SetAPIKey(t.Context(), "example", want); err != nil {
+					t.Fatal(err)
+				}
+			}
+			legacy := filepath.Join(home, "auth.json")
+			if err := os.WriteFile(legacy, []byte(`{"profiles":{"work":{"provider":"example","kind":"api_key","payload":{"token":"legacy-key"}}},"defaults":{"example":"work"}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := OpenCredentials(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if token, ok, err := store.APIKey("example"); err != nil || !ok || token != want {
+				t.Fatalf("migrated API key = %q, %v, %v", token, ok, err)
+			}
+			if _, err := os.Stat(legacy); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("plaintext credentials remain: %v", err)
+			}
+			if raw, err := os.ReadFile(filepath.Join(home, "store.bin")); err != nil || bytes.Contains(raw, []byte(want)) {
+				t.Fatal("migration did not persist opaque credentials")
+			}
+		})
 	}
 }

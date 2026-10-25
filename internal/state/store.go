@@ -99,10 +99,10 @@ type apiKeyPayload struct {
 }
 
 type Store struct {
-	mu       sync.Mutex
-	dir      string
-	path     string
-	authPath string
+	mu             sync.Mutex
+	dir            string
+	path           string
+	credentialPath string
 }
 
 func Open(home string) (*Store, error) {
@@ -120,16 +120,19 @@ func Open(home string) (*Store, error) {
 	return store, nil
 }
 
-// OpenCredentials opens auth.json independently of application configuration.
+// OpenCredentials opens the credential store independently of application configuration.
 func OpenCredentials(home string) (*Store, error) {
 	if err := inspectHome(home); err != nil {
 		return nil, err
 	}
-	store := &Store{dir: home, path: filepath.Join(home, "config.json"), authPath: filepath.Join(home, "auth.json")}
-	if err := privatefs.InspectRegularFile(store.authPath, "credential store"); err != nil {
+	store := &Store{dir: home, path: filepath.Join(home, "config.json"), credentialPath: filepath.Join(home, "store.bin")}
+	if err := privatefs.InspectRegularFile(store.credentialPath, "credential store"); err != nil {
 		return nil, err
 	}
-	privatefs.TryRestrictPermissions(store.authPath)
+	privatefs.TryRestrictPermissions(store.credentialPath)
+	if err := store.migrateCredentials(); err != nil {
+		return nil, err
+	}
 	if _, err := store.loadCredentials(); err != nil {
 		return nil, err
 	}
@@ -235,7 +238,7 @@ func (store *Store) UpdateCredential(ctx context.Context, provider string, updat
 	if err := privatefs.EnsureDirectory(store.dir, "state directory"); err != nil {
 		return err
 	}
-	lock, err := acquireStateLock(ctx, filepath.Join(store.dir, "auth.lock"), "credential store")
+	lock, err := acquireStateLock(ctx, filepath.Join(store.dir, "store.lock"), "credential store")
 	if err != nil {
 		return err
 	}
@@ -276,7 +279,7 @@ func (store *Store) UpdateCredential(ctx context.Context, provider string, updat
 		credentials.Profiles[name] = after
 		credentials.Defaults[provider] = name
 	}
-	return store.saveJSON(store.authPath, "credentials", credentials)
+	return store.saveCredentials(credentials)
 }
 
 func (store *Store) Dir() string { return store.dir }
@@ -296,39 +299,15 @@ func (store *Store) loadConfig() (configDocument, error) {
 	return document, nil
 }
 
-func (store *Store) loadCredentials() (credentialData, error) {
-	credentials := credentialData{
-		Profiles: make(map[string]CredentialProfile),
-		Defaults: make(map[string]string),
-	}
-	raw, err := os.ReadFile(store.authPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return credentials, nil
-	}
-	if err != nil {
-		return credentialData{}, fmt.Errorf("read credentials: %w", err)
-	}
-	if err := json.Unmarshal(raw, &credentials); err != nil {
-		return credentialData{}, fmt.Errorf("decode credentials: %w", err)
-	}
-	if credentials.Profiles == nil {
-		credentials.Profiles = make(map[string]CredentialProfile)
-	}
-	if credentials.Defaults == nil {
-		credentials.Defaults = make(map[string]string)
-	}
-	return credentials, nil
-}
-
-func (store *Store) saveJSON(path, label string, value any) error {
-	return saveJSONAtomic(store.dir, path, label, value)
-}
-
 func saveJSONAtomic(dir, path, label string, value any) error {
 	raw, err := json.Marshal(value, json.Deterministic(true), jsontext.WithIndentPrefix(""), jsontext.WithIndent("  "))
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", label, err)
 	}
+	return writeStateAtomic(dir, path, label, append(raw, '\n'))
+}
+
+func writeStateAtomic(dir, path, label string, raw []byte) error {
 	if err := ensureHome(dir); err != nil {
 		return err
 	}
@@ -345,7 +324,7 @@ func saveJSONAtomic(dir, path, label string, value any) error {
 	if err := file.Chmod(0o600); err != nil {
 		return fail("restrict temporary", err)
 	}
-	if _, err := file.Write(append(raw, '\n')); err != nil {
+	if _, err := file.Write(raw); err != nil {
 		return fail("write", err)
 	}
 	if err := file.Sync(); err != nil {

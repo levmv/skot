@@ -244,7 +244,7 @@ func TestCodexRefreshIsSharedAcrossStoresAndMasksRotatedTokens(t *testing.T) {
 	if value, ok, err := store.APIKey("deepseek"); err != nil || !ok || value != "other-key" {
 		t.Fatal("refresh overwrote another provider credential")
 	}
-	for _, name := range []string{"auth.json", "auth.lock"} {
+	for _, name := range []string{"store.bin", "store.lock"} {
 		info, err := os.Stat(filepath.Join(home, name))
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s is not private", name)

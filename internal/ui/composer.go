@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -73,6 +74,30 @@ func (composer composerState) height() int { return composer.editor.Height() }
 func (composer composerState) view() string { return composer.editor.View() }
 
 func (composer composerState) cursor() *tea.Cursor { return composer.editor.Cursor() }
+
+func (composer composerState) cursorOffset() int {
+	lines := strings.Split(composer.value(), "\n")
+	row := min(composer.editor.Line(), len(lines)-1)
+	offset := 0
+	for index := 0; index < row; index++ {
+		offset += len(lines[index]) + 1
+	}
+	runes := []rune(lines[row])
+	return offset + len(string(runes[:min(composer.editor.Column(), len(runes))]))
+}
+
+func (composer *composerState) setValueAt(value string, offset int) {
+	composer.setValue(value)
+	// SetValue may truncate text at the editor's size limit.
+	value = composer.value()
+	offset = min(offset, len(value))
+	composer.moveToBegin()
+	for row := strings.Count(value[:offset], "\n"); composer.editor.Line() < row; {
+		composer.editor.CursorDown()
+	}
+	lineStart := strings.LastIndex(value[:offset], "\n") + 1
+	composer.editor.SetCursorColumn(utf8.RuneCountInString(value[lineStart:offset]))
+}
 
 func (composer *composerState) update(message tea.Msg) tea.Cmd {
 	var command tea.Cmd

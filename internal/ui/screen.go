@@ -17,6 +17,7 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
 	modelapi "github.com/levmv/skot/model"
+	"github.com/levmv/skot/skills"
 )
 
 const (
@@ -31,10 +32,10 @@ const (
 
 type ConversationAgent interface {
 	SessionStatus() agent.SessionStatus
-	Run(context.Context, string, agent.EmitFunc) (agent.RunResult, error)
-	QueueInput(string) error
-	ClaimQueued() (string, bool)
-	PopQueued() (string, bool)
+	RunInput(context.Context, agent.Input, agent.EmitFunc) (agent.RunResult, error)
+	QueueUserInput(agent.Input) error
+	ClaimQueuedInput() (agent.Input, bool)
+	PopQueuedInput() (agent.Input, bool)
 	QueuedInputs() []string
 	State(context.Context) (agent.State, error)
 	ToolStatus(string) ([]modelapi.Detail, bool)
@@ -52,6 +53,9 @@ type ShellAgent interface {
 type Agent interface {
 	ConversationAgent
 	ShellAgent
+	PrepareInput(string, ...string) (agent.Input, error)
+	Skills() skills.Catalog
+	ClearSkills(context.Context) error
 
 	// Configuration.
 	CurrentToolSet() string
@@ -236,12 +240,13 @@ type screenModel struct {
 	agent  Agent
 	config Config
 
-	composer   composerState
-	secret     textinput.Model
-	picker     pickerState
-	transcript transcriptState
-	keymap     keyMap
-	keyboard   terminalKeyboardState
+	composer    composerState
+	skillSearch skillSearchState
+	secret      textinput.Model
+	picker      pickerState
+	transcript  transcriptState
+	keymap      keyMap
+	keyboard    terminalKeyboardState
 
 	modelChoices   []ModelChoice
 	providers      []ProviderStatus
@@ -642,8 +647,8 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 			return m, cmd
 		}
 		m.refreshSessionStatus()
-		if input, ok := m.agent.ClaimQueued(); ok {
-			m.addBlock(screenBlockUser, input)
+		if input, ok := m.agent.ClaimQueuedInput(); ok {
+			m.addUserBlock(input.Text, input.InstructionReferences())
 			cmd := m.startTurn(input)
 			m.refreshTranscript()
 			return m, cmd

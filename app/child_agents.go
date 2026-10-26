@@ -452,7 +452,7 @@ func (supervisor *childSupervisor) start(ctx context.Context, parentID, prompt, 
 	if err != nil {
 		return nil, err
 	}
-	if err := supervisor.launchLocked(child, prompt); err != nil {
+	if err := supervisor.launchLocked(child, agent.Input{Text: prompt, ReadOnlyPaths: agent.ToolReadOnlyPaths(ctx)}); err != nil {
 		return nil, errors.Join(err, cancelAndDiscardNewChild(child))
 	}
 	if err := publishNewChild(child); err != nil {
@@ -487,7 +487,7 @@ func (supervisor *childSupervisor) send(ctx context.Context, parentID, childID, 
 			return nil, fmt.Errorf("active child agent limit reached (%d)", maxActiveChildren)
 		}
 	}
-	if err := supervisor.launchLocked(child, prompt); err != nil {
+	if err := supervisor.launchLocked(child, agent.Input{Text: prompt, ReadOnlyPaths: agent.ToolReadOnlyPaths(ctx)}); err != nil {
 		return nil, err
 	}
 	supervisor.signalLocked()
@@ -558,7 +558,7 @@ func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parent
 	return &childAgent{metadata: metadata, dir: stagingDir, journal: journal, runtime: runtime}, nil
 }
 
-func (supervisor *childSupervisor) launchLocked(child *childAgent, prompt string) error {
+func (supervisor *childSupervisor) launchLocked(child *childAgent, input agent.Input) error {
 	child.mu.Lock()
 	if child.metadata.Stopped {
 		child.mu.Unlock()
@@ -586,7 +586,7 @@ func (supervisor *childSupervisor) launchLocked(child *childAgent, prompt string
 	var startOnce sync.Once
 	signalStarted := func(err error) { startOnce.Do(func() { started <- err }) }
 	go func() {
-		result, runErr := runtime.Run(runCtx, prompt, func(event agent.Event) {
+		result, runErr := runtime.RunInput(runCtx, input, func(event agent.Event) {
 			if event.Kind == agent.EventRunStarted && event.RunID != "" {
 				child.mu.Lock()
 				run.RunID = event.RunID

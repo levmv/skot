@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ type ConversationBlock struct {
 	ToolLimitReached bool
 	DetachedJobs     []string
 	Entries          []ConversationEntry
+	// InputInstructions survive compaction at their original user authority.
+	InputInstructions  []Instruction
+	InputReadOnlyPaths []string
 }
 
 type ConversationEntry struct {
@@ -52,6 +56,9 @@ type State struct {
 	DeliveredJobs map[string]struct{}
 	DetachedJobs  []string
 	LastSequence  uint64
+	// InputContextClearedThrough affects model projection and resource requests,
+	// never the historical transcript in Items or Blocks.
+	InputContextClearedThrough uint64
 	// lastRequiredSequence advances only for records which participate in the
 	// semantic session projection. Auxiliary diagnostics leave it unchanged.
 	lastRequiredSequence uint64
@@ -97,11 +104,10 @@ func (state State) VerbatimItems() []model.Item {
 	return state.verbatimItemsFromSequence(state.firstVerbatimSequence(), true)
 }
 
-// verbatimModelItems returns an owned projection source without product-only
-// details. Model requests and context estimates discard those details, so
-// copying potentially large JSON payloads here would be pure overhead.
-func (state State) verbatimModelItems() []model.Item {
-	return state.verbatimModelItemsFromSequence(state.firstVerbatimSequence())
+// modelItems returns retained user instructions followed by the verbatim tail,
+// without product-only details. Requests and context estimates share this source.
+func (state State) modelItems() []model.Item {
+	return state.modelItemsFromSequence(state.firstVerbatimSequence())
 }
 
 func (state State) firstVerbatimSequence() uint64 {
@@ -111,8 +117,38 @@ func (state State) firstVerbatimSequence() uint64 {
 	return 0
 }
 
-func (state State) verbatimModelItemsFromSequence(firstSequence uint64) []model.Item {
-	return state.verbatimItemsFromSequence(firstSequence, false)
+func (state State) modelItemsFromSequence(firstSequence uint64) []model.Item {
+	// Retain the latest version of each source unless it is already in the tail.
+	// Compaction requests restrict Blocks to the prefix being summarized.
+	var items []model.Item
+	seen := make(map[string]bool)
+	for _, block := range slices.Backward(state.Blocks) {
+		if block.StartSequence <= state.InputContextClearedThrough {
+			continue
+		}
+		var retained []Instruction
+		for _, instruction := range slices.Backward(block.InputInstructions) {
+			if instruction.Text == "" {
+				continue
+			}
+			if instruction.Key != "" {
+				if seen[instruction.Key] {
+					continue
+				}
+				seen[instruction.Key] = true
+			}
+			if block.StartSequence < firstSequence {
+				retained = append(retained, instruction)
+			}
+		}
+		if len(retained) != 0 {
+			slices.Reverse(retained)
+			text := (Input{Instructions: retained}).instructionsText()
+			items = append(items, model.Item{Kind: model.ItemUserText, Text: text})
+		}
+	}
+	slices.Reverse(items)
+	return append(items, state.verbatimItemsFromSequence(firstSequence, false)...)
 }
 
 func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetails bool) []model.Item {
@@ -123,6 +159,10 @@ func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetail
 		}
 		for _, entry := range block.Entries {
 			item := cloneItemForProjection(entry.Item, includeDetails)
+			if !includeDetails && block.StartSequence <= state.InputContextClearedThrough &&
+				entry.Sequence == block.StartSequence && len(block.InputInstructions) != 0 {
+				item.Text = InputText(entry.Item)
+			}
 			if item.Kind == model.ItemToolResult && item.ToolResult != nil && state.ToolPruning != nil && entry.Sequence <= state.ToolPruning.ThroughSequence {
 				item.ToolResult.Content = pruneToolResult(item.ToolResult.Content, state.ToolPruning.HeadBytes, state.ToolPruning.TailBytes)
 			}

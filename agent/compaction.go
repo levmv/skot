@@ -228,10 +228,9 @@ func (runtime *Runtime) compactionInputTargetEnd(state State, spec runRequestSpe
 	if runtime.modelInfo.ContextWindow == 0 {
 		return desiredTargetEnd
 	}
-	first, last := activeStart+1, desiredTargetEnd
-	selected := activeStart
-	for first <= last {
-		candidateEnd := first + (last-first)/2
+	// Including a newer instruction can replace a larger retained version, so
+	// input size is not monotonic in the prefix length.
+	for candidateEnd := desiredTargetEnd; candidateEnd > activeStart; candidateEnd-- {
 		candidate := state
 		candidate.Blocks = candidate.Blocks[:candidateEnd]
 		prompt := compactionPrompt(
@@ -240,13 +239,10 @@ func (runtime *Runtime) compactionInputTargetEnd(state State, spec runRequestSpe
 		)
 		report := runtime.requestReport(candidate, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
 		if report.TotalInputTokens <= report.InputLimit {
-			selected = candidateEnd
-			first = candidateEnd + 1
-		} else {
-			last = candidateEnd - 1
+			return candidateEnd
 		}
 	}
-	return selected
+	return activeStart
 }
 
 // The proportional target adapts to ordinary model sizes. Absolute bounds keep
@@ -274,7 +270,7 @@ func compactionPrompt(instructions, runtimeFacts string) string {
 }
 
 func (runtime *Runtime) projectedTailTokens(state State, spec runRequestSpec, firstBlock int) int {
-	items := state.verbatimModelItemsFromSequence(state.Blocks[firstBlock].StartSequence)
+	items := state.modelItemsFromSequence(state.Blocks[firstBlock].StartSequence)
 	items, boundary := runtime.projectedItemsForRequest(state, items, spec.extraUserText)
 	return estimateItemsTokens(items[:boundary])
 }

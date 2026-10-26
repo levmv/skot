@@ -60,6 +60,9 @@ func seatbeltProfile(boundary Boundary) string {
 			paths,
 			paths,
 		)
+		for _, path := range boundary.ReadOnlyPaths {
+			profile += fmt.Sprintf("(allow file-read* (subpath %q))\n", path)
+		}
 	}
 	for _, path := range boundary.ProtectedPaths {
 		path = canonicalpath.Resolve(path)

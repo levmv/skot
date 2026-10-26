@@ -52,6 +52,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-scope value` | `SK_SCOPE` | Choose where the model's tools can access files: `workspace` or `machine`. Default: `workspace`. |
 | `-add-dir path` | — | Add a directory tree to `workspace` scope. Repeat the flag to add more than one. |
 | `-protect-path path` | — | Hide a path from model-owned tools for this run. Repeat the flag to protect more than one. |
+| `-skill name-or-path` | — | Select an installed skill for a one-shot request by name or absolute `SKILL.md` path. Repeatable. |
 | `-home path` | `SK_HOME` | Select the Skot data directory. Default: `~/.skot`. |
 | `-journal path` | — | Use an explicit JSONL session journal. |
 | `-save-session` | — | Retain a one-shot invocation as a resumable managed session. |
@@ -205,6 +206,7 @@ recent session for that workspace.
 | `/login [provider]` | Sign in to a provider or service. |
 | `/model [provider/model]` | List or switch models. |
 | `/tools [name]` | Show or switch the active tool set. |
+| `/skills [clear]` | Search local skills, or remove all attached skills from the current conversation. |
 | `/scope [workspace|machine]` | Show or change the filesystem scope, added directories, and protected paths. |
 | `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
 | `/display [compact|detailed|full]` | Show or persist transcript detail. Default: `compact`. |
@@ -213,16 +215,6 @@ recent session for that workspace.
 | `/logout [provider]` | Remove stored credentials. |
 | `/exit`, `/quit`, `/q` | Exit Skot. |
 
-Enter sends a message; Shift/Alt+Enter or Ctrl+J inserts a newline. Escape
-interrupts current work, Alt+Up returns the newest pending message to the
-editor, and Ctrl+C interrupts while working or exits when idle.
-
-Shift+Tab cycles the filesystem scope, including while a turn is running.
-
-Use `/display` to choose transcript detail. On terminals that support them,
-Ctrl+1, Ctrl+2, and Ctrl+3 select `compact`, `detailed`, and `full` directly.
-Outside macOS, Ctrl+Up and Ctrl+Down move between detail levels.
-
 `! command` runs a shell command and includes its result in the conversation.
 `!! command` runs it privately. Both are user-owned commands and therefore use
 the user's normal environment and filesystem permissions rather than the
@@ -230,6 +222,26 @@ model-owned filesystem scope.
 
 Skot loads applicable `AGENTS.md` instructions from the workspace root down
 to the current directory.
+
+### Skills
+
+Skot reads packages in the [Agent Skills format](https://agentskills.io/specification)
+from `.agents/skills` under the workspace root and `skills` under its data
+directory (`~/.skot/skills` by default). Project skills take precedence over
+user skills with the same name.
+
+Skills are selected explicitly with `/skills`, `$name` references anywhere in a
+request, or `-skill name` for one-shot requests. `$"/absolute/path/SKILL.md"`
+selects a specific package from these directories. References in code or escaped
+as `\$name` are ordinary text.
+
+Selected instructions stay in the conversation across compaction and resume.
+Supporting files outside the workspace remain readable while the skill is
+installed and not protected. `/skills clear` removes the attached instructions
+and this extra access.
+
+`user-invocable: false` excludes a skill from manual use. Fields such as
+`allowed-tools`, `model`, and `hooks` are not applied.
 
 ## Tools and tool sets
 
@@ -374,8 +386,9 @@ ordinary environment and filesystem permissions.
 ### Filesystem scopes
 
 - `workspace` (default) limits built-in file tools and model-owned processes to
-  the workspace and any added directories. Processes also receive required
-  runtime files and a disposable per-workspace tool home;
+  the workspace and any added directories, with read access to selected skill
+  directories. Processes also receive required runtime files and a disposable
+  per-workspace tool home;
 - `machine` lets explicit built-in file paths and model-owned processes reach
   the surrounding filesystem, minus any explicit protected paths. Inside a
   container, “machine” means that container's filesystem boundary, not the host

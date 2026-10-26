@@ -69,6 +69,8 @@ func (reducer *stateReducer) applyRecord(record Record) error {
 		return reducer.applyRunStarted(record)
 	case RecordRunInputAdded:
 		return reducer.applyRunInputAdded(record)
+	case RecordInputContextCleared:
+		return reducer.applyInputContextCleared(record)
 	case RecordModelResponse:
 		return reducer.applyModelResponse(record)
 	case RecordToolResult:
@@ -187,13 +189,16 @@ func (reducer *stateReducer) applyRunInputAdded(record Record) error {
 		return fmt.Errorf("input for inactive run %q at sequence %d", payload.RunID, record.Sequence)
 	}
 	state := &reducer.state
-	item := model.Item{Kind: model.ItemUserText, Text: payload.Text}
+	input := Input{Text: payload.Text, Instructions: payload.Instructions}
+	item := input.item()
 	state.Items = append(state.Items, item)
 	state.Blocks = append(state.Blocks, ConversationBlock{
-		RunID:         payload.RunID,
-		StartSequence: record.Sequence,
-		EndSequence:   record.Sequence,
-		Entries:       []ConversationEntry{{Sequence: record.Sequence, Time: record.Time, Item: item}},
+		RunID:              payload.RunID,
+		StartSequence:      record.Sequence,
+		EndSequence:        record.Sequence,
+		InputInstructions:  input.Instructions,
+		InputReadOnlyPaths: payload.ReadOnlyPaths,
+		Entries:            []ConversationEntry{{Sequence: record.Sequence, Time: record.Time, Item: item}},
 	})
 	reducer.blockByRun[payload.RunID] = len(state.Blocks) - 1
 	return nil

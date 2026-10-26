@@ -133,7 +133,8 @@ func sandboxWritableDirs(boundary Boundary) []string {
 func applyToolLandlock(boundary Boundary) error {
 	switch boundary.Scope {
 	case ScopeWorkspace:
-		readDirs, readFiles, err := landlockPathsExcept(sandboxReadOnlyDirs, boundary.ProtectedPaths)
+		readRoots := append(append([]string(nil), sandboxReadOnlyDirs...), boundary.ReadOnlyPaths...)
+		readDirs, readFiles, err := landlockPathsExcept(readRoots, boundary.ProtectedPaths)
 		if err != nil {
 			return err
 		}

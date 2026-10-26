@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -235,6 +236,48 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			knownModel = &modelInfo
 		}
 	}
+	application := &Application{
+		config: applicationConfig{
+			settings:                 settingsStore,
+			interactive:              interactiveStore,
+			tools:                    append([]agent.Tool(nil), catalog...),
+			programDeclarations:      append([]workspacetools.ProgramTool(nil), builtCatalog.programDeclarations...),
+			programToolsFile:         builtCatalog.programToolsFile,
+			applicationBuild:         build,
+			toolSets:                 toolSets,
+			systemPrompt:             config.SystemPrompt,
+			systemPromptExplicit:     config.SystemPromptExplicit,
+			root:                     root,
+			home:                     home,
+			skillSources:             slices.Clone(config.SkillSources),
+			invocationAddedPaths:     layers.invocationAdded,
+			invocationProtectedPaths: layers.invocationProtected,
+			settingsProtectedPaths:   layers.settingsProtected,
+			baseURL:                  config.BaseURL,
+			modelAPI:                 modelAPIOverride,
+			contextWindow:            config.ContextWindow,
+			metadataLookup:           modelconfig.OpenRouterContextWindow,
+			retryBudget:              config.RetryBudget,
+			streamIdleTimeout:        config.StreamIdleTimeout,
+			maxToolIterations:        config.MaxToolIterations,
+			masker:                   masker,
+			awaitRequiredJobs:        !config.Interactive,
+		},
+		state: applicationState{
+			session:                 currentSession,
+			processes:               processes,
+			children:                children,
+			toolSet:                 config.ToolSet,
+			theme:                   theme,
+			displayProfile:          displayProfile,
+			security:                security,
+			additions:               layers.additions,
+			protection:              layers.protection,
+			workspaceAddedPaths:     layers.workspaceAdded,
+			workspaceProtectedPaths: layers.workspaceProtected,
+			startupNotices:          notices,
+		},
+	}
 	builder := runtimeBuilder{
 		baseURL:           config.BaseURL,
 		modelAPI:          modelAPIOverride,
@@ -254,6 +297,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		scope:             security.snapshot(),
 		awaitRequiredJobs: !config.Interactive,
 		sanitize:          masker.Redact,
+
+		authorizeReadOnlyPaths: application.authorizeSkillPaths,
 	}
 	buildParams := runtimeBuildParams{
 		journal:           journal,
@@ -293,47 +338,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	notices = append(notices, processes.AttachSessionNotices(runtimeSessionID)...)
 	currentSession.runtime = runtime
-	return &Application{
-		config: applicationConfig{
-			settings:                 settingsStore,
-			interactive:              interactiveStore,
-			tools:                    append([]agent.Tool(nil), catalog...),
-			programDeclarations:      append([]workspacetools.ProgramTool(nil), builtCatalog.programDeclarations...),
-			programToolsFile:         builtCatalog.programToolsFile,
-			applicationBuild:         build,
-			toolSets:                 toolSets,
-			systemPrompt:             config.SystemPrompt,
-			systemPromptExplicit:     config.SystemPromptExplicit,
-			root:                     root,
-			home:                     home,
-			invocationAddedPaths:     layers.invocationAdded,
-			invocationProtectedPaths: layers.invocationProtected,
-			settingsProtectedPaths:   layers.settingsProtected,
-			baseURL:                  config.BaseURL,
-			modelAPI:                 modelAPIOverride,
-			contextWindow:            config.ContextWindow,
-			metadataLookup:           modelconfig.OpenRouterContextWindow,
-			retryBudget:              config.RetryBudget,
-			streamIdleTimeout:        config.StreamIdleTimeout,
-			maxToolIterations:        config.MaxToolIterations,
-			masker:                   masker,
-			awaitRequiredJobs:        !config.Interactive,
-		},
-		state: applicationState{
-			session:                 currentSession,
-			processes:               processes,
-			children:                children,
-			toolSet:                 config.ToolSet,
-			theme:                   theme,
-			displayProfile:          displayProfile,
-			security:                security,
-			additions:               layers.additions,
-			protection:              layers.protection,
-			workspaceAddedPaths:     layers.workspaceAdded,
-			workspaceProtectedPaths: layers.workspaceProtected,
-			startupNotices:          notices,
-		},
-	}, nil
+	application.state.startupNotices = notices
+	return application, nil
 }
 
 // applyRememberedModelPreference resolves the interactive model fallback. A

@@ -17,6 +17,13 @@ type toolExecution struct {
 }
 
 func (runtime *Runtime) executeToolCalls(ctx context.Context, live *stateReducer, emit EmitFunc, runID string, calls []model.ToolCall) (bool, error) {
+	var paths []string
+	if runtime.authorizeReadOnlyPaths != nil {
+		if requested := live.state.readOnlyPaths(); len(requested) != 0 {
+			paths = runtime.authorizeReadOnlyPaths(requested)
+		}
+	}
+	ctx = WithToolReadOnlyPaths(ctx, paths)
 	for start := 0; start < len(calls); {
 		if err := ctx.Err(); err != nil {
 			return true, nil

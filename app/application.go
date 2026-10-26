@@ -14,6 +14,7 @@ import (
 	"github.com/levmv/skot/internal/state"
 	"github.com/levmv/skot/internal/toolpolicy"
 	"github.com/levmv/skot/model"
+	"github.com/levmv/skot/skills"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -50,6 +51,7 @@ type applicationConfig struct {
 	systemPromptExplicit bool
 	root                 string
 	home                 string
+	skillSources         []skills.Source
 	// invocation and settings paths are the filesystem-policy layers a running
 	// session does not own: flags last for this run, config.json for every run
 	// using that data directory.
@@ -85,12 +87,27 @@ type applicationState struct {
 	accountQuota            accountQuotaCache
 }
 
+// Run captures $name skill references in input and submits the message.
+// Use RunInput to submit text without interpreting skill references.
 func (application *Application) Run(ctx context.Context, input string, emit agent.EmitFunc) (agent.RunResult, error) {
+	prepared, err := application.PrepareInput(input)
+	if err != nil {
+		return agent.RunResult{}, err
+	}
+	return application.RunInput(ctx, prepared, emit)
+}
+
+// RunInput submits an input whose supplementary context has already been captured.
+func (application *Application) RunInput(ctx context.Context, input agent.Input, emit agent.EmitFunc) (agent.RunResult, error) {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return agent.RunResult{}, err
 	}
-	result, runErr := runtime.Run(ctx, input, emit)
+	result, runErr := runtime.RunInput(ctx, input, emit)
+	var contextErr *agent.ContextLimitError
+	if errors.As(runErr, &contextErr) && contextErr.AttachedTokens > 0 {
+		runErr = fmt.Errorf("%w; use /skills clear to remove attached skills, or select a model with a larger context window", runErr)
+	}
 	application.mu.RLock()
 	current := application.state.session
 	children := application.state.children
@@ -322,28 +339,53 @@ func (application *Application) Usage(ctx context.Context, afterSequence uint64)
 	return runtime.Usage(ctx, afterSequence)
 }
 
+// QueueInput captures $name skill references before queuing the message.
+// Use QueueUserInput to queue text without interpreting skill references.
 func (application *Application) QueueInput(input string) error {
+	prepared, err := application.PrepareInput(input)
+	if err != nil {
+		return err
+	}
+	return application.QueueUserInput(prepared)
+}
+
+// QueueUserInput retains captured context while a request waits for delivery.
+func (application *Application) QueueUserInput(input agent.Input) error {
 	runtime, err := application.requireRuntime()
 	if err != nil {
 		return err
 	}
-	return runtime.QueueInput(input)
+	return runtime.QueueUserInput(input)
 }
 
+// ClaimQueued removes the oldest input and returns its authored text.
+// Use ClaimQueuedInput to retain captured instructions and resource requests.
 func (application *Application) ClaimQueued() (string, bool) {
-	runtime := application.runtimeOrNil()
-	if runtime == nil {
-		return "", false
-	}
-	return runtime.ClaimQueued()
+	input, ok := application.ClaimQueuedInput()
+	return input.Text, ok
 }
 
-func (application *Application) PopQueued() (string, bool) {
+func (application *Application) ClaimQueuedInput() (agent.Input, bool) {
 	runtime := application.runtimeOrNil()
 	if runtime == nil {
-		return "", false
+		return agent.Input{}, false
 	}
-	return runtime.PopQueued()
+	return runtime.ClaimQueuedInput()
+}
+
+// PopQueued removes the newest input and returns its authored text.
+// Use PopQueuedInput to retain captured instructions and resource requests.
+func (application *Application) PopQueued() (string, bool) {
+	input, ok := application.PopQueuedInput()
+	return input.Text, ok
+}
+
+func (application *Application) PopQueuedInput() (agent.Input, bool) {
+	runtime := application.runtimeOrNil()
+	if runtime == nil {
+		return agent.Input{}, false
+	}
+	return runtime.PopQueuedInput()
 }
 
 func (application *Application) QueuedInputs() []string {
@@ -647,6 +689,8 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		scope:             security.snapshot(),
 		awaitRequiredJobs: awaitRequiredJobs,
 		sanitize:          masker.Redact,
+
+		authorizeReadOnlyPaths: application.authorizeSkillPaths,
 		externalWork: applicationExternalWork{
 			processes: processExternalWork{processes: processes, await: awaitRequiredJobs}, agents: children,
 		},

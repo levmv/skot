@@ -40,7 +40,7 @@ func TestCompactionAcceptsInputForTheNextTurn(t *testing.T) {
 	if command != nil || model.operation.kind != operationCompaction {
 		t.Fatalf("submit command=%v operation=%#v", command, model.operation)
 	}
-	if len(fake.queued) != 1 || fake.queued[0] != "follow up" || model.composer.value() != "" {
+	if len(fake.queued) != 1 || fake.queued[0].Text != "follow up" || model.composer.value() != "" {
 		t.Fatalf("queue=%#v input=%q", fake.queued, model.composer.value())
 	}
 

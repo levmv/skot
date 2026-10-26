@@ -468,6 +468,62 @@ func TestSubtractModelUsageIncludesReasoningTokens(t *testing.T) {
 	}
 }
 
+func TestDelegatedChildCanReadAttachedSkillResources(t *testing.T) {
+	home := canonicalApplicationTestRoot(t, t.TempDir())
+	root := canonicalApplicationTestRoot(t, t.TempDir())
+	manifest := writeApplicationSkill(t, filepath.Join(home, "skills"), "review", "Read reference.md before reviewing.\n", "")
+	reference := filepath.Join(filepath.Dir(manifest), "reference.md")
+	const contents = "Package-specific review procedure."
+	if err := os.WriteFile(reference, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	readArguments, err := json.Marshal(map[string]string{"path": reference})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRead := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		decoded, err := decodeChildTestRequest(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if decoded.Prompt == "read attached resource" {
+			if decoded.LastToolResult == "" {
+				writeChildTestNamedToolCall(t, writer, "read", string(readArguments))
+			} else {
+				childRead <- decoded.LastToolResult
+				writeChildTestAnswer(t, writer, "reviewed")
+			}
+			return
+		}
+		if decoded.LastToolResult == "" {
+			writeChildTestToolCall(t, writer, `{"action":"start","prompt":"read attached resource"}`)
+		} else {
+			writeChildTestAnswer(t, writer, "delegated")
+		}
+	}))
+	t.Cleanup(server.Close)
+	config := childTestConfig(home, root, server.URL+"/v1", false)
+	config.Scope = ScopeWorkspace
+	application, err := Open(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if _, err := application.Run(t.Context(), "$review delegate the review", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-childRead:
+		if !strings.Contains(result, contents) {
+			t.Fatalf("child could not read the selected skill's resource: %s", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("child did not finish reading the skill resource")
+	}
+}
+
 func TestOneShotParentIsRetainedWhenItStartsChildAgent(t *testing.T) {
 	childStarted := make(chan struct{}, 1)
 	releaseChild := make(chan struct{})
@@ -509,6 +565,7 @@ func TestOneShotParentIsRetainedWhenItStartsChildAgent(t *testing.T) {
 	if application.SessionID() != "" {
 		t.Fatal("one-shot session was resumable before delegation")
 	}
+	t.Cleanup(func() { _ = application.Close() })
 	result, err := application.Run(context.Background(), "delegate", nil)
 	if err != nil || result.Answer != "delegated" {
 		t.Fatalf("parent result = %#v, %v", result, err)
@@ -694,10 +751,11 @@ func runChildTestTool(t *testing.T, tool agent.Tool, parentID string, args child
 }
 
 type childTestRequest struct {
-	Prompt   string
-	Tools    []string
-	Model    string
-	Boundary string
+	Prompt         string
+	Tools          []string
+	Model          string
+	Boundary       string
+	LastToolResult string
 }
 
 func decodeChildTestRequest(body io.Reader) (childTestRequest, error) {
@@ -720,6 +778,8 @@ func decodeChildTestRequest(body io.Reader) (childTestRequest, error) {
 	for _, message := range request.Messages {
 		if message.Role == "user" {
 			decoded.Prompt = message.Content
+		} else if message.Role == "tool" {
+			decoded.LastToolResult = message.Content
 		} else if message.Role == "system" && strings.Contains(message.Content, "Child agent ") {
 			decoded.Boundary += message.Content
 		}
@@ -753,12 +813,17 @@ func writeChildTestAnswer(t *testing.T, writer http.ResponseWriter, answer strin
 
 func writeChildTestToolCall(t *testing.T, writer http.ResponseWriter, arguments string) {
 	t.Helper()
+	writeChildTestNamedToolCall(t, writer, "agent", arguments)
+}
+
+func writeChildTestNamedToolCall(t *testing.T, writer http.ResponseWriter, name, arguments string) {
+	t.Helper()
 	payload, err := json.Marshal(map[string]any{
 		"choices": []any{map[string]any{
 			"index": 0,
 			"delta": map[string]any{"tool_calls": []any{map[string]any{
 				"index": 0, "id": "provider_agent_call", "type": "function",
-				"function": map[string]string{"name": "agent", "arguments": arguments},
+				"function": map[string]string{"name": name, "arguments": arguments},
 			}}},
 			"finish_reason": "tool_calls",
 		}},

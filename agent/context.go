@@ -33,6 +33,24 @@ type ContextReport struct {
 	ToolPruningCount     int
 }
 
+// ContextLimitError reports a request that context maintenance could not fit.
+// AttachedTokens estimates instructions retained outside the ordinary summary.
+type ContextLimitError struct {
+	Report         ContextReport
+	AttachedTokens int
+	Cause          error
+}
+
+func (err *ContextLimitError) Error() string {
+	message := fmt.Sprintf("estimated model input is %d tokens (limit %d) and automatic context reduction failed: %v", err.Report.TotalInputTokens, err.Report.InputLimit, err.Cause)
+	if err.AttachedTokens > 0 {
+		message += fmt.Sprintf("; attached instructions retain approximately %d tokens", err.AttachedTokens)
+	}
+	return message
+}
+
+func (err *ContextLimitError) Unwrap() error { return err.Cause }
+
 // SessionStatus is the coherent, presentation-neutral status of one journal
 // projection. Runtime publishes complete values at operation boundaries so
 // observers never have to replay the journal or assemble a partial view.
@@ -56,7 +74,7 @@ func (runtime *Runtime) publishSessionStatus(state State) {
 
 func (runtime *Runtime) calculateSessionStatus(state State) SessionStatus {
 	return SessionStatus{
-		ContextReport: runtime.contextReport(state, runtime.QueuedInputs()...),
+		ContextReport: runtime.contextReport(state, runtime.queuedModelInputs(state)...),
 		Usage:         state.Usage,
 		ImageDelivery: runtime.visibleImageDelivery(state),
 	}
@@ -96,7 +114,11 @@ func (runtime *Runtime) prepareRunRequestContext(ctx context.Context, live *stat
 		var err error
 		report, err = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
 		if err != nil {
-			return report, fmt.Errorf("estimated model input is %d tokens (limit %d) and automatic context reduction failed: %w", report.TotalInputTokens, report.InputLimit, err)
+			attached := 0
+			if live.state.hasInputContext() {
+				attached = estimateItemsTokens(live.state.modelItemsFromSequence(live.state.LastSequence + 1))
+			}
+			return report, &ContextLimitError{Report: report, AttachedTokens: attached, Cause: err}
 		}
 	}
 	return report, nil
@@ -164,7 +186,7 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 	if state.Compaction != nil {
 		report.SummaryTokens = estimateTextTokens(model.ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
 	}
-	items, boundary := runtime.projectedItemsForRequest(state, state.verbatimModelItems(), pendingInputs...)
+	items, boundary := runtime.projectedItemsForRequest(state, state.modelItems(), pendingInputs...)
 	report.HistoryTokens = estimateItemsTokens(items[:boundary])
 	report.PendingTokens = estimateItemsTokens(items[boundary:])
 	report.TotalInputTokens = report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens

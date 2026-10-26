@@ -54,7 +54,8 @@ While Skot is working
   %-24s steer at next model request
   %-24s edit the last pending steer
 
-Type / for commands.`,
+Type / for commands.
+Type $ to choose a skill.`,
 		keymap.helpFor(actionConfirm),
 		keymap.helpFor(actionInsertNewline),
 		keymap.helpFor(actionAcceptSuggestion),
@@ -80,6 +81,7 @@ func init() {
 		{name: "/login", description: "sign in to a provider or service", usage: "/login [provider]", maxArgs: 1, duringTurn: true, run: runLoginCommand},
 		{name: "/model", description: "list or switch models", usage: "/model [provider/model [api]]", maxArgs: 2, duringTurn: true, run: runModelCommand},
 		{name: "/tools", description: "show or switch the active tool set", usage: "/tools [name]", maxArgs: 1, duringTurn: true, run: runToolsCommand},
+		{name: "/skills", description: "find a skill or clear attached skills", usage: "/skills [clear]", maxArgs: 1, duringTurn: true, run: runSkillsCommand},
 		{name: "/scope", description: "show or switch filesystem scope", usage: "/scope [workspace|machine]", maxArgs: 1, duringTurn: true, run: runScopeCommand},
 		{name: "/theme", description: "show or switch the terminal theme", usage: "/theme [auto|light|dark]", maxArgs: 1, duringTurn: true, run: runThemeCommand},
 		{name: "/display", description: "show or switch transcript detail", usage: "/display [compact|detailed|full]", maxArgs: 1, duringTurn: true, run: runDisplayCommand},
@@ -119,6 +121,11 @@ var displayPickerItems = []pickerItem{
 }
 
 func (m *screenModel) syncCommandSuggestions() {
+	m.syncSkillSuggestions()
+	if m.skillSearch.visible() {
+		m.composer.setSuggestionCandidates(nil)
+		return
+	}
 	if m.pathPrompt != notFilesystemPath {
 		m.composer.setSuggestionCandidates(pathCompletionCandidates(&m.pathCompletion, m.config.Root, m.composer.value()))
 		return
@@ -130,6 +137,8 @@ func (m *screenModel) syncCommandSuggestions() {
 	value := strings.ToLower(strings.TrimLeft(m.composer.value(), " \t"))
 	var candidates []string
 	switch {
+	case strings.HasPrefix(value, "/skills "):
+		candidates = []string{"/skills clear"}
 	case strings.HasPrefix(value, "/tools "):
 		for _, toolSet := range m.agent.ToolSets() {
 			candidates = append(candidates, "/tools "+toolSet)
@@ -172,7 +181,7 @@ func (m *screenModel) syncCommandSuggestions() {
 func (m screenModel) commandSuggestionsVisible() bool {
 	value := strings.TrimSpace(m.composer.value())
 	naming := m.pathPrompt != notFilesystemPath || strings.HasPrefix(value, "/")
-	return m.loginProvider == "" && !m.maintenanceOperation().isMaintenance() && !m.picker.active() && naming && m.composer.hasSuggestions()
+	return !m.skillSearch.visible() && m.loginProvider == "" && !m.maintenanceOperation().isMaintenance() && !m.picker.active() && naming && m.composer.hasSuggestions()
 }
 
 func (m screenModel) currentCommandSuggestion() string {
@@ -198,6 +207,9 @@ func (m screenModel) selectedInput() string {
 }
 
 func (m screenModel) renderCommandSuggestions() []string {
+	if m.skillSearch.visible() {
+		return m.renderSkillSuggestions()
+	}
 	if !m.commandSuggestionsVisible() {
 		return nil
 	}

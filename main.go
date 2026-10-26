@@ -46,6 +46,7 @@ type cliConfig struct {
 	scope                string
 	addedPaths           stringListFlag
 	protectedPaths       stringListFlag
+	skillReferences      stringListFlag
 	verbose              bool
 	jsonOutput           bool
 	showVersion          bool
@@ -65,7 +66,7 @@ func (values *stringListFlag) String() string { return strings.Join(*values, ","
 func (values *stringListFlag) Set(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return errors.New("path cannot be empty")
+		return errors.New("value cannot be empty")
 	}
 	*values = append(*values, value)
 	return nil
@@ -122,6 +123,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.StringVar(&config.scope, "scope", envOr("SK_SCOPE", string(app.ScopeWorkspace)), "model filesystem scope: workspace or machine")
 	flags.Var(&config.addedPaths, "add-dir", "add a directory tree to workspace scope (repeatable)")
 	flags.Var(&config.protectedPaths, "protect-path", "deny model access to a path (repeatable)")
+	flags.Var(&config.skillReferences, "skill", "installed skill for a one-shot request: name or absolute SKILL.md path (repeatable)")
 	flags.BoolVar(&config.verbose, "v", false, "show model attempts and status")
 	flags.BoolVar(&config.jsonOutput, "json", false, "emit one versioned JSON result on stdout")
 	flags.BoolVar(&config.showVersion, "version", false, "print the Skot version and exit")
@@ -176,6 +178,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	scopeExplicit := setFlags["scope"] || strings.TrimSpace(os.Getenv("SK_SCOPE")) != ""
 	inFile, outFile, terminalScreen := ui.CanUseScreen(stdin, stdout)
 	interactive := len(invocation.args) == 0 && terminalScreen
+	if interactive && len(config.skillReferences) != 0 {
+		return model.MarkInvalidRequest(errors.New("-skill requires a prompt or piped input"))
+	}
 	var prompt string
 	if !interactive {
 		prompt, err = readPrompt(invocation.args, stdin)
@@ -256,7 +261,13 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 	}
 	startedAt := time.Now()
 	sessionWasResumable := application.SessionID() != ""
-	result, runErr := application.Run(ctx, prompt, emit)
+	input, runErr := application.PrepareInput(prompt, config.skillReferences...)
+	var result agent.RunResult
+	if runErr == nil {
+		result, runErr = application.RunInput(ctx, input, emit)
+	} else {
+		runErr = model.MarkInvalidRequest(runErr)
+	}
 	durationMillis := time.Since(startedAt).Milliseconds()
 	var usage model.TokenCounts
 	var accounting *agent.UsageReport

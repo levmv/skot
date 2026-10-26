@@ -32,7 +32,7 @@ func (workspace *workspace) ls(ctx context.Context, raw string) (agent.ToolOutpu
 	if err := decodeArgs(raw, &args); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	policy := workspace.access.snapshot()
+	policy := workspace.access.forCall(ctx)
 	abs, display, info, err := policy.resolveExistingPath(args.Path, true)
 	if err != nil {
 		return agent.ToolOutput{}, err

@@ -27,8 +27,8 @@ func (m *screenModel) finishCompaction(message compactionDoneMsg) tea.Cmd {
 	} else {
 		m.addBlock(screenBlockSystem, "context compacted\n"+formatContextReport(m.sessionStatus.ContextReport))
 	}
-	if input, ok := m.agent.ClaimQueued(); ok {
-		m.addBlock(screenBlockUser, input)
+	if input, ok := m.agent.ClaimQueuedInput(); ok {
+		m.addUserBlock(input.Text, input.InstructionReferences())
 		return m.startTurn(input)
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -37,11 +38,14 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 	}
 	journal := &memoryJournal{}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
+	initial := Input{Text: "start", Instructions: []Instruction{{Key: "review", Text: "Review the changes carefully."}}}
+	first := Input{Text: "first steering", Instructions: []Instruction{initial.Instructions[0], {Key: "explain", Text: "Explain the tradeoffs."}}}
+	second := Input{Text: "second steering", Instructions: first.Instructions}
 	var eventsMu sync.Mutex
 	var events []Event
 	done := make(chan error, 1)
 	go func() {
-		_, err := runtime.Run(context.Background(), "start", func(event Event) {
+		_, err := runtime.RunInput(context.Background(), initial, func(event Event) {
 			eventsMu.Lock()
 			events = append(events, event)
 			eventsMu.Unlock()
@@ -49,10 +53,10 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 		done <- err
 	}()
 	waitForSignal(t, firstStarted, "first model request")
-	if err := runtime.QueueInput("first steering"); err != nil {
+	if err := runtime.QueueUserInput(first); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.QueueInput("second steering"); err != nil {
+	if err := runtime.QueueUserInput(second); err != nil {
 		t.Fatal(err)
 	}
 	close(releaseFirst)
@@ -67,15 +71,21 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 		t.Fatalf("model requests = %d", len(captured))
 	}
 	items := captured[1].Items
-	if len(items) < 2 || items[len(items)-2].Kind != modelapi.ItemUserText || items[len(items)-2].Text != "first steering" ||
-		items[len(items)-1].Kind != modelapi.ItemUserText || items[len(items)-1].Text != "second steering" {
+	if len(items) < 3 || !strings.Contains(items[0].Text, initial.Text) ||
+		items[len(items)-2].Kind != modelapi.ItemUserText || !strings.Contains(items[len(items)-2].Text, first.Text) ||
+		items[len(items)-1].Kind != modelapi.ItemUserText || !strings.Contains(items[len(items)-1].Text, second.Text) {
 		t.Fatalf("second request items = %#v", items)
+	}
+	review, explain := initial.Instructions[0].Text, first.Instructions[1].Text
+	if !strings.Contains(items[0].Text, review) || !strings.Contains(items[len(items)-2].Text, explain) ||
+		itemsContainText(items[len(items)-2:], review) || itemsContainText(items[len(items)-1:], explain) {
+		t.Fatal("queued instructions were lost or repeated")
 	}
 	state, err := Replay(journal.snapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Blocks) != 3 || state.Blocks[1].Entries[0].Item.Text != "first steering" || state.Blocks[2].Entries[0].Item.Text != "second steering" {
+	if len(state.Blocks) != 3 || InputText(state.Blocks[1].Entries[0].Item) != first.Text || InputText(state.Blocks[2].Entries[0].Item) != second.Text {
 		t.Fatalf("replayed queued blocks = %#v", state.Blocks)
 	}
 	if queued := runtime.QueuedInputs(); len(queued) != 0 {
@@ -87,6 +97,11 @@ func TestRuntimeDeliversQueuedInputFIFOAtNextModelBoundary(t *testing.T) {
 	for _, event := range capturedEvents {
 		if event.Kind == EventQueuedInputDelivered && event.Sequence != 0 {
 			delivered++
+			liveReferences := InputReferences(modelapi.Item{Kind: modelapi.ItemUserText, Details: event.Details})
+			replayedReferences := InputReferences(state.Blocks[delivered].Entries[0].Item)
+			if len(liveReferences) != 2 || !slices.Equal(liveReferences, replayedReferences) {
+				t.Fatal("queued selections differ between delivery and replay")
+			}
 		}
 	}
 	eventsMu.Unlock()

@@ -53,7 +53,7 @@ func TestReplayRejectsInvalidJournaledDetail(t *testing.T) {
 	}
 }
 
-func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
+func TestModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 	state := State{Blocks: []ConversationBlock{
 		{Entries: []ConversationEntry{
 			{Item: model.Item{
@@ -66,7 +66,7 @@ func TestVerbatimModelItemsSkipDetailsWithoutAliasingState(t *testing.T) {
 			{Item: model.Item{Kind: model.ItemBoundaryText, Text: "job completed", Details: []model.Detail{{Kind: "inspection", Data: jsontext.Value(`{"value":2}`)}}}},
 		}},
 	}}
-	items := state.verbatimModelItems()
+	items := state.modelItems()
 	if len(items) != 2 || items[0].ToolResult == nil || len(items[0].ToolResult.Details) != 0 || len(items[1].Details) != 0 {
 		t.Fatalf("model items = %#v", items)
 	}

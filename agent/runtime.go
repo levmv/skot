@@ -65,6 +65,10 @@ type Config struct {
 	UserShell         ShellFunc
 	ExternalWork      ExternalWork
 	Sanitize          func(string) string
+	// AuthorizeReadOnlyPaths checks resource roots requested by delivered inputs
+	// against current host policy before tool execution, including after replay.
+	// The journal is untrusted. Nil grants no additional filesystem access.
+	AuthorizeReadOnlyPaths func([]string) []string
 	// Metadata supplies resolved product facts which agent.Runtime cannot
 	// infer from backend and tool interfaces. It is recorded but not interpreted.
 	Metadata ConfigurationMetadata
@@ -90,7 +94,7 @@ type Runtime struct {
 	statusSequence uint64
 	// queueMu owns pendingInputs independently of a running turn.
 	queueMu       sync.Mutex
-	pendingInputs []string
+	pendingInputs []Input
 	// configMu synchronizes observer reads with configuration changes.
 	// Scope changes deliberately take it without runMu so subsequently started
 	// work in an active turn can observe the new boundary.
@@ -111,6 +115,8 @@ type Runtime struct {
 	build             BuildSnapshot
 	scope             ScopeSnapshot
 	awaitRequiredJobs bool
+
+	authorizeReadOnlyPaths func([]string) []string
 }
 
 // New constructs an inert Runtime: it starts no background work and does not
@@ -195,6 +201,8 @@ func New(config Config) (*Runtime, error) {
 		build:             build,
 		scope:             sanitizeScopeSnapshot(config.Metadata.Scope, sanitize),
 		awaitRequiredJobs: config.Metadata.AwaitRequiredJobs,
+
+		authorizeReadOnlyPaths: config.AuthorizeReadOnlyPaths,
 	}
 	runtime.sessionStatus = runtime.calculateSessionStatus(State{})
 	return runtime, nil
@@ -359,6 +367,11 @@ func (runtime *Runtime) ToolStatus(id string) ([]modelapi.Detail, bool) {
 }
 
 func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (result RunResult, runErr error) {
+	return runtime.RunInput(ctx, Input{Text: input}, emit)
+}
+
+// RunInput starts a run with captured supplementary context.
+func (runtime *Runtime) RunInput(ctx context.Context, input Input, emit EmitFunc) (result RunResult, runErr error) {
 	runtime.configMu.Lock()
 	if !runtime.runMu.TryLock() {
 		runtime.configMu.Unlock()
@@ -381,14 +394,13 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (r
 		}
 	}()
 
-	input, err := normalizeInput(input)
+	input, err := runtime.normalizeUserInput(input)
 	if err != nil {
 		return RunResult{}, err
 	}
 	if err := runtime.requireBackend(); err != nil {
 		return RunResult{}, err
 	}
-	input = runtime.sanitize(input)
 	records, err := runtime.journal.Records(ctx)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("read journal: %w", err)
@@ -404,7 +416,8 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (r
 	if err := runtime.prepareSession(ctx, live); err != nil {
 		return RunResult{}, err
 	}
-	_, err = runtime.prepareRunRequestContext(ctx, live, runRequestSpec{extraUserText: input}, emit)
+	input = input.withNewInstructions(live.state.latestInstructions())
+	_, err = runtime.prepareRunRequestContext(ctx, live, runRequestSpec{extraUserText: input.modelText()}, emit)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -417,13 +430,13 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (r
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunStarted, RunStartedRecord{RunID: runID}); err != nil {
 		return RunResult{}, err
 	}
-	inputRecord, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: input})
+	inputRecord, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: input.Text, Instructions: input.Instructions, ReadOnlyPaths: input.ReadOnlyPaths})
 	if err != nil {
 		return RunResult{}, err
 	}
 	// RunStarted reports that both the run and its initial input are committed, so
 	// its watermark is the later of those two records.
-	emitEvent(emit, Event{Sequence: inputRecord.Sequence, Kind: EventRunStarted, RunID: runID})
+	emitEvent(emit, Event{Sequence: inputRecord.Sequence, Kind: EventRunStarted, RunID: runID, Details: input.details()})
 
 	toolIterations := 0
 	for {
@@ -434,7 +447,7 @@ func (runtime *Runtime) Run(ctx context.Context, input string, emit EmitFunc) (r
 		}
 		delivered, deliveryErr := runtime.deliverQueuedInput(ctx, live, runID)
 		for _, queuedInput := range delivered {
-			emitEvent(emit, Event{Sequence: queuedInput.Sequence, Kind: EventQueuedInputDelivered, RunID: runID, Text: queuedInput.Text})
+			emitEvent(emit, Event{Sequence: queuedInput.Sequence, Kind: EventQueuedInputDelivered, RunID: runID, Text: queuedInput.Text, Details: queuedInput.Details})
 		}
 		if deliveryErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, deliveryErr)
@@ -1012,7 +1025,7 @@ func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (mo
 	if state.Compaction != nil {
 		summary = state.Compaction.Summary
 	}
-	items := state.verbatimModelItems()
+	items := state.modelItems()
 	if spec.extraUserText != "" {
 		items = append(items, modelapi.Item{Kind: modelapi.ItemUserText, Text: spec.extraUserText})
 	}

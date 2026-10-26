@@ -43,7 +43,7 @@ func (workspace *workspace) read(ctx context.Context, raw string) (agent.ToolOut
 	if err := decodeArgs(raw, &args); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	policy := workspace.access.snapshot()
+	policy := workspace.access.forCall(ctx)
 	abs, display, err := policy.resolveReadableFile(args.Path)
 	if err != nil {
 		return agent.ToolOutput{}, err
@@ -169,7 +169,7 @@ func (workspace *workspace) grep(ctx context.Context, raw string) (agent.ToolOut
 	if strings.TrimSpace(args.Pattern) == "" {
 		return agent.ToolOutput{}, errors.New("pattern is required")
 	}
-	policy := workspace.access.snapshot()
+	policy := workspace.access.forCall(ctx)
 	plan, err := workspace.planSearch(policy, args.Path, false)
 	if err != nil {
 		return agent.ToolOutput{}, err
@@ -238,7 +238,7 @@ func (workspace *workspace) glob(ctx context.Context, raw string) (agent.ToolOut
 	if strings.TrimSpace(args.Pattern) == "" {
 		return agent.ToolOutput{}, errors.New("pattern is required")
 	}
-	policy := workspace.access.snapshot()
+	policy := workspace.access.forCall(ctx)
 	plan, err := workspace.planSearch(policy, args.Path, true)
 	if err != nil {
 		return agent.ToolOutput{}, err
@@ -349,9 +349,12 @@ func (workspace *workspace) edit(ctx context.Context, raw string) (agent.ToolOut
 	if !utf8.ValidString(args.OldText) || !utf8.ValidString(args.NewText) {
 		return agent.ToolOutput{}, errors.New("old_text and new_text must be valid UTF-8")
 	}
-	policy := workspace.access.snapshot()
+	policy := workspace.access.forCall(ctx)
 	abs, display, err := policy.resolveReadableFile(args.Path)
 	if err != nil {
+		return agent.ToolOutput{}, err
+	}
+	if err := policy.checkWriteScope(abs); err != nil {
 		return agent.ToolOutput{}, err
 	}
 	old, err := readBoundedTextFile(abs, maxEditableFileSize)
@@ -404,7 +407,7 @@ func (workspace *workspace) write(ctx context.Context, raw string) (agent.ToolOu
 	if err := ctx.Err(); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	policy := workspace.access.snapshot()
+	policy := workspace.access.forCall(ctx)
 	target, err := workspace.resolveWriteTarget(policy, args.Path)
 	if err != nil {
 		return agent.ToolOutput{}, err
@@ -458,13 +461,16 @@ func (workspace *workspace) resolveWriteTarget(policy *filesystemPolicy, path st
 	if display == "." {
 		return writeTarget{}, errors.New("file path is required")
 	}
+	if err := policy.checkWriteScope(abs); err != nil {
+		return writeTarget{}, err
+	}
 	if err := policy.checkProtected(abs, display); err != nil {
 		return writeTarget{}, err
 	}
 	lexical := abs
 	parent := filepath.Dir(abs)
 	realParent, parentErr := ensureWritableParent(parent, func(path string) error {
-		if err := policy.checkScope(path); err != nil {
+		if err := policy.checkWriteScope(path); err != nil {
 			return err
 		}
 		return policy.checkProtected(path, policy.displayPath(path))
@@ -474,7 +480,7 @@ func (workspace *workspace) resolveWriteTarget(policy *filesystemPolicy, path st
 	}
 	abs = filepath.Join(realParent, filepath.Base(abs))
 	display = policy.displayActionPath(lexical, abs)
-	if err := policy.checkScope(abs); err != nil {
+	if err := policy.checkWriteScope(abs); err != nil {
 		return writeTarget{}, err
 	}
 	if err := policy.checkProtected(abs, display); err != nil {
@@ -492,7 +498,7 @@ func (workspace *workspace) resolveWriteTarget(policy *filesystemPolicy, path st
 		if err != nil {
 			return writeTarget{}, err
 		}
-		if err := policy.checkScope(target); err != nil {
+		if err := policy.checkWriteScope(target); err != nil {
 			return writeTarget{}, fmt.Errorf("symlink target %w", err)
 		}
 		display = policy.displayActionPath(lexical, target)

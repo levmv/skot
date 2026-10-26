@@ -17,11 +17,15 @@ import (
 	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/internal/toolpolicy"
 	modelapi "github.com/levmv/skot/model"
+	"github.com/levmv/skot/skills"
 )
 
 type fakeAgent struct {
 	state            agent.State
-	queued           []string
+	queued           []agent.Input
+	skillCatalog     skills.Catalog
+	prepareInput     func(string) (agent.Input, error)
+	skillsCleared    bool
 	shellResult      modelapi.ToolResult
 	shellErr         error
 	shellCommand     string
@@ -78,27 +82,41 @@ type fakeAgent struct {
 	resumeNotices    []string
 }
 
-func (fake *fakeAgent) Run(context.Context, string, agent.EmitFunc) (agent.RunResult, error) {
+func (fake *fakeAgent) RunInput(context.Context, agent.Input, agent.EmitFunc) (agent.RunResult, error) {
 	return agent.RunResult{}, nil
 }
 
-func (fake *fakeAgent) QueueInput(input string) error {
+func (fake *fakeAgent) Skills() skills.Catalog { return fake.skillCatalog }
+
+func (fake *fakeAgent) ClearSkills(context.Context) error {
+	fake.skillsCleared = true
+	return nil
+}
+
+func (fake *fakeAgent) PrepareInput(text string, _ ...string) (agent.Input, error) {
+	if fake.prepareInput != nil {
+		return fake.prepareInput(text)
+	}
+	return agent.Input{Text: text}, nil
+}
+
+func (fake *fakeAgent) QueueUserInput(input agent.Input) error {
 	fake.queued = append(fake.queued, input)
 	return nil
 }
 
-func (fake *fakeAgent) ClaimQueued() (string, bool) {
+func (fake *fakeAgent) ClaimQueuedInput() (agent.Input, bool) {
 	if len(fake.queued) == 0 {
-		return "", false
+		return agent.Input{}, false
 	}
 	input := fake.queued[0]
 	fake.queued = fake.queued[1:]
 	return input, true
 }
 
-func (fake *fakeAgent) PopQueued() (string, bool) {
+func (fake *fakeAgent) PopQueuedInput() (agent.Input, bool) {
 	if len(fake.queued) == 0 {
-		return "", false
+		return agent.Input{}, false
 	}
 	last := len(fake.queued) - 1
 	input := fake.queued[last]
@@ -107,7 +125,11 @@ func (fake *fakeAgent) PopQueued() (string, bool) {
 }
 
 func (fake *fakeAgent) QueuedInputs() []string {
-	return append([]string(nil), fake.queued...)
+	inputs := make([]string, len(fake.queued))
+	for index, input := range fake.queued {
+		inputs[index] = input.Text
+	}
+	return inputs
 }
 
 func (fake *fakeAgent) State(context.Context) (agent.State, error) { return fake.state, nil }
@@ -405,7 +427,7 @@ func TestSubmitWhileWorkingQueuesInput(t *testing.T) {
 	blocksBefore := len(model.transcript.blocks)
 
 	model, _ = model.submitInput()
-	if len(fake.queued) != 1 || fake.queued[0] != "follow up" {
+	if len(fake.queued) != 1 || fake.queued[0].Text != "follow up" {
 		t.Fatalf("queued = %#v", fake.queued)
 	}
 	if model.composer.value() != "" {
@@ -428,7 +450,7 @@ func TestLeadingPathIsOrdinaryInputWhileWorking(t *testing.T) {
 	model.composer.setValue(input)
 
 	model, _ = model.submitInput()
-	if len(fake.queued) != 1 || fake.queued[0] != input {
+	if len(fake.queued) != 1 || fake.queued[0].Text != input {
 		t.Fatalf("queued = %#v", fake.queued)
 	}
 	if got := len(model.transcript.blocks); got != blocksBefore {
@@ -497,14 +519,14 @@ func TestCommandMenuHighlightsTheSelection(t *testing.T) {
 }
 
 func TestQueuedLineShowsLatestInputAndCount(t *testing.T) {
-	model := testScreenModel(t, &fakeAgent{queued: []string{"first", "latest"}})
+	model := testScreenModel(t, &fakeAgent{queued: []agent.Input{{Text: "first"}, {Text: "latest"}}})
 	if got := strings.TrimSpace(model.queuedLine()); got != "pending steers 2 · latest: latest" {
 		t.Fatalf("queued line = %q", got)
 	}
 }
 
 func TestQueuedLineOffsetsEditorCursor(t *testing.T) {
-	model := testScreenModel(t, &fakeAgent{queued: []string{"follow up"}})
+	model := testScreenModel(t, &fakeAgent{queued: []agent.Input{{Text: "follow up"}}})
 	model.operation.kind = operationTurn
 	model.composer.setValue("draft")
 	frame := model.inlineFrame()
@@ -525,7 +547,7 @@ func TestQueuedLineOffsetsEditorCursor(t *testing.T) {
 }
 
 func TestAltUpRecallsNewestQueuedInput(t *testing.T) {
-	fake := &fakeAgent{queued: []string{"first", "latest"}}
+	fake := &fakeAgent{queued: []agent.Input{{Text: "first"}, {Text: "latest"}}}
 	model := testScreenModel(t, fake)
 	model.operation.kind = operationTurn
 
@@ -533,7 +555,7 @@ func TestAltUpRecallsNewestQueuedInput(t *testing.T) {
 	if model.composer.value() != "latest" {
 		t.Fatalf("input = %q", model.composer.value())
 	}
-	if len(fake.queued) != 1 || fake.queued[0] != "first" {
+	if len(fake.queued) != 1 || fake.queued[0].Text != "first" {
 		t.Fatalf("remaining queue = %#v", fake.queued)
 	}
 	if got := strings.TrimSpace(model.queuedLine()); got != "pending steer: first" {
@@ -542,7 +564,7 @@ func TestAltUpRecallsNewestQueuedInput(t *testing.T) {
 }
 
 func TestAltUpDoesNotOverwriteDraft(t *testing.T) {
-	fake := &fakeAgent{queued: []string{"queued"}}
+	fake := &fakeAgent{queued: []agent.Input{{Text: "queued"}}}
 	model := testScreenModel(t, fake)
 	model.operation.kind = operationTurn
 	model.composer.setValue("draft")
@@ -743,7 +765,7 @@ func TestCommandSuggestionsCompleteAndSelectArguments(t *testing.T) {
 }
 
 func TestControlCInterruptsWithoutReclaimingPendingInput(t *testing.T) {
-	fake := &fakeAgent{queued: []string{"one", "two"}}
+	fake := &fakeAgent{queued: []agent.Input{{Text: "one"}, {Text: "two"}}}
 	model := testScreenModel(t, fake)
 	model.operation.kind = operationTurn
 	cancelled := false
@@ -762,7 +784,7 @@ func TestControlCInterruptsWithoutReclaimingPendingInput(t *testing.T) {
 }
 
 func TestEscapeInterruptsForQueuedInput(t *testing.T) {
-	fake := &fakeAgent{queued: []string{"send now"}}
+	fake := &fakeAgent{queued: []agent.Input{{Text: "send now"}}}
 	model := testScreenModel(t, fake)
 	model.operation.kind = operationTurn
 	cancelled := false
@@ -985,7 +1007,7 @@ func TestTurnCompletionRingsOnlyAfterAnUnfocusedQueueDrains(t *testing.T) {
 
 	model, _ = model.update(tea.BlurMsg{})
 	model.operation = activeOperation{kind: operationTurn, startedAt: time.Now()}
-	fake.queued = []string{"continue"}
+	fake.queued = []agent.Input{{Text: "continue"}}
 	model, command = model.update(agentDoneMsg{})
 	if command == nil || !model.operation.isTurn() {
 		t.Fatalf("queued turn did not continue: command=%v operation=%#v", command, model.operation)

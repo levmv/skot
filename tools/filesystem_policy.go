@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
 )
 
@@ -82,10 +84,11 @@ type FilesystemAccess struct {
 // filesystemPolicy is immutable after publication. Workspace remains the
 // primary relative-path and default-search base even when scope is machine.
 type filesystemPolicy struct {
-	scope      Scope
-	workspace  string
-	additions  *AddedDirectoryPolicy
-	protection *ProtectedPathPolicy
+	scope         Scope
+	workspace     string
+	additions     *AddedDirectoryPolicy
+	protection    *ProtectedPathPolicy
+	readOnlyPaths []string
 }
 
 // NewFilesystemAccess creates one shared authority state for built-in file
@@ -125,6 +128,26 @@ func (access *FilesystemAccess) snapshot() *filesystemPolicy {
 		panic("tools: uninitialized filesystem access")
 	}
 	return policy
+}
+
+func (access *FilesystemAccess) forCall(ctx context.Context) *filesystemPolicy {
+	return access.snapshot().withReadOnlyPaths(agent.ToolReadOnlyPaths(ctx))
+}
+
+func (policy *filesystemPolicy) withReadOnlyPaths(paths []string) *filesystemPolicy {
+	if len(paths) == 0 {
+		return policy
+	}
+	copy := *policy
+	copy.readOnlyPaths = nil
+	for _, path := range paths {
+		// Grants name the canonical location captured at submission. Replacing
+		// it with a symlink must not authorize a different tree on later calls.
+		if filepath.IsAbs(path) && filepath.Dir(path) != path && canonicalpath.Resolve(path) == path {
+			copy.readOnlyPaths = append(copy.readOnlyPaths, path)
+		}
+	}
+	return &copy
 }
 
 func (access *FilesystemAccess) policyFor(scope Scope, additions *AddedDirectoryPolicy, protection *ProtectedPathPolicy) (*filesystemPolicy, error) {
@@ -178,13 +201,38 @@ func (policy *filesystemPolicy) processBoundary(toolHome string) Boundary {
 	return Boundary{
 		Scope: policy.scope, Workspace: policy.workspace,
 		ToolHome: toolHome, AddedPaths: policy.additions.Paths(), ProtectedPaths: policy.protection.Paths(),
+		ReadOnlyPaths: append([]string(nil), policy.readOnlyPaths...),
 	}
 }
 
 func (policy *filesystemPolicy) checkScope(path string) error {
 	path = canonicalpath.Resolve(path)
-	if policy.scope == ScopeMachine || isWithinRoot(policy.workspace, path) || policy.additions.Contains(path) {
+	if policy.canWrite(path) || policy.readOnlyContains(path) {
 		return nil
+	}
+	return fmt.Errorf("path is outside workspace scope: %s", policy.displayPath(path))
+}
+
+func (policy *filesystemPolicy) canWrite(path string) bool {
+	return policy.scope == ScopeMachine || isWithinRoot(policy.workspace, path) || policy.additions.Contains(path)
+}
+
+func (policy *filesystemPolicy) readOnlyContains(path string) bool {
+	for _, root := range policy.readOnlyPaths {
+		if isWithinRoot(root, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func (policy *filesystemPolicy) checkWriteScope(path string) error {
+	path = canonicalpath.Resolve(path)
+	if policy.canWrite(path) {
+		return nil
+	}
+	if policy.readOnlyContains(path) {
+		return fmt.Errorf("path is read-only: %s", policy.displayPath(path))
 	}
 	return fmt.Errorf("path is outside workspace scope: %s", policy.displayPath(path))
 }

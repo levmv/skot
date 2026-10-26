@@ -10,9 +10,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/model"
 )
 
-func (m *screenModel) startTurn(input string) tea.Cmd {
+func (m *screenModel) startTurn(input agent.Input) tea.Cmd {
 	m.transcript.startAttempt("")
 	events := make(chan tea.Msg, 256)
 	turnCtx, cancel := context.WithCancel(m.ctx)
@@ -20,9 +21,9 @@ func (m *screenModel) startTurn(input string) tea.Cmd {
 	return tea.Batch(runAgentTurnCmd(turnCtx, m.agent, input, events), waitAgentMsg(events), scheduleTurnTick())
 }
 
-func runAgentTurnCmd(ctx context.Context, runtime ConversationAgent, input string, events chan<- tea.Msg) tea.Cmd {
+func runAgentTurnCmd(ctx context.Context, runtime ConversationAgent, input agent.Input, events chan<- tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		_, err := runtime.Run(ctx, input, func(event agent.Event) {
+		_, err := runtime.RunInput(ctx, input, func(event agent.Event) {
 			// Keep attempt-reset and final events ordered even after cancellation;
 			// otherwise partial streamed output can survive an interrupted turn.
 			events <- agentEventMsg{event: event}
@@ -91,7 +92,7 @@ func (m *screenModel) applyAgentEvent(event agent.Event) {
 		}
 	case agent.EventQueuedInputDelivered:
 		m.finishModelRetryNotice()
-		m.addBlock(screenBlockUser, event.Text)
+		m.addUserBlock(event.Text, agent.InputReferences(model.Item{Kind: model.ItemUserText, Details: event.Details}))
 	case agent.EventBoundaryDelivered:
 		m.finishModelRetryNotice()
 		m.addBoundaryEvent(event.Text, event.Details)

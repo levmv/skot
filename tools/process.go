@@ -156,6 +156,7 @@ type processSpec struct {
 	timeout        time.Duration
 	origin         processOrigin
 	sessionID      string
+	readOnlyPaths  []string
 	stdin          io.Reader
 	separateStderr bool
 	supervised     bool
@@ -364,11 +365,12 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 		timeout = time.Duration(args.TimeoutSeconds) * time.Second
 	}
 	job, err := manager.start(processSpec{
-		command:    args.Command,
-		timeout:    timeout,
-		origin:     origin,
-		sessionID:  sessionID,
-		supervised: args.Background,
+		readOnlyPaths: agent.ToolReadOnlyPaths(ctx),
+		command:       args.Command,
+		timeout:       timeout,
+		origin:        origin,
+		sessionID:     sessionID,
+		supervised:    args.Background,
 		prepare: func(policy *filesystemPolicy) (string, error) {
 			workdirPolicy := policy
 			enforceProtection := true
@@ -553,6 +555,7 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		return nil, fmt.Errorf("unknown process origin %d", spec.origin)
 	}
 	if spec.origin == processOriginModel {
+		policy = policy.withReadOnlyPaths(spec.readOnlyPaths)
 		if policy.scope == ScopeWorkspace {
 			if err := manager.ensureToolHome(policy); err != nil {
 				return nil, err

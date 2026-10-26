@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/app"
 	"github.com/levmv/skot/model"
 )
 
@@ -25,9 +26,10 @@ const (
 )
 
 type screenBlock struct {
-	kind      screenBlockKind
-	text      string
-	attemptID string
+	kind       screenBlockKind
+	text       string
+	attemptID  string
+	references []agent.InstructionReference
 	// printedPrefix is already printed source. It supplies Markdown context
 	// when only a continuation of this block can still be rendered.
 	printedPrefix string
@@ -104,7 +106,8 @@ func (m *screenModel) loadSessionHistory() error {
 		item := state.Items[index]
 		switch item.Kind {
 		case model.ItemUserText:
-			m.composer.remember(item.Text)
+			text := agent.InputText(item)
+			m.composer.remember(text)
 			if call, result, ok := recordedShellItems(state.Items, index); ok {
 				m.addToolCall(call)
 				m.transcript.markLastToolAsShell(false)
@@ -112,7 +115,7 @@ func (m *screenModel) loadSessionHistory() error {
 				index += 2
 				continue
 			}
-			m.addBlock(screenBlockUser, item.Text)
+			m.addUserBlock(text, agent.InputReferences(item))
 		case model.ItemBoundaryText:
 			if strings.TrimSpace(item.Text) != "" {
 				m.addBoundaryEvent(item.Text, item.Details)
@@ -153,6 +156,15 @@ func (m *screenModel) clearTranscript() {
 
 func (m *screenModel) addBlock(kind screenBlockKind, text string) {
 	m.transcript.addBlock(kind, text)
+}
+
+func (m *screenModel) addUserBlock(text string, references []agent.InstructionReference) {
+	references = slices.Clone(references)
+	for index := range references {
+		references[index].Name = sanitizeTerminalText(references[index].Name)
+		references[index].Key = sanitizeTerminalText(references[index].Key)
+	}
+	m.appendBlock(screenBlock{kind: screenBlockUser, text: sanitizeTerminalText(text), references: references})
 }
 
 func (m *screenModel) appendBlock(block screenBlock) {
@@ -539,7 +551,7 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 	case screenBlockScopeChange:
 		return m.padded(m.wrappedMarked(" ", m.renderScopeChangeText(block.text)))
 	case screenBlockUser:
-		return m.renderUserBlock(block.text)
+		return m.renderUserBlock(block)
 	case screenBlockAssistant:
 		return m.renderAssistantContinuation(block.printedPrefix, block.text)
 	case screenBlockTool:
@@ -641,12 +653,30 @@ func (m screenModel) renderAssistantContinuation(prefix, text string) []string {
 	return append(lines, m.marked(" ", ""))
 }
 
-func (m screenModel) renderUserBlock(text string) []string {
+func (m screenModel) renderUserBlock(block screenBlock) []string {
 	// Keep the bar on wrapped lines so the whole message reads as one block.
 	bar := m.userBarStyle.Render(userBarMarker)
 	blank := m.marked(" ", "")
 	lines := []string{blank, blank}
-	lines = append(lines, m.wrappedMarkedWithContinuation(bar, bar, text)...)
+	var text strings.Builder
+	start := 0
+	for _, span := range app.SkillReferenceSpans(block.text, block.references) {
+		text.WriteString(block.text[start:span[0]])
+		text.WriteString(m.accentStyle.Render(block.text[span[0]:span[1]]))
+		start = span[1]
+	}
+	text.WriteString(block.text[start:])
+	lines = append(lines, m.wrappedMarkedWithContinuation(bar, bar, text.String())...)
+	if m.displayProfile != DisplayCompact {
+		for _, reference := range block.references {
+			label := reference.Key
+			if reference.Name != "" {
+				label = reference.Name + " · " + label
+			}
+			detail := fmt.Sprintf("%s · ≈%s tokens", label, formatTokenCount(reference.EstimatedTokens))
+			lines = append(lines, m.wrappedMarkedWithContinuation(bar, bar, m.mutedStyle.Render(detail))...)
+		}
+	}
 	return append(lines, blank, blank)
 }
 

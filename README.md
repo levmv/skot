@@ -114,9 +114,8 @@ dedicated container or virtual machine for that threat model. See
 
 ## Documentation
 
-See the [complete user reference](docs/reference.md). Run `sk -help` for CLI
-syntax, type `/` in the interactive UI for commands, or use `/help` for keyboard
-shortcuts.
+See the [complete user reference](docs/reference.md). CLI syntax is available
+through `sk -help`; keyboard shortcuts through `/help`.
 
 ## Go packages
 
@@ -137,6 +136,7 @@ Skot's reusable packages live under `github.com/levmv/skot`.
 | [web](web/) | Standalone web search and page fetching through supported services or direct HTTP fetching. |
 | [imageinput](imageinput/) | Image preparation for model input: decoding, orientation, resizing, and metadata removal. |
 | [images](images/) | Standalone image generation and editing through the OpenAI and OpenRouter image APIs, with usage and costs. |
+| [skills](skills/) | Agent Skills parsing and local discovery. |
 
 For an application with its own conversation storage and execution loop, start
 with `provider` and `model`. `provider.Open` uses Skot's model catalog and provider

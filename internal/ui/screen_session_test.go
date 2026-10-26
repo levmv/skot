@@ -21,7 +21,7 @@ func TestClearCommandStartsCleanSessionAndInvalidatesTranscript(t *testing.T) {
 			name = "working"
 		}
 		t.Run(name, func(t *testing.T) {
-			fake := &fakeAgent{model: "deepseek/model", sessionID: "session_old", clearID: "session_new", queued: []string{"next"}}
+			fake := &fakeAgent{model: "deepseek/model", sessionID: "session_old", clearID: "session_new", queued: []agent.Input{{Text: "next"}}}
 			model := testScreenModel(t, fake)
 			model.addBlock(screenBlockUser, "old conversation")
 			model.composer.history = []string{"old conversation"}
@@ -45,7 +45,7 @@ func TestClearCommandStartsCleanSessionAndInvalidatesTranscript(t *testing.T) {
 			}
 			model, cmd = model.update(cmd())
 			if cmd != nil || model.operation.kind != operationNone || len(fake.queued) != 0 {
-				t.Fatalf("clear resumed old work: command=%v operation=%#v queue=%q", cmd, model.operation, fake.queued)
+				t.Fatalf("clear resumed old work: command=%v operation=%#v queue=%#v", cmd, model.operation, fake.queued)
 			}
 			if fake.sessionID != "session_new" || !model.renderer.invalidated || model.quitting {
 				t.Fatalf("session=%q invalidated=%v quitting=%v", fake.sessionID, model.renderer.invalidated, model.quitting)

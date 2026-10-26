@@ -7,6 +7,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/toolpolicy"
+	"github.com/levmv/skot/skills"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -54,6 +55,10 @@ type Config struct {
 	// ToolsFile is a strict JSON catalog of executable-backed tools. Empty uses
 	// tools.json in Home; a missing file is an empty catalog.
 	ToolsFile string
+	// SkillSources selects local skill directories in precedence order. Nil uses
+	// .agents/skills under Root, then skills under Home; an empty slice disables
+	// discovery.
+	SkillSources []skills.Source
 	// ConfigureTools receives the complete standard catalog and returns the
 	// complete catalog to expose through tool sets. It may add, remove, replace,
 	// or modify any tool. Open validates and takes an owned copy of the result;

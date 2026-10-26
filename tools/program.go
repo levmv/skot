@@ -419,6 +419,7 @@ func (manager *ProcessManager) programRunner(declaration ProgramTool, program st
 			return agent.ToolOutput{}, err
 		}
 		job, err := manager.start(processSpec{
+			readOnlyPaths:  agent.ToolReadOnlyPaths(ctx),
 			command:        declaration.Name,
 			timeout:        declaration.timeout(),
 			origin:         processOriginModel,

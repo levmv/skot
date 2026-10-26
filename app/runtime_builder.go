@@ -35,6 +35,8 @@ type runtimeBuilder struct {
 	awaitRequiredJobs bool
 	sanitize          func(string) string
 	externalWork      agent.ExternalWork
+
+	authorizeReadOnlyPaths func([]string) []string
 }
 
 type runtimeBuildParams struct {
@@ -208,6 +210,8 @@ func (builder runtimeBuilder) newRuntime(params runtimeBuildParams, modelInfo mo
 		UserShell:         builder.processes.RunShell,
 		ExternalWork:      builder.externalWork,
 		Sanitize:          builder.sanitize,
+
+		AuthorizeReadOnlyPaths: builder.authorizeReadOnlyPaths,
 		Metadata: agent.ConfigurationMetadata{
 			ToolSet: builder.toolSet, Scope: builder.scope, AwaitRequiredJobs: builder.awaitRequiredJobs,
 			Build: builder.applicationBuild, ProgramTools: builder.programTools,

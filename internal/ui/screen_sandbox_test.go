@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/app"
 )
 
@@ -135,7 +136,7 @@ func TestSessionCommandsWaitForConcurrentScopeChange(t *testing.T) {
 			name = test.input + "/turn finishes first"
 		}
 		t.Run(name, func(t *testing.T) {
-			fake := &fakeAgent{sessionID: "session_old", clearID: "session_new", queued: []string{"next"}}
+			fake := &fakeAgent{sessionID: "session_old", clearID: "session_new", queued: []agent.Input{{Text: "next"}}}
 			model := testScreenModel(t, fake)
 			turnCtx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -170,7 +171,7 @@ func TestSessionCommandsWaitForConcurrentScopeChange(t *testing.T) {
 			}
 			if test.input == "/exit" {
 				if command == nil || !model.quitting || len(fake.queued) != 1 {
-					t.Fatalf("command=%v quitting=%v queue=%q", command, model.quitting, fake.queued)
+					t.Fatalf("command=%v quitting=%v queue=%#v", command, model.quitting, fake.queued)
 				}
 			} else {
 				if command == nil || fake.sessionID != "session_old" {
@@ -178,7 +179,7 @@ func TestSessionCommandsWaitForConcurrentScopeChange(t *testing.T) {
 				}
 				model, command = model.update(command())
 				if command != nil || model.quitting || fake.sessionID != "session_new" || len(fake.queued) != 0 {
-					t.Fatalf("command=%v quitting=%v session=%q queue=%q", command, model.quitting, fake.sessionID, fake.queued)
+					t.Fatalf("command=%v quitting=%v session=%q queue=%#v", command, model.quitting, fake.sessionID, fake.queued)
 				}
 			}
 		})

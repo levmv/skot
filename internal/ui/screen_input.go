@@ -41,6 +41,23 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.skillSearch.visible() {
+		switch {
+		case action == actionCancel:
+			m.skillSearch.dismissed = m.composer.value()
+			m.skillSearch.active = false
+			return m, nil
+		case action == actionAcceptSuggestion || action == actionConfirm && m.skillSearch.query != "" && m.skillSearch.query != m.skillSearch.matches[m.skillSearch.index].Metadata.Name:
+			m.acceptSkillSuggestion()
+			return m, nil
+		case !hasCtrl && isUpKey(msg):
+			m.moveSkillSuggestion(-1)
+			return m, nil
+		case !hasCtrl && isDownKey(msg):
+			m.moveSkillSuggestion(1)
+			return m, nil
+		}
+	}
 
 	switch {
 	case action == actionDisplayCompact || action == actionDisplayDetailed || action == actionDisplayFull:
@@ -88,9 +105,10 @@ func (m screenModel) handleKey(msg tea.KeyPressMsg) (screenModel, tea.Cmd) {
 		return m.submitInput()
 	case action == actionRestoreQueuedInput:
 		if m.operation.acceptsQueuedInput() && m.composer.value() == "" {
-			if input, ok := m.agent.PopQueued(); ok {
-				m.composer.setValue(input)
+			if input, ok := m.agent.PopQueuedInput(); ok {
+				m.composer.setValue(input.Text)
 				m.composer.cursorEnd()
+				m.syncCommandSuggestions()
 				m.addBlock(screenBlockSystem, "pending steer returned to editor")
 				m.refreshTranscript()
 			}
@@ -278,10 +296,17 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 		return m, cmd
 	}
 
+	prepared, err := m.agent.PrepareInput(input)
+	if err != nil {
+		m.addBlock(screenBlockError, err.Error())
+		m.refreshTranscript()
+		return m, nil
+	}
 	m.composer.reset()
 	m.composer.remember(input)
+	m.syncCommandSuggestions()
 	if m.operation.acceptsQueuedInput() {
-		if err := m.agent.QueueInput(input); err != nil {
+		if err := m.agent.QueueUserInput(prepared); err != nil {
 			m.addBlock(screenBlockError, "queue input: "+err.Error())
 			m.composer.setValue(input)
 			m.composer.cursorEnd()
@@ -290,8 +315,8 @@ func (m screenModel) submitInput() (screenModel, tea.Cmd) {
 		return m, nil
 	}
 
-	m.addBlock(screenBlockUser, input)
-	cmd := m.startTurn(input)
+	m.addUserBlock(input, prepared.InstructionReferences())
+	cmd := m.startTurn(prepared)
 	m.refreshTranscript()
 	return m, cmd
 }

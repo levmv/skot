@@ -156,6 +156,7 @@ const (
 	RecordSessionConfigured     RecordKind = "session_configured"
 	RecordRunStarted            RecordKind = "run_started"
 	RecordRunInputAdded         RecordKind = "run_input_added"
+	RecordInputContextCleared   RecordKind = "input_context_cleared"
 	RecordModelResponse         RecordKind = "model_response"
 	RecordToolResult            RecordKind = "tool_result"
 	RecordBoundaryEvent         RecordKind = "boundary_event"
@@ -326,8 +327,10 @@ type ScopeSnapshot struct {
 }
 
 type RunInputAddedRecord struct {
-	RunID string `json:"run_id"`
-	Text  string `json:"text"`
+	RunID         string        `json:"run_id"`
+	Text          string        `json:"text"`
+	Instructions  []Instruction `json:"instructions,omitempty"`
+	ReadOnlyPaths []string      `json:"read_only_paths,omitempty"`
 }
 
 type ModelResponseRecord struct {

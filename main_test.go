@@ -294,6 +294,64 @@ func TestRunVersionDoesNotOpenApplication(t *testing.T) {
 	}
 }
 
+func TestRunSelectsSkillsFromFlagsWithStdin(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	paths := make(map[string]string)
+	for name, body := range map[string]string{"review": "Review body.", "explain": "Explain body."} {
+		path := filepath.Join(root, ".agents", "skills", name, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: "+name+"\ndescription: A procedure.\n---\n"+body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths[name] = canonical
+	}
+	requests := make(chan chatRequestForTest, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body chatRequestForTest
+		if err := json.UnmarshalRead(request.Body, &body); err != nil {
+			t.Error(err)
+		}
+		requests <- body
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("DEEPSEEK_API_KEY", "secret")
+	clearMainWebCredentials(t)
+	base := []string{"-home", home, "-root", root, "-model", "deepseek/test-model", "-base-url", server.URL, "-tools", "read-only"}
+	args := append(append([]string(nil), base...), "-skill", "review", "-skill", paths["explain"])
+	var output bytes.Buffer
+	if err := run(t.Context(), args, strings.NewReader("$foo is a variable"), &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "done\n" {
+		t.Fatalf("one-shot output = %q", output.String())
+	}
+	messages := conversationMessages((<-requests).Messages)
+	last := messages[len(messages)-1].Content
+	if !strings.Contains(last, "$foo is a variable") || !strings.Contains(last, paths["review"]) {
+		t.Fatalf("prompt or selected source missing: %q", last)
+	}
+	if !strings.Contains(last, "Review body.") || !strings.Contains(last, "Explain body.") {
+		t.Fatal("repeatable -skill flags did not attach both skills")
+	}
+	args = append(append([]string(nil), base...), "-skill", "missing", "check")
+	if err := run(t.Context(), args, strings.NewReader(""), io.Discard, io.Discard); !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), "skill not found") {
+		t.Fatalf("unknown explicit skill = %v", err)
+	}
+	select {
+	case <-requests:
+		t.Fatal("unknown explicit skill reached the model")
+	default:
+	}
+}
+
 func TestRunOneShotAndResumeJournal(t *testing.T) {
 	t.Setenv("SK_HOME", t.TempDir())
 	var requests []chatRequestForTest

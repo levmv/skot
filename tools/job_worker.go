@@ -117,20 +117,35 @@ func runJobWorker(input io.Reader) error {
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
 	timeout := time.Duration(metadata.TimeoutMillis) * time.Millisecond
-	timer := time.NewTimer(timeout)
+	var deadline <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	var waitErr error
 	status := ProcessUnknown
 	stopReason := ""
 	managedProcesses := 0
 	select {
 	case waitErr = <-wait:
-		timer.Stop()
-	case <-timer.C:
+		if spec.AwaitGroup {
+			var end processGroupEnd
+			end, managedProcesses = awaitProcessGroup(command, deadline, stopRequests)
+			switch end {
+			case processGroupTimedOut:
+				status = ProcessTimedOut
+				stopReason = "timeout after " + timeout.String()
+			case processGroupStopped:
+				status = ProcessKilled
+				stopReason = "stop requested"
+			}
+		}
+	case <-deadline:
 		status = ProcessTimedOut
 		stopReason = "timeout after " + timeout.String()
 		managedProcesses, waitErr = waitWhileKillingProcessGroup(command, wait)
 	case <-stopRequests:
-		timer.Stop()
 		status = ProcessKilled
 		stopReason = "stop requested"
 		managedProcesses, waitErr = waitWhileKillingProcessGroup(command, wait)

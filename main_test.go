@@ -894,6 +894,9 @@ func TestRunKeepsOneShotSessionForDetachedJob(t *testing.T) {
 	if result.SessionID == "" || len(result.DetachedJobs) != 1 {
 		t.Fatalf("detached result = %#v", result)
 	}
+	if !strings.Contains(stderr.String(), "Still running in the background:\n  "+result.DetachedJobs[0]+"  detached_worker  (") {
+		t.Fatalf("running work notice = %q", stderr.String())
+	}
 	if !strings.Contains(stderr.String(), "Resume with: sk resume "+session.ShortID(result.SessionID)) {
 		t.Fatalf("resume hint = %q", stderr.String())
 	}

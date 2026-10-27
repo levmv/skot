@@ -111,13 +111,19 @@ func (application *Application) RunInput(ctx context.Context, input agent.Input,
 	application.mu.RLock()
 	current := application.state.session
 	children := application.state.children
+	processes := application.state.processes
 	application.mu.RUnlock()
 	currentIsRuntime := current != nil && current.runtime == runtime
 	retainedChildren := currentIsRuntime && children != nil && children.HasChildren(runtime.CurrentSessionID())
-	if (len(result.DetachedJobs) != 0 || retainedChildren) && currentIsRuntime && current.memory {
+	// Ask the registry rather than trusting the result alone: a run that fails
+	// before it finishes, for example on a journal write, lists no detached
+	// work even though the work keeps running.
+	detachedJobs := len(result.DetachedJobs) != 0 ||
+		currentIsRuntime && processes != nil && len(processes.DetachedJobs(runtime.CurrentSessionID())) != 0
+	if (detachedJobs || retainedChildren) && currentIsRuntime && current.memory {
 		return result, errors.Join(runErr, errors.New("in-memory one-shot created unexpected durable external work"))
 	}
-	if len(result.DetachedJobs) != 0 || retainedChildren {
+	if detachedJobs || retainedChildren {
 		application.mu.Lock()
 		if current := application.state.session; current != nil && current.runtime == runtime {
 			current.provisional = false
@@ -540,6 +546,19 @@ func (application *Application) updateCredential(ctx context.Context, provider s
 		application.invalidateAccountQuota()
 	}
 	return nil
+}
+
+// RunningDetachedJobs reports work in the current session that keeps running
+// after Skot exits.
+func (application *Application) RunningDetachedJobs() []workspacetools.DetachedJob {
+	application.mu.RLock()
+	current := application.state.session
+	processes := application.state.processes
+	application.mu.RUnlock()
+	if current == nil || current.runtime == nil || processes == nil {
+		return nil
+	}
+	return processes.RunningDetachedJobs(current.runtime.CurrentSessionID())
 }
 
 func (application *Application) SessionID() string {

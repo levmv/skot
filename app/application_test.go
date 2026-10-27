@@ -1288,9 +1288,16 @@ func TestScopeSummaryReportsRunningProcessesWithEarlierScope(t *testing.T) {
 	t.Cleanup(func() { _ = processes.Close() })
 	tool := processes.Tools()[0]
 	ctx := agent.WithToolSessionID(context.Background(), "session-test")
-	if _, err := tool.Run(ctx, `{"command":"sleep 30","background":true}`); err != nil {
+	started, err := tool.Run(ctx, `{"command":"sleep 30","background":true}`)
+	if err != nil {
 		t.Fatal(err)
 	}
+	// Background Bash outlives Close; stop it so the test leaves nothing running.
+	t.Cleanup(func() {
+		if process, ok := agent.ProcessResultFromDetail(started.Details[0]); ok {
+			_, _ = processes.Tools()[1].Run(ctx, `{"action":"stop","job_id":"`+process.JobID+`"}`)
+		}
+	})
 	additions, protection := emptyApplicationTestFilesystemPolicies(t, root)
 	if err := processes.SetFilesystemPolicyAfter(workspacetools.ScopeWorkspace, additions, protection, nil); err != nil {
 		t.Fatal(err)
@@ -1525,12 +1532,48 @@ func TestApplicationClearSessionSwapsJournalAndPrunesEmptySession(t *testing.T) 
 	}
 }
 
-func TestApplicationClearSessionStopsOldSessionJobs(t *testing.T) {
+func TestOneShotSessionIsKeptForBackgroundWorkAfterAnUnfinishedRun(t *testing.T) {
+	application, err := Open(context.Background(), childTestConfig(t.TempDir(), t.TempDir(), "http://127.0.0.1:1/v1", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	runtime, err := application.requireRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := application.state.processes.Tools()
+	bash, job := tools[0], tools[1]
+	ctx := agent.WithToolSessionID(context.Background(), runtime.CurrentSessionID())
+	started, err := bash.Run(ctx, `{"command":"sleep 30","background":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, ok := agent.ProcessResultFromDetail(started.Details[0])
+	if !ok || process.JobID == "" {
+		t.Fatalf("process result = %#v, %t", process, ok)
+	}
+	t.Cleanup(func() { _, _ = job.Run(ctx, `{"action":"stop","job_id":"`+process.JobID+`"}`) })
+
+	// A run that ends before recording its detached work stands in for one
+	// whose journal write failed after a tool started background work.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if result, err := application.Run(cancelled, "hi", nil); err == nil || len(result.DetachedJobs) != 0 {
+		t.Fatalf("unfinished run = %#v, %v", result, err)
+	}
+	if application.SessionID() == "" {
+		t.Fatal("one-shot session with running background work would be discarded")
+	}
+}
+
+func TestApplicationClearSessionLeavesBackgroundJobsWithTheOldSession(t *testing.T) {
 	application, _ := newSessionApplication(t)
 	oldID := application.SessionID()
-	tool := application.state.processes.Tools()[0]
-	ctx := agent.WithToolSessionID(context.Background(), oldID)
-	started, err := tool.Run(ctx, `{"command":"sleep 30","background":true}`)
+	tools := application.state.processes.Tools()
+	bash, job := tools[0], tools[1]
+	oldCtx := agent.WithToolSessionID(context.Background(), oldID)
+	started, err := bash.Run(oldCtx, `{"command":"sleep 30","background":true}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1542,11 +1585,22 @@ func TestApplicationClearSessionStopsOldSessionJobs(t *testing.T) {
 		t.Fatalf("process result = %#v, %t", process, ok)
 	}
 
-	if _, err := application.ClearSession(context.Background()); err != nil {
+	newID, err := application.ClearSession(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := application.state.processes.Status(process.JobID); ok {
-		t.Fatal("old session job remained registered after clear")
+	if status, ok := application.state.processes.Status(process.JobID); !ok || status.Status != agent.ProcessRunning {
+		t.Fatalf("background job after clear = %#v, %t", status, ok)
+	}
+	listed, err := job.Run(agent.WithToolSessionID(context.Background(), newID), `{"action":"list"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(listed.Content.Text(), process.JobID) {
+		t.Fatalf("new session lists the old session's job: %q", listed.Content.Text())
+	}
+	if _, err := job.Run(oldCtx, `{"action":"stop","job_id":"`+process.JobID+`"}`); err != nil {
+		t.Fatal(err)
 	}
 	if err := application.Close(); err != nil {
 		t.Fatal(err)

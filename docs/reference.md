@@ -178,7 +178,7 @@ headless runs do not read them.
 
 Starting `sk` interactively saves the conversation automatically. A one-shot
 run is kept if you use `-save-session` or `-journal`, or if it creates a child
-agent or leaves detached work running. Other one-shot conversations are
+agent or leaves background work running. Other one-shot conversations are
 discarded after normal completion.
 
 A one-shot run limited to built-in tools that cannot start processes or child
@@ -341,12 +341,19 @@ contain `job`, so the model can observe and stop work it starts.
 Short Bash commands run in the foreground. A command still running after about
 ten seconds returns a job ID so the model can inspect, wait for, or stop it.
 
+Processes that a model's Bash command leaves running, for example with `&` or
+`nohup`, remain part of its job until they exit, and whatever ends the job ends
+them too.
+
 Explicit background Bash and background or detached program tools use a
-separate worker that owns their timeout, bounded log, and final result. If the
-main Skot process disappears unexpectedly, resuming the session can adopt that
-work. A clean exit stops non-detached jobs; detached custom tools continue
-across it. If a one-shot run leaves detached work running, Skot retains the
-session automatically and prints its resume command.
+separate worker that owns their timeout, bounded log, and final result.
+Background Bash jobs and detached program tools keep running after Skot exits
+until they finish, are stopped, or reach their timeout; the model can start
+background Bash work without a time limit. A clean exit stops other jobs.
+Resuming the session adopts worker jobs that are still running, including
+ones left behind when Skot exited unexpectedly. When Skot exits with such work
+still running, it lists the work before the resume command; a one-shot run
+that leaves work running also retains its session automatically.
 
 Job supervision uses Unix process groups, not a container boundary. A
 descendant that leaves its group may escape later observation and stopping; use

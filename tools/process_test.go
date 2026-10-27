@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,11 @@ func TestJobMetadataRequiresCurrentProtocolTimingAndValidScope(t *testing.T) {
 	if err := validateJobMetadata(metadata, jobDir); err != nil {
 		t.Fatalf("current metadata rejected: %v", err)
 	}
+	unlimited := metadata
+	unlimited.TimeoutMillis = 0
+	if err := validateJobMetadata(unlimited, jobDir); err != nil {
+		t.Fatalf("metadata without a time limit rejected: %v", err)
+	}
 	tests := []struct {
 		name, want string
 		mutate     func(*jobMetadata)
@@ -61,7 +67,7 @@ func TestJobMetadataRequiresCurrentProtocolTimingAndValidScope(t *testing.T) {
 		{name: "old protocol", want: "unsupported job protocol", mutate: func(value *jobMetadata) { value.Version-- }},
 		{name: "empty command", want: "timing metadata", mutate: func(value *jobMetadata) { value.Command = " " }},
 		{name: "missing start time", want: "timing metadata", mutate: func(value *jobMetadata) { value.StartedAt = time.Time{} }},
-		{name: "zero timeout", want: "timing metadata", mutate: func(value *jobMetadata) { value.TimeoutMillis = 0 }},
+		{name: "negative timeout", want: "timing metadata", mutate: func(value *jobMetadata) { value.TimeoutMillis = -1 }},
 		{name: "unknown scope", want: "scope", mutate: func(value *jobMetadata) { value.Scope = Scope("unknown") }},
 	}
 	for _, test := range tests {
@@ -443,7 +449,7 @@ func TestBashReturnsStructuredFailureStatus(t *testing.T) {
 func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	manager := processManagerForTest(t)
 	started := time.Now()
-	result := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30 & wait", TimeoutSeconds: 1})
+	result := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30 & wait", TimeoutSeconds: new(1)})
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("timeout took %s", elapsed)
 	}
@@ -452,6 +458,152 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	}
 	if !strings.Contains(result.Content.Text(), "managed_processes:") {
 		t.Fatalf("timeout report = %q", result.Content.Text())
+	}
+}
+
+func TestBashKeepsLeftBehindProcessesInTheirJobUntilTimeout(t *testing.T) {
+	// Each case leaves a process that publishes its pid and then sleeps.
+	sleeper := `sh -c 'echo $$ > "$0"; exec sleep 30' "$PID_FILE"`
+	for _, test := range []struct {
+		name   string
+		launch string
+		// returnsAtExit marks commands that hand back their job as soon as the
+		// shell exits rather than at the yield.
+		returnsAtExit bool
+	}{
+		// A backgrounded list runs in a subshell that keeps the output pipe open.
+		{name: "holding output", launch: "cd . && " + sleeper + " &"},
+		// Redirected output leaves only the process group tying it to the job.
+		{name: "redirected output", launch: sleeper + " > /dev/null 2>&1 &", returnsAtExit: true},
+		// Members that fork and exit can be missed by a /proc scan.
+		{name: "re-forking", launch: `hop() { if [ "$1" -gt 0 ]; then (hop $(($1 - 1)) &); else ` + sleeper + `; fi; }
+hop 200 > /dev/null 2>&1 &`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := processManagerForTest(t)
+			manager.bashYield = 200 * time.Millisecond
+			if test.returnsAtExit {
+				manager.bashYield = time.Minute
+			}
+			pidFile := filepath.Join(t.TempDir(), "pid")
+			command := "PID_FILE=" + shellQuoteForProcessTest(pidFile) + "\n" + test.launch
+			started := runProcessResult(t, manager.bash, bashArgs{Command: command, TimeoutSeconds: new(2)})
+			id := jobIDFromText(t, started.Content.Text())
+			pid := readPIDForProcessTest(t, pidFile)
+			running := runProcessResult(t, manager.job, jobArgs{Action: "output", JobID: id})
+			if text := running.Content.Text(); !strings.Contains(text, "status: running") || !strings.Contains(text, "still running in this job") {
+				t.Fatalf("running result = %q", text)
+			}
+
+			finished := runProcessResult(t, manager.job, jobArgs{Action: "wait", JobID: id, TimeoutSeconds: 10})
+			meta := processResultForTest(t, finished)
+			if meta.Status != ProcessTimedOut || meta.ExitCode == nil || *meta.ExitCode != 0 {
+				t.Fatalf("finished result = %#v / %q", meta, finished.Content.Text())
+			}
+			if text := finished.Content.Text(); !strings.Contains(text, "stop_reason: timeout after 2s") || !strings.Contains(text, "before the timeout") {
+				t.Fatalf("finished report = %q", text)
+			}
+			if processLiveForTest(pid) {
+				t.Fatalf("left-behind process %d survived its job timeout", pid)
+			}
+		})
+	}
+}
+
+func TestProcessGroupOfZombiesCountsAsFinished(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("zombie-only groups are settled on Linux, where init may not reap orphans")
+	}
+	// An unreaped child stands in for orphans that a container's init never reaps.
+	command := exec.Command("true")
+	configureProcessGroup(command)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = command.Wait() })
+	deadline := time.Now().Add(3 * time.Second)
+	for processLiveForTest(command.Process.Pid) {
+		if time.Now().After(deadline) {
+			t.Fatal("child did not exit")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !processGroupExists(command) {
+		t.Fatal("zombie group is not visible to the kernel group lookup")
+	}
+	watch := processGroupWatch{command: command}
+	if watch.finished() {
+		t.Fatal("one scan settled a zombie-only group")
+	}
+	if !watch.finished() {
+		t.Fatal("a stable zombie-only group did not settle")
+	}
+}
+
+func TestProcessGroupWithThreadsBehindAZombieLeaderIsNotFinished(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("zombie-only groups are settled on Linux")
+	}
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is unavailable")
+	}
+	// pthread_exit in the main thread leaves the leader a zombie while another
+	// thread keeps the process running.
+	command := exec.Command(python, "-c", `import ctypes, threading, time; threading.Thread(target=time.sleep, args=(30,)).start(); ctypes.CDLL(None).pthread_exit(None)`)
+	configureProcessGroup(command)
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = killProcessGroup(command)
+		_ = command.Wait()
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	for processLiveForTest(command.Process.Pid) {
+		if time.Now().After(deadline) {
+			t.Fatal("main thread did not exit")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	watch := processGroupWatch{command: command}
+	for range 3 {
+		if watch.finished() {
+			t.Fatal("a process with running threads settled as a zombie")
+		}
+	}
+	if count := processGroupMemberCount(command); count != 1 {
+		t.Fatalf("live members = %d, want 1", count)
+	}
+}
+
+func TestJobStopKillsLeftBehindProcessesNearTheTimeout(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		t.Run("background="+strconv.FormatBool(background), func(t *testing.T) {
+			manager := processManagerForTest(t)
+			pidFile := filepath.Join(t.TempDir(), "pid")
+			command := "sleep 30 > /dev/null 2>&1 &\necho $! > " + shellQuoteForProcessTest(pidFile)
+			started := runProcessResult(t, manager.bash, bashArgs{Command: command, Background: background, TimeoutSeconds: new(2)})
+			id := jobIDFromText(t, started.Content.Text())
+			pid := readPIDForProcessTest(t, pidFile)
+
+			waited := runProcessResult(t, manager.job, jobArgs{Action: "wait", JobID: id, TimeoutSeconds: 1})
+			if meta := processResultForTest(t, waited); meta.Status != ProcessRunning {
+				t.Fatalf("job ended while its background process ran: %#v / %q", meta, waited.Content.Text())
+			}
+			// Stop late enough that the timeout would fire before a slow group poll.
+			time.Sleep(500 * time.Millisecond)
+			stopped := runProcessResult(t, manager.job, jobArgs{Action: "stop", JobID: id})
+			if meta := processResultForTest(t, stopped); meta.Status != ProcessKilled {
+				t.Fatalf("stopped result = %#v / %q", meta, stopped.Content.Text())
+			}
+			if !strings.Contains(stopped.Content.Text(), "before the stop") {
+				t.Fatalf("stopped report = %q", stopped.Content.Text())
+			}
+			if processLiveForTest(pid) {
+				t.Fatalf("left-behind process %d survived its job stop", pid)
+			}
+		})
 	}
 }
 
@@ -501,7 +653,7 @@ func TestJobListReportsManagedJobsInStartOrder(t *testing.T) {
 	}
 
 	listed := runProcessResult(t, manager.job, jobArgs{Action: "list"})
-	if !strings.Contains(listed.Content.Text(), runningID+" running") || !strings.Contains(listed.Content.Text(), "long-running marker") {
+	if !strings.Contains(listed.Content.Text(), runningID+" running") || !strings.Contains(listed.Content.Text(), "timeout=10m0s left=") || !strings.Contains(listed.Content.Text(), "long-running marker") {
 		t.Fatalf("running job absent from list: %q", listed.Content.Text())
 	}
 	if !strings.Contains(listed.Content.Text(), finishedID+" completed") || !strings.Contains(listed.Content.Text(), "exit_code=0") || !strings.Contains(listed.Content.Text(), "finished marker") {
@@ -552,6 +704,9 @@ func TestJobWaitReturnsCompletionOrCurrentStateAtTimeout(t *testing.T) {
 	}
 	if meta := processResultForTest(t, waited); meta.Status != ProcessRunning {
 		t.Fatalf("timed wait = %#v / %q", meta, waited.Content.Text())
+	}
+	if !strings.Contains(waited.Content.Text(), "\ntimeout: 10m0s (") {
+		t.Fatalf("running job does not report its timeout: %q", waited.Content.Text())
 	}
 
 	raw, err := json.Marshal(jobArgs{Action: "wait", JobID: longID, TimeoutSeconds: 3601})
@@ -625,7 +780,7 @@ func TestSupervisedCompletionAndDeliverySurviveManagerRestart(t *testing.T) {
 	started := runProcessResultContext(t, ctx, first.bash, bashArgs{Command: "printf durable", Background: true})
 	id := jobIDFromText(t, started.Content.Text())
 	job := first.get(id)
-	if job == nil || !job.supervised || job.detached {
+	if job == nil || !job.supervised {
 		t.Fatalf("background job = %#v", job)
 	}
 	select {
@@ -691,8 +846,7 @@ func TestCleanCloseStopsNonDetachedWorkerAndKeepsTerminalState(t *testing.T) {
 	home := t.TempDir()
 	ctx := agent.WithToolSessionID(context.Background(), "session-close")
 	first := newProcessManagerForTest(t, root, home)
-	started := runProcessResultContext(t, ctx, first.bash, bashArgs{Command: "sleep 30 & printf ready; wait", Background: true})
-	id := jobIDFromText(t, started.Content.Text())
+	id := startBackgroundProgramForTest(t, ctx, first, "sleep 30 & printf ready; wait")
 	job := first.get(id)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -1296,6 +1450,52 @@ func TestAttachLeavesUnobservableJobUntouchedAndLoadsOtherJobs(t *testing.T) {
 	}
 }
 
+func TestDeliveryClaimForRunningJobIsIgnored(t *testing.T) {
+	manager := processManagerForTest(t)
+	ctx := agent.WithToolSessionID(context.Background(), "session-claim")
+	started := runProcessResultContext(t, ctx, manager.bash, bashArgs{Command: "sleep 30", Background: true})
+	id := jobIDFromText(t, started.Content.Text())
+	manager.MarkCompletionDelivered(id)
+	if delivered, err := jobDelivered(manager.get(id).jobDir); err != nil || delivered {
+		t.Fatalf("running job marked delivered = %t, %v", delivered, err)
+	}
+	runProcessResultContext(t, ctx, manager.job, jobArgs{Action: "stop", JobID: id})
+	if events := manager.PendingCompletionEvents("session-claim"); len(events) != 1 || events[0].JobID != id {
+		t.Fatalf("completion events after an early delivery claim = %#v", events)
+	}
+}
+
+func TestAttachAdoptsLiveJobMarkedDelivered(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	ctx := agent.WithToolSessionID(context.Background(), "session-marked")
+	first := newProcessManagerForTest(t, root, home)
+	started := runProcessResultContext(t, ctx, first.bash, bashArgs{Command: "sleep 30", Background: true})
+	id := jobIDFromText(t, started.Content.Text())
+	jobDir := first.get(id).jobDir
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A marker on live work stands in for replayed or tampered journal state.
+	if err := markJobDelivered(jobDir); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newProcessManagerForTest(t, root, home)
+	if err := second.AttachSession("session-marked"); err != nil {
+		t.Fatal(err)
+	}
+	if status, ok := second.Status(id); !ok || status.Status != ProcessRunning {
+		t.Fatalf("live job marked delivered = %#v, %t", status, ok)
+	}
+	if delivered, err := jobDelivered(jobDir); err != nil || delivered {
+		t.Fatalf("corrupt delivery marker kept = %t, %v", delivered, err)
+	}
+	if notices := second.AttachSessionNotices("session-marked"); len(notices) != 1 || !strings.Contains(notices[0], "marked delivered while still running") {
+		t.Fatalf("attach notices = %#v", notices)
+	}
+}
+
 func TestAttachSessionKeepsDeliveredOutputForAlreadyLoadedSession(t *testing.T) {
 	home := canonicalpath.Resolve(t.TempDir())
 	sessionID := "session-already-loaded"
@@ -1704,19 +1904,81 @@ func TestSupervisedOutputReadFailurePreservesResultAndOtherStream(t *testing.T) 
 	}
 }
 
-func TestProcessManagerCloseKillsBackgroundJobs(t *testing.T) {
+func TestProcessManagerCloseKillsNonDetachedJobs(t *testing.T) {
 	manager := processManagerForTest(t)
-	started := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	id := jobIDFromText(t, started.Content.Text())
+	manager.bashYield = 50 * time.Millisecond
+	foreground := runProcessResult(t, manager.bash, bashArgs{Command: "sleep 30"})
+	ids := []string{jobIDFromText(t, foreground.Content.Text()), startBackgroundProgramForTest(t, context.Background(), manager, "sleep 30")}
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
-	job := manager.get(id)
-	job.mu.Lock()
-	status := job.status
-	job.mu.Unlock()
-	if status != ProcessKilled {
-		t.Fatalf("job status = %q", status)
+	for _, id := range ids {
+		job := manager.get(id)
+		job.mu.Lock()
+		status := job.status
+		job.mu.Unlock()
+		if status != ProcessKilled {
+			t.Fatalf("job %s status = %q", id, status)
+		}
+	}
+}
+
+func TestBashTimeoutLimitsDependOnBackground(t *testing.T) {
+	manager := processManagerForTest(t)
+	for _, test := range []struct {
+		name string
+		args bashArgs
+		// want is part of the error, or of the result when the call succeeds.
+		want string
+	}{
+		{name: "foreground without limit", args: bashArgs{Command: "true", TimeoutSeconds: new(0)}, want: "requires background"},
+		{name: "foreground over an hour", args: bashArgs{Command: "true", TimeoutSeconds: new(3601)}, want: "between 0 and 3600 seconds"},
+		{name: "background over an hour", args: bashArgs{Command: "sleep 30", Background: true, TimeoutSeconds: new(7200)}, want: "\ntimeout: 2h0m0s ("},
+		{name: "background over a week", args: bashArgs{Command: "true", Background: true, TimeoutSeconds: new(604801)}, want: "between 0 and 604800 seconds"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output, err := manager.bash(context.Background(), jsonArgs(t, test.args))
+			text := output.Content.Text()
+			if err != nil {
+				text = err.Error()
+			}
+			if !strings.Contains(text, test.want) {
+				t.Fatalf("result = %q", text)
+			}
+		})
+	}
+}
+
+func TestBackgroundBashOutlivesCleanExitWithoutTimeout(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	ctx := agent.WithToolSessionID(context.Background(), "session-outlive")
+	first := newProcessManagerForTest(t, root, home)
+	started := runProcessResultContext(t, ctx, first.bash, bashArgs{Command: "sleep 30", Background: true, TimeoutSeconds: new(0)})
+	id := jobIDFromText(t, started.Content.Text())
+	if !strings.Contains(started.Content.Text(), "\ntimeout: none\n") {
+		t.Fatalf("background start = %q", started.Content.Text())
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newProcessManagerForTest(t, root, home)
+	if err := second.AttachSession("session-outlive"); err != nil {
+		t.Fatal(err)
+	}
+	if status, ok := second.Status(id); !ok || status.Status != ProcessRunning || !status.Detached {
+		t.Fatalf("background job after exit = %#v, %t", status, ok)
+	}
+	if running := second.RunningDetachedJobs("session-outlive"); len(running) != 1 || running[0] != (DetachedJob{ID: id, Command: "sleep 30"}) {
+		t.Fatalf("running detached jobs = %#v", running)
+	}
+	if listed := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "list"}); !strings.Contains(listed.Content.Text(), id+" running") || !strings.Contains(listed.Content.Text(), " timeout=none ") {
+		t.Fatalf("job list after exit = %q", listed.Content.Text())
+	}
+	stopped := runProcessResultContext(t, ctx, second.job, jobArgs{Action: "stop", JobID: id})
+	if meta := processResultForTest(t, stopped); meta.Status != ProcessKilled {
+		t.Fatalf("stopped result = %#v", meta)
 	}
 }
 
@@ -1724,10 +1986,8 @@ func TestProcessManagerCloseSessionStopsAndForgetsOnlyThatSessionsJobs(t *testin
 	manager := processManagerForTest(t)
 	sessionA := agent.WithToolSessionID(context.Background(), "session-a")
 	sessionB := agent.WithToolSessionID(context.Background(), "session-b")
-	startedA := runProcessResultContext(t, sessionA, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	startedB := runProcessResultContext(t, sessionB, manager.bash, bashArgs{Command: "sleep 30", Background: true})
-	idA := jobIDFromText(t, startedA.Content.Text())
-	idB := jobIDFromText(t, startedB.Content.Text())
+	idA := startBackgroundProgramForTest(t, sessionA, manager, "sleep 30")
+	idB := startBackgroundProgramForTest(t, sessionB, manager, "sleep 30")
 	jobA := manager.get(idA)
 
 	if err := manager.CloseSession("session-a"); err != nil {
@@ -1949,7 +2209,13 @@ func newProcessManagerForTest(t *testing.T, root, home string) *ProcessManager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = manager.Close() })
+	t.Cleanup(func() {
+		// Background Bash outlives Close; stop it so a test leaves nothing running.
+		for _, job := range manager.allJobs() {
+			_, _ = manager.stop(context.Background(), job.id, "test cleanup")
+		}
+		_ = manager.Close()
+	})
 	return manager
 }
 
@@ -2022,6 +2288,50 @@ func waitForPathForProcessTest(t *testing.T, path string) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// startBackgroundProgramForTest starts supervised work that a clean exit stops,
+// unlike background Bash.
+func startBackgroundProgramForTest(t *testing.T, ctx context.Context, manager *ProcessManager, script string) string {
+	t.Helper()
+	resolved, err := manager.ResolveProgramTools([]ProgramTool{normalizedProgramTool(t, ProgramTool{
+		Name: "background_work", Description: "background work",
+		Command: []string{"sh", "-c", script}, Background: BackgroundAlways,
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := resolved[0].Tool.Run(ctx, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobIDFromText(t, output.Content.Text())
+}
+
+func readPIDForProcessTest(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && parseErr == nil && pid > 1 {
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid was not published to %s: %q, %v", path, data, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// processLiveForTest treats zombies as gone: an orphan's reaper is outside the
+// test's control.
+func processLiveForTest(pid int) bool {
+	if stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
+		_, fields, _ := strings.CutLast(string(stat), ")")
+		state := strings.TrimSpace(fields)
+		return !strings.HasPrefix(state, "Z") && !strings.HasPrefix(state, "X")
+	}
+	return syscall.Kill(pid, 0) == nil
 }
 
 func workerPayloadPIDCommand(path string) string {

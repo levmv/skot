@@ -44,7 +44,7 @@ type jobMetadata struct {
 	SessionID      string    `json:"session_id"`
 	Command        string    `json:"command"`
 	StartedAt      time.Time `json:"started_at"`
-	TimeoutMillis  int64     `json:"timeout_ms"`
+	TimeoutMillis  int64     `json:"timeout_ms"` // zero means no limit
 	SeparateStderr bool      `json:"separate_stderr,omitzero"`
 	Scope          Scope     `json:"scope,omitempty"`
 	Detach         bool      `json:"detach,omitzero"`
@@ -63,6 +63,8 @@ type jobWorkerSpec struct {
 	Env      []string `json:"env"`
 	Dir      string   `json:"dir"`
 	Stdin    []byte   `json:"stdin,omitempty"`
+	// AwaitGroup keeps the job open for processes the payload leaves running.
+	AwaitGroup bool `json:"await_group,omitzero"`
 }
 
 type jobTerminalResult struct {
@@ -179,7 +181,7 @@ func validateJobMetadata(metadata jobMetadata, jobDir string) error {
 	if metadata.JobID == "" || filepath.Base(jobDir) != metadata.JobID {
 		return errors.New("job id does not match its directory")
 	}
-	if strings.TrimSpace(metadata.Command) == "" || metadata.StartedAt.IsZero() || metadata.TimeoutMillis <= 0 {
+	if strings.TrimSpace(metadata.Command) == "" || metadata.StartedAt.IsZero() || metadata.TimeoutMillis < 0 {
 		return errors.New("job timing metadata is invalid")
 	}
 	if err := validateScope(metadata.Scope); err != nil {

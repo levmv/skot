@@ -80,13 +80,40 @@ func (manager *ProcessManager) AttachSession(sessionID string) error {
 			continue
 		}
 		if delivered {
-			if err := directory.RemoveAll(entry.Name()); err != nil {
+			// The marker follows journal state, so check the job itself before
+			// it authorizes deleting the job's durable state.
+			_, terminal, live, err := observeSupervisedJobState(jobDir, entry.Name(), func() (bool, error) {
+				return probeJobControl(jobControlPath(jobDir))
+			})
+			if err != nil {
 				notices = append(notices, fmt.Sprintf(
-					"delivered durable job %s could not be removed and was left for a later cleanup: %v",
+					"delivered durable job %s is unobservable and was left untouched: %v",
 					entry.Name(), err,
 				))
+				continue
 			}
-			continue
+			if terminal || !live {
+				if err := directory.RemoveAll(entry.Name()); err != nil {
+					notices = append(notices, fmt.Sprintf(
+						"delivered durable job %s could not be removed and was left for a later cleanup: %v",
+						entry.Name(), err,
+					))
+				}
+				continue
+			}
+			// Only finished work is delivered; drop the corrupt marker and
+			// adopt the live job so that its real completion is reported.
+			if err := directory.Remove(filepath.Join(entry.Name(), jobDeliveredFile)); err != nil {
+				notices = append(notices, fmt.Sprintf(
+					"durable job %s is marked delivered while still running and was left untouched: %v",
+					entry.Name(), err,
+				))
+				continue
+			}
+			notices = append(notices, fmt.Sprintf(
+				"durable job %s was marked delivered while still running; the marker was removed",
+				entry.Name(),
+			))
 		}
 		job, err := manager.loadSupervisedJob(jobDir, sessionID)
 		if err != nil {
@@ -156,6 +183,7 @@ func supervisedJobFromMetadata(metadata jobMetadata, jobDir string) *processJob 
 		command:        metadata.Command,
 		done:           make(chan struct{}),
 		status:         ProcessRunning,
+		timeout:        time.Duration(metadata.TimeoutMillis) * time.Millisecond,
 		startedAt:      metadata.StartedAt,
 		scope:          metadata.Scope,
 		separateStderr: metadata.SeparateStderr,
@@ -252,14 +280,15 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 		return control.Close()
 	}
 	launch := jobWorkerSpec{
-		Version:  jobWorkerProtocolVersion,
-		JobDir:   jobDir,
-		LogLimit: manager.logLimit,
-		Program:  process.Path,
-		Args:     append([]string(nil), process.Args...),
-		Env:      append([]string(nil), process.Env...),
-		Dir:      process.Dir,
-		Stdin:    stdin,
+		Version:    jobWorkerProtocolVersion,
+		JobDir:     jobDir,
+		LogLimit:   manager.logLimit,
+		Program:    process.Path,
+		Args:       append([]string(nil), process.Args...),
+		Env:        append([]string(nil), process.Env...),
+		Dir:        process.Dir,
+		Stdin:      stdin,
+		AwaitGroup: spec.awaitGroup,
 	}
 	payload, err := json.Marshal(launch, json.Deterministic(true))
 	if err != nil {

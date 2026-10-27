@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,12 +30,14 @@ const (
 	defaultBashYield              = 10 * time.Second
 	defaultBashTimeout            = 10 * time.Minute
 	maxBashTimeout                = time.Hour
+	maxBackgroundTimeout          = 7 * 24 * time.Hour
 	defaultCommandPreview         = 32 * 1024
 	defaultCommandLogLimit        = 256 * 1024
 	maxJobReadBytes               = 256 * 1024
 	processFailureTailSize        = 4 * 1024
 	jobStopTimeout                = 3 * time.Second
 	processGroupKillRetryInterval = 20 * time.Millisecond
+	processGroupPollInterval      = time.Second
 	defaultJobWait                = time.Minute
 	maxCommandSummary             = 120
 )
@@ -93,6 +96,7 @@ type processJob struct {
 	outputError      string
 	stopReason       string
 	managedProcesses int
+	timeout          time.Duration
 	startedAt        time.Time
 	finishedAt       time.Time
 	completionSeen   bool
@@ -104,6 +108,12 @@ type processJob struct {
 	detached         bool
 	jobDir           string
 	doneOnce         sync.Once
+	// awaitGroup keeps the job open for processes its command leaves running.
+	// leftovers is closed when the command exits while such processes are live,
+	// and stopRequested when the first stop is requested.
+	awaitGroup    bool
+	leftovers     chan struct{}
+	stopRequested chan struct{}
 }
 
 type jobState struct {
@@ -113,6 +123,7 @@ type jobState struct {
 	outputError      string
 	stopReason       string
 	managedProcesses int
+	timeout          time.Duration
 	startedAt        time.Time
 	finishedAt       time.Time
 	completionSeen   bool
@@ -122,6 +133,9 @@ type jobState struct {
 	separateStderr   bool
 	supervised       bool
 	detached         bool
+	// leftover is observed when a result is reported: the command has exited,
+	// but processes it started still run in the job.
+	leftover bool
 }
 
 func (job *processJob) snapshot() jobState {
@@ -133,6 +147,7 @@ func (job *processJob) snapshot() jobState {
 		outputError:      job.outputError,
 		stopReason:       job.stopReason,
 		managedProcesses: job.managedProcesses,
+		timeout:          job.timeout,
 		startedAt:        job.startedAt,
 		finishedAt:       job.finishedAt,
 		completionSeen:   job.completionSeen,
@@ -161,6 +176,7 @@ type processSpec struct {
 	separateStderr bool
 	supervised     bool
 	detach         bool
+	awaitGroup     bool
 	environment    map[string]string
 	prepare        func(policy *filesystemPolicy) (string, error)
 	build          func(policy *filesystemPolicy, workdir string) (*exec.Cmd, error)
@@ -178,7 +194,7 @@ type jobBuffer struct {
 type bashArgs struct {
 	Command        string `json:"command"`
 	Workdir        string `json:"workdir,omitempty"`
-	TimeoutSeconds int    `json:"timeout,omitzero"`
+	TimeoutSeconds *int   `json:"timeout,omitzero"`
 	Background     bool   `json:"background,omitzero"`
 }
 
@@ -314,7 +330,7 @@ func (manager *ProcessManager) HideModelEnvironment(names ...string) {
 }
 
 func (manager *ProcessManager) Tools() []agent.Tool {
-	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory; defaults to the workspace. Use instead of cd. Relative paths start at the workspace."},"timeout":{"type":"integer","minimum":1,"maximum":3600,"description":"Hard timeout in seconds. Defaults to 600."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher or other work whose output you do not need in this reply. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
+	bashSchema := `{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run."},"workdir":{"type":"string","description":"Starting directory; defaults to the workspace. Use instead of cd. Relative paths start at the workspace."},"timeout":{"type":"integer","minimum":0,"maximum":604800,"description":"Hard timeout in seconds. Defaults to 600. Foreground commands allow up to 3600; background work up to a week, or 0 for no limit."},"background":{"type":"boolean","description":"Return immediately instead of waiting, for a server, watcher, download or other long work. Background jobs keep running after Skot exits until they finish, are stopped, or reach their timeout, so use this rather than nohup or setsid. Set timeout to cover the work; use 0 only when the user wants it running after this conversation, such as a service they asked you to start. Stop background work once you no longer need it. Ordinary commands stay in the foreground and hand back a job id on their own if they are still running after about 10 seconds. Either way, use job to inspect, wait for, or stop work that is still running."}},"required":["command"],"additionalProperties":false}`
 	return []agent.Tool{
 		{
 			Spec: model.ToolSpec{
@@ -357,12 +373,19 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 	if err := ctx.Err(); err != nil {
 		return agent.ToolOutput{}, err
 	}
-	if args.TimeoutSeconds < 0 || args.TimeoutSeconds > int(maxBashTimeout/time.Second) {
-		return agent.ToolOutput{}, fmt.Errorf("timeout must be between 1 and %d seconds", int(maxBashTimeout/time.Second))
-	}
 	timeout := defaultBashTimeout
-	if args.TimeoutSeconds > 0 {
-		timeout = time.Duration(args.TimeoutSeconds) * time.Second
+	if args.TimeoutSeconds != nil {
+		seconds, limit := *args.TimeoutSeconds, maxBashTimeout
+		if args.Background {
+			limit = maxBackgroundTimeout
+		}
+		switch {
+		case seconds == 0 && !args.Background:
+			return agent.ToolOutput{}, errors.New("timeout 0 (no limit) requires background")
+		case seconds < 0 || seconds > int(limit/time.Second):
+			return agent.ToolOutput{}, fmt.Errorf("timeout must be between 0 and %d seconds", int(limit/time.Second))
+		}
+		timeout = time.Duration(seconds) * time.Second
 	}
 	job, err := manager.start(processSpec{
 		readOnlyPaths: agent.ToolReadOnlyPaths(ctx),
@@ -371,6 +394,12 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 		origin:        origin,
 		sessionID:     sessionID,
 		supervised:    args.Background,
+		// Background Bash runs until it finishes, is stopped, or times out;
+		// Skot's exit does not end it.
+		detach: args.Background,
+		// Configured programs and the user's own shell may start work meant to
+		// outlive them; the model's Bash commands may not.
+		awaitGroup: origin == processOriginModel,
 		prepare: func(policy *filesystemPolicy) (string, error) {
 			workdirPolicy := policy
 			enforceProtection := true
@@ -419,20 +448,29 @@ func (manager *ProcessManager) runBash(ctx context.Context, args bashArgs, origi
 	case <-job.done:
 		return manager.completedForegroundResult(job)
 	case <-timer.C:
-		job.mu.Lock()
-		job.joinRequired = true
-		job.mu.Unlock()
-		select {
-		case <-job.done:
-			return manager.completedForegroundResult(job)
-		default:
-		}
-		return manager.result(job, jobResultOptions{outputLimit: defaultCommandPreview, managed: true})
+		return manager.yieldForeground(job)
+	case <-job.leftovers:
+		// Its output is complete; waiting out the yield would only add latency.
+		return manager.yieldForeground(job)
 	case <-ctx.Done():
 		_, _ = manager.stop(context.Background(), job.id, "tool call cancelled")
 		manager.forget(job)
 		return agent.ToolOutput{}, ctx.Err()
 	}
+}
+
+// yieldForeground hands a foreground command that is still running back as a
+// job that the run must join.
+func (manager *ProcessManager) yieldForeground(job *processJob) (agent.ToolOutput, error) {
+	job.mu.Lock()
+	job.joinRequired = true
+	job.mu.Unlock()
+	select {
+	case <-job.done:
+		return manager.completedForegroundResult(job)
+	default:
+	}
+	return manager.result(job, jobResultOptions{outputLimit: defaultCommandPreview, managed: true})
 }
 
 func (manager *ProcessManager) completedForegroundResult(job *processJob) (agent.ToolOutput, error) {
@@ -523,6 +561,9 @@ func (manager *ProcessManager) listJobs(sessionID string) (string, error) {
 		if state.exitCode != nil {
 			fmt.Fprintf(&text, " exit_code=%d", *state.exitCode)
 		}
+		if state.status == ProcessRunning {
+			fmt.Fprintf(&text, " timeout=%s", timeoutText(state, "%s left=%s"))
+		}
 		if state.detached && state.status == ProcessRunning {
 			text.WriteString(" detached")
 		}
@@ -568,7 +609,8 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 	if spec.build == nil {
 		return nil, errors.New("process builder is required")
 	}
-	if spec.timeout <= 0 {
+	// Only a supervised worker can run without a time limit.
+	if spec.timeout < 0 || (spec.timeout == 0 && !spec.supervised) {
 		return nil, errors.New("process timeout must be positive")
 	}
 	if spec.prepare != nil {
@@ -635,9 +677,13 @@ func (manager *ProcessManager) start(spec processSpec) (*processJob, error) {
 		errLog:         errLog,
 		done:           make(chan struct{}),
 		status:         ProcessRunning,
+		timeout:        spec.timeout,
 		startedAt:      time.Now().UTC(),
 		userInitiated:  spec.origin == processOriginUser,
 		separateStderr: spec.separateStderr,
+		awaitGroup:     spec.awaitGroup,
+		leftovers:      make(chan struct{}),
+		stopRequested:  make(chan struct{}),
 	}
 	if spec.origin == processOriginModel {
 		job.scope = policy.scope
@@ -665,6 +711,14 @@ func (manager *ProcessManager) monitor(job *processJob, timeout time.Duration) {
 	timer := time.NewTimer(timeout)
 	select {
 	case waitErr = <-wait:
+		if job.awaitGroup {
+			if processGroupExists(job.cmd) && processGroupMemberCount(job.cmd) > 0 {
+				close(job.leftovers)
+			}
+			var end processGroupEnd
+			end, managedProcesses = awaitProcessGroup(job.cmd, timer.C, job.stopRequested)
+			timedOut = end == processGroupTimedOut
+		}
 		timer.Stop()
 	case <-timer.C:
 		timedOut = true
@@ -677,11 +731,12 @@ func (manager *ProcessManager) monitor(job *processJob, timeout time.Duration) {
 	job.errText = processErrorText(waitErr)
 	job.managedProcesses = max(job.managedProcesses, managedProcesses)
 	switch {
+	case job.stopReason != "":
+		// A requested stop keeps its reason even if the timeout fired meanwhile.
+		job.status = ProcessKilled
 	case timedOut:
 		job.status = ProcessTimedOut
 		job.stopReason = fmt.Sprintf("timeout after %s", timeout)
-	case job.stopReason != "":
-		job.status = ProcessKilled
 	case waitErr != nil:
 		job.status = ProcessFailed
 	default:
@@ -733,9 +788,12 @@ func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []agent
 			continue
 		}
 		result := manager.processResult(job, state, true)
-		content := fmt.Sprintf("Background job %s (%q) completed: status=%s", job.id, result.Command, state.status)
+		content := fmt.Sprintf("Background job %s (%q) finished: status=%s", job.id, result.Command, state.status)
 		if state.exitCode != nil {
 			content += fmt.Sprintf(", exit_code=%d", *state.exitCode)
+		}
+		if state.stopReason != "" {
+			content += ", stop_reason=" + state.stopReason
 		}
 		if state.errText != "" {
 			content += ", error=" + state.errText
@@ -743,7 +801,12 @@ func (manager *ProcessManager) PendingCompletionEvents(sessionID string) []agent
 		if state.outputError != "" {
 			content += ", output_error=" + state.outputError
 		}
-		content += ". Inspect output with job(action=\"output\", job_id=\"" + job.id + "\")."
+		if note := leftoverProcessNote(state); note != "" {
+			content += "; " + note
+		} else {
+			content += "."
+		}
+		content += " Inspect output with job(action=\"output\", job_id=\"" + job.id + "\")."
 		event := agent.BoundaryEvent{JobID: job.id, FinishedAt: state.finishedAt, Content: content}
 		// Preserve the text notice even if its presentation details cannot be encoded.
 		if detail, err := agent.NewDetail(agent.ProcessResultDetailKind, result); err == nil {
@@ -789,10 +852,21 @@ func (manager *ProcessManager) MarkCompletionDelivered(jobID string) {
 	if job == nil {
 		return
 	}
-	job.mu.Lock()
-	job.completionSeen = true
-	job.mu.Unlock()
 	if job.snapshot().supervised {
+		_ = manager.refreshSupervisedJob(job)
+	}
+	job.mu.Lock()
+	// Only finished work has a completion to deliver. Replayed or tampered
+	// journal state naming a running job must neither hide its real completion
+	// nor mark its durable state for deletion.
+	if job.status == ProcessRunning {
+		job.mu.Unlock()
+		return
+	}
+	job.completionSeen = true
+	supervised := job.supervised
+	job.mu.Unlock()
+	if supervised {
 		manager.markSupervisedDelivered(job)
 	}
 }
@@ -801,21 +875,43 @@ func (manager *ProcessManager) MarkCompletionDelivered(jobID string) {
 // a clean session or application boundary. It inspects the current registry;
 // callers adopting jobs directly must call AttachSession first.
 func (manager *ProcessManager) DetachedJobs(sessionID string) []string {
-	sessionID = strings.TrimSpace(sessionID)
-	jobs := manager.sessionJobs(sessionID)
 	var ids []string
-	for _, job := range jobs {
+	for _, job := range manager.RunningDetachedJobs(sessionID) {
+		ids = append(ids, job.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// DetachedJob describes detached work that is still running.
+type DetachedJob struct {
+	ID      string
+	Command string
+	// Timeout is the job's limit, or zero when it has none.
+	Timeout   time.Duration
+	Remaining time.Duration
+}
+
+// RunningDetachedJobs reports a session's detached work that is still running,
+// in start order. Like DetachedJobs, it inspects the current registry.
+func (manager *ProcessManager) RunningDetachedJobs(sessionID string) []DetachedJob {
+	var running []DetachedJob
+	for _, job := range manager.sessionJobs(strings.TrimSpace(sessionID)) {
 		state := job.snapshot()
 		if state.supervised {
 			_ = manager.refreshSupervisedJob(job)
 			state = job.snapshot()
 		}
-		if state.detached && state.status == ProcessRunning {
-			ids = append(ids, job.id)
+		if !state.detached || state.status != ProcessRunning {
+			continue
 		}
+		detached := DetachedJob{ID: job.id, Command: summarizeCommand(job.command), Timeout: state.timeout}
+		if state.timeout > 0 {
+			detached.Remaining = max(0, time.Until(state.startedAt.Add(state.timeout)))
+		}
+		running = append(running, detached)
 	}
-	sort.Strings(ids)
-	return ids
+	return running
 }
 
 // SetFilesystemPolicyAfter publishes a complete filesystem policy at the same
@@ -868,6 +964,7 @@ func (manager *ProcessManager) stop(ctx context.Context, id, reason string) (*pr
 		job.mu.Unlock()
 		return job, nil
 	}
+	firstStop := job.stopReason == ""
 	job.stopReason = reason
 	supervised := job.supervised
 	job.mu.Unlock()
@@ -907,6 +1004,9 @@ func (manager *ProcessManager) stop(ctx context.Context, id, reason string) (*pr
 			return job, errors.New("timed out waiting for job worker to stop; the queued stop may still complete if the worker resumes")
 		}
 	}
+	if firstStop {
+		close(job.stopRequested)
+	}
 	stopped := make(chan struct{})
 	counts := make(chan int, 1)
 	go func() { counts <- keepKillingProcessGroup(job.cmd, stopped) }()
@@ -934,6 +1034,85 @@ func waitWhileKillingProcessGroup(command *exec.Cmd, wait <-chan error) (int, er
 	err := <-wait
 	close(stopped)
 	return <-counts, err
+}
+
+type processGroupEnd uint8
+
+const (
+	processGroupExited processGroupEnd = iota
+	processGroupTimedOut
+	processGroupStopped
+)
+
+// awaitProcessGroup runs after the payload's own process has been reaped. A
+// command can leave processes in its group with output redirected away from
+// Skot's pipes, so a completed wait does not mean that the job has finished.
+// They stay part of the job until they exit, and the job timeout or a stop
+// request kills them as it would have killed the shell. Polling starts fast so
+// briefly lingering members do not delay ordinary commands.
+func awaitProcessGroup(command *exec.Cmd, timeout <-chan time.Time, stop <-chan struct{}) (processGroupEnd, int) {
+	watch := processGroupWatch{command: command}
+	interval := processGroupKillRetryInterval
+	poll := time.NewTimer(interval)
+	defer poll.Stop()
+	for !watch.finished() {
+		select {
+		case <-timeout:
+			return processGroupTimedOut, killProcessGroupUntilEmpty(command)
+		case <-stop:
+			return processGroupStopped, killProcessGroupUntilEmpty(command)
+		case <-poll.C:
+			interval = min(2*interval, processGroupPollInterval)
+			poll.Reset(interval)
+		}
+	}
+	return processGroupExited, 0
+}
+
+// killProcessGroupUntilEmpty tears down a group whose leader was already
+// reaped, so no wait path can report completion. The member count is only
+// reported. The bound keeps a process stuck in uninterruptible sleep from
+// holding the job open indefinitely.
+func killProcessGroupUntilEmpty(command *exec.Cmd) int {
+	watch := processGroupWatch{command: command}
+	managedProcesses := 0
+	deadline := time.Now().Add(jobStopTimeout)
+	for {
+		managedProcesses = max(managedProcesses, processGroupMemberCount(command))
+		_ = killProcessGroup(command)
+		if watch.finished() || time.Now().After(deadline) {
+			return managedProcesses
+		}
+		time.Sleep(processGroupKillRetryInterval)
+	}
+}
+
+// processGroupWatch decides when a payload group has finished. The kernel's
+// group lookup is atomic, but it counts zombies, which never leave the group
+// when init does not reap orphans. A /proc scan is not atomic: a member that
+// forks and exits during one can hide its child. A zombie-only group therefore
+// counts as finished only after two scans see the same zombies; a hidden live
+// member would show up in the second scan or leave a new zombie behind.
+type processGroupWatch struct {
+	command *exec.Cmd
+	zombies []int
+}
+
+func (watch *processGroupWatch) finished() bool {
+	if !processGroupExists(watch.command) {
+		return true
+	}
+	zombies := processGroupZombies(watch.command)
+	settled := len(zombies) > 0 && slices.Equal(zombies, watch.zombies)
+	watch.zombies = zombies
+	return settled
+}
+
+// hasLeftoverProcesses reports processes still running in a payload group
+// after the payload's own process exited. The leader's pid cannot be reused
+// while its process group has members, so its absence identifies that exit.
+func hasLeftoverProcesses(command *exec.Cmd) bool {
+	return processExited(command) && processGroupMemberCount(command) > 0
 }
 
 // keepKillingProcessGroup signals a group until its wait path has completed.
@@ -1085,6 +1264,9 @@ func (manager *ProcessManager) result(job *processJob, options jobResultOptions)
 		output = manager.jobOutput(job, options.outputLimit)
 	}
 	state := job.snapshot()
+	if state.status == ProcessRunning && job.awaitGroup && !state.supervised {
+		state.leftover = hasLeftoverProcesses(job.cmd)
+	}
 	// A later output read can recover. Keep read errors on this result without
 	// changing the job's status or its recorded output storage errors.
 	if output.readErr != nil {
@@ -1140,8 +1322,14 @@ func formatJob(jobID string, state jobState, output processOutput, options jobRe
 		fmt.Fprintf(&text, "job_id: %s\n", jobID)
 	}
 	fmt.Fprintf(&text, "status: %s\n", state.status)
+	if state.status == ProcessRunning {
+		fmt.Fprintf(&text, "timeout: %s\n", timeoutText(state, "%s (%s left)"))
+	}
 	if state.exitCode != nil {
 		fmt.Fprintf(&text, "exit_code: %d\n", *state.exitCode)
+	}
+	if state.status != ProcessRunning && state.stopReason != "" {
+		fmt.Fprintf(&text, "stop_reason: %s\n", state.stopReason)
 	}
 	if state.errText != "" {
 		fmt.Fprintf(&text, "error: %s\n", state.errText)
@@ -1154,6 +1342,9 @@ func formatJob(jobID string, state jobState, output processOutput, options jobRe
 	}
 	if output.truncated {
 		text.WriteString("truncated: true\n")
+	}
+	if note := leftoverProcessNote(state); note != "" {
+		fmt.Fprintf(&text, "note: %s\n", note)
 	}
 	if state.status == ProcessRunning {
 		if state.detached {
@@ -1169,6 +1360,40 @@ func formatJob(jobID string, state jobState, output processOutput, options jobRe
 		}
 	}
 	return text.String()
+}
+
+// leftoverProcessNote explains jobs kept alive, or killed, only because of
+// processes the command left behind. A command killed with its group reports a
+// signal, so an ordinary exit code on a stopped job means it had already exited
+// by itself.
+func leftoverProcessNote(state jobState) string {
+	switch state.status {
+	case ProcessRunning:
+		if !state.leftover {
+			return ""
+		}
+		return "the command has exited, but processes it started are still running in this job and will be killed at its timeout. Run long work with background=true and a timeout that covers it."
+	case ProcessTimedOut, ProcessKilled:
+		if state.exitCode == nil || *state.exitCode < 0 {
+			return ""
+		}
+		cause := "timeout"
+		if state.status == ProcessKilled {
+			cause = "stop"
+		}
+		return fmt.Sprintf("the command exited with code %d before the %s; the %s killed processes it had left running.", *state.exitCode, cause, cause)
+	}
+	return ""
+}
+
+// timeoutText shows a running job's limit and how much of it is left, so the
+// model can compare it with the work it expects. Zero means no limit.
+func timeoutText(state jobState, format string) string {
+	if state.timeout == 0 {
+		return "none"
+	}
+	remaining := max(0, time.Until(state.startedAt.Add(state.timeout))).Round(time.Second)
+	return fmt.Sprintf(format, state.timeout, remaining)
 }
 
 func (manager *ProcessManager) processResult(job *processJob, state jobState, managed bool) agent.ProcessResult {

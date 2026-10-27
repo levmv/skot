@@ -8,6 +8,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// processGroupZombies never settles a group on macOS: launchd reaps orphans,
+// so zombies do not linger there.
+func processGroupZombies(*exec.Cmd) []int { return nil }
+
 // processGroupMemberCount is observational only; failure to inspect a group
 // must never prevent the normal kill path.
 func processGroupMemberCount(command *exec.Cmd) int {

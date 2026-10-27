@@ -191,6 +191,32 @@ func TestProgramBackgroundAutoStripsItsSyntheticArgumentAndUsesJobTool(t *testin
 	}
 }
 
+func TestProgramMayLeaveProcessesRunningAfterItReturns(t *testing.T) {
+	manager := processManagerForTest(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	declaration := normalizedProgramTool(t, ProgramTool{
+		Name: "start_server", Description: "start a server",
+		Command: []string{"sh", "-c", `sleep 30 > /dev/null 2>&1 & echo $! > "$0"`, pidFile},
+	})
+	resolved, err := manager.ResolveProgramTools([]ProgramTool{declaration})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	output, err := resolved[0].Tool.Run(agent.WithToolSessionID(context.Background(), "session-program"), `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta := processResultForTest(t, output); meta.Status != ProcessCompleted || time.Since(started) > 5*time.Second {
+		t.Fatalf("program result = %#v after %s", meta, time.Since(started))
+	}
+	pid := readPIDForProcessTest(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if !processLiveForTest(pid) {
+		t.Fatalf("process %d started by the program did not keep running", pid)
+	}
+}
+
 func TestProgramYieldPreservesForegroundJoinObligation(t *testing.T) {
 	manager := processManagerForTest(t)
 	declaration := normalizedProgramTool(t, ProgramTool{

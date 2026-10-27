@@ -214,6 +214,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			}
 			returnErr = errors.Join(returnErr, waitForCleanup(ctx, func() error {
 				// Close drops the session, so print its resume hint first.
+				writeDetachedJobs(stderr, application.RunningDetachedJobs())
 				if application.HasUserTurn() {
 					writeResumeHint(stderr, application.ShortSessionID())
 				}
@@ -310,6 +311,7 @@ func runOneShot(ctx context.Context, application *app.Application, config cliCon
 			usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.TotalTokens, accounting.Complete)
 	}
 	autoRetained := !sessionWasResumable && application.SessionID() != ""
+	writeDetachedJobs(stderr, application.RunningDetachedJobs())
 	if config.saveSession || len(result.DetachedJobs) != 0 || autoRetained {
 		writeResumeHint(stderr, application.ShortSessionID())
 	}
@@ -324,6 +326,22 @@ func systemPromptMode(prompt string, explicit bool) string {
 		return "none"
 	}
 	return "custom"
+}
+
+// writeDetachedJobs names work that keeps running after Skot exits, so it is
+// not forgotten once the conversation is gone.
+func writeDetachedJobs(output io.Writer, jobs []workspacetools.DetachedJob) {
+	if len(jobs) == 0 {
+		return
+	}
+	fmt.Fprintln(output, "Still running in the background:")
+	for _, job := range jobs {
+		limit := "no time limit"
+		if job.Timeout > 0 {
+			limit = job.Remaining.Round(time.Second).String() + " left"
+		}
+		fmt.Fprintf(output, "  %s  %s  (%s)\n", job.ID, ui.TerminalText(output, job.Command), limit)
+	}
 }
 
 // writeResumeHint prints nothing for sessions Skot cannot address, such as an

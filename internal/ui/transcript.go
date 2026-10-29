@@ -33,9 +33,11 @@ type screenBlock struct {
 	// printedPrefix is already printed source. It supplies Markdown context
 	// when only a continuation of this block can still be rendered.
 	printedPrefix string
-	duration      time.Duration
-	tool          *toolBlock
-	completion    *processResultMeta
+	// streaming marks assistant text the model is still writing.
+	streaming  bool
+	duration   time.Duration
+	tool       *toolBlock
+	completion *processResultMeta
 }
 
 type toolBlock struct {
@@ -285,6 +287,7 @@ func (m *screenModel) addToolCallAt(call model.ToolCall, startedAt time.Time) {
 }
 
 func (transcript *transcriptState) addToolCallAt(call model.ToolCall, startedAt time.Time) {
+	transcript.settleAssistant()
 	display := describeToolCall(call.Name, call.RawArguments, transcript.root)
 	var group *toolGroupMeta
 	if display.GroupKey != "" {
@@ -553,7 +556,7 @@ func (m screenModel) renderBlockLines(block screenBlock) []string {
 	case screenBlockUser:
 		return m.renderUserBlock(block)
 	case screenBlockAssistant:
-		return m.renderAssistantContinuation(block.printedPrefix, block.text)
+		return m.renderAssistantLines(block)
 	case screenBlockTool:
 		if block.tool == nil {
 			return m.renderErrorNotice("invalid tool block")
@@ -634,14 +637,19 @@ func (m screenModel) renderScopeChangeText(text string) string {
 }
 
 func (m screenModel) renderAssistantBlock(text string) []string {
-	return m.renderAssistantContinuation("", text)
+	return m.renderAssistantLines(screenBlock{kind: screenBlockAssistant, text: text})
 }
 
-func (m screenModel) renderAssistantContinuation(prefix, text string) []string {
+func (m screenModel) renderAssistantLines(block screenBlock) []string {
 	lines := []string{m.marked(" ", "")}
 	marked := false
-	for _, rendered := range m.markdown.renderMarkdownContinuation(prefix, text, m.contentWidth()) {
-		for _, line := range wrapDisplayLine(rendered, m.contentWidth()) {
+	rendered := m.markdown.render(block.printedPrefix+block.text, markdownOptions{
+		width: m.contentWidth(), from: len(block.printedPrefix), streaming: block.streaming,
+	})
+	for _, row := range rendered {
+		// Table borders and deeply nested margins can exceed a narrow pane
+		// even after layout. Wrap them before the terminal clips long rows.
+		for _, line := range wrapDisplayLine(row, m.contentWidth()) {
 			marker := " "
 			if !marked && strings.TrimSpace(line) != "" {
 				marker = "•"

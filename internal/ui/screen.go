@@ -630,6 +630,7 @@ func (m screenModel) update(msg tea.Msg) (screenModel, tea.Cmd) {
 		return m, nil
 	case agentDoneMsg:
 		m.programOutcome = programResultState(msg.err, "done")
+		m.transcript.settleAssistant()
 		if msg.err == nil {
 			m.finishModelRetryNotice()
 		} else {

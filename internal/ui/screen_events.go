@@ -208,6 +208,7 @@ func (m *screenModel) resetModelRetryGroup() {
 }
 
 func (transcript *transcriptState) startAttempt(attemptID string) {
+	transcript.settleAssistant()
 	transcript.currentAttempt = attemptID
 	transcript.assistantSanitizer = terminalTextSanitizer{}
 	transcript.assistantPrefix = ""
@@ -226,6 +227,7 @@ func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
 		if block.kind == screenBlockAssistant && block.attemptID == attemptID {
 			transcript.markBlockDirty(index)
 			block.text += delta
+			block.streaming = true
 			return
 		}
 	}
@@ -238,10 +240,22 @@ func (transcript *transcriptState) appendAssistant(attemptID, delta string) {
 	// Blocks supply their own vertical padding; keep indentation, but do not
 	// turn a provider's opening newlines into extra blank transcript rows.
 	delta = strings.TrimLeft(delta, "\n")
-	transcript.appendBlock(screenBlock{kind: screenBlockAssistant, text: delta, attemptID: attemptID})
+	transcript.appendBlock(screenBlock{kind: screenBlockAssistant, text: delta, attemptID: attemptID, streaming: true})
+}
+
+// settleAssistant ends streaming presentation once the model stops writing,
+// so syntax held back for text still to come renders as written.
+func (transcript *transcriptState) settleAssistant() {
+	for index := range slices.Backward(transcript.blocks) {
+		if block := &transcript.blocks[index]; block.streaming {
+			block.streaming = false
+			transcript.markBlockDirty(index)
+		}
+	}
 }
 
 func (transcript *transcriptState) finishAssistant(text string) {
+	transcript.settleAssistant()
 	transcript.assistantSanitizer = terminalTextSanitizer{}
 	transcript.assistantPrefix = ""
 	text = sanitizeTerminalText(text)

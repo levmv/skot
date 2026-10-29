@@ -224,6 +224,7 @@ func (p *AnswerProgress) Finish(answer string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.finishAnswer(answer)
+	p.source.settleAssistant()
 	p.source.collapseToolTail()
 	if len(p.source.blocks) == 0 && p.width == 0 {
 		return p.renderer.Stop()
@@ -247,6 +248,10 @@ func snapshotProgressBlocks(blocks []screenBlock) []progressBlockSnapshot {
 	snapshot := make([]progressBlockSnapshot, len(blocks))
 	for index, block := range blocks {
 		snapshot[index].text = block.text
+		if block.streaming {
+			// Markdown held back for text still to come is not printed yet.
+			snapshot[index].text = block.text[:markdownShown(block.text)]
+		}
 		snapshot[index].toolDone = block.tool != nil && block.tool.done
 	}
 	return snapshot

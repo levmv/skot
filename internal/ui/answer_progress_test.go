@@ -167,7 +167,7 @@ func TestAnswerProgressResizePreservesMarkdownContext(t *testing.T) {
 	for _, test := range []struct{ name, prefix, want string }{
 		{"opening fence", "```py", "if True:\n    # important comment\n    pattern = '**'\nDone"},
 		{"inside code", "```python\nif True:\n", "if True:\n    # important comment\n    pattern = '**'\nDone"},
-		{"partial code line", "```python\nif True:\n    # important comment\n    pattern = ", "if True:\n    # important comment\n    pattern =\n'**'\nDone"},
+		{"partial code line", "```python\nif True:\n    # important comment\n    pattern = ", "if True:\n    # important comment\n    pattern =\n '**'\nDone"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			terminal := newProgressTestTerminal(80, 12, "")
@@ -194,6 +194,80 @@ func TestAnswerProgressResizePreservesMarkdownContext(t *testing.T) {
 			}
 			if got := strings.Join(lines, "\n"); got != test.want {
 				t.Fatalf("resize changed code or replayed text:\ngot: %q\nwant: %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAnswerProgressResizeKeepsHeldBackMarkdown(t *testing.T) {
+	const answer = "Results:\n| Key | Value |\n| --- | --- |\n| alpha | one |\n"
+	terminal := newProgressTestTerminal(60, 12, "")
+	progress := newAnswerProgress(terminal, terminal.size, time.Now, "/work")
+	// The header line is held back until its delimiter row arrives.
+	progress.Emit(agent.Event{Kind: agent.EventTextDelta, AttemptID: "a1", Text: "Results:\n| Key | Value |\n"})
+	mustRedrawProgress(t, progress)
+	terminal.resize(50, 12, true)
+	mustRedrawProgress(t, progress)
+	progress.Emit(agent.Event{Kind: agent.EventTextDelta, AttemptID: "a1", Text: "| --- | --- |\n| alpha | one |\n"})
+	if err := progress.Finish(answer); err != nil {
+		t.Fatal(err)
+	}
+	got := terminal.text()
+	if strings.Count(got, "Results:") != 1 || strings.Count(got, "Key") != 1 || !strings.Contains(got, "│ alpha │ one   │") || strings.Contains(got, "|") {
+		t.Fatalf("resize lost or replayed held-back Markdown:\n%s", got)
+	}
+}
+
+func TestAnswerProgressResizePreservesInlineText(t *testing.T) {
+	for _, test := range []struct{ name, prefix, answer string }{
+		{"glob", "Use *", "Use *.go"},
+		{"reference", "First &amp; sec", "First &amp; second"},
+		{"pending reference", "First &am", "First &amp; second"},
+		{"tab", "alpha\tbe", "alpha\tbeta"},
+		{"inline code tab", "Use `alpha\tbe", "Use `alpha\tbeta`"},
+		{"fenced code tab", "```\nalpha\tbe", "```\nalpha\tbeta\n```"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			terminal := newProgressTestTerminal(80, 12, "")
+			progress := newAnswerProgress(terminal, terminal.size, time.Now, "/work")
+			progress.Emit(agent.Event{Kind: agent.EventTextDelta, AttemptID: "a1", Text: test.prefix})
+			mustRedrawProgress(t, progress)
+			terminal.resize(70, 12, true)
+			mustRedrawProgress(t, progress)
+			progress.Emit(agent.Event{Kind: agent.EventTextDelta, AttemptID: "a1", Text: test.answer[len(test.prefix):]})
+			if err := progress.Finish(test.answer); err != nil {
+				t.Fatal(err)
+			}
+			// A committed partial line resumes on a new terminal row. Ignore
+			// that wrap point and the gutter, but retain every text character.
+			got := strings.Join(strings.Fields(strings.ReplaceAll(terminal.text(), "•", "")), "")
+			want := strings.Join(strings.Fields(renderPlainMarkdown(test.answer, markdownOptions{})), "")
+			if got != want {
+				t.Fatalf("resize lost or replayed text:\ngot:  %q\nwant: %q", got, want)
+			}
+		})
+	}
+}
+
+func TestAnswerProgressPreservesTableCellsInNarrowPanes(t *testing.T) {
+	const table = "| Aaa | Bbb | Ccc | Ddd |\n| --- | --- | --- | --- |\n| one | two | six | last |\n"
+	for _, width := range []int{60, 24, 12, 1} {
+		t.Run(strconv.Itoa(width), func(t *testing.T) {
+			terminal := newProgressTestTerminal(width, 20, "")
+			progress := newAnswerProgress(terminal, terminal.size, time.Now, "/work")
+			if err := progress.Finish(table); err != nil {
+				t.Fatal(err)
+			}
+			// Ignore borders, gutter and wrap points while preserving the
+			// letters of every cell in reading order.
+			got := strings.Map(func(char rune) rune {
+				if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' {
+					return char
+				}
+				return -1
+			}, terminal.text())
+			if want := "AaaBbbCccDddonetwosixlast"; got != want {
+				t.Fatalf("table lost or reordered cells:\ngot:  %q\nwant: %q\n%s", got, want, terminal.text())
 			}
 		})
 	}

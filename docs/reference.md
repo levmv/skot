@@ -211,7 +211,7 @@ recent session for that workspace.
 | `/theme [auto|light|dark]` | Show or persist the interactive terminal theme. Default: `auto`, which asks the terminal for its background colour and falls back to `dark` when there is no answer. Set `light` or `dark` explicitly if your terminal filters that query. |
 | `/display [compact|detailed|full]` | Show or persist transcript detail. Default: `compact`. |
 | `/context` | Show the current context budget. |
-| `/compact` | Compact older completed conversation blocks. |
+| `/compact` | Summarize older conversation history while retaining recent work. |
 | `/logout [provider]` | Remove stored credentials. |
 | `/exit`, `/quit`, `/q` | Exit Skot. |
 
@@ -365,9 +365,11 @@ an outer container when whole-process-tree containment matters.
 instructions, tool definitions, rolling summary, history, and queued input.
 Reasoning data that will not be sent again is excluded.
 
-When a conversation gets too large for the model, Skot first shortens older
-tool results. If more space is needed, it summarizes older completed turns.
-The current turn is kept intact. Use `/compact` to request a summary yourself.
+When a conversation gets too large for the model, Skot first tries to shorten
+older tool results. If that would not free enough space, it summarizes older
+work. Both can happen during a long task and keep recent exchanges in full;
+the task's user messages and selected instructions remain available.
+Use `/compact` between runs to request a summary yourself.
 
 `-context-window` overrides missing or incorrect route metadata.
 `-max-tool-iterations` limits repeated rounds of tool calls. When the limit is

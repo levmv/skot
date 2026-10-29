@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/levmv/skot/model"
@@ -68,38 +67,6 @@ func (state State) hasUnfinishedWork() bool {
 	return len(state.ActiveRuns) != 0 || len(state.PendingTools) != 0
 }
 
-// firstUnfinishedBlock returns the oldest block owned by an active run. Model
-// boundary maintenance may rewrite the projection of older completed blocks,
-// but it must never summarize or prune any part of the run in progress.
-func (state State) firstUnfinishedBlock() (int, bool) {
-	if len(state.ActiveRuns) == 0 {
-		return 0, false
-	}
-	active := make(map[string]struct{}, len(state.ActiveRuns))
-	for _, runID := range state.ActiveRuns {
-		active[runID] = struct{}{}
-	}
-	for index, block := range state.Blocks {
-		if _, unfinished := active[block.RunID]; unfinished {
-			return index, true
-		}
-	}
-	return 0, false
-}
-
-func boundaryPrecedesUnfinishedWork(state State, throughSequence uint64) bool {
-	if !state.hasUnfinishedWork() {
-		return true
-	}
-	first, ok := state.firstUnfinishedBlock()
-	if !ok {
-		// An active run without an input block is not a boundary at which context
-		// maintenance can prove that it leaves unfinished work untouched.
-		return false
-	}
-	return throughSequence < state.Blocks[first].StartSequence
-}
-
 func (state State) VerbatimItems() []model.Item {
 	return state.verbatimItemsFromSequence(state.firstVerbatimSequence(), true)
 }
@@ -107,7 +74,11 @@ func (state State) VerbatimItems() []model.Item {
 // modelItems returns retained user instructions followed by the verbatim tail,
 // without product-only details. Requests and context estimates share this source.
 func (state State) modelItems() []model.Item {
-	return state.modelItemsFromSequence(state.firstVerbatimSequence())
+	var inputs []uint64
+	if state.Compaction != nil {
+		inputs = state.Compaction.RetainedInputSequences
+	}
+	return state.modelItemsFromSequence(state.firstVerbatimSequence(), inputs)
 }
 
 func (state State) firstVerbatimSequence() uint64 {
@@ -117,7 +88,7 @@ func (state State) firstVerbatimSequence() uint64 {
 	return 0
 }
 
-func (state State) modelItemsFromSequence(firstSequence uint64) []model.Item {
+func (state State) modelItemsFromSequence(firstSequence uint64, retainedInputs []uint64) []model.Item {
 	// Retain the latest version of each source unless it is already in the tail.
 	// Compaction requests restrict Blocks to the prefix being summarized.
 	var items []model.Item
@@ -148,16 +119,24 @@ func (state State) modelItemsFromSequence(firstSequence uint64) []model.Item {
 		}
 	}
 	slices.Reverse(items)
+	for _, block := range state.Blocks {
+		if slices.Contains(retainedInputs, block.StartSequence) {
+			items = append(items, model.Item{Kind: model.ItemUserText, Text: InputText(block.Entries[0].Item)})
+		}
+	}
 	return append(items, state.verbatimItemsFromSequence(firstSequence, false)...)
 }
 
 func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetails bool) []model.Item {
 	var items []model.Item
 	for _, block := range state.Blocks {
-		if firstSequence != 0 && block.StartSequence < firstSequence {
+		if firstSequence != 0 && block.EndSequence < firstSequence {
 			continue
 		}
 		for _, entry := range block.Entries {
+			if entry.Sequence < firstSequence {
+				continue
+			}
 			item := cloneItemForProjection(entry.Item, includeDetails)
 			if !includeDetails && block.StartSequence <= state.InputContextClearedThrough &&
 				entry.Sequence == block.StartSequence && len(block.InputInstructions) != 0 {
@@ -170,31 +149,6 @@ func (state State) verbatimItemsFromSequence(firstSequence uint64, includeDetail
 		}
 	}
 	return items
-}
-
-func validateCompactionBoundary(state State, payload ContextCompactedRecord, recordSequence uint64, unfinished bool) error {
-	if strings.TrimSpace(payload.Summary) == "" || payload.CoveredThroughSequence == 0 || payload.FirstVerbatimSequence == 0 || payload.CoveredThroughSequence >= payload.FirstVerbatimSequence || payload.FirstVerbatimSequence >= recordSequence {
-		return fmt.Errorf("invalid context compaction at sequence %d", recordSequence)
-	}
-	if unfinished && !boundaryPrecedesUnfinishedWork(state, payload.CoveredThroughSequence) {
-		return fmt.Errorf("context compacted while work was unfinished at sequence %d", recordSequence)
-	}
-	firstIndex := -1
-	for index, block := range state.Blocks {
-		if block.StartSequence == payload.FirstVerbatimSequence {
-			firstIndex = index
-			break
-		}
-	}
-	if firstIndex <= 0 || state.Blocks[firstIndex-1].EndSequence != payload.CoveredThroughSequence {
-		return fmt.Errorf("context compaction at sequence %d does not use a conversation-block boundary", recordSequence)
-	}
-	if state.Compaction != nil {
-		if payload.FirstVerbatimSequence <= state.Compaction.FirstVerbatimSequence || payload.CoveredThroughSequence <= state.Compaction.CoveredThroughSequence {
-			return fmt.Errorf("context compaction at sequence %d does not advance", recordSequence)
-		}
-	}
-	return nil
 }
 
 func validateProviderOwnership(item model.Item, selection model.ReplayContext) error {

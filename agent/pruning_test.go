@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -82,6 +83,91 @@ func TestToolResultPruningRequiresACompactionSizedResult(t *testing.T) {
 	compactSized := ContextReport{Window: before.Window, InputLimit: before.InputLimit, HistoryTokens: 30_000, TotalInputTokens: 100_000}
 	if !toolResultPruningIsDecisive(before, compactSized) {
 		t.Fatal("tool-dominated projection did not qualify for pruning")
+	}
+}
+
+func TestActiveRunToolPruningPreservesRecentExchanges(t *testing.T) {
+	for _, trigger := range []string{"preflight", "provider_overflow"} {
+		t.Run(trigger, func(t *testing.T) {
+			journal := &memoryJournal{}
+			largeResult := "BEGIN\n" + strings.Repeat("x", 40*1024) + "\nEND"
+			recentResult := strings.Repeat("recent output ", 600)
+			outputs := []string{largeResult, recentResult, recentResult, recentResult}
+			executed := 0
+			rejected := false
+			var runtime *Runtime
+			backend := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				if isCompactionRequest(request) {
+					t.Fatal("decisive pruning should avoid a summary call")
+				}
+				assertCompleteExchanges(t, request.Items)
+				if !itemsContainText(request.Items, "Inspect four sections.") {
+					t.Fatal("pruning lost the task")
+				}
+				var results []string
+				for _, item := range request.Items {
+					if item.Kind == modelapi.ItemToolResult {
+						results = append(results, item.ToolResult.Content.Text())
+					}
+				}
+				if len(results) != executed {
+					t.Fatal("pruning dropped tool results")
+				}
+				for i, result := range results {
+					if i > 0 && result != outputs[i] {
+						t.Fatal("pruning changed an exchange in the recent tail")
+					}
+				}
+				if executed < len(outputs) {
+					return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}}, nil
+				}
+				if trigger == "provider_overflow" && !rejected {
+					rejected = true
+					return modelapi.Response{}, &modelapi.ProviderError{
+						Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge,
+					}
+				}
+				if !strings.HasPrefix(results[0], "BEGIN\n") || !strings.HasSuffix(results[0], "\nEND") || !strings.Contains(results[0], "bytes omitted") {
+					t.Fatal("the older large tool result was not pruned")
+				}
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}, StopReason: "stop"}, nil
+			})
+			info := modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 64 * 1024}
+			if trigger == "preflight" {
+				info.ContextWindow = 24 * 1024
+			}
+			runtime = newTestRuntime(t, Config{Model: info, Backend: backend, Journal: journal, Tools: []Tool{{
+				Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)},
+				Run: func(context.Context, string) (ToolOutput, error) {
+					executed++
+					return ToolOutput{Content: modelapi.TextContent(outputs[executed-1])}, nil
+				},
+			}}})
+			result, err := runtime.Run(t.Context(), "Inspect four sections.", func(event Event) {
+				if event.Kind == EventToolResultsPruned {
+					state, err := runtime.State(t.Context())
+					if err != nil || len(state.ActiveRuns) != 1 || len(state.Blocks) != 1 {
+						t.Fatalf("pruning did not happen inside the only run: %v", err)
+					}
+				}
+			})
+			if err != nil || result.Answer != "done" || executed != len(outputs) {
+				t.Fatalf("run = %#v, error = %v, tool executions = %d", result, err, executed)
+			}
+			state, err := Replay(journal.snapshot())
+			if err != nil || state.ToolPruningCount != 1 || state.CompactionCount != 0 || len(state.ActiveRuns) != 0 {
+				t.Fatalf("replay: pruning %d, compactions %d, active %v, error %v", state.ToolPruningCount, state.CompactionCount, state.ActiveRuns, err)
+			}
+			var rawResults []string
+			for _, item := range state.Items {
+				if item.Kind == modelapi.ItemToolResult {
+					rawResults = append(rawResults, item.ToolResult.Content.Text())
+				}
+			}
+			if !slices.Equal(rawResults, outputs) {
+				t.Fatal("pruning changed the journaled output")
+			}
+		})
 	}
 }
 
@@ -265,7 +351,7 @@ func TestPruneToolResultKeepsUTF8HeadAndTail(t *testing.T) {
 	}
 }
 
-func TestReplayRejectsToolPruningInsideConversationBlock(t *testing.T) {
+func TestReplayRejectsToolPruningInsideUnansweredExchange(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
@@ -284,12 +370,12 @@ func TestReplayRejectsToolPruningInsideConversationBlock(t *testing.T) {
 		HeadBytes:       10,
 		TailBytes:       10,
 	})
-	if _, err := Replay(journal.snapshot()); err == nil || !strings.Contains(err.Error(), "conversation-block boundary") {
+	if _, err := Replay(journal.snapshot()); err == nil || !strings.Contains(err.Error(), "completed older exchange") {
 		t.Fatalf("invalid pruning replay error = %v", err)
 	}
 }
 
-func TestToolPruningCannotAdvanceIntoActiveRun(t *testing.T) {
+func TestToolPruningCannotAdvanceIntoUnansweredInput(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
@@ -307,12 +393,12 @@ func TestToolPruningCannotAdvanceIntoActiveRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	safe := ToolResultsPrunedRecord{ThroughSequence: state.Blocks[1].EndSequence, HeadBytes: 10, TailBytes: 10}
-	if err := validateToolPruningBoundary(state, safe, state.LastSequence+1, true); err != nil {
+	if err := validateToolPruningBoundary(state, safe, state.LastSequence+1); err != nil {
 		t.Fatalf("completed-prefix pruning: %v", err)
 	}
 	unsafe := ToolResultsPrunedRecord{ThroughSequence: state.Blocks[2].EndSequence, HeadBytes: 10, TailBytes: 10}
-	if err := validateToolPruningBoundary(state, unsafe, state.LastSequence+1, true); err == nil || !strings.Contains(err.Error(), "unfinished") {
-		t.Fatalf("active block pruning error = %v", err)
+	if err := validateToolPruningBoundary(state, unsafe, state.LastSequence+1); err == nil || !strings.Contains(err.Error(), "completed older exchange") {
+		t.Fatalf("unanswered input pruning error = %v", err)
 	}
 }
 

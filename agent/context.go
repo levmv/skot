@@ -83,10 +83,13 @@ func (runtime *Runtime) calculateSessionStatus(state State) SessionStatus {
 func (runtime *Runtime) visibleImageDelivery(state State) ImageDeliveryStatus {
 	firstSequence := state.firstVerbatimSequence()
 	for _, block := range state.Blocks {
-		if firstSequence != 0 && block.StartSequence < firstSequence {
+		if firstSequence != 0 && block.EndSequence < firstSequence {
 			continue
 		}
 		for _, entry := range block.Entries {
+			if entry.Sequence < firstSequence {
+				continue
+			}
 			if state.ToolPruning != nil && entry.Sequence <= state.ToolPruning.ThroughSequence {
 				continue
 			}
@@ -116,7 +119,7 @@ func (runtime *Runtime) prepareRunRequestContext(ctx context.Context, live *stat
 		if err != nil {
 			attached := 0
 			if live.state.hasInputContext() {
-				attached = estimateItemsTokens(live.state.modelItemsFromSequence(live.state.LastSequence + 1))
+				attached = estimateItemsTokens(live.state.modelItemsFromSequence(live.state.LastSequence+1, nil))
 			}
 			return report, &ContextLimitError{Report: report, AttachedTokens: attached, Cause: err}
 		}

@@ -389,6 +389,7 @@ type ContextCompactedRecord struct {
 	AttemptID              string            `json:"attempt_id,omitempty"`
 	CoveredThroughSequence uint64            `json:"covered_through_sequence"`
 	FirstVerbatimSequence  uint64            `json:"first_verbatim_sequence"`
+	RetainedInputSequences []uint64          `json:"retained_input_sequences,omitempty"`
 	Summary                string            `json:"summary"`
 	Usage                  model.TokenCounts `json:"usage"`
 }

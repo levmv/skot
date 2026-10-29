@@ -769,14 +769,6 @@ func TestCompactionBlockKeepsToolCallAndResultTogether(t *testing.T) {
 		result == nil || result.ToolResult == nil || !strings.Contains(result.ToolResult.Content.Text(), "echo result") {
 		t.Fatalf("cache-aligned tool block = %#v", request.Items)
 	}
-	invalid := ContextCompactedRecord{
-		CoveredThroughSequence: state.Blocks[0].StartSequence,
-		FirstVerbatimSequence:  state.Blocks[0].EndSequence,
-		Summary:                "bad cut",
-	}
-	if err := validateCompactionBoundary(state, invalid, state.LastSequence+1, false); err == nil {
-		t.Fatal("cut inside a tool block was accepted")
-	}
 }
 
 func TestCompactionRejectsUnfinishedAndStalePlans(t *testing.T) {
@@ -864,7 +856,7 @@ func TestCompactionRetryDiagnosticsDoNotInvalidatePlan(t *testing.T) {
 	}
 }
 
-func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
+func TestModelBoundaryCompactionPreservesUnansweredInput(t *testing.T) {
 	journal := &memoryJournal{}
 	model := &scriptedModel{steps: []modelStep{directModelResponse("old answer"), directModelResponse("recent answer")}}
 	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
@@ -893,7 +885,8 @@ func TestModelBoundaryCompactionCannotCoverActiveRunBlocks(t *testing.T) {
 		FirstVerbatimSequence:  state.Blocks[3].StartSequence,
 		Summary:                "would swallow active input",
 	}
-	if err := validateCompactionBoundary(state, unsafe, state.LastSequence+1, true); err == nil || !strings.Contains(err.Error(), "unfinished") {
+	unsafe.RetainedInputSequences = state.inputsBeforeBoundary(unsafe.FirstVerbatimSequence)
+	if err := validateContextCheckpoint(state, unsafe, state.LastSequence+1); err == nil || !strings.Contains(err.Error(), "completed exchange") {
 		t.Fatalf("active block compaction error = %v", err)
 	}
 }

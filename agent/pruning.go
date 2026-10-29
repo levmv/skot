@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -15,22 +14,14 @@ const (
 )
 
 func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, ContextReport, error) {
-	if len(state.Blocks) < 2 {
-		return Record{}, report, nil
-	}
-	boundaryIndex := len(state.Blocks) - 2
-	if state.hasUnfinishedWork() {
-		unfinishedStart, ok := state.firstUnfinishedBlock()
-		if !ok {
-			return Record{}, report, errors.New("cannot locate unfinished conversation block")
-		}
-		boundaryIndex = min(boundaryIndex, unfinishedStart-1)
-	}
-	if boundaryIndex < 0 {
+	boundaries := state.contextBoundaries()
+	// Preserve the same recent tail as compaction before considering savings.
+	targetEnd := runtime.compactionTargetEnd(state, spec, boundaries)
+	if targetEnd < 0 {
 		return Record{}, report, nil
 	}
 	payload := ToolResultsPrunedRecord{
-		ThroughSequence: state.Blocks[boundaryIndex].EndSequence,
+		ThroughSequence: boundaries[targetEnd].through,
 		HeadBytes:       defaultPrunedToolHeadBytes,
 		TailBytes:       defaultPrunedToolTailBytes,
 	}
@@ -47,7 +38,7 @@ func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State
 	if !toolResultPruningIsDecisive(report, prunedReport) {
 		return Record{}, report, nil
 	}
-	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1, state.hasUnfinishedWork()); err != nil {
+	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1); err != nil {
 		return Record{}, report, err
 	}
 	record, err := appendRecord(ctx, runtime.journal, RecordToolResultsPruned, payload)
@@ -73,22 +64,19 @@ func toolResultPruningIsDecisive(before, after ContextReport) bool {
 	return before.Window == 0 || before.TotalInputTokens <= before.InputLimit || after.TotalInputTokens <= after.InputLimit
 }
 
-func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, recordSequence uint64, unfinished bool) error {
+func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, recordSequence uint64) error {
 	if payload.ThroughSequence == 0 || payload.ThroughSequence >= recordSequence || payload.HeadBytes <= 0 || payload.TailBytes <= 0 {
 		return fmt.Errorf("invalid tool-result pruning at sequence %d", recordSequence)
 	}
-	if unfinished && !boundaryPrecedesUnfinishedWork(state, payload.ThroughSequence) {
-		return fmt.Errorf("tool results pruned while work was unfinished at sequence %d", recordSequence)
-	}
-	boundaryIndex := -1
-	for index, block := range state.Blocks {
-		if block.EndSequence == payload.ThroughSequence {
-			boundaryIndex = index
+	found := false
+	for _, boundary := range state.contextBoundaries() {
+		if boundary.through == payload.ThroughSequence {
+			found = true
 			break
 		}
 	}
-	if boundaryIndex < 0 || boundaryIndex >= len(state.Blocks)-1 {
-		return fmt.Errorf("tool-result pruning at sequence %d does not use an older conversation-block boundary", recordSequence)
+	if !found {
+		return fmt.Errorf("tool-result pruning at sequence %d does not follow a completed older exchange", recordSequence)
 	}
 	if state.ToolPruning != nil && payload.ThroughSequence <= state.ToolPruning.ThroughSequence {
 		return fmt.Errorf("tool-result pruning at sequence %d does not advance", recordSequence)

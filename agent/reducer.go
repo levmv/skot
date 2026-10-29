@@ -354,7 +354,7 @@ func (reducer *stateReducer) applyContextCompacted(record Record) error {
 		return err
 	}
 	state := &reducer.state
-	if err := validateCompactionBoundary(*state, payload, record.Sequence, state.hasUnfinishedWork()); err != nil {
+	if err := validateContextCheckpoint(*state, payload, record.Sequence); err != nil {
 		return err
 	}
 	payload.Summary = strings.TrimSpace(payload.Summary)
@@ -370,7 +370,7 @@ func (reducer *stateReducer) applyToolResultsPruned(record Record) error {
 		return err
 	}
 	state := &reducer.state
-	if err := validateToolPruningBoundary(*state, payload, record.Sequence, state.hasUnfinishedWork()); err != nil {
+	if err := validateToolPruningBoundary(*state, payload, record.Sequence); err != nil {
 		return err
 	}
 	state.ToolPruning = &payload

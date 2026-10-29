@@ -22,11 +22,11 @@ const (
 const compactionInstructions = `Act as a compaction engine for this coding session. Summarize the conversation above for reliable continuation. Preserve the objective and acceptance criteria, user constraints, decisions and reasons, modified files and current state, commands and tests with their results, errors and abandoned approaches, outstanding work and the next step, and explicit uncertainty. Be compact but concrete. Do not claim work was done unless the conversation says it was. Do not call tools. Output only the summary.`
 
 var (
-	errNoCompactionBoundary = errors.New("no completed older conversation block is available to compact")
+	errNoCompactionBoundary = errors.New("no completed older exchange is available to compact")
 	errCompactionNotNeeded  = errors.New("context is already within the compaction target")
 )
 
-// compactionPlan is tied to an exact journal state and a whole-block boundary.
+// compactionPlan is tied to an exact journal state and a completed exchange.
 type compactionPlan struct {
 	SessionID              string
 	BaseRequiredSequence   uint64
@@ -114,12 +114,7 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, spec run
 // Prefix-caching routes can therefore reuse the work already done for the
 // session instead of receiving a separately serialized transcript.
 func (runtime *Runtime) compactionRequest(state State, spec runRequestSpec, plan compactionPlan) (model.Request, error) {
-	targetEnd := blockIndexAtSequence(state.Blocks, plan.FirstVerbatimSequence)
-	if targetEnd < 0 {
-		return model.Request{}, errors.New("compaction boundary is missing from replayed blocks")
-	}
-	prefix := state
-	prefix.Blocks = prefix.Blocks[:targetEnd]
+	prefix := state.historyBefore(plan.FirstVerbatimSequence)
 	prompt := compactionPrompt(state.Configured.ModelContext.CompactionInstructions, plan.RuntimeFacts)
 	request, err := runtime.modelRequestForRun(prefix, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
 	if err != nil {
@@ -152,66 +147,56 @@ func withoutStreamedModelContent(emit EmitFunc) EmitFunc {
 	}
 }
 
-// planCompactionForModelBoundary selects an older complete prefix while
-// preserving a token-bounded, whole-block tail. During an active run it stops
-// before that run's oldest block, so newly delivered tool results, boundary
-// events, or queued input can trigger maintenance without changing the active
-// transcript.
+// Manual compaction, preflight, and provider-overflow recovery share the same
+// exchange boundaries. The run may continue while its earlier steps are
+// summarized; its authored inputs remain outside the summary.
 func (runtime *Runtime) planCompactionForModelBoundary(state State, spec runRequestSpec) (compactionPlan, error) {
 	if state.SessionID == "" {
 		return compactionPlan{}, errors.New("session is not initialized")
 	}
-	activeStart := 0
+	boundaries := state.contextBoundaries()
 	if state.Compaction != nil {
-		activeStart = blockIndexAtSequence(state.Blocks, state.Compaction.FirstVerbatimSequence)
-		if activeStart < 0 {
-			return compactionPlan{}, errors.New("current compaction boundary is missing from replayed blocks")
+		first := 0
+		for first < len(boundaries) && boundaries[first].first <= state.Compaction.FirstVerbatimSequence {
+			first++
 		}
+		boundaries = boundaries[first:]
 	}
-	targetEnd := len(state.Blocks) - 1
-	if state.hasUnfinishedWork() {
-		unfinishedStart, ok := state.firstUnfinishedBlock()
-		if !ok {
-			return compactionPlan{}, errors.New("cannot locate unfinished conversation block")
-		}
-		targetEnd = unfinishedStart
-	}
-	if targetEnd <= activeStart {
+	if len(boundaries) == 0 {
 		return compactionPlan{}, errNoCompactionBoundary
 	}
-	targetEnd = runtime.compactionTargetEnd(state, spec, activeStart, targetEnd)
-	if targetEnd <= activeStart {
+	targetEnd := runtime.compactionTargetEnd(state, spec, boundaries)
+	if targetEnd < 0 {
 		return compactionPlan{}, errCompactionNotNeeded
 	}
-	targetEnd = runtime.compactionInputTargetEnd(state, spec, activeStart, targetEnd)
-	if targetEnd <= activeStart {
-		return compactionPlan{}, errors.New("no complete conversation block fits in the compaction model input")
+	targetEnd = runtime.compactionInputTargetEnd(state, spec, boundaries, targetEnd)
+	if targetEnd < 0 {
+		return compactionPlan{}, errors.New("no complete exchange fits in the compaction model input")
 	}
-	coveredThrough := state.Blocks[targetEnd-1].EndSequence
+	boundary := boundaries[targetEnd]
 	return compactionPlan{
 		SessionID:              state.SessionID,
 		BaseRequiredSequence:   state.lastRequiredSequence,
-		CoveredThroughSequence: coveredThrough,
-		FirstVerbatimSequence:  state.Blocks[targetEnd].StartSequence,
-		RuntimeFacts:           formatCompactionRuntimeFacts(state.Blocks[activeStart:targetEnd]),
+		CoveredThroughSequence: boundary.through,
+		FirstVerbatimSequence:  boundary.first,
+		RuntimeFacts:           compactionRuntimeFacts(state.historyBefore(boundary.first)),
 	}, nil
 }
 
-func (runtime *Runtime) compactionTargetEnd(state State, spec runRequestSpec, activeStart, latestTargetEnd int) int {
+func (runtime *Runtime) compactionTargetEnd(state State, spec runRequestSpec, boundaries []contextBoundary) int {
 	report := runtime.requestReport(state, spec)
 	budget := compactionVerbatimTokenBudget(report)
 	if report.HistoryTokens <= budget {
-		return activeStart
+		return -1
 	}
 	// Find the earliest boundary whose provider-projected tail fits. The lower
 	// bound retains as much recent history as the budget permits. If the newest
-	// block alone exceeds the soft budget, selected retains it and compacts every
-	// older available block.
-	first, last := activeStart+1, latestTargetEnd
-	selected := latestTargetEnd
+	// exchange alone exceeds the soft budget, retain it in full.
+	first, last := 0, len(boundaries)-1
+	selected := last
 	for first <= last {
 		candidate := first + (last-first)/2
-		if runtime.projectedTailTokens(state, spec, candidate) <= budget {
+		if runtime.projectedTailTokens(state, spec, boundaries[candidate].first) <= budget {
 			selected = candidate
 			last = candidate - 1
 		} else {
@@ -224,25 +209,24 @@ func (runtime *Runtime) compactionTargetEnd(state State, spec runRequestSpec, ac
 // compactionInputTargetEnd keeps the auxiliary request inside the same input
 // limit used for an ordinary request. A session imported from a larger route
 // may therefore advance through more than one cache-aligned prefix.
-func (runtime *Runtime) compactionInputTargetEnd(state State, spec runRequestSpec, activeStart, desiredTargetEnd int) int {
+func (runtime *Runtime) compactionInputTargetEnd(state State, spec runRequestSpec, boundaries []contextBoundary, desiredTargetEnd int) int {
 	if runtime.modelInfo.ContextWindow == 0 {
 		return desiredTargetEnd
 	}
 	// Including a newer instruction can replace a larger retained version, so
 	// input size is not monotonic in the prefix length.
-	for candidateEnd := desiredTargetEnd; candidateEnd > activeStart; candidateEnd-- {
-		candidate := state
-		candidate.Blocks = candidate.Blocks[:candidateEnd]
+	for candidateEnd := desiredTargetEnd; candidateEnd >= 0; candidateEnd-- {
+		candidate := state.historyBefore(boundaries[candidateEnd].first)
 		prompt := compactionPrompt(
 			state.Configured.ModelContext.CompactionInstructions,
-			formatCompactionRuntimeFacts(state.Blocks[activeStart:candidateEnd]),
+			compactionRuntimeFacts(candidate),
 		)
 		report := runtime.requestReport(candidate, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
 		if report.TotalInputTokens <= report.InputLimit {
 			return candidateEnd
 		}
 	}
-	return activeStart
+	return -1
 }
 
 // The proportional target adapts to ordinary model sizes. Absolute bounds keep
@@ -269,8 +253,8 @@ func compactionPrompt(instructions, runtimeFacts string) string {
 	return "Durable runtime facts not represented in the conversation messages:\n" + runtimeFacts + "\n\n" + instructions
 }
 
-func (runtime *Runtime) projectedTailTokens(state State, spec runRequestSpec, firstBlock int) int {
-	items := state.modelItemsFromSequence(state.Blocks[firstBlock].StartSequence)
+func (runtime *Runtime) projectedTailTokens(state State, spec runRequestSpec, first uint64) int {
+	items := state.modelItemsFromSequence(first, state.inputsBeforeBoundary(first))
 	items, boundary := runtime.projectedItemsForRequest(state, items, spec.extraUserText)
 	return estimateItemsTokens(items[:boundary])
 }
@@ -300,10 +284,11 @@ func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan,
 		AttemptID:              attemptID,
 		CoveredThroughSequence: plan.CoveredThroughSequence,
 		FirstVerbatimSequence:  plan.FirstVerbatimSequence,
+		RetainedInputSequences: state.inputsBeforeBoundary(plan.FirstVerbatimSequence),
 		Summary:                summary,
 		Usage:                  usage,
 	}
-	if err := validateCompactionBoundary(state, payload, state.LastSequence+1, state.hasUnfinishedWork()); err != nil {
+	if err := validateContextCheckpoint(state, payload, state.LastSequence+1); err != nil {
 		return ContextCompactedRecord{}, Record{}, err
 	}
 	record, err := appendRecord(ctx, journal, RecordContextCompacted, payload)
@@ -313,13 +298,14 @@ func commitCompaction(ctx context.Context, journal Journal, plan compactionPlan,
 	return payload, record, nil
 }
 
-func blockIndexAtSequence(blocks []ConversationBlock, sequence uint64) int {
-	for index, block := range blocks {
-		if block.StartSequence == sequence {
-			return index
+func compactionRuntimeFacts(prefix State) string {
+	first := 0
+	if prefix.Compaction != nil {
+		for first < len(prefix.Blocks) && prefix.Blocks[first].EndSequence <= prefix.Compaction.CoveredThroughSequence {
+			first++
 		}
 	}
-	return -1
+	return formatCompactionRuntimeFacts(prefix.Blocks[first:])
 }
 
 // Model items contain the transcript but not run completion metadata. Preserve
@@ -328,7 +314,7 @@ func blockIndexAtSequence(blocks []ConversationBlock, sequence uint64) int {
 func formatCompactionRuntimeFacts(blocks []ConversationBlock) string {
 	var output strings.Builder
 	for _, block := range blocks {
-		if block.Status == RunCompleted && !block.ToolLimitReached && block.Error == "" && len(block.DetachedJobs) == 0 {
+		if block.Status == "" || (block.Status == RunCompleted && !block.ToolLimitReached && block.Error == "" && len(block.DetachedJobs) == 0) {
 			continue
 		}
 		fmt.Fprintf(&output, "- run seq=%d..%d status=%s", block.StartSequence, block.EndSequence, block.Status)

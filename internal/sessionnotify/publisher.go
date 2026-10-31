@@ -155,12 +155,11 @@ func newNode(home string) (_ *node, err error) {
 		return nil, err
 	}
 	id := hex.EncodeToString(random[:])
-	record := registration{Version: protocolVersion, Instance: id, Address: filepath.Join(runtimeDirectory(id), "s")}
-	// Use the stricter Darwin limit on both supported platforms. TMPDIR and
-	// home may exceed sockaddr_un's capacity, including in ordinary tests.
-	if len(record.Address) >= 104 {
-		return nil, errors.New("session notification socket path is too long")
+	address, err := runtimeAddress(id)
+	if err != nil {
+		return nil, err
 	}
+	record := registration{Version: protocolVersion, Instance: id, Address: address}
 	guard, err := openPrivateFile(filepath.Join(dir, signalName), os.O_RDWR)
 	if err != nil {
 		return nil, err
@@ -200,26 +199,37 @@ func newNode(home string) (_ *node, err error) {
 	}
 	// Persist staging metadata before allocating runtime resources. A process
 	// killed during socket setup leaves a registration the collector can own.
-	if err := os.Mkdir(runtimeDirectory(id), 0o700); err != nil {
+	if err := runtimeParent(record, true); err != nil {
+		return nil, err
+	}
+	runtime := filepath.Dir(record.Address)
+	if err := os.Mkdir(runtime, 0o700); err != nil {
 		return nil, err
 	}
 	defer func() {
 		if err != nil {
-			_ = os.RemoveAll(runtimeDirectory(id))
+			_ = removeRuntime(record)
 		}
 	}()
-	if err := privateDirectory(runtimeDirectory(id)); err != nil {
+	if err := privateDirectory(runtime); err != nil {
 		return nil, err
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: record.Address, Net: "unix"})
 	if err != nil {
 		return nil, err
 	}
+	// Cleanup checks type and ownership itself, including after replacement.
+	listener.SetUnlinkOnClose(false)
 	defer func() {
 		if err != nil {
 			_ = listener.Close()
 		}
 	}()
+	// XDG age cleanup skips sticky files. Keep the socket without a heartbeat;
+	// its eventual removal belongs to our collector.
+	if err := os.Chmod(record.Address, 0o600|os.ModeSticky); err != nil {
+		return nil, err
+	}
 	if err = os.Rename(path, filepath.Join(dir, id+".json")); err != nil {
 		return nil, err
 	}

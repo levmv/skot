@@ -84,12 +84,13 @@ type notificationExecutor struct {
 	stdout *bufio.Scanner
 }
 
-func startNotificationExecutor(t *testing.T, home, root, provider string) *notificationExecutor {
+func startNotificationExecutor(t *testing.T, home, root, provider string, environment ...string) *notificationExecutor {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSessionNotificationExecutor$")
 	cmd.Env = append(os.Environ(), "SKOT_NOTIFICATION_EXECUTOR=1", "SKOT_NOTIFICATION_HOME="+home,
 		"SKOT_NOTIFICATION_ROOT="+root, "SKOT_NOTIFICATION_PROVIDER="+provider, "DEEPSEEK_API_KEY=notification-test-key",
-		"TMPDIR="+t.TempDir())
+		"TMPDIR="+t.TempDir(), "XDG_RUNTIME_DIR=")
+	cmd.Env = append(cmd.Env, environment...)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -108,6 +109,36 @@ func startNotificationExecutor(t *testing.T, home, root, provider string) *notif
 		_ = cmd.Wait()
 	})
 	return &notificationExecutor{cmd: cmd, stdin: stdin, stdout: bufio.NewScanner(stdout)}
+}
+
+func notificationRuntimeBase(t *testing.T) string {
+	t.Helper()
+	base, err := os.MkdirTemp("/tmp", "skot-test-runtime-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	return base
+}
+
+func waitForNotificationRuntimeCleanup(t *testing.T, path string) {
+	t.Helper()
+	// Journal unlock and invalidation can precede the collector's unlink.
+	// Wait only here, after the test has observed an actual close or crash.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("runtime remains after close/crash collection: %v", entries)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (executor *notificationExecutor) command(t *testing.T, operation, id string) string {
@@ -218,10 +249,14 @@ func notificationProvider(t *testing.T) string {
 }
 
 func TestWatchSessionsAcrossProcesses(t *testing.T) {
+	runtimeBase := notificationRuntimeBase(t)
+	runtimeEnvironment := "XDG_RUNTIME_DIR=" + runtimeBase
+	observerRuntime := notificationRuntimeBase(t)
+	t.Setenv("XDG_RUNTIME_DIR", observerRuntime)
 	// Deliberately longer than either platform's Unix socket address capacity.
 	home := filepath.Join(t.TempDir(), strings.Repeat("long-home-", 16), "skot")
 	root, provider := t.TempDir(), notificationProvider(t)
-	executor := startNotificationExecutor(t, home, root, provider)
+	executor := startNotificationExecutor(t, home, root, provider, runtimeEnvironment)
 	id := executor.command(t, "open", "")
 	executor.command(t, "run", "")
 	watch := observeSessions(t, home, nil) // executor first
@@ -229,6 +264,13 @@ func TestWatchSessionsAcrossProcesses(t *testing.T) {
 	if snapshot, err := app.ReadSession(t.Context(), home, id); err != nil || !snapshot.Summary.Locked || len(snapshot.State.Blocks) != 1 {
 		t.Fatalf("initial snapshot: %+v, %v", snapshot, err)
 	}
+	// The same home can contain live XDG and /tmp publishers simultaneously.
+	fallback := startNotificationExecutor(t, home, root, provider)
+	fallbackID := fallback.command(t, "open", "")
+	fallback.command(t, "run", "")
+	watch.session(t, home, fallbackID, func(s app.SessionSnapshot, err error) bool { return err == nil && s.Summary.Locked })
+	fallback.command(t, "close", "")
+	watch.session(t, home, fallbackID, func(s app.SessionSnapshot, err error) bool { return err == nil && !s.Summary.Locked })
 	watch.stop(t)
 	watch = observeSessions(t, home, nil) // subscriber restart, idle executor
 	executor.command(t, "run", "")
@@ -250,7 +292,7 @@ func TestWatchSessionsAcrossProcesses(t *testing.T) {
 		current.session(t, home, id, func(_ app.SessionSnapshot, err error) bool { return errors.Is(err, os.ErrNotExist) })
 	}
 	// subscriber first; same home, different executor
-	other := startNotificationExecutor(t, home, root, provider)
+	other := startNotificationExecutor(t, home, root, provider, runtimeEnvironment)
 	otherID := other.command(t, "open", "")
 	other.command(t, "run", "")
 	watch.session(t, home, otherID, func(s app.SessionSnapshot, err error) bool { return err == nil && s.Summary.Locked })
@@ -260,13 +302,13 @@ func TestWatchSessionsAcrossProcesses(t *testing.T) {
 	watch.session(t, home, otherID, func(s app.SessionSnapshot, err error) bool { return err == nil && !s.Summary.Locked })
 	// Ownership can move immediately after a crash. EOF must not overwrite
 	// the new executor's actual Locked state.
-	other = startNotificationExecutor(t, home, root, provider)
+	other = startNotificationExecutor(t, home, root, provider, runtimeEnvironment)
 	other.command(t, "resume", otherID)
 	watch.session(t, home, otherID, func(s app.SessionSnapshot, err error) bool { return err == nil && s.Summary.Locked })
 	if err := other.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	other = startNotificationExecutor(t, home, root, provider)
+	other = startNotificationExecutor(t, home, root, provider, runtimeEnvironment)
 	other.command(t, "resume", otherID)
 	other.command(t, "run", "")
 	watch.session(t, home, otherID, func(s app.SessionSnapshot, err error) bool {
@@ -274,6 +316,10 @@ func TestWatchSessionsAcrossProcesses(t *testing.T) {
 	})
 	other.command(t, "close", "")
 	watch.session(t, home, otherID, func(s app.SessionSnapshot, err error) bool { return err == nil && !s.Summary.Locked })
+	waitForNotificationRuntimeCleanup(t, filepath.Join(runtimeBase, "skot"))
+	if _, err := os.Lstat(filepath.Join(observerRuntime, "skot")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("observer used its own runtime instead of published addresses: %v", err)
+	}
 }
 
 func TestWatchSessionsAccumulatesDuringSlowSnapshot(t *testing.T) {

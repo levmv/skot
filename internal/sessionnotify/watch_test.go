@@ -28,7 +28,7 @@ func TestWatchReconcilesSessionsReleasedDuringReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := hex.EncodeToString(random[:])
-	runtime := runtimeDirectory(id)
+	runtime := fallbackRuntimeDirectory(id)
 	if err := os.Mkdir(runtime, 0o700); err != nil {
 		t.Fatal(err)
 	}

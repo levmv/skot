@@ -3,8 +3,6 @@ package sessionnotify
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -45,6 +43,10 @@ func TestPublisherSnapshotIdleAndSlowSubscriber(t *testing.T) {
 	}
 	defer lease.Close()
 	lease.Own(testSessionID)
+	info, err := os.Lstat(lease.node.record.Address)
+	if err != nil || info.Mode().Perm() != 0o600 || info.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("socket must be private and protected from age cleanup: %v, %v", info, err)
+	}
 	conn, err := net.Dial("unix", lease.node.record.Address)
 	if err != nil {
 		t.Fatal(err)
@@ -111,32 +113,14 @@ func TestRegistrationCollectionPreservesLiveNodes(t *testing.T) {
 	}
 }
 
-func TestRegistrationCollectionRemovesInterruptedStagingRuntime(t *testing.T) {
+func TestRegistrationCollectionRemovesIncompleteStaging(t *testing.T) {
 	for _, contents := range []string{"", `{"version":1,"instance":`} {
 		t.Run(fmt.Sprintf("bytes=%d", len(contents)), func(t *testing.T) {
 			dir, err := registry(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
-			var random [16]byte
-			if _, err := rand.Read(random[:]); err != nil {
-				t.Fatal(err)
-			}
-			id := hex.EncodeToString(random[:])
-			runtime := runtimeDirectory(id)
-			if err := os.Mkdir(runtime, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = os.RemoveAll(runtime) })
-			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(runtime, "s"), Net: "unix"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Preserve the socket pathname as the kernel does on process death.
-			listener.SetUnlinkOnClose(false)
-			if err := listener.Close(); err != nil {
-				t.Fatal(err)
-			}
+			id := strings.Repeat("a", 32)
 			name := "." + id + ".tmp"
 			path := filepath.Join(dir, name)
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -145,10 +129,8 @@ func TestRegistrationCollectionRemovesInterruptedStagingRuntime(t *testing.T) {
 			if _, alive, err := inspectRegistration(dir, name); err != nil || alive {
 				t.Fatalf("staging registration: alive=%v, %v", alive, err)
 			}
-			for _, removed := range []string{runtime, path} {
-				if _, err := os.Lstat(removed); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("stale state remains at %s: %v", removed, err)
-				}
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("staging file remains: %v", err)
 			}
 		})
 	}

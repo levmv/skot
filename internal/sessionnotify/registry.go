@@ -50,8 +50,12 @@ func privateDirectory(path string) error {
 }
 
 func privateOwner(info os.FileInfo) bool {
+	return ownedByCurrentUser(info) && info.Mode().Perm()&0o077 == 0
+}
+
+func ownedByCurrentUser(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && uint64(stat.Uid) == uint64(os.Geteuid()) && info.Mode().Perm()&0o077 == 0
+	return ok && uint64(stat.Uid) == uint64(os.Geteuid())
 }
 
 func openPrivateFile(path string, flags int) (*os.File, error) {
@@ -75,8 +79,6 @@ func openPrivateFile(path string, flags int) (*os.File, error) {
 	return file, nil
 }
 
-func runtimeDirectory(id string) string { return filepath.Join("/tmp", "skot-"+id) }
-
 func readRegistration(file *os.File, name string) (registration, error) {
 	var record registration
 	data, err := io.ReadAll(io.LimitReader(file, 4097))
@@ -89,8 +91,11 @@ func readRegistration(file *os.File, name string) (registration, error) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return record, fmt.Errorf("decode notification registration: %w", err)
 	}
-	if !validInstance(record.Instance) || name != record.Instance+".json" || record.Address != filepath.Join(runtimeDirectory(record.Instance), "s") {
+	if name != record.Instance+".json" {
 		return record, errors.New("invalid notification registration identity or socket path")
+	}
+	if _, err := runtimeBase(record); err != nil {
+		return record, err
 	}
 	return record, nil
 }
@@ -158,13 +163,9 @@ func inspectRegistration(dir, name string) (registration, bool, error) {
 	}
 	record, readErr := readRegistration(file, identity)
 	if lockErr == nil {
-		if readErr != nil && staging {
-			// Interrupted staging can leave empty or partial JSON. The checked
-			// filename still identifies its runtime directory; never use an
-			// address from the incomplete contents as cleanup authority.
-			record = registration{Instance: strings.TrimSuffix(identity, ".json")}
-		}
-		if readErr == nil || staging {
+		// Runtime allocation follows the complete staging record. An empty or
+		// partial record grants no cleanup authority and has no runtime to reap.
+		if readErr == nil {
 			if err := removeRuntime(record); err != nil {
 				return record, false, err
 			}
@@ -183,7 +184,7 @@ func inspectRegistration(dir, name string) (registration, bool, error) {
 	if record.Version != protocolVersion {
 		return record, true, fmt.Errorf("unsupported session notification protocol %d", record.Version)
 	}
-	if err := privateDirectory(runtimeDirectory(record.Instance)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := inspectRuntime(record); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return record, true, err
 	}
 	return record, true, nil
@@ -192,33 +193,6 @@ func inspectRegistration(dir, name string) (registration, bool, error) {
 func registrationName(name string) bool {
 	return strings.HasSuffix(name, ".json") && validInstance(strings.TrimSuffix(name, ".json")) ||
 		strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp") && validInstance(strings.TrimSuffix(strings.TrimPrefix(name, "."), ".tmp"))
-}
-
-// Never recursively remove an address supplied by a registration. Only the
-// socket and empty private directory derived from its unguessable ID are ours.
-func removeRuntime(record registration) error {
-	dir := runtimeDirectory(record.Instance)
-	if err := privateDirectory(dir); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	info, err := root.Lstat("s")
-	if err == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return errors.New("notification socket was replaced")
-		}
-		err = root.Remove("s")
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Remove(dir)
 }
 
 func signalCompletion(dir string) error {

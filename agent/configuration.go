@@ -95,10 +95,33 @@ func (runtime *Runtime) recordEffectiveConfigurationAndApply(ctx context.Context
 }
 
 func (runtime *Runtime) recordCurrentEffectiveConfigurationAndApply(ctx context.Context, reducer *stateReducer) error {
-	runtime.configMu.RLock()
-	defer runtime.configMu.RUnlock()
+	// The caller holds runMu. Load outside configMu so observers and pending
+	// model/tool selections remain available while host code reads its sources.
+	instructions := runtime.instructions
+	if runtime.instructionsDirty {
+		loaded, err := runtime.loadInstructions(ctx, runtime.baseInstructions)
+		if err != nil {
+			return fmt.Errorf("load system instructions: %w", sanitizeError(err, runtime.sanitize))
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		instructions = runtime.sanitize(strings.TrimSpace(loaded))
+	}
+	runtime.configMu.Lock()
+	defer runtime.configMu.Unlock()
 	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, runtime.scope)
-	return runtime.recordEffectiveConfigurationAndApply(ctx, reducer, snapshot)
+	snapshot.ModelContext.Instructions = instructions
+	if err := runtime.recordEffectiveConfigurationAndApply(ctx, reducer, snapshot); err != nil {
+		return err
+	}
+	changed := runtime.instructions != instructions
+	runtime.instructions = instructions
+	runtime.instructionsDirty = false
+	if changed {
+		runtime.publishSessionStatus(reducer.state)
+	}
+	return nil
 }
 
 func equalEffectiveConfigSnapshots(left, right EffectiveConfigSnapshot) bool {

@@ -53,12 +53,18 @@ type Config struct {
 	Model   modelapi.Info
 	Backend modelapi.Backend
 
-	Journal       Journal
-	Tools         []Tool
-	Instructions  string
-	SessionID     string
-	Workspace     string
-	RequestPolicy ModelRequestPolicy
+	Journal      Journal
+	Tools        []Tool
+	Instructions string
+	// LoadInstructions receives the normalized Instructions as its base and
+	// returns the complete system prompt. It runs before this Runtime first
+	// prepares a session and after each successful compaction. Ordinary turns
+	// reuse the result; a new Runtime reloads it, including on resume.
+	// New and State do not invoke it. The callback must not reenter this Runtime.
+	LoadInstructions func(ctx context.Context, base string) (string, error)
+	SessionID        string
+	Workspace        string
+	RequestPolicy    ModelRequestPolicy
 	// MaxToolIterations bounds completed model-to-tool cycles in one run. Zero
 	// selects DefaultMaxToolIterations; -1 disables the fuse.
 	MaxToolIterations int
@@ -104,7 +110,10 @@ type Runtime struct {
 	runtimeConfiguration
 
 	journal           Journal
+	baseInstructions  string // immutable; reloads never receive the previous callback result
 	instructions      string
+	loadInstructions  func(context.Context, string) (string, error)
+	instructionsDirty bool // guarded by runMu; cleared only after configuration is recorded
 	sessionID         string
 	workspace         string
 	requestPolicy     ModelRequestPolicy
@@ -190,7 +199,10 @@ func New(config Config) (*Runtime, error) {
 			programTools: programTools,
 		},
 		journal:           config.Journal,
+		baseInstructions:  instructions,
 		instructions:      instructions,
+		loadInstructions:  config.LoadInstructions,
+		instructionsDirty: config.LoadInstructions != nil,
 		sessionID:         strings.TrimSpace(config.SessionID),
 		workspace:         strings.TrimSpace(config.Workspace),
 		requestPolicy:     requestPolicy,
@@ -1125,12 +1137,10 @@ func (runtime *Runtime) prepareSession(ctx context.Context, reducer *stateReduce
 	if err != nil {
 		return err
 	}
-	if selection.Epoch == state.Selection.Epoch {
-		return runtime.recordCurrentEffectiveConfigurationAndApply(ctx, reducer)
-	}
-	_, err = appendRecordAndApply(ctx, runtime.journal, reducer, RecordModelSelected, selection)
-	if err != nil {
-		return err
+	if selection.Epoch != state.Selection.Epoch {
+		if _, err := appendRecordAndApply(ctx, runtime.journal, reducer, RecordModelSelected, selection); err != nil {
+			return err
+		}
 	}
 	return runtime.recordCurrentEffectiveConfigurationAndApply(ctx, reducer)
 }

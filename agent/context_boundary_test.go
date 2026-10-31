@@ -17,8 +17,11 @@ func TestActiveRunCompactionPreservesTaskAndCompleteExchanges(t *testing.T) {
 	const steering = "Use the revised procedure for the remaining pairs."
 	const rounds = 6
 	var runtime *Runtime
-	mainCalls, summaries, tools := 0, 0, 0
+	mainCalls, summaries, tools, loads := 0, 0, 0, 0
 	backend := modelFunc(func(_ context.Context, request model.Request, _ func(model.StreamEvent)) (model.Response, error) {
+		if want := fmt.Sprintf("system instructions %d", summaries); request.Instructions != want || loads != summaries+1 {
+			t.Fatalf("instructions=%q, loads=%d; want %q after %d compactions", request.Instructions, loads, want, summaries)
+		}
 		assertCompleteExchanges(t, request.Items)
 		state, err := runtime.State(t.Context())
 		if err != nil {
@@ -52,6 +55,10 @@ func TestActiveRunCompactionPreservesTaskAndCompleteExchanges(t *testing.T) {
 	runtime = newTestRuntime(t, Config{
 		Model:   model.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		Backend: backend, Journal: journal,
+		LoadInstructions: func(context.Context, string) (string, error) {
+			loads++
+			return fmt.Sprintf("system instructions %d", summaries), nil
+		},
 		Tools: []Tool{{Spec: model.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)}, Run: func(context.Context, string) (ToolOutput, error) {
 			tools++
 			if tools == 2 {

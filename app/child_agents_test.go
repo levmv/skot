@@ -139,6 +139,94 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 	}
 }
 
+func TestChildInstructionsCanObserveApplicationDuringFilesystemChange(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "instruction-loader-test-key")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writeChildTestAnswer(t, writer, "done")
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	loading, release := make(chan struct{}), make(chan struct{})
+	config := childTestConfig(t.TempDir(), canonicalApplicationTestRoot(t, t.TempDir()), server.URL+"/v1", false)
+	config.SaveSession = true
+	var application *Application
+	loads := 0
+	config.LoadInstructions = func(ctx context.Context, base string) (string, error) {
+		loads++
+		if loads > 1 {
+			close(loading)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			// A host loader may inspect application settings while assembling
+			// the prompt, including when a child is starting.
+			_ = application.CurrentScope()
+		}
+		return base, nil
+	}
+	var err error
+	application, err = Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Run(ctx, "parent", nil); err != nil {
+		t.Fatal(err)
+	}
+	journal := application.state.session.journal
+	tool, parentID := childTestTool(t, application), application.SessionID()
+	started := make(chan error, 1)
+	go func() {
+		_, err := tool.Run(agent.WithToolSessionID(ctx, parentID), `{"action":"start","prompt":"child"}`)
+		started <- err
+	}()
+	select {
+	case <-loading:
+	case err := <-started:
+		t.Fatalf("child ended before loading instructions: %v", err)
+	case <-ctx.Done():
+		t.Fatal("child did not begin loading instructions")
+	}
+	protected := filepath.Join(config.Root, "private")
+	changed := make(chan error, 1)
+	go func() { changed <- application.ProtectPath(ctx, protected) }()
+	// Wait for the parent snapshot so the policy update overlaps the loader.
+	for {
+		records, err := journal.Records(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := agent.Replay(records)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(state.Configured.Environment.Scope.ProtectedPaths, protected) {
+			break
+		}
+		select {
+		case err := <-changed:
+			t.Fatalf("policy update ended before the child started: %v", err)
+		case <-ctx.Done():
+			t.Fatal("policy update did not reach the parent")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	close(release)
+	for _, done := range []<-chan error{started, changed} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("instruction loading and filesystem update blocked each other")
+		}
+	}
+	t.Cleanup(func() { _ = application.Close() })
+}
+
 func TestChildAgentSupervisorRunsInParallelAndAppliesBackpressure(t *testing.T) {
 	started := make(chan string, maxActiveChildren)
 	release := make(chan struct{})

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -24,9 +25,25 @@ Prefer available file tools over shell commands for inspection and search. Inspe
 
 Workspace root (default working directory): {{workspace_root}}.`
 
+// loadSystemInstructions assembles a fresh prompt at runtime refresh boundaries.
+// Filesystem policy is live, so a refresh uses the current protection rules.
+func (application *Application) loadSystemInstructions(ctx context.Context, _ string) (string, error) {
+	application.mu.RLock()
+	protection := application.state.protection
+	application.mu.RUnlock()
+	instructions, err := loadEffectiveInstructions(application.config.systemPrompt,
+		application.config.systemPromptExplicit, application.config.root, protection)
+	if err != nil {
+		return "", fmt.Errorf("load project instructions: %w", err)
+	}
+	if application.config.loadInstructions == nil {
+		return instructions, nil
+	}
+	return application.config.loadInstructions(ctx, instructions)
+}
+
 // loadInstructions reads the AGENTS.md chain that applies to the current
-// working directory. Sessions keep no historical copy: a new process or an
-// in-process resume uses the repository's current instructions.
+// working directory.
 func loadInstructions(root string, protection *workspacetools.ProtectedPathPolicy) ([]string, error) {
 	root, err := workspacetools.ResolveWorkspaceRoot(root)
 	if err != nil {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -49,8 +50,15 @@ type Config struct {
 	StreamIdleTimeout       time.Duration
 	MaxToolIterations       int
 	SystemPrompt            string
+	// LoadInstructions receives the current system and project instructions as
+	// its base and returns the complete system prompt. It runs before a new or
+	// resumed session first runs and after each compaction. Ordinary turns reuse
+	// the result. Reading State or the catalog does not invoke it. Child sessions
+	// may call it concurrently.
+	LoadInstructions func(ctx context.Context, base string) (string, error)
 	// SystemPromptExplicit affects an empty SystemPrompt: false selects the
-	// built-in and project instructions, while true selects no instructions.
+	// built-in and project instructions, while true omits both and supplies an
+	// empty base to LoadInstructions.
 	SystemPromptExplicit bool
 	// ToolsFile is a strict JSON catalog of executable-backed tools. Empty uses
 	// tools.json in Home; a missing file is an empty catalog.

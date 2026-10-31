@@ -147,15 +147,10 @@ func (runtime *Runtime) shrinkRunRequestOnce(ctx context.Context, live *stateRed
 		return nextReport, nil
 	}
 
-	_, compactionRecord, err := runtime.compactLocked(ctx, live.state, spec, emit)
+	_, err = runtime.compactLocked(ctx, live, spec, emit)
 	if err != nil {
-		return report, fmt.Errorf("compact context: %w", err)
+		return runtime.requestReport(live.state, spec), fmt.Errorf("compact context: %w", err)
 	}
-	if err := live.apply(compactionRecord); err != nil {
-		return report, fmt.Errorf("apply committed context compaction: %w", err)
-	}
-	runtime.publishSessionStatus(live.state)
-	emitEvent(emit, Event{Sequence: compactionRecord.Sequence, Kind: EventContextCompacted, Text: "context compacted"})
 	return runtime.requestReport(live.state, spec), nil
 }
 

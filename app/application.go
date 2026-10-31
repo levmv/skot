@@ -48,6 +48,7 @@ type applicationConfig struct {
 	applicationBuild     agent.BuildSnapshot
 	toolSets             toolpolicy.ToolSets
 	systemPrompt         string
+	loadInstructions     func(context.Context, string) (string, error)
 	systemPromptExplicit bool
 	root                 string
 	home                 string
@@ -705,6 +706,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		workspace:         root,
 		requestPolicy:     modelRequestPolicy(retryBudget, streamIdleTimeout),
 		maxToolIterations: maxToolIterations,
+		loadInstructions:  application.loadSystemInstructions,
 		scope:             security.snapshot(),
 		awaitRequiredJobs: awaitRequiredJobs,
 		sanitize:          masker.Redact,
@@ -911,26 +913,31 @@ func (application *Application) applyFilesystemPolicy(ctx context.Context, scope
 		return fmt.Errorf("cannot apply filesystem policy: %w", err)
 	}
 
-	application.mu.Lock()
+	application.mu.RLock()
 	if application.state.processes != processes || application.state.session != currentSession {
-		application.mu.Unlock()
+		application.mu.RUnlock()
 		return fmt.Errorf("runtime changed while applying the filesystem policy")
 	}
+	previous := application.state.security.snapshot()
+	children := application.state.children
+	application.mu.RUnlock()
+	// Child startup may read application settings while loading instructions.
+	// Do not hold mu while waiting for children. Close and session replacement
+	// are serialized with configuration changes by the caller.
 	if err := processes.SetFilesystemPolicyAfter(security.Scope, additions, protection, func() error {
-		previous := application.state.security.snapshot()
 		if err := runtime.SetScopeSnapshot(ctx, security.snapshot()); err != nil {
 			return err
 		}
-		if children := application.state.children; children != nil {
+		if children != nil {
 			if err := children.setScopeSnapshot(ctx, security.snapshot()); err != nil {
 				return errors.Join(err, runtime.SetScopeSnapshot(context.WithoutCancel(ctx), previous))
 			}
 		}
 		return nil
 	}); err != nil {
-		application.mu.Unlock()
 		return err
 	}
+	application.mu.Lock()
 	application.state.security = security
 	application.state.additions = additions
 	application.state.protection = protection

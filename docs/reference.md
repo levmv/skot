@@ -221,7 +221,8 @@ the user's normal environment and filesystem permissions rather than the
 model-owned filesystem scope.
 
 Skot loads applicable `AGENTS.md` instructions from the workspace root down
-to the current directory.
+to the current directory. Changes take effect when starting or resuming a
+session, or after compaction; ordinary turns reuse the loaded instructions.
 
 ### Skills
 

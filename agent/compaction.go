@@ -37,6 +37,8 @@ type compactionPlan struct {
 
 // Compact generates and commits one rolling summary. Its model call preserves
 // the ordinary request prefix, and provisional output is never journaled.
+// If reloading instructions fails afterwards, the summary remains committed
+// and the next operation which prepares the session retries the reload.
 func (runtime *Runtime) Compact(ctx context.Context) (ContextCompactedRecord, error) {
 	if !runtime.runMu.TryLock() {
 		return ContextCompactedRecord{}, ErrRunActive
@@ -60,36 +62,29 @@ func (runtime *Runtime) Compact(ctx context.Context) (ContextCompactedRecord, er
 	if err := runtime.prepareSession(ctx, live); err != nil {
 		return ContextCompactedRecord{}, err
 	}
-	compaction, record, err := runtime.compactLocked(ctx, live.state, runRequestSpec{}, nil)
-	if err != nil {
-		return ContextCompactedRecord{}, err
-	}
-	if err := live.apply(record); err != nil {
-		return ContextCompactedRecord{}, err
-	}
-	runtime.publishSessionStatus(live.state)
-	return compaction, nil
+	return runtime.compactLocked(ctx, live, runRequestSpec{}, nil)
 }
 
-func (runtime *Runtime) compactLocked(ctx context.Context, state State, spec runRequestSpec, emit EmitFunc) (ContextCompactedRecord, Record, error) {
+func (runtime *Runtime) compactLocked(ctx context.Context, live *stateReducer, spec runRequestSpec, emit EmitFunc) (ContextCompactedRecord, error) {
+	state := live.state
 	if state.Configured == nil {
-		return ContextCompactedRecord{}, Record{}, errors.New("session has no effective configuration")
+		return ContextCompactedRecord{}, errors.New("session has no effective configuration")
 	}
 	plan, err := runtime.planCompactionForModelBoundary(state, spec)
 	if err != nil {
-		return ContextCompactedRecord{}, Record{}, err
+		return ContextCompactedRecord{}, err
 	}
 	request, err := runtime.compactionRequest(state, spec, plan)
 	if err != nil {
-		return ContextCompactedRecord{}, Record{}, err
+		return ContextCompactedRecord{}, err
 	}
 	emitEvent(emit, Event{Kind: EventStatus, Text: "compacting context"})
 	response, err := runtime.completeRequest(ctx, "", request, withoutStreamedModelContent(emit))
 	if err != nil {
-		return ContextCompactedRecord{}, Record{}, fmt.Errorf("summarize context: %w", sanitizeError(err, runtime.sanitize))
+		return ContextCompactedRecord{}, fmt.Errorf("summarize context: %w", sanitizeError(err, runtime.sanitize))
 	}
 	if model.IsIncompleteStopReason(response.StopReason) {
-		return ContextCompactedRecord{}, Record{}, fmt.Errorf("compaction model returned an incomplete summary: stop reason %s", response.StopReason)
+		return ContextCompactedRecord{}, fmt.Errorf("compaction model returned an incomplete summary: stop reason %s", response.StopReason)
 	}
 	for _, item := range response.Items {
 		switch item.Kind {
@@ -99,14 +94,29 @@ func (runtime *Runtime) compactLocked(ctx context.Context, state State, spec run
 			// never executes calls. Keep a usable text summary if the model also
 			// emitted a call; a call-only response still fails as empty below.
 		default:
-			return ContextCompactedRecord{}, Record{}, fmt.Errorf("compaction model returned unsupported item kind %q", item.Kind)
+			return ContextCompactedRecord{}, fmt.Errorf("compaction model returned unsupported item kind %q", item.Kind)
 		}
 	}
 	summary := responseText(response.Items)
 	if strings.TrimSpace(summary) == "" {
-		return ContextCompactedRecord{}, Record{}, errors.New("compaction model returned an empty summary")
+		return ContextCompactedRecord{}, errors.New("compaction model returned an empty summary")
 	}
-	return commitCompaction(ctx, runtime.journal, plan, summary, response.Usage.Tokens.Known(), response.attemptID)
+	compaction, record, err := commitCompaction(ctx, runtime.journal, plan, summary, response.Usage.Tokens.Known(), response.attemptID)
+	if err != nil {
+		return ContextCompactedRecord{}, err
+	}
+	if err := live.apply(record); err != nil {
+		return compaction, fmt.Errorf("apply committed context compaction: %w", err)
+	}
+	runtime.instructionsDirty = runtime.loadInstructions != nil
+	runtime.publishSessionStatus(live.state)
+	emitEvent(emit, Event{Sequence: record.Sequence, Kind: EventContextCompacted, Text: "context compacted"})
+	if runtime.instructionsDirty {
+		if err := runtime.recordCurrentEffectiveConfigurationAndApply(ctx, live); err != nil {
+			return compaction, err
+		}
+	}
+	return compaction, nil
 }
 
 // compactionRequest preserves the ordinary request prefix through the selected

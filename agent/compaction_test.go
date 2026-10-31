@@ -343,11 +343,16 @@ func TestRuntimeCompactRejectsIncompleteSummary(t *testing.T) {
 
 func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	journal := &memoryJournal{}
+	instructions, loads := "initial instructions", 0
+	loadInstructions := func(context.Context, string) (string, error) {
+		loads++
+		return instructions, nil
+	}
 	seedModel := &scriptedModel{steps: []modelStep{
 		directModelResponse("old answer"),
 		directModelResponse("recent answer"),
 	}}
-	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal})
+	seedRuntime := newTestRuntime(t, Config{Backend: seedModel, Journal: journal, Instructions: instructions})
 	oldQuestion := strings.Repeat("old context ", 2_100)
 	recentQuestion := "recent question " + strings.Repeat("r", 8*1024)
 	if _, err := seedRuntime.Run(context.Background(), oldQuestion, nil); err != nil {
@@ -361,6 +366,10 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 		info: modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: 16 * 1024},
 		steps: []modelStep{
 			func(_ context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				if request.Instructions != "initial instructions" {
+					t.Fatalf("compaction prefix changed: %q", request.Instructions)
+				}
+				instructions = "updated instructions"
 				if !isCompactionRequest(request) || len(request.Tools) != 0 {
 					t.Fatalf("automatic compaction request = %#v", request)
 				}
@@ -376,6 +385,9 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 				}, nil
 			},
 			func(_ context.Context, request modelapi.Request, emit func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				if request.Instructions != "updated instructions" {
+					t.Fatalf("instructions were not refreshed: %q", request.Instructions)
+				}
 				if request.Summary != "Old work was summarized." {
 					t.Fatalf("summary = %q", request.Summary)
 				}
@@ -387,7 +399,7 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 			},
 		},
 	}
-	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal})
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, LoadInstructions: loadInstructions})
 	var events []Event
 	result, err := runtime.Run(context.Background(), "new question", func(event Event) {
 		assertEventCommittedAtEmission(t, journal, event)
@@ -398,6 +410,9 @@ func TestRuntimeAutomaticallyCompactsBeforeOversizedRequest(t *testing.T) {
 	}
 	if result.Answer != "final answer" || !hasEvent(events, EventStatus) || !hasEvent(events, EventContextCompacted) {
 		t.Fatalf("result=%#v events=%#v", result, events)
+	}
+	if loads != 2 {
+		t.Fatalf("instruction loads = %d", loads)
 	}
 	modelAttempts := 0
 	for _, event := range events {

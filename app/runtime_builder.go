@@ -31,6 +31,7 @@ type runtimeBuilder struct {
 	workspace         string
 	requestPolicy     agent.ModelRequestPolicy
 	maxToolIterations int
+	loadInstructions  func(context.Context, string) (string, error)
 	scope             agent.ScopeSnapshot
 	awaitRequiredJobs bool
 	sanitize          func(string) string
@@ -203,6 +204,7 @@ func (builder runtimeBuilder) newRuntime(params runtimeBuildParams, modelInfo mo
 		Journal:           params.journal,
 		Tools:             selectedTools,
 		Instructions:      params.instructions,
+		LoadInstructions:  builder.loadInstructions,
 		SessionID:         params.sessionID,
 		Workspace:         builder.workspace,
 		RequestPolicy:     builder.requestPolicy,

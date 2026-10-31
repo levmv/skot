@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,92 @@ import (
 
 	workspacetools "github.com/levmv/skot/tools"
 )
+
+func TestApplicationRefreshesSystemPromptSources(t *testing.T) {
+	root := canonicalApplicationTestRoot(t, t.TempDir())
+	t.Chdir(root)
+	writeSources := func(version string) {
+		t.Helper()
+		for name, prefix := range map[string]string{"AGENTS.md": "project ", "SOUL.md": "persona "} {
+			if err := os.WriteFile(filepath.Join(root, name), []byte(prefix+version), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	writeSources("one")
+	loads := 0
+	application, err := Open(t.Context(), Config{
+		Home: t.TempDir(), Root: root, Interactive: true,
+		ModelURI: "deepseek/deepseek-v4-flash", ModelExplicit: true, ContextWindow: 256 * 1024,
+		ToolSet: ToolSetNone, ToolSetExplicit: true, Scope: ScopeMachine, ScopeExplicit: true,
+		SystemPrompt: "base instructions",
+		LoadInstructions: func(_ context.Context, base string) (string, error) {
+			loads++
+			if strings.Contains(base, "persona ") {
+				t.Fatal("callback received its previous output as the base")
+			}
+			data, err := os.ReadFile(filepath.Join(root, "SOUL.md"))
+			return base + "\n\n" + string(data), err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if _, err := application.State(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.ListSessions(); err != nil || loads != 0 {
+		t.Fatalf("inspecting the application loaded instructions: %d, %v", loads, err)
+	}
+	backend := &skillCaptureModel{}
+	installBackend := func() {
+		t.Helper()
+		runtime := application.runtimeOrNil()
+		if err := runtime.SwitchModel(t.Context(), runtime.CurrentModelInfo(), backend); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installBackend()
+	run := func(input, version string, wantLoads int) {
+		t.Helper()
+		if _, err := application.Run(t.Context(), input, nil); err != nil {
+			t.Fatal(err)
+		}
+		prompt := backend.requests[len(backend.requests)-1].Instructions
+		if loads != wantLoads || strings.Count(prompt, "base instructions") != 1 || !strings.HasPrefix(prompt, "base instructions\n\n") ||
+			!strings.Contains(prompt, "project "+version) || !strings.HasSuffix(prompt, "persona "+version) {
+			t.Fatalf("system prompt = %q, loads = %d; want version %s, loads %d", prompt, loads, version, wantLoads)
+		}
+		state, err := application.State(t.Context())
+		if err != nil || state.Configured == nil || state.Configured.ModelContext.Instructions != prompt {
+			t.Fatalf("effective prompt was not recorded: %#v, %v", state.Configured, err)
+		}
+	}
+	run(strings.Repeat("old context ", 13_000), "one", 1)
+	writeSources("two")
+	run("recent question", "one", 1)
+	if _, err := application.Compact(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if prompt := backend.requests[len(backend.requests)-1].Instructions; !strings.Contains(prompt, "project one") || !strings.HasSuffix(prompt, "persona one") {
+		t.Fatalf("compaction changed the previous prompt: %q", prompt)
+	}
+	run("continue", "two", 2)
+	savedID := application.SessionID()
+	writeSources("three")
+	if _, err := application.ClearSession(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	installBackend()
+	run("new session", "three", 3)
+	writeSources("four")
+	if _, err := application.ResumeSession(t.Context(), savedID); err != nil {
+		t.Fatal(err)
+	}
+	installBackend()
+	run("resume", "four", 4)
+}
 
 func TestLoadInstructionsUsesCurrentHierarchy(t *testing.T) {
 	root := t.TempDir()

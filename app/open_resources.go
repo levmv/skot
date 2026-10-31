@@ -18,14 +18,14 @@ type openResources struct {
 
 func (resources *openResources) fail(cause error) (*Application, error) {
 	var cleanupErr error
-	if resources.session != nil {
-		cleanupErr = errors.Join(cleanupErr, resources.session.close())
-	}
 	if resources.children != nil {
 		cleanupErr = errors.Join(cleanupErr, resources.children.Close())
 	}
 	if resources.processes != nil {
 		cleanupErr = errors.Join(cleanupErr, resources.processes.Close())
+	}
+	if resources.session != nil {
+		cleanupErr = errors.Join(cleanupErr, resources.session.close())
 	}
 	return nil, errors.Join(cause, cleanupErr)
 }

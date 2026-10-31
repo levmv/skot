@@ -13,7 +13,7 @@ func TestMemoryStoreImplementsJournalLifecycleWithoutFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !validSessionID(id) {
+	if !IsFullID(id) {
 		t.Fatalf("memory session ID = %q", id)
 	}
 	record, err := store.Append(context.Background(), agent.PendingRecord{

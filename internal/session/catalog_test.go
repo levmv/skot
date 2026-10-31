@@ -19,6 +19,16 @@ func TestCatalogListsWorkspaceSessionsAndResolvesPrefix(t *testing.T) {
 	firstID := createCatalogSession(t, home, workspace, "  first   task  \nignored")
 	secondID := createCatalogSession(t, home, workspace, strings.Repeat("д", 80))
 	_ = createCatalogSession(t, home, filepath.Join(t.TempDir(), "other"), "other task")
+	empty, emptyID, err := Create(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCatalogRecord(t, empty, agent.RecordSessionStarted, agent.SessionStartedRecord{
+		SchemaVersion: agent.JournalSchemaVersion, SessionID: emptyID, Workspace: workspace,
+	})
+	if err := empty.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for index, id := range []string{firstID, secondID} {
 		updated := time.Date(2026, time.January, 1+index, 0, 0, 0, 0, time.UTC)
 		if err := os.Chtimes(filepath.Join(home, "sessions", id, journalName), updated, updated); err != nil {
@@ -36,9 +46,16 @@ func TestCatalogListsWorkspaceSessionsAndResolvesPrefix(t *testing.T) {
 	if len([]rune(summaries[0].Title)) != 72 || !strings.HasSuffix(summaries[0].Title, "…") {
 		t.Fatalf("truncated title = %q", summaries[0].Title)
 	}
-	resolved, err := Resolve(home, workspace, ShortID(firstID))
-	if err != nil || resolved.ID != firstID || resolved.Title != "first task" {
-		t.Fatalf("resolved = %#v, err = %v", resolved, err)
+	for _, reference := range []string{ShortID(firstID), firstID} {
+		resolved, err := Resolve(home, workspace, reference)
+		if err != nil || resolved.ID != firstID || resolved.Title != "first task" {
+			t.Fatalf("Resolve(%q) = %#v, err = %v", reference, resolved, err)
+		}
+	}
+	for _, reference := range []string{ShortID(emptyID), emptyID} {
+		if _, err := Resolve(home, workspace, reference); err == nil {
+			t.Fatalf("Resolve(%q) offered a session without user input", reference)
+		}
 	}
 	if got := ShortID(firstID); strings.HasPrefix(got, "session_") || len(got) != 12 {
 		t.Fatalf("ShortID() = %q", got)
@@ -101,7 +118,7 @@ func TestCatalogMatchesCanonicalWorkspaceAlias(t *testing.T) {
 	}
 }
 
-func TestCatalogSkipsUnsupportedSessionSchema(t *testing.T) {
+func TestCatalogReportsUnsupportedSchemaWithoutOfferingResume(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	store, id, err := Create(home)
@@ -117,8 +134,34 @@ func TestCatalogSkipsUnsupportedSessionSchema(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	summaries, err := List(home, workspace)
+	if err != nil || len(summaries) != 1 || summaries[0].Error == "" {
+		t.Fatalf("unsupported session metadata: %+v, %v", summaries, err)
+	}
 	if _, err := Resolve(home, workspace, ShortID(id)); err == nil || !strings.Contains(err.Error(), "no session") {
 		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
+func TestSessionSummariesUseFirstNonemptyInput(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	id := createCatalogSession(t, home, workspace, " \n ")
+	store, err := OpenManaged(home, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCatalogRecord(t, store, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "second"})
+	appendCatalogRecord(t, store, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "second", Text: "Actual title"})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := InspectAll(t.Context(), home)
+	if err != nil || len(entries) != 1 || entries[0].Title != "Actual title" {
+		t.Fatalf("catalog title: %+v, %v", entries, err)
+	}
+	snapshot, err := Inspect(t.Context(), home, id)
+	if err != nil || snapshot.Summary.Title != "Actual title" {
+		t.Fatalf("snapshot title: %+v, %v", snapshot.Summary, err)
 	}
 }
 
@@ -155,7 +198,7 @@ func createCatalogSession(t *testing.T, home, workspace, input string) string {
 		t.Fatal(err)
 	}
 	appendCatalogRecord(t, store, agent.RecordSessionStarted, agent.SessionStartedRecord{SchemaVersion: agent.JournalSchemaVersion, SessionID: id, Workspace: workspace})
-	appendCatalogRecord(t, store, agent.RecordModelSelected, model.ReplayContext{Backend: "test", Model: "model", Epoch: "epoch"})
+	appendCatalogRecord(t, store, agent.RecordModelSelected, model.ReplayContext{Backend: "test", Provider: "test", Model: "model", Epoch: "epoch"})
 	appendCatalogRecord(t, store, agent.RecordRunStarted, agent.RunStartedRecord{RunID: "run"})
 	appendCatalogRecord(t, store, agent.RecordRunInputAdded, agent.RunInputAddedRecord{RunID: "run", Text: input})
 	appendCatalogRecord(t, store, agent.RecordRunFinished, agent.RunFinishedRecord{RunID: "run", Status: agent.RunCompleted})

@@ -94,7 +94,7 @@ func (m *screenModel) openSessionPicker() {
 	now := time.Now()
 	current := m.agent.SessionID()
 	for _, summary := range summaries {
-		if summary.ID == current {
+		if summary.ID == current || summary.Error != "" {
 			continue
 		}
 		items = append(items, pickerItem{

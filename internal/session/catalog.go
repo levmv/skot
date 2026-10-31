@@ -2,11 +2,14 @@ package session
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,15 +21,17 @@ import (
 	"github.com/levmv/skot/internal/canonicalpath"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/privatefs"
-	"golang.org/x/sys/unix"
 )
 
 const journalName = "events.jsonl"
 
 type Summary struct {
 	ID        string
+	Workspace string
 	Title     string
 	UpdatedAt time.Time
+	Locked    bool
+	Error     string
 }
 
 func Create(home string) (*Store, string, error) {
@@ -57,26 +62,28 @@ func Create(home string) (*Store, string, error) {
 }
 
 func OpenManaged(home, id string) (*Store, error) {
-	if !validSessionID(id) {
-		return nil, fmt.Errorf("invalid session ID %q", id)
-	}
-	path := filepath.Join(home, "sessions", id, journalName)
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("session %q does not exist", id)
-		}
-		return nil, fmt.Errorf("stat session %q: %w", id, err)
-	}
-	if err := privatefs.RequireRegularFile(path, "managed session journal"); err != nil {
+	file, err := openManagedJournal(home, id, os.O_RDWR|os.O_APPEND)
+	if err != nil {
 		return nil, err
 	}
-	privatefs.TryRestrictPermissions(path)
-	return Open(path)
+	privatefs.TryRestrictOpenFile(file)
+	return openStore(file, file.Name())
 }
 
 func List(home, workspace string) ([]Summary, error) {
 	workspace = canonicalWorkspace(workspace)
-	entries, err := os.ReadDir(filepath.Join(home, "sessions"))
+	return listSummaries(context.Background(), home, &workspace)
+}
+
+func listSummaries(ctx context.Context, home string, workspace *string) ([]Summary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(home, "sessions")
+	if err := privatefs.InspectDirectory(dir, "sessions directory"); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -85,13 +92,31 @@ func List(home, workspace string) ([]Summary, error) {
 	}
 	var summaries []Summary
 	for _, entry := range entries {
-		if !entry.IsDir() || !validSessionID(entry.Name()) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !IsFullID(entry.Name()) {
 			continue
 		}
-		path := filepath.Join(home, "sessions", entry.Name(), journalName)
-		if summary, ok := summarize(entry.Name(), path, workspace); ok {
-			summaries = append(summaries, summary)
+		summary, err := summarize(ctx, home, entry.Name())
+		if err != nil {
+			// A concurrently removed session is no longer a catalog entry.
+			if errors.Is(err, os.ErrNotExist) {
+				if _, statErr := os.Lstat(filepath.Join(dir, entry.Name())); errors.Is(statErr, os.ErrNotExist) {
+					continue
+				}
+			}
+			summary.Error = err.Error()
+		} else if summary.Title == "" {
+			continue
 		}
+		if workspace != nil && summary.Workspace != *workspace {
+			continue
+		}
+		summaries = append(summaries, summary)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	sort.SliceStable(summaries, func(i, j int) bool {
 		if !summaries[i].UpdatedAt.Equal(summaries[j].UpdatedAt) {
@@ -103,23 +128,38 @@ func List(home, workspace string) ([]Summary, error) {
 }
 
 func Resolve(home, workspace, prefix string) (Summary, error) {
+	workspace = canonicalWorkspace(workspace)
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" && !strings.HasPrefix(prefix, "session_") {
+		prefix = "session_" + prefix
+	}
+	// A full ID is globally unique. An empty workspace is allowed only for
+	// this direct lookup, so Open can resolve its root before building tools.
+	if IsFullID(prefix) {
+		summary, err := summarize(context.Background(), home, prefix)
+		if err != nil {
+			return Summary{}, err
+		}
+		if summary.Title == "" || summary.Workspace == "" || (workspace != "" && summary.Workspace != workspace) {
+			return Summary{}, fmt.Errorf("no session matching %q in workspace %s", prefix, workspace)
+		}
+		return summary, nil
+	}
 	summaries, err := List(home, workspace)
 	if err != nil {
 		return Summary{}, err
 	}
-	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
-		if len(summaries) == 0 {
-			return Summary{}, fmt.Errorf("no resumable sessions in workspace %s", workspace)
+		for _, summary := range summaries {
+			if summary.Error == "" {
+				return summary, nil
+			}
 		}
-		return summaries[0], nil
-	}
-	if !strings.HasPrefix(prefix, "session_") {
-		prefix = "session_" + prefix
+		return Summary{}, fmt.Errorf("no resumable sessions in workspace %s", workspace)
 	}
 	var matches []Summary
 	for _, summary := range summaries {
-		if strings.HasPrefix(summary.ID, prefix) {
+		if summary.Error == "" && strings.HasPrefix(summary.ID, prefix) {
 			matches = append(matches, summary)
 		}
 	}
@@ -132,49 +172,81 @@ func Resolve(home, workspace, prefix string) (Summary, error) {
 	return matches[0], nil
 }
 
-func summarize(id, path, workspace string) (Summary, bool) {
-	// Do not wait on a FIFO before checking the opened object's type.
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+// summarize stops after the first nonempty input. Catalogs report metadata
+// failures; validating the rest of a journal belongs to Inspect or OpenManaged.
+func summarize(ctx context.Context, home, id string) (Summary, error) {
+	summary := Summary{ID: id}
+	file, err := openManagedJournal(home, id, os.O_RDONLY)
 	if err != nil {
-		return Summary{}, false
+		return summary, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return Summary{}, false
+	if err != nil {
+		return summary, err
 	}
-	summary := Summary{ID: id, UpdatedAt: info.ModTime()}
-	scanner := bufio.NewScanner(file)
+	summary.UpdatedAt = info.ModTime()
+	summary.Locked, err = journalLocked(file)
+	if err != nil {
+		return summary, err
+	}
+	scanner := bufio.NewScanner(io.NewSectionReader(file, 0, info.Size()))
 	scanner.Buffer(make([]byte, initialJournalBufferBytes), productlimits.MaxJournalRecordBytes+1)
-	if !scanner.Scan() {
-		return Summary{}, false
-	}
-	var record agent.Record
-	if json.Unmarshal(scanner.Bytes(), &record) != nil || record.Kind != agent.RecordSessionStarted {
-		return Summary{}, false
-	}
-	var started agent.SessionStartedRecord
-	if json.Unmarshal(record.Data, &started) != nil || started.SchemaVersion != agent.JournalSchemaVersion ||
-		started.SessionID != id || canonicalWorkspace(started.Workspace) != workspace {
-		return Summary{}, false
-	}
+	scanner.Split(completeJournalLines)
+	var sequence uint64
 	for scanner.Scan() {
-		if json.Unmarshal(scanner.Bytes(), &record) != nil {
-			return Summary{}, false
+		if err := ctx.Err(); err != nil {
+			return summary, err
+		}
+		sequence++
+		var record agent.Record
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return summary, fmt.Errorf("decode journal record at line %d: %w", sequence, err)
+		}
+		if record.Sequence != sequence || record.Time.IsZero() || record.Kind == "" || len(record.Data) == 0 {
+			return summary, fmt.Errorf("invalid journal record at line %d", sequence)
+		}
+		if sequence == 1 {
+			if record.Kind != agent.RecordSessionStarted {
+				return summary, errors.New("first journal record must be session_started")
+			}
+			var started agent.SessionStartedRecord
+			if err := json.Unmarshal(record.Data, &started); err != nil {
+				return summary, err
+			}
+			if started.SessionID != id {
+				return summary, errors.New("journal session ID does not match its directory")
+			}
+			summary.Workspace = canonicalWorkspace(started.Workspace)
+			if started.SchemaVersion != agent.JournalSchemaVersion {
+				return summary, fmt.Errorf("unsupported journal schema version %d", started.SchemaVersion)
+			}
+			continue
 		}
 		if record.Kind != agent.RecordRunInputAdded {
 			continue
 		}
 		var input agent.RunInputAddedRecord
-		if json.Unmarshal(record.Data, &input) != nil {
-			return Summary{}, false
+		if err := json.Unmarshal(record.Data, &input); err != nil {
+			return summary, err
 		}
 		summary.Title = sessionTitle(input.Text)
 		if summary.Title != "" {
-			return summary, true
+			return summary, nil
 		}
 	}
-	return Summary{}, false
+	return summary, scanner.Err()
+}
+
+// A live writer owns the final unterminated line, even if it is valid JSON.
+func completeJournalLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if index := bytes.IndexByte(data, '\n'); index >= 0 {
+		return index + 1, data[:index], nil
+	}
+	if atEOF {
+		return len(data), nil, nil
+	}
+	return 0, nil, nil
 }
 
 func canonicalWorkspace(workspace string) string {
@@ -233,7 +305,8 @@ func newSessionID() (string, error) {
 	return "session_" + hex.EncodeToString(data[:]), nil
 }
 
-func validSessionID(id string) bool {
+// IsFullID reports whether id is a complete managed session identifier.
+func IsFullID(id string) bool {
 	if len(id) != len("session_")+32 || !strings.HasPrefix(id, "session_") {
 		return false
 	}

@@ -93,12 +93,19 @@ type Config struct {
 	ProtectedPaths []string
 	JournalPath    string
 	Resume         bool
-	ResumePrefix   string
-	SaveSession    bool
+	// ResumePrefix accepts an ID prefix in Root, or a full session ID. With a
+	// full ID and no Root, Open uses the session's saved workspace. An explicit
+	// Root must match. Empty resumes the latest session in Root.
+	ResumePrefix string
+	SaveSession  bool
 	// Interactive selects frontend-oriented lifecycle policy: credentials may
 	// be supplied after startup and required background work is not awaited by
-	// Run.
+	// Run. By default it also loads and saves shared interactive preferences.
 	Interactive bool
+	// DisableInteractivePreferences ignores interactive.json and keeps runtime
+	// preference changes local to this Application. Useful for frontends that
+	// manage several independent sessions or persist their own preferences.
+	DisableInteractivePreferences bool
 }
 
 type ProviderStatus struct {
@@ -138,8 +145,22 @@ type ModelChoice struct {
 
 type SessionSummary struct {
 	ID        string
+	Workspace string
 	Title     string
 	UpdatedAt time.Time
+	// Locked observes journal ownership, not whether a model is running.
+	// It can become stale immediately; opening a session arbitrates ownership.
+	// On Linux, sessions opened by older Skot versions may appear unlocked
+	// until reopened with a version supporting passive ownership queries.
+	Locked bool
+	// Error describes unreadable or invalid catalog metadata. Other fields may
+	// be incomplete. An empty Error does not validate the full session history.
+	Error string
+}
+
+type SessionSnapshot struct {
+	Summary SessionSummary
+	State   agent.State
 }
 
 // PreferenceNotPersistedError reports a live configuration value whose

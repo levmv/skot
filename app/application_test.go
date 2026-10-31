@@ -352,6 +352,44 @@ func TestOpenAppliesWorkspaceScopedAndSharedInteractivePreferences(t *testing.T)
 	}
 }
 
+func TestInteractiveApplicationCanKeepPreferencesLocal(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	preferences, err := state.OpenInteractive(home, canonicalApplicationTestRoot(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetModelSelection("ollama/shared", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := preferences.SetThemeSelection(state.ThemeDark); err != nil {
+		t.Fatal(err)
+	}
+	application, err := Open(t.Context(), Config{
+		Home: home, Root: root, Interactive: true, DisableInteractivePreferences: true,
+		ModelURI: "ollama/local", Scope: ScopeMachine, ScopeExplicit: true, ToolSet: ToolSetNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	if application.CurrentModel() != "ollama/local" || application.CurrentTheme() != state.ThemeAuto {
+		t.Fatalf("inherited shared preferences: model=%q theme=%q", application.CurrentModel(), application.CurrentTheme())
+	}
+	if err := application.SwitchModel(t.Context(), "ollama/local-changed", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.SwitchTheme(state.ThemeLight); err != nil {
+		t.Fatal(err)
+	}
+	if application.CurrentModel() != "ollama/local-changed" || application.CurrentTheme() != state.ThemeLight {
+		t.Fatal("local preferences did not change")
+	}
+	settings, err := preferences.Settings()
+	if err != nil || settings.Workspace.Model != "ollama/shared" || settings.Theme != state.ThemeDark {
+		t.Fatalf("changed shared preferences: %+v, %v", settings, err)
+	}
+}
+
 func TestOpenPrefersWorkspaceModelOverNewerSelectionElsewhere(t *testing.T) {
 	home, pinnedRoot, otherRoot := t.TempDir(), t.TempDir(), t.TempDir()
 	if _, err := state.Open(home); err != nil {

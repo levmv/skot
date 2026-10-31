@@ -588,9 +588,7 @@ func (application *Application) ListSessions() ([]SessionSummary, error) {
 	}
 	result := make([]SessionSummary, 0, len(summaries))
 	for _, summary := range summaries {
-		result = append(result, SessionSummary{
-			ID: summary.ID, Title: summary.Title, UpdatedAt: summary.UpdatedAt,
-		})
+		result = append(result, sessionSummary(summary))
 	}
 	return result, nil
 }
@@ -785,6 +783,9 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 	return nil
 }
 
+// Close cancels child runs and stops non-detached processes before releasing
+// the session journal. Detached jobs keep running; this is not a handoff of
+// unfinished agent runs to another Application.
 func (application *Application) Close() error {
 	application.mu.Lock()
 	currentSession := application.state.session
@@ -795,11 +796,13 @@ func (application *Application) Close() error {
 	application.state.children = nil
 	application.mu.Unlock()
 	childErr := children.Close()
-	sessionErr := currentSession.close()
 	var processErr error
 	if processes != nil {
 		processErr = processes.Close()
 	}
+	// Keep the journal owned until child and process cleanup has completed.
+	// A new executor must not adopt work still being stopped by this owner.
+	sessionErr := currentSession.close()
 	return errors.Join(childErr, sessionErr, processErr)
 }
 

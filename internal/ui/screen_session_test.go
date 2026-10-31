@@ -141,6 +141,8 @@ func TestResumePickerDefersSwitchAndLoadsSelectedHistoryBelowScrollback(t *testi
 		resumeNotices: []string{"durable job job-corrupt is unobservable and was left untouched"},
 		sessions: []SessionSummary{
 			{ID: "session_current", Title: "Current work", UpdatedAt: now},
+			{ID: "session_invalid", Error: "invalid journal record", UpdatedAt: now},
+			{ID: "session_future", Error: "unsupported journal schema version", UpdatedAt: now},
 			{ID: "session_resumed", Title: "Continue useful work", UpdatedAt: now.Add(-4 * time.Minute)},
 		},
 	}

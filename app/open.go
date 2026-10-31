@@ -51,6 +51,17 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return nil, err
 	}
 	config.Home = home
+	if config.Resume && session.IsFullID(strings.TrimSpace(config.ResumePrefix)) {
+		// Resolve the saved root before binding instructions, filesystem access,
+		// tools, or workspace preferences. An explicit root must still match.
+		summary, err := session.Resolve(home, config.Root, config.ResumePrefix)
+		if err != nil {
+			return nil, model.MarkInvalidRequest(fmt.Errorf("resolve session: %w", err))
+		}
+		if strings.TrimSpace(config.Root) == "" {
+			config.Root = summary.Workspace
+		}
+	}
 	settingsStore, err := state.Open(home)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Skot data: %w", err)
@@ -70,7 +81,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	var workspaceSettings state.WorkspaceSettings
 	var lastModel state.ModelPreference
 	workspaceToolSet := false
-	if config.Interactive {
+	if config.Interactive && !config.DisableInteractivePreferences {
 		legacyKeys, err := settingsStore.LegacyInteractiveKeys()
 		if err != nil {
 			return nil, fmt.Errorf("inspect legacy settings: %w", err)

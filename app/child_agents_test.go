@@ -137,6 +137,17 @@ func TestChildAgentToolIsOptInReadOnlyAndDurable(t *testing.T) {
 	if count := childBoundaryRecordCount(t, application); count != 2 {
 		t.Fatalf("parent boundary record count = %d, want 2", count)
 	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteSession(t.Context(), home, parentID); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(home, "sessions", parentID), filepath.Join(home, "agents", parentID)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("session state survived deletion: %s: %v", path, err)
+		}
+	}
 }
 
 func TestChildInstructionsCanObserveApplicationDuringFilesystemChange(t *testing.T) {

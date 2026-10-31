@@ -43,6 +43,10 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open journal: %w", err)
 	}
+	return openStore(file, path)
+}
+
+func openStore(file *os.File, path string) (*Store, error) {
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
@@ -60,6 +64,12 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("%w: %s", ErrLocked, path)
 		}
 		return nil, fmt.Errorf("lock journal: %w", err)
+	}
+	// A deleter may have held this inode's lock after we opened it. Never
+	// resume an unlinked or replaced journal after that owner releases it.
+	if err := sameJournal(file, path); err != nil {
+		_ = file.Close()
+		return nil, err
 	}
 	tailRepaired, err := repairIncompleteTail(file, productlimits.MaxJournalRecordBytes)
 	if err != nil {

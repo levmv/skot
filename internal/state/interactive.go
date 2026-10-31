@@ -136,7 +136,7 @@ func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
 		lockPath: filepath.Join(home, "interactive.lock"), workspace: workspace,
 		lockTimeout: defaultLockTimeout,
 	}
-	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
+	if err := privatefs.InspectTrustedRegularFile(store.path, interactiveStateLabel); err != nil {
 		return nil, err
 	}
 	privatefs.TryRestrictPermissions(store.path)
@@ -149,7 +149,7 @@ func OpenInteractive(home, workspace string) (*InteractiveStore, error) {
 func (store *InteractiveStore) Settings() (InteractiveSettings, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
+	if err := privatefs.InspectTrustedRegularFile(store.path, interactiveStateLabel); err != nil {
 		return InteractiveSettings{}, err
 	}
 	privatefs.TryRestrictPermissions(store.path)
@@ -307,7 +307,7 @@ func (store *InteractiveStore) mutate(change func(*interactiveDocument) bool) (r
 		return err
 	}
 	defer func() { returnErr = errors.Join(returnErr, releaseStateLock(lock)) }()
-	if err := privatefs.InspectRegularFile(store.path, interactiveStateLabel); err != nil {
+	if err := privatefs.InspectTrustedRegularFile(store.path, interactiveStateLabel); err != nil {
 		return err
 	}
 	privatefs.TryRestrictPermissions(store.path)

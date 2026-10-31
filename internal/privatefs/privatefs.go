@@ -1,7 +1,5 @@
 // Package privatefs separates structural filesystem validation from optional
-// permission repair. A missing or broader-than-usual mode may be harmless
-// historical state, while a symlink or the wrong object type changes what an
-// operation would act on and remains an error.
+// permission repair and explicit trust checks for application configuration.
 package privatefs
 
 import (
@@ -65,6 +63,35 @@ func inspectRegularFile(path, label string, allowMissing bool) error {
 		return fmt.Errorf("%s must be a regular file", label)
 	}
 	return nil
+}
+
+// InspectTrustedDirectory validates an optional configuration root's structure
+// and ownership (current user or root) without changing its permissions.
+func InspectTrustedDirectory(path, label string) error {
+	return inspectTrusted(path, label, true)
+}
+
+// InspectTrustedRegularFile validates an optional configuration or credential
+// file's structure and ownership. Its permission bits do not prevent use.
+func InspectTrustedRegularFile(path, label string) error {
+	return inspectTrusted(path, label, false)
+}
+
+func inspectTrusted(path, label string, directory bool) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", label, err)
+	}
+	if directory && !info.IsDir() {
+		return fmt.Errorf("%s must be a directory", label)
+	}
+	if !directory && !info.Mode().IsRegular() {
+		return fmt.Errorf("%s must be a regular file", label)
+	}
+	return inspectOwnership(info, path, label)
 }
 
 // TryRestrictPermissions best-effort removes group/other access without

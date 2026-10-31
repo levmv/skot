@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var errJobControlReplaced = errors.New("job control FIFO was replaced")
+
 // createJobControl creates the per-job FIFO and opens its read side before the
 // worker is forked. The descriptor is CLOEXEC in the manager; os/exec clears
 // that flag only on the copy explicitly passed through ExtraFiles.
@@ -91,13 +93,48 @@ func validateJobControlFile(file *os.File, path string) error {
 }
 
 func openJobControlWriter(path string) (*os.File, error) {
+	return openKnownJobControlWriter(path, nil)
+}
+
+func validateJobControlIdentity(path string, expected os.FileInfo) error {
+	if expected == nil {
+		return nil
+	}
+	named, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(expected, named) {
+		return fmt.Errorf("%w: %s", errJobControlReplaced, path)
+	}
+	return nil
+}
+
+func openKnownJobControlWriter(path string, expected os.FileInfo) (*os.File, error) {
+	if err := validateJobControlIdentity(path, expected); err != nil {
+		return nil, err
+	}
 	writer, err := openJobFile(path, os.O_WRONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
+		if errors.Is(err, unix.ENXIO) {
+			// The name may have been replaced after the first check. ENXIO
+			// establishes absence only for the same FIFO we already knew.
+			if identityErr := validateJobControlIdentity(path, expected); identityErr != nil {
+				return nil, identityErr
+			}
+		}
 		return nil, err
 	}
 	if err := validateJobControlFile(writer, path); err != nil {
 		_ = writer.Close()
 		return nil, err
+	}
+	if expected != nil {
+		opened, err := writer.Stat()
+		if err != nil || !os.SameFile(expected, opened) {
+			_ = writer.Close()
+			return nil, errors.Join(errJobControlReplaced, err)
+		}
 	}
 	unix.CloseOnExec(int(writer.Fd()))
 	return writer, nil
@@ -107,7 +144,11 @@ func openJobControlWriter(path string) (*os.File, error) {
 // is the precise absent-owner answer. Missing or malformed filesystem state is
 // returned as an error rather than being turned into an invented lifecycle.
 func probeJobControl(path string) (bool, error) {
-	writer, err := openJobControlWriter(path)
+	return probeKnownJobControl(path, nil)
+}
+
+func probeKnownJobControl(path string, expected os.FileInfo) (bool, error) {
+	writer, err := openKnownJobControlWriter(path, expected)
 	if errors.Is(err, unix.ENXIO) {
 		return false, nil
 	}
@@ -117,8 +158,8 @@ func probeJobControl(path string) (bool, error) {
 	return true, writer.Close()
 }
 
-func writeJobControl(path string, command byte) error {
-	writer, err := openJobControlWriter(path)
+func writeJobControl(path string, command byte, expected os.FileInfo) error {
+	writer, err := openKnownJobControlWriter(path, expected)
 	if err != nil {
 		return err
 	}

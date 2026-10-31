@@ -158,7 +158,12 @@ func (manager *ProcessManager) loadSupervisedJob(jobDir, sessionID string) (*pro
 	if err := validateJobSessionOwnership(metadata, sessionID); err != nil {
 		return nil, err
 	}
-	job := supervisedJobFromMetadata(metadata, jobDir)
+	// Adoption can only pin the currently named FIFO. The durable registry is
+	// not authenticated if a command can rewrite it before the first adoption.
+	// A missing FIFO still allows terminal-result recovery; a running job must
+	// pass the probe below before it can be adopted.
+	controlIdentity, _ := os.Lstat(jobControlPath(jobDir))
+	job := supervisedJobFromMetadata(metadata, jobDir, controlIdentity)
 	result, terminal, live, err := observeSupervisedJobState(jobDir, job.id, func() (bool, error) {
 		return manager.probeSupervisedJob(job)
 	})
@@ -166,6 +171,9 @@ func (manager *ProcessManager) loadSupervisedJob(jobDir, sessionID string) (*pro
 		return nil, err
 	}
 	if terminal {
+		if err := validateJobControlIdentity(jobControlPath(jobDir), job.controlIdentity); err != nil {
+			return nil, err
+		}
 		manager.applyTerminalResult(job, result)
 		return job, nil
 	}
@@ -176,20 +184,21 @@ func (manager *ProcessManager) loadSupervisedJob(jobDir, sessionID string) (*pro
 	return job, nil
 }
 
-func supervisedJobFromMetadata(metadata jobMetadata, jobDir string) *processJob {
+func supervisedJobFromMetadata(metadata jobMetadata, jobDir string, controlIdentity os.FileInfo) *processJob {
 	return &processJob{
-		id:             metadata.JobID,
-		sessionID:      metadata.SessionID,
-		command:        metadata.Command,
-		done:           make(chan struct{}),
-		status:         ProcessRunning,
-		timeout:        time.Duration(metadata.TimeoutMillis) * time.Millisecond,
-		startedAt:      metadata.StartedAt,
-		scope:          metadata.Scope,
-		separateStderr: metadata.SeparateStderr,
-		supervised:     true,
-		detached:       metadata.Detach,
-		jobDir:         jobDir,
+		id:              metadata.JobID,
+		sessionID:       metadata.SessionID,
+		command:         metadata.Command,
+		done:            make(chan struct{}),
+		status:          ProcessRunning,
+		timeout:         time.Duration(metadata.TimeoutMillis) * time.Millisecond,
+		startedAt:       metadata.StartedAt,
+		scope:           metadata.Scope,
+		separateStderr:  metadata.SeparateStderr,
+		supervised:      true,
+		detached:        metadata.Detach,
+		jobDir:          jobDir,
+		controlIdentity: controlIdentity,
 	}
 }
 
@@ -271,6 +280,11 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 	if err != nil {
 		return cleanup(err)
 	}
+	controlIdentity, err := control.Stat()
+	if err != nil {
+		_ = control.Close()
+		return cleanup(fmt.Errorf("inspect created job control FIFO: %w", err))
+	}
 	controlOpen := true
 	closeControl := func() error {
 		if !controlOpen {
@@ -321,7 +335,9 @@ func (manager *ProcessManager) startSupervised(spec processSpec, process *exec.C
 	wait := make(chan error, 1)
 	go func() { wait <- worker.Wait() }()
 
-	job := supervisedJobFromMetadata(metadata, jobDir)
+	// A payload may already be running: use the original descriptor's identity
+	// rather than trusting another lookup after worker.Start.
+	job := supervisedJobFromMetadata(metadata, jobDir, controlIdentity)
 	if controlCloseErr != nil {
 		cause := fmt.Errorf("close manager job control reader: %w", controlCloseErr)
 		stopErr := manager.requestJobStop(job)
@@ -429,11 +445,11 @@ func (manager *ProcessManager) monitorAdoptedJob(job *processJob) {
 }
 
 func (manager *ProcessManager) probeSupervisedJob(job *processJob) (bool, error) {
-	return probeJobControl(jobControlPath(job.jobDir))
+	return probeKnownJobControl(jobControlPath(job.jobDir), job.controlIdentity)
 }
 
 func (manager *ProcessManager) requestJobStop(job *processJob) error {
-	return writeJobControl(jobControlPath(job.jobDir), jobControlStop)
+	return writeJobControl(jobControlPath(job.jobDir), jobControlStop, job.controlIdentity)
 }
 
 func (manager *ProcessManager) refreshSupervisedJob(job *processJob) error {
@@ -442,6 +458,9 @@ func (manager *ProcessManager) refreshSupervisedJob(job *processJob) error {
 		return err
 	}
 	if terminal {
+		if err := validateJobControlIdentity(jobControlPath(job.jobDir), job.controlIdentity); err != nil {
+			return err
+		}
 		manager.applyTerminalResult(job, result)
 	}
 	return nil
@@ -512,10 +531,13 @@ func removeSettledJobState(job *processJob) (bool, error) {
 	if !settled {
 		return false, nil
 	}
+	if err := validateJobControlIdentity(jobControlPath(jobDir), job.controlIdentity); err != nil {
+		return false, err
+	}
 	if _, terminal, err := readJobTerminalResult(jobDir, job.id); err != nil {
 		return false, err
 	} else if !terminal {
-		live, err := probeJobControl(jobControlPath(jobDir))
+		live, err := probeKnownJobControl(jobControlPath(jobDir), job.controlIdentity)
 		if err != nil {
 			return false, err
 		}

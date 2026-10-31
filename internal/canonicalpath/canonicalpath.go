@@ -5,7 +5,6 @@ package canonicalpath
 
 import (
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -17,23 +16,36 @@ func Resolve(path string) string {
 		path = absolute
 	}
 	path = filepath.Clean(path)
-	current := path
-	var missing []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			for _, m := range slices.Backward(missing) {
-				resolved = filepath.Join(resolved, m)
-			}
-			return filepath.Clean(resolved)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return path
-		}
-		missing = append(missing, filepath.Base(current))
-		current = parent
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
 	}
+	// Cleaned paths contain no parent components: if a component prefix cannot
+	// be resolved, no longer prefix can be resolved either. Search byte offsets
+	// rounded to component boundaries instead of cleaning every shrinking path.
+	rootEnd := len(filepath.VolumeName(path))
+	if filepath.IsAbs(path) {
+		rootEnd++
+	}
+	bestEnd := -1
+	var best string
+	for low, high := 0, len(path); low < high; {
+		middle := low + (high-low)/2
+		end := max(rootEnd, strings.LastIndexByte(path[:middle+1], filepath.Separator))
+		resolved, err := filepath.EvalSymlinks(path[:end])
+		if err == nil {
+			if end > bestEnd {
+				bestEnd, best = end, resolved
+			}
+			low = middle + 1
+		} else {
+			high = middle
+		}
+	}
+	if bestEnd < 0 {
+		return path
+	}
+	// Rebuild the missing suffix once; per-component Join is quadratic too.
+	return filepath.Join(best, strings.TrimPrefix(path[bestEnd:], string(filepath.Separator)))
 }
 
 // Contains reports whether path is root itself or canonically below root.

@@ -75,6 +75,33 @@ func TestStoreRepairsSharedConfigWithoutChangingHomePermissions(t *testing.T) {
 	}
 }
 
+func TestStoreAllowsSharedHomeAndRepairsConfiguration(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		home := t.TempDir()
+		path := filepath.Join(home, "config.json")
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0o660)
+		if directory {
+			path, mode = home, 0o770
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(home); err != nil {
+			t.Fatalf("shared permissions prevented startup: %v", err)
+		}
+		wantMode := mode
+		if !directory {
+			wantMode = 0o600
+		}
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != wantMode {
+			t.Fatalf("state permissions: %v, %v", info, err)
+		}
+	}
+}
+
 func TestThemeNormalizationDefaultsToAutoAndRejectsInvalidValues(t *testing.T) {
 	if got, err := NormalizeTheme(""); err != nil || got != ThemeAuto {
 		t.Fatalf("default theme = %q, %v", got, err)

@@ -110,7 +110,7 @@ func Open(home string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := privatefs.InspectRegularFile(store.path, "config file"); err != nil {
+	if err := privatefs.InspectTrustedRegularFile(store.path, "config file"); err != nil {
 		return nil, err
 	}
 	privatefs.TryRestrictPermissions(store.path)
@@ -126,7 +126,7 @@ func OpenCredentials(home string) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{dir: home, path: filepath.Join(home, "config.json"), credentialPath: filepath.Join(home, "store.bin")}
-	if err := privatefs.InspectRegularFile(store.credentialPath, "credential store"); err != nil {
+	if err := privatefs.InspectTrustedRegularFile(store.credentialPath, "credential store"); err != nil {
 		return nil, err
 	}
 	privatefs.TryRestrictPermissions(store.credentialPath)
@@ -235,7 +235,7 @@ func (store *Store) UpdateCredential(ctx context.Context, provider string, updat
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := privatefs.EnsureDirectory(store.dir, "state directory"); err != nil {
+	if err := ensureHome(store.dir); err != nil {
 		return err
 	}
 	lock, err := acquireStateLock(ctx, filepath.Join(store.dir, "store.lock"), "credential store")

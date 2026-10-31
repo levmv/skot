@@ -3,6 +3,7 @@ package canonicalpath
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,48 @@ func TestResolvePreservesMissingSuffixBelowSymlink(t *testing.T) {
 	want := filepath.Join(resolvedReal, "missing", "leaf")
 	if got != want {
 		t.Fatalf("resolved path = %q; want %q", got, want)
+	}
+}
+
+func TestResolveLongMissingSuffixPreservesSymlinkBoundary(t *testing.T) {
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := strings.Repeat("missing/", 8192) + "leaf"
+	if got, want := Resolve(filepath.Join(alias, suffix)), filepath.Join(resolved, suffix); got != want {
+		t.Fatalf("long missing suffix resolved outside its canonical prefix: length=%d", len(got))
+	}
+}
+
+func TestResolvePreservesUnresolvableSuffixes(t *testing.T) {
+	parent := t.TempDir()
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("absent", filepath.Join(parent, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loop", filepath.Join(parent, "loop")); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"file/child", "dangling/child", "loop/child", "absent/child", "absent"} {
+		if got, want := Resolve(filepath.Join(parent, suffix)), filepath.Join(resolvedParent, suffix); got != want {
+			t.Errorf("Resolve(%q) = %q, want %q", suffix, got, want)
+		}
 	}
 }
 

@@ -106,7 +106,7 @@ func (store *Store) migrateCredentials() error {
 		return err
 	}
 	defer releaseStateLock(lock)
-	if err := privatefs.InspectRegularFile(legacyPath, "legacy credential store"); err != nil {
+	if err := privatefs.InspectTrustedRegularFile(legacyPath, "legacy credential store"); err != nil {
 		return err
 	}
 	if _, err := os.Stat(store.credentialPath); errors.Is(err, os.ErrNotExist) {

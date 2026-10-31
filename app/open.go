@@ -114,6 +114,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			config.Scope = workspaceSettings.Scope
 		}
 	}
+	notices = append(notices, homePermissionNotices(home, interactiveStore != nil)...)
 	if strings.TrimSpace(config.ModelURI) == "" {
 		config.ModelURI = DefaultModelURI
 	}

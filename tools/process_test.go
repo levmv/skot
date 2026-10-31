@@ -1245,7 +1245,7 @@ func TestJobControlWriteReportsFullFIFOWithoutBlocking(t *testing.T) {
 		}
 	}
 	started := time.Now()
-	if err := writeJobControl(path, jobControlStop); !errors.Is(err, syscall.EAGAIN) {
+	if err := writeJobControl(path, jobControlStop, nil); !errors.Is(err, syscall.EAGAIN) {
 		t.Fatalf("write to full FIFO = %v, want EAGAIN", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {

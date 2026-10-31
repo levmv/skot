@@ -469,9 +469,54 @@ func TestOpenLegacyInteractiveConfigIsIgnoredAndNoticedOnlyInteractively(t *test
 	}
 }
 
+func TestOpenWarnsWithoutRejectingSharedHomePermissions(t *testing.T) {
+	for _, mode := range []os.FileMode{0o700, 0o770, 0o707} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.Chmod(home, mode); err != nil {
+				t.Fatal(err)
+			}
+			for name, raw := range map[string]string{"config.json": "{}", "interactive.json": `{"version":1}`} {
+				path := filepath.Join(home, name)
+				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0o660); err != nil {
+					t.Fatal(err)
+				}
+			}
+			application, err := Open(t.Context(), Config{
+				Home: home, Root: t.TempDir(), Interactive: true,
+				ModelURI: "ollama/shared-home", ModelExplicit: true, ContextWindow: 32 * 1024,
+				ToolSet: ToolSetNone, ToolSetExplicit: true, Scope: ScopeMachine,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer application.Close()
+			warned := strings.Contains(strings.Join(application.StartupNotices(), "\n"), "group or other write permission")
+			if warned != (mode&0o022 != 0) {
+				t.Fatalf("mode %04o, notices: %v", mode, application.StartupNotices())
+			}
+			for _, notice := range application.StartupNotices() {
+				if strings.Contains(notice, "config.json") || strings.Contains(notice, "interactive.json") {
+					t.Fatalf("warning about repaired file permissions: %s", notice)
+				}
+			}
+			if info, err := os.Stat(home); err != nil || info.Mode().Perm() != mode {
+				t.Fatalf("home permissions changed: %v, %v", info, err)
+			}
+		})
+	}
+}
+
 func TestOpenHeadlessDoesNotInspectInteractiveStateOrLock(t *testing.T) {
 	home, root := t.TempDir(), t.TempDir()
-	if err := os.Mkdir(filepath.Join(home, "interactive.json"), 0o700); err != nil {
+	interactivePath := filepath.Join(home, "interactive.json")
+	if err := os.Mkdir(interactivePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(interactivePath, 0o770); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(home, "interactive.lock"), 0o700); err != nil {
@@ -487,6 +532,9 @@ func TestOpenHeadlessDoesNotInspectInteractiveStateOrLock(t *testing.T) {
 	defer application.Close()
 	if application.CurrentModel() != "ollama/headless" {
 		t.Fatalf("headless model = %q", application.CurrentModel())
+	}
+	if notices := application.StartupNotices(); len(notices) != 0 {
+		t.Fatalf("headless inspected unused interactive state: %v", notices)
 	}
 }
 

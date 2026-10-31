@@ -107,7 +107,10 @@ type processJob struct {
 	supervised       bool
 	detached         bool
 	jobDir           string
-	doneOnce         sync.Once
+	// controlIdentity is captured at creation or first adoption, then immutable.
+	// It detects later FIFO replacement without treating it as worker death.
+	controlIdentity os.FileInfo
+	doneOnce        sync.Once
 	// awaitGroup keeps the job open for processes its command leaves running.
 	// leftovers is closed when the command exits while such processes are live,
 	// and stopRequested when the first stop is requested.

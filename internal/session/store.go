@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/filelock"
 	productlimits "github.com/levmv/skot/internal/limits"
+	"github.com/levmv/skot/internal/sessionnotify"
 )
 
 type Store struct {
@@ -25,6 +27,7 @@ type Store struct {
 	failed         error
 	maxRecordBytes int
 	dirty          bool
+	notifications  *sessionnotify.Lease
 }
 
 var ErrLocked = errors.New("session is already open")
@@ -58,9 +61,9 @@ func openStore(file *os.File, path string) (*Store, error) {
 	}
 	// Open also backs an explicit -journal path, whose existing mode belongs to
 	// the user. Managed callers tighten their journals before opening them here.
-	if err := acquireStoreLock(file); err != nil {
+	if err := filelock.Acquire(file); err != nil {
 		_ = file.Close()
-		if errors.Is(err, errStoreWouldBlock) {
+		if errors.Is(err, filelock.ErrWouldBlock) {
 			return nil, fmt.Errorf("%w: %s", ErrLocked, path)
 		}
 		return nil, fmt.Errorf("lock journal: %w", err)
@@ -93,7 +96,13 @@ func (store *Store) Append(ctx context.Context, pending agent.PendingRecord) (ag
 		return agent.Record{}, err
 	}
 	store.mu.Lock()
-	defer store.mu.Unlock()
+	changed := false
+	defer func() {
+		store.mu.Unlock()
+		if changed {
+			store.notifications.Change(store.notificationsID())
+		}
+	}()
 	if store.file == nil {
 		return agent.Record{}, errors.New("journal is closed")
 	}
@@ -133,8 +142,11 @@ func (store *Store) Append(ctx context.Context, pending agent.PendingRecord) (ag
 		return agent.Record{}, fmt.Errorf("persist journal record: %w", err)
 	}
 	store.records = append(store.records, record)
+	changed = true
 	return cloneRecord(record), nil
 }
+
+func (store *Store) notificationsID() string { return filepath.Base(filepath.Dir(store.path)) }
 
 func (store *Store) Records(ctx context.Context) ([]agent.Record, error) {
 	if err := ctx.Err(); err != nil {
@@ -157,10 +169,14 @@ func (store *Store) Records(ctx context.Context) ([]agent.Record, error) {
 
 func (store *Store) Close() error {
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	if store.file == nil {
+		store.mu.Unlock()
 		return nil
 	}
+	defer func() {
+		store.mu.Unlock()
+		store.notifications.Close()
+	}()
 	return store.closeLocked(true)
 }
 
@@ -182,23 +198,19 @@ func (store *Store) HasUserTurn() bool {
 // journal and directory if no record was ever written.
 func (store *Store) ClosePruningEmpty() error {
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	if store.file == nil {
+		store.mu.Unlock()
 		return nil
 	}
+	defer func() {
+		store.mu.Unlock()
+		store.notifications.Close()
+	}()
 	prune := len(store.records) == 0 && store.failed == nil
-	path := store.path
-	err := store.closeLocked(!prune)
-	if err != nil || !prune {
-		return err
+	if !prune {
+		return store.closeLocked(true)
 	}
-	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return fmt.Errorf("remove empty session journal: %w", removeErr)
-	}
-	if removeErr := os.Remove(filepath.Dir(path)); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return fmt.Errorf("remove empty session directory: %w", removeErr)
-	}
-	return nil
+	return store.removeLocked("empty")
 }
 
 // CloseDiscarding closes a provisional managed session and removes its
@@ -206,19 +218,27 @@ func (store *Store) ClosePruningEmpty() error {
 // directory is removed only when it is otherwise empty.
 func (store *Store) CloseDiscarding() error {
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	if store.file == nil {
+		store.mu.Unlock()
 		return nil
 	}
-	path := store.path
-	if err := store.closeLocked(false); err != nil {
-		return err
+	defer func() {
+		store.mu.Unlock()
+		store.notifications.Close()
+	}()
+	return store.removeLocked("provisional")
+}
+
+// Keep journal ownership through unlink and directory cleanup. An opener that
+// already has a descriptor must fail sameJournal after it acquires the lock.
+// Even failed cleanup closes the journal before release is published.
+func (store *Store) removeLocked(label string) (result error) {
+	defer func() { result = errors.Join(result, store.closeLocked(false)) }()
+	if err := os.Remove(store.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s session journal: %w", label, err)
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove provisional session journal: %w", err)
-	}
-	if err := os.Remove(filepath.Dir(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove provisional session directory: %w", err)
+	if err := os.Remove(filepath.Dir(store.path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s session directory: %w", label, err)
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/filelock"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/privatefs"
 	"github.com/levmv/skot/model"
@@ -40,7 +41,7 @@ func Inspect(ctx context.Context, home, id string) (Snapshot, error) {
 		return snapshot, err
 	}
 	snapshot.Summary.UpdatedAt = info.ModTime()
-	snapshot.Summary.Locked, err = journalLocked(file)
+	snapshot.Summary.Locked, err = filelock.Locked(file)
 	if err != nil {
 		return snapshot, err
 	}
@@ -62,7 +63,10 @@ func Inspect(ctx context.Context, home, id string) (Snapshot, error) {
 	if snapshot.State.SessionID != "" && snapshot.State.SessionID != id {
 		return snapshot, errors.New("journal session ID does not match its directory")
 	}
-	snapshot.Summary.Workspace = canonicalWorkspace(snapshot.State.Workspace)
+	snapshot.Summary.Workspace, err = journalWorkspace(snapshot.State.Workspace)
+	if err != nil {
+		return snapshot, err
+	}
 	for _, block := range snapshot.State.Blocks {
 		for _, entry := range block.Entries {
 			if entry.Item.Kind == model.ItemUserText {

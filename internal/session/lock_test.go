@@ -41,3 +41,41 @@ func TestStoreExcludesLegacyFlockOwners(t *testing.T) {
 		t.Fatalf("legacy executor acquired an owned journal: %v", err)
 	}
 }
+
+func TestRemovingSessionExcludesConcurrentOpeners(t *testing.T) {
+	for _, operation := range []struct {
+		name  string
+		close func(*Store) error
+	}{
+		{name: "prune empty", close: (*Store).ClosePruningEmpty},
+		{name: "discard", close: (*Store).CloseDiscarding},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			home := t.TempDir()
+			for range 128 {
+				store, id, err := Create(home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				start, done := make(chan struct{}), make(chan error, 1)
+				go func() {
+					<-start
+					opened, err := OpenManaged(home, id)
+					if opened != nil {
+						err = errors.Join(errors.New("opened a journal being removed"), opened.Close())
+					}
+					done <- err
+				}()
+				close(start)
+				closeErr := operation.close(store)
+				openErr := <-done
+				if closeErr != nil {
+					t.Fatal(closeErr)
+				}
+				if !errors.Is(openErr, ErrLocked) && !errors.Is(openErr, os.ErrNotExist) {
+					t.Fatalf("concurrent opener: %v", openErr)
+				}
+			}
+		})
+	}
+}

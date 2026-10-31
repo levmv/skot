@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/levmv/skot/agent"
+	"github.com/levmv/skot/internal/filelock"
 )
 
 func TestStorePersistsAndReopensRecords(t *testing.T) {
@@ -425,5 +426,48 @@ func TestCloseDiscardingRemovesNonemptyProvisionalSession(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "sessions", id)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("provisional session still exists: %v", err)
+	}
+}
+
+func TestRemovingSessionClosesJournalWhenDirectoryCannotBeRemoved(t *testing.T) {
+	for _, operation := range []struct {
+		name  string
+		close func(*Store) error
+	}{
+		{name: "prune empty", close: (*Store).ClosePruningEmpty},
+		{name: "discard", close: (*Store).CloseDiscarding},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			home := t.TempDir()
+			store, id, err := Create(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			journal, err := openManagedJournal(home, id, os.O_RDONLY)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer journal.Close()
+			artifact := filepath.Join(home, "sessions", id, "keep")
+			if err := os.WriteFile(artifact, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := operation.close(store); err == nil {
+				t.Fatal("nonempty directory removal succeeded")
+			}
+			if _, err := store.Records(t.Context()); err == nil {
+				t.Fatal("journal remained open after failed cleanup")
+			}
+			if locked, err := filelock.Locked(journal); err != nil || locked {
+				t.Fatalf("journal remained owned: %v, %v", locked, err)
+			}
+			if _, err := os.Stat(journal.Name()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("journal was not removed: %v", err)
+			}
+			if data, err := os.ReadFile(artifact); err != nil || string(data) != "keep" {
+				t.Fatalf("unrelated artifact changed: %q, %v", data, err)
+			}
+		})
 	}
 }

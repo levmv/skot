@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/levmv/skot/internal/filelock"
+	"github.com/levmv/skot/internal/sessionnotify"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,8 +24,8 @@ func LockJournal(path string) (*os.File, error) {
 		err = errors.New("session journal must be a regular file")
 	}
 	if err == nil {
-		err = acquireStoreLock(file)
-		if errors.Is(err, errStoreWouldBlock) {
+		err = filelock.Acquire(file)
+		if errors.Is(err, filelock.ErrWouldBlock) {
 			err = fmt.Errorf("%w: %s", ErrLocked, path)
 		}
 	}
@@ -40,7 +42,7 @@ func LockJournal(path string) (*os.File, error) {
 // Delete holds the parent's journal lock while its owner removes child and job
 // state. It does not need a valid replay: corrupt journals remain deletable.
 // Missing parent state still requires cleanup after an interrupted deletion.
-func Delete(ctx context.Context, home, id string, cleanup func() error) error {
+func Delete(ctx context.Context, home, id string, cleanup func() error) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -51,10 +53,27 @@ func Delete(ctx context.Context, home, id string, cleanup func() error) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if errors.Is(err, os.ErrNotExist) {
+		// A missing home has neither dependent state nor notification observers.
+		// Do not create it just to announce an already-complete deletion.
+		if _, homeErr := os.Stat(home); homeErr != nil {
+			if errors.Is(homeErr, os.ErrNotExist) {
+				return nil
+			}
+			return homeErr
+		}
+	}
+	lease := sessionnotify.Begin(home)
+	defer func() {
+		if result == nil {
+			lease.Change(id)
+		}
+		lease.Close()
+	}()
 	if file != nil {
 		defer file.Close()
-		if err := acquireStoreLock(file); err != nil {
-			if errors.Is(err, errStoreWouldBlock) {
+		if err := filelock.Acquire(file); err != nil {
+			if errors.Is(err, filelock.ErrWouldBlock) {
 				return fmt.Errorf("%w: %s", ErrLocked, id)
 			}
 			return err
@@ -62,6 +81,9 @@ func Delete(ctx context.Context, home, id string, cleanup func() error) error {
 		if err := sameJournal(file, file.Name()); err != nil {
 			return err
 		}
+		// Ownership must be released observably even if dependent cleanup
+		// refuses deletion. The file's deferred Close runs before lease.Close.
+		lease.Own(id)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

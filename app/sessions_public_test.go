@@ -32,6 +32,9 @@ func TestSessionCatalogReadResumeAndDelete(t *testing.T) {
 	if err := app.DeleteSession(t.Context(), home, "session_00000000000000000000000000000000"); err != nil {
 		t.Fatalf("delete from missing home: %v", err)
 	}
+	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deletion created a home: %v", err)
+	}
 	config := app.Config{
 		Home: home, Root: t.TempDir(), Interactive: true,
 		ModelURI: "deepseek/session-test", ModelExplicit: true,

@@ -19,8 +19,10 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/canonicalpath"
+	"github.com/levmv/skot/internal/filelock"
 	productlimits "github.com/levmv/skot/internal/limits"
 	"github.com/levmv/skot/internal/privatefs"
+	"github.com/levmv/skot/internal/sessionnotify"
 )
 
 const journalName = "events.jsonl"
@@ -40,6 +42,12 @@ func Create(home string) (*Store, string, error) {
 		return nil, "", err
 	}
 	privatefs.TryRestrictPermissions(sessionsDir)
+	lease := sessionnotify.Begin(home)
+	defer func() {
+		if lease != nil {
+			lease.Close()
+		}
+	}()
 	for range 8 {
 		id, err := newSessionID()
 		if err != nil {
@@ -56,6 +64,9 @@ func Create(home string) (*Store, string, error) {
 			_ = os.Remove(dir)
 			return nil, "", err
 		}
+		store.notifications = lease
+		lease.Own(id)
+		lease = nil
 		return store, id, nil
 	}
 	return nil, "", errors.New("could not allocate a unique session ID")
@@ -67,7 +78,15 @@ func OpenManaged(home, id string) (*Store, error) {
 		return nil, err
 	}
 	privatefs.TryRestrictOpenFile(file)
-	return openStore(file, file.Name())
+	lease := sessionnotify.Begin(home)
+	store, err := openStore(file, file.Name())
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	store.notifications = lease
+	lease.Own(id)
+	return store, nil
 }
 
 func List(home, workspace string) ([]Summary, error) {
@@ -186,7 +205,7 @@ func summarize(ctx context.Context, home, id string) (Summary, error) {
 		return summary, err
 	}
 	summary.UpdatedAt = info.ModTime()
-	summary.Locked, err = journalLocked(file)
+	summary.Locked, err = filelock.Locked(file)
 	if err != nil {
 		return summary, err
 	}
@@ -217,7 +236,10 @@ func summarize(ctx context.Context, home, id string) (Summary, error) {
 			if started.SessionID != id {
 				return summary, errors.New("journal session ID does not match its directory")
 			}
-			summary.Workspace = canonicalWorkspace(started.Workspace)
+			summary.Workspace, err = journalWorkspace(started.Workspace)
+			if err != nil {
+				return summary, err
+			}
 			if started.SchemaVersion != agent.JournalSchemaVersion {
 				return summary, fmt.Errorf("unsupported journal schema version %d", started.SchemaVersion)
 			}
@@ -247,6 +269,17 @@ func completeJournalLines(data []byte, atEOF bool) (advance int, token []byte, e
 		return len(data), nil, nil
 	}
 	return 0, nil, nil
+}
+
+// Bound untrusted journal metadata before best-effort path canonicalization.
+// Its repeated ancestor lookups must never receive a journal-sized string.
+const maxWorkspacePathBytes = 16 * 1024
+
+func journalWorkspace(workspace string) (string, error) {
+	if len(workspace) > maxWorkspacePathBytes {
+		return "", fmt.Errorf("session workspace exceeds %d bytes", maxWorkspacePathBytes)
+	}
+	return canonicalWorkspace(workspace), nil
 }
 
 func canonicalWorkspace(workspace string) string {

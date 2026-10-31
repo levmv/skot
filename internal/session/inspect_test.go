@@ -178,6 +178,33 @@ func TestCatalogReportsMetadataErrorsAndInspectValidatesHistory(t *testing.T) {
 	}
 }
 
+func TestJournalWorkspaceLengthDoesNotBlockOtherSessions(t *testing.T) {
+	home := t.TempDir()
+	good := createCatalogSession(t, home, t.TempDir(), "readable session")
+	bad := createCatalogSession(t, home, "/"+strings.Repeat("missing/", 8192), "oversized workspace")
+	entries, err := InspectAll(t.Context(), home)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("catalog: %+v, %v", entries, err)
+	}
+	for _, entry := range entries {
+		if entry.ID == bad && !strings.Contains(entry.Error, "session workspace exceeds") {
+			t.Fatalf("missing workspace diagnostic: %+v", entry)
+		}
+		if entry.ID == good && (entry.Error != "" || entry.Title != "readable session") {
+			t.Fatalf("unrelated session affected: %+v", entry)
+		}
+	}
+	if _, err := Inspect(t.Context(), home, bad); err == nil || !strings.Contains(err.Error(), "session workspace exceeds") {
+		t.Fatalf("inspect oversized workspace: %v", err)
+	}
+	if _, err := Resolve(home, "", bad); err == nil || !strings.Contains(err.Error(), "session workspace exceeds") {
+		t.Fatalf("resolve oversized workspace: %v", err)
+	}
+	if err := Delete(t.Context(), home, bad, nil); err != nil {
+		t.Fatalf("delete oversized workspace: %v", err)
+	}
+}
+
 func TestDeleteCleansUpWithoutParentJournal(t *testing.T) {
 	for _, parentExists := range []bool{false, true} {
 		t.Run(fmt.Sprint(parentExists), func(t *testing.T) {

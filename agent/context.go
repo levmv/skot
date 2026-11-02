@@ -163,8 +163,45 @@ func (runtime *Runtime) contextReport(state State, pendingInputs ...string) Cont
 }
 
 func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, pendingInputs ...string) ContextReport {
+	var tools []model.ToolSpec
+	if includeTools {
+		for _, tool := range runtime.tools {
+			tools = append(tools, tool.Spec)
+		}
+	}
+	items, boundary := runtime.projectedItemsForRequest(state, state.modelItems(), pendingInputs...)
+	return estimateContextReport(state, runtime.modelInfo.ContextWindow, runtime.instructions, tools, items[:boundary], items[boundary:])
+}
+
+// ContextReportForState estimates the next input using the last persisted
+// configuration. It excludes transient queued input and does not reload host
+// instructions. False means the journal has no effective configuration.
+// project supplies the selected route's Backend.ProjectModelItems policy;
+// nil retains all runtime-owned items and may overestimate routes that discard
+// reasoning. No model call is made.
+func ContextReportForState(state State, project func([]model.Item) []model.Item) (ContextReport, bool) {
+	if state.Configured == nil {
+		return ContextReport{}, false
+	}
+	config := state.Configured
+	imageStatus := state.ImageDelivery.Status
+	if config.RuntimePolicy.ImageInputUnsupported {
+		imageStatus = ImageDeliveryRejected
+	}
+	items := (model.ProviderContext{
+		Backend: state.Selection.Backend,
+		Epoch:   state.Selection.Epoch,
+	}).ProjectItems(state.modelItems(), nil)
+	if project != nil {
+		items = project(items)
+	}
+	items = projectImagesForDelivery(items, imageStatus)
+	return estimateContextReport(state, config.RuntimePolicy.ContextWindow, config.ModelContext.Instructions, config.ModelContext.Tools, items, nil), true
+}
+
+func estimateContextReport(state State, window int, instructions string, tools []model.ToolSpec, history, pending []model.Item) ContextReport {
 	report := ContextReport{
-		Window:           runtime.modelInfo.ContextWindow,
+		Window:           window,
 		CompactionCount:  state.CompactionCount,
 		ToolPruningCount: state.ToolPruningCount,
 	}
@@ -172,21 +209,18 @@ func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, 
 		reserve := min(max(report.Window/5, minContextReserve), maxContextReserve)
 		report.InputLimit = max(1, report.Window-reserve)
 	}
-	report.InstructionTokens = estimateTextTokens(runtime.instructions)
-	if runtime.instructions != "" {
+	report.InstructionTokens = estimateTextTokens(instructions)
+	if instructions != "" {
 		report.InstructionTokens += perMessageTokens
 	}
-	if includeTools {
-		for _, tool := range runtime.tools {
-			report.ToolTokens += estimateTextTokens(tool.Spec.Name) + estimateTextTokens(tool.Spec.Description) + estimateTextTokens(string(tool.Spec.InputSchema)) + perToolDefinitionTokens
-		}
+	for _, tool := range tools {
+		report.ToolTokens += estimateTextTokens(tool.Name) + estimateTextTokens(tool.Description) + estimateTextTokens(string(tool.InputSchema)) + perToolDefinitionTokens
 	}
 	if state.Compaction != nil {
 		report.SummaryTokens = estimateTextTokens(model.ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
 	}
-	items, boundary := runtime.projectedItemsForRequest(state, state.modelItems(), pendingInputs...)
-	report.HistoryTokens = estimateItemsTokens(items[:boundary])
-	report.PendingTokens = estimateItemsTokens(items[boundary:])
+	report.HistoryTokens = estimateItemsTokens(history)
+	report.PendingTokens = estimateItemsTokens(pending)
 	report.TotalInputTokens = report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens
 	if report.Window > 0 {
 		report.AvailableInputTokens = max(0, report.InputLimit-report.TotalInputTokens)

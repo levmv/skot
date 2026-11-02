@@ -20,6 +20,7 @@ import (
 type Snapshot struct {
 	Summary Summary
 	State   agent.State
+	Records []agent.Record // the same finite prefix used for State
 }
 
 func InspectAll(ctx context.Context, home string) ([]Summary, error) {
@@ -56,6 +57,7 @@ func Inspect(ctx context.Context, home, id string) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return snapshot, err
 	}
+	snapshot.Records = records
 	snapshot.State, err = agent.Replay(records)
 	if err != nil {
 		return snapshot, err

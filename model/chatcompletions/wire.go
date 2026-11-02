@@ -420,8 +420,14 @@ func (backend *Backend) normalizeFinishReason(reason string) (string, error) {
 // keeps all reasoning; current-turn replay keeps reasoning after the last user
 // message; the zero policy drops it.
 func (backend *Backend) ProjectModelItems(items []model.Item) []model.Item {
+	return backend.traits.ReasoningReplay.ProjectModelItems(items)
+}
+
+// ProjectModelItems applies the policy in place without a model connection.
+// The caller must first filter provider ownership, as for Backend.ProjectModelItems.
+func (policy ReasoningReplayPolicy) ProjectModelItems(items []model.Item) []model.Item {
 	lastUser := -1
-	if backend.traits.ReasoningReplay == ReasoningReplayCurrentTurn {
+	if policy == ReasoningReplayCurrentTurn {
 		for index, item := range items {
 			if item.Kind == model.ItemUserText {
 				lastUser = index
@@ -433,7 +439,7 @@ func (backend *Backend) ProjectModelItems(items []model.Item) []model.Item {
 	for index, item := range items {
 		if item.Kind == model.ItemReasoning {
 			keep := false
-			switch backend.traits.ReasoningReplay {
+			switch policy {
 			case ReasoningReplayAllTurns:
 				keep = true
 			case ReasoningReplayCurrentTurn:

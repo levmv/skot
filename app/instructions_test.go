@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/levmv/skot/agent"
 	workspacetools "github.com/levmv/skot/tools"
 )
 
@@ -76,6 +77,14 @@ func TestApplicationRefreshesSystemPromptSources(t *testing.T) {
 	run("recent question", "one", 1)
 	if _, err := application.Compact(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	saved, err := application.State(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	compacted, ok := agent.ContextReportForState(saved, backend.ProjectModelItems)
+	if !ok || compacted.CompactionCount != 1 || compacted != application.SessionStatus().ContextReport {
+		t.Fatalf("saved compaction context: %+v", compacted)
 	}
 	if prompt := backend.requests[len(backend.requests)-1].Instructions; !strings.Contains(prompt, "project one") || !strings.HasSuffix(prompt, "persona one") {
 		t.Fatalf("compaction changed the previous prompt: %q", prompt)

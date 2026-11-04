@@ -120,6 +120,8 @@ func (usage *UsageAccumulator) Observe(raw jsontext.Value, protocol string, prof
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.CachedInputTokens, tokens.ReasoningTokens = values.InputDetails.Cached, values.OutputDetails.Reasoning
 		tokens.CacheWriteInputTokens = values.InputDetails.Write
+	case "systemone":
+		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 	case "openai_images":
 		tokens.InputTokens, tokens.OutputTokens = values.InputTokens, values.OutputTokens
 		tokens.InputTextTokens, tokens.InputImageTokens = values.InputDetails.Text, values.InputDetails.Image

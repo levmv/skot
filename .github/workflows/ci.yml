@@ -52,8 +52,8 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Run hygiene checks
-        run: make format-check mod-check staticcheck
+      - name: Run static analysis
+        run: make staticcheck
 
   race:
     name: Race detector

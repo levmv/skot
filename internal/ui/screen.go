@@ -23,7 +23,6 @@ import (
 const (
 	transcriptGutter   = 2
 	userMarker         = "›"
-	userBarMarker      = "┃"
 	resizeInterval     = 75 * time.Millisecond
 	transcriptMaxDelay = 200 * time.Millisecond
 	themeQueryTimeout  = 150 * time.Millisecond

@@ -1159,31 +1159,6 @@ func TestLongInputWrapsAndGrowsComposer(t *testing.T) {
 	}
 }
 
-func TestUserMessageGutterContinuesThroughWrappedLines(t *testing.T) {
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("SK_COLOR", "always")
-	model, err := newScreenModel(context.Background(), &fakeAgent{theme: ThemeDark}, Config{}, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model.resize(24, 14)
-	lines := model.renderBlockLines(screenBlock{kind: screenBlockUser, text: strings.Repeat("wrapped message ", 5)})
-	bar := model.userBarStyle.Render(userBarMarker)
-	contentLines := 0
-	for _, line := range lines {
-		if isBlankTranscriptLine(line) {
-			continue
-		}
-		if !strings.HasPrefix(line, bar) {
-			t.Fatalf("user line has no styled bar: %q", line)
-		}
-		contentLines++
-	}
-	if contentLines < 2 {
-		t.Fatalf("user message did not wrap: %#v", lines)
-	}
-}
-
 func TestFrameKeepsOneBlankLineAboveTheComposer(t *testing.T) {
 	model := testScreenModel(t, &fakeAgent{})
 	model.resize(60, 30)

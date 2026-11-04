@@ -662,8 +662,9 @@ func (m screenModel) renderAssistantLines(block screenBlock) []string {
 }
 
 func (m screenModel) renderUserBlock(block screenBlock) []string {
-	// Keep the bar on wrapped lines so the whole message reads as one block.
-	bar := m.userBarStyle.Render(userBarMarker)
+	// Paint a space so terminal selections contain no decorative glyph. Keep
+	// the background on wrapped and empty lines to mark the whole message.
+	bar := m.userBarStyle.Render(" ")
 	blank := m.marked(" ", "")
 	lines := []string{blank, blank}
 	var text strings.Builder

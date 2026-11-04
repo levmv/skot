@@ -22,9 +22,8 @@ type terminalPalette struct {
 	// warning sits between muted and error: it calls attention to a state or a
 	// cost without presenting it as a failure.
 	warning color.Color
-	// userBar marks user messages and should sit below muted text: it is a
-	// scanning aid, not something to read, so it fades toward the background
-	// rather than away from it.
+	// userBar is the background of the user-message gutter cell. Keep it subtle
+	// so a continuous strip helps scanning without competing with the text.
 	userBar color.Color
 }
 
@@ -93,7 +92,7 @@ func (m *screenModel) applyTerminalTheme(dark bool) {
 		m.errorStyle = m.errorStyle.Foreground(palette.error)
 		m.successStyle = m.successStyle.Foreground(palette.success)
 		m.warningStyle = m.warningStyle.Foreground(palette.warning)
-		m.userBarStyle = m.userBarStyle.Foreground(palette.userBar)
+		m.userBarStyle = m.userBarStyle.Background(palette.userBar)
 	}
 	m.markdown = newMarkdownRenderer(m.useStyle, palette)
 	// Transcript lines are cached after styling, so a palette change must

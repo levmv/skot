@@ -210,8 +210,15 @@ func appendContent(contents []content, role string, parts []part) []content {
 		return contents
 	}
 	if len(contents) != 0 && contents[len(contents)-1].Role == role {
-		contents[len(contents)-1].Parts = append(contents[len(contents)-1].Parts, parts...)
-		return contents
+		previous := &contents[len(contents)-1]
+		// Keep function responses separate from ordinary user input. Gemini
+		// can reject a functionResponse followed by text in the same content
+		// as "Requests ending with a model turn are not supported".
+		// https://github.com/router-for-me/CLIProxyAPI/issues/5607
+		if role != "user" || (previous.Parts[len(previous.Parts)-1].FunctionResponse == nil) == (parts[0].FunctionResponse == nil) {
+			previous.Parts = append(previous.Parts, parts...)
+			return contents
+		}
 	}
 	return append(contents, content{Role: role, Parts: parts})
 }

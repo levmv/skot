@@ -176,6 +176,58 @@ func TestImagesAndFunctionResults(t *testing.T) {
 	}
 }
 
+func TestToolResultsKeepFollowingInputInSeparateTurn(t *testing.T) {
+	for _, kind := range []model.ItemKind{model.ItemUserText, model.ItemBoundaryText} {
+		t.Run(string(kind), func(t *testing.T) {
+			backend := newBackend(t, &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				var body struct {
+					Contents []struct {
+						Role  string `json:"role"`
+						Parts []struct {
+							Text     string `json:"text"`
+							Response *struct {
+								Name     string            `json:"name"`
+								Response map[string]string `json:"response"`
+							} `json:"functionResponse"`
+						} `json:"parts"`
+					} `json:"contents"`
+				}
+				if err := json.UnmarshalRead(request.Body, &body); err != nil {
+					t.Fatal(err)
+				}
+				if len(body.Contents) != 4 {
+					t.Fatalf("tool results and following input must have separate turns: %+v", body.Contents)
+				}
+				results, input := body.Contents[2], body.Contents[3]
+				if results.Role != "user" || len(results.Parts) != 2 || input.Role != "user" || len(input.Parts) != 1 || input.Parts[0].Text != "continue" {
+					t.Fatalf("lost parallel results or following input: %+v", body.Contents)
+				}
+				for i, part := range results.Parts {
+					if part.Response == nil || part.Response.Name != "lookup" || part.Response.Response["output"] != fmt.Sprintf("result-%d", i) {
+						t.Fatalf("result %d = %+v", i, part)
+					}
+				}
+				return googleResponse("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Done\"}]},\"finishReason\":\"STOP\"}]}\n\n"), nil
+			})})
+			request := model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "look up both"}}}
+			for i := range 2 {
+				request.Items = append(request.Items, model.Item{Kind: model.ItemToolCall, ResponseID: "response", ToolCall: &model.ToolCall{
+					ID: fmt.Sprintf("call-%d", i), Name: "lookup", RawArguments: "{}",
+				}})
+			}
+			for i := range 2 {
+				request.Items = append(request.Items, model.Item{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{
+					CallID: fmt.Sprintf("call-%d", i), Content: model.TextContent(fmt.Sprintf("result-%d", i)),
+				}})
+			}
+			request.Items = append(request.Items, model.Item{Kind: kind, Text: "continue"})
+			if _, err := backend.Complete(t.Context(), request, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func newBackend(t *testing.T, client *http.Client) *google.Backend {
 	t.Helper()
 	connection, err := transport.New(transport.Config{API: "gemini", Provider: "google", APIModel: "test-model", Endpoint: "https://example.test/models/test-model:streamGenerateContent", HTTPClient: client, Authorizer: transport.BearerToken("unused")})

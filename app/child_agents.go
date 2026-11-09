@@ -508,8 +508,7 @@ func (supervisor *childSupervisor) childModelLocked(requested string) (string, s
 	if _, allowed := supervisor.allowedModels[model]; !allowed {
 		return "", "", fmt.Errorf("model %q is not allowed for child agents; add it to agent_models", model)
 	}
-	effort, err := modelconfig.NormalizeReasoningEffort(model, "")
-	return model, effort, err
+	return model, modelconfig.DefaultReasoningEffort, nil
 }
 
 func (supervisor *childSupervisor) createChildLocked(ctx context.Context, parentID, model, effort string) (*childAgent, error) {

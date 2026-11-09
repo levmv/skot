@@ -21,8 +21,8 @@ type ReasoningEffortEncoding string
 const (
 	ReasoningEffortTopLevel ReasoningEffortEncoding = "reasoning_effort"
 	ReasoningEffortNested   ReasoningEffortEncoding = "reasoning"
-	// ReasoningEffortThinking uses DeepSeek's thinking switch. Enabled requests
-	// also carry reasoning_effort; disabled requests do not.
+	// ReasoningEffortThinking uses DeepSeek's thinking switch: "off" disables
+	// thinking; other values enable it and set reasoning_effort.
 	ReasoningEffortThinking ReasoningEffortEncoding = "thinking"
 )
 
@@ -55,9 +55,6 @@ func (traits RouteTraits) validate(reasoningEffort string) error {
 	case "", ReasoningEffortTopLevel, ReasoningEffortNested, ReasoningEffortThinking:
 	default:
 		return fmt.Errorf("unsupported reasoning effort encoding %q", traits.ReasoningEffort)
-	}
-	if reasoningEffort == reasoningEffortOff && traits.ReasoningEffort != ReasoningEffortThinking {
-		return fmt.Errorf("reasoning effort %q needs the %q encoding", reasoningEffortOff, ReasoningEffortThinking)
 	}
 	switch traits.ReasoningReplay {
 	case "", ReasoningReplayCurrentTurn, ReasoningReplayAllTurns:

@@ -389,6 +389,30 @@ func TestModelPickerPlacesDefaultEffortMidLadderAndClampsAtBothEnds(t *testing.T
 	}
 }
 
+func TestModelPickerPreservesCurrentEffortOutsideSuggestions(t *testing.T) {
+	fake := &fakeAgent{
+		model: "openai/future-model", reasoningEffort: "provider-level",
+		knownModels: []string{"openai/other-model"},
+		providers:   []ProviderStatus{{Name: "openai", Source: "auth store"}},
+	}
+	model := testScreenModel(t, fake)
+	model.resize(120, 24)
+	model.openModelPicker()
+	if selectedModelEffort(model.picker.items[0]) != "provider-level" {
+		t.Fatal("opening picker lost the current effort")
+	}
+	if selectedModelEffort(model.picker.items[1]) != "" {
+		t.Fatal("current effort leaked to another model")
+	}
+	if rendered := strings.Join(model.renderPicker(), "\n"); !strings.Contains(rendered, "provider-level") {
+		t.Fatalf("current effort is not visible: %s", rendered)
+	}
+	model, _ = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	if fake.reasoningEffort != "provider-level" || model.picker.kind != pickerNone {
+		t.Fatalf("selecting current model changed effort or kept picker open: effort=%q picker=%d", fake.reasoningEffort, model.picker.kind)
+	}
+}
+
 func TestModelPickerKeepsSearchForCustomModelEntry(t *testing.T) {
 	fake := &fakeAgent{
 		model:       "deepseek/model",

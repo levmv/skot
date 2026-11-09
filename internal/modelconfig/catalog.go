@@ -109,7 +109,7 @@ type Route struct {
 	PromptCache            bool
 	DropMismatchedThinking bool
 	ReasoningEffort        string
-	ReasoningEfforts       []string
+	ReasoningEfforts       []string // Menu choices; unverified routes may accept other values.
 	ChatTraits             chatcompletions.RouteTraits
 	ResponsesTraits        responsemodel.RouteTraits
 	Compatibility          Compatibility
@@ -486,6 +486,7 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 
 	declaration, declared := CatalogSpec(uri)
 	defaults := defaultModelSpec(provider)
+	customEndpoint := strings.TrimSpace(overrides.BaseURL) != ""
 	if providerDescription.RequireDeclaredModel && !declared && overrides.API == "" {
 		return Route{}, &modelapi.APIRequiredError{URI: uri}
 	}
@@ -519,15 +520,21 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 
 	usesReviewedProtocol := declared && api == declaredAPI
 	reasoningEfforts := defaults.ReasoningEfforts
-	if usesReviewedProtocol && declaration.ReasoningEfforts != nil {
+	if usesReviewedProtocol && !customEndpoint && declaration.ReasoningEfforts != nil {
 		reasoningEfforts = declaration.ReasoningEfforts
+	}
+	var supportedEfforts []string
+	// Menu choices only restrict values on reviewed native routes.
+	if usesReviewedProtocol && !customEndpoint {
+		supportedEfforts = reasoningEfforts
 	}
 	if api == AnthropicMessages {
 		// This adapter leaves reasoning effort at the provider default.
 		reasoningEfforts = []string{DefaultReasoningEffort}
+		supportedEfforts = reasoningEfforts
 	}
 	reasoningEfforts = append([]string(nil), reasoningEfforts...)
-	reasoningEffort, err = normalizeReasoningEffortForRoute(uri, reasoningEffort, reasoningEfforts)
+	reasoningEffort, err = normalizeReasoningEffortForRoute(uri, reasoningEffort, supportedEfforts)
 	if err != nil {
 		return Route{}, err
 	}
@@ -543,16 +550,16 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	baseURL := strings.TrimRight(strings.TrimSpace(providerDescription.BaseURL), "/")
 	header := providerDescription.Header.Clone()
 	requestEncoding := providerDescription.RequestEncoding
-	customEndpoint := strings.TrimSpace(overrides.BaseURL) != ""
 	if customEndpoint {
 		baseURL = strings.TrimRight(strings.TrimSpace(overrides.BaseURL), "/")
 		header = nil
 		requestEncoding = ""
 		compatibility = Unverified
-		// Cache extensions and cross-turn replay are route claims. A custom
-		// compatible endpoint starts from the conservative generic behavior.
+		// Reviewed model controls and replay are route claims. A custom endpoint
+		// uses the provider's default effort field without replay or caching.
 		traits.PromptCacheKey = false
 		traits.ReasoningReplay = ""
+		traits.ReasoningEffort = defaults.ChatTraits.ReasoningEffort
 		responsesTraits = responsemodel.RouteTraits{}
 	}
 	imageInputUnsupported := declaration.ImageInputUnsupported && !customEndpoint
@@ -638,8 +645,7 @@ func defaultModelSpec(provider string) Spec {
 		ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 		ReasoningReplay: chatcompletions.ReasoningReplayCurrentTurn,
 	}
-	// Undeclared routes expose only the conservative default/high vocabulary;
-	// route-specific values require a reviewed declaration.
+	// These are menu suggestions, not a vocabulary restriction for unknown routes.
 	efforts := []string{DefaultReasoningEffort, "high"}
 	switch provider {
 	case "deepseek":
@@ -651,7 +657,6 @@ func defaultModelSpec(provider string) Spec {
 		traits.UseMaxCompletionTokens = true
 	case "ollama":
 		efforts = []string{DefaultReasoningEffort}
-		traits.ReasoningEffort = ""
 	}
 	responsesTraits := responsemodel.RouteTraits{}
 	if provider == "openai-codex" {

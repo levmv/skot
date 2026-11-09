@@ -89,6 +89,73 @@ func TestOutputTokenLimit(t *testing.T) {
 	}
 }
 
+func TestUnverifiedRoutesPassReasoningEffortToProvider(t *testing.T) {
+	for _, test := range []struct {
+		name, uri, api, baseURL, effort string
+		topLevel, nested, thinkingLevel string
+	}{
+		{name: "unknown model", uri: "openai/future-model", effort: " PROVIDER-LEVEL ", topLevel: "provider-level"},
+		{name: "unreviewed protocol", uri: "deepseek/deepseek-v4-flash", api: "responses", effort: "provider-level", nested: "provider-level"},
+		{name: "Gemini", uri: "google/future-model", effort: "provider-level", thinkingLevel: "provider-level"},
+		{name: "Ollama", uri: "ollama/future-model", effort: "max", topLevel: "max"},
+		{name: "custom OpenRouter", uri: "openrouter/vendor/future-model", baseURL: "https://gateway.example/v1", effort: "off", nested: "off"},
+		{name: "custom known model", uri: "deepseek/deepseek-v4-flash", baseURL: "https://gateway.example/v1", effort: "provider-level", topLevel: "provider-level"},
+		{name: "custom literal off", uri: "deepseek/deepseek-v4-flash", baseURL: "https://gateway.example/v1", effort: "off", topLevel: "off"},
+		{name: "custom route without native effort", uri: "opencode-go/glm-5.1", baseURL: "https://gateway.example/v1", effort: "max", topLevel: "max"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sent := false
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				sent = true
+				var wire struct {
+					Effort    string         `json:"reasoning_effort"`
+					Thinking  jsontext.Value `json:"thinking"`
+					Reasoning struct {
+						Effort string `json:"effort"`
+					} `json:"reasoning"`
+					GenerationConfig struct {
+						ThinkingConfig struct {
+							Level string `json:"thinkingLevel"`
+						} `json:"thinkingConfig"`
+					} `json:"generationConfig"`
+				}
+				if err := json.UnmarshalRead(request.Body, &wire); err != nil {
+					t.Fatal(err)
+				}
+				if wire.Effort != test.topLevel || wire.Reasoning.Effort != test.nested ||
+					wire.GenerationConfig.ThinkingConfig.Level != test.thinkingLevel || len(wire.Thinking) != 0 {
+					t.Fatalf("effort changed or used the wrong encoding: %+v", wire)
+				}
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"test rejection"}}`))}, nil
+			})}
+			selected, err := provider.Open(t.Context(), provider.Config{
+				URI: test.uri, API: test.api, BaseURL: test.baseURL, ReasoningEffort: test.effort,
+				APIKey: "test-key", ContextWindow: 128_000, HTTPClient: client,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := selected.Backend.Complete(t.Context(), model.Request{
+				Items: []model.Item{{Kind: model.ItemUserText, Text: "hello"}},
+			}, nil); !sent {
+				t.Fatalf("request did not reach provider: sent=%t, error=%v", sent, err)
+			}
+		})
+	}
+}
+
+func TestReasoningEffortRejectsKnownUnsupportedValues(t *testing.T) {
+	for _, config := range []provider.Config{
+		{URI: "deepseek/deepseek-v4-flash", ReasoningEffort: "provider-level"},
+		{URI: "opencode-go/glm-5.1", ReasoningEffort: "high"},
+		{URI: "anthropic/future-model", BaseURL: "https://gateway.example/v1", ReasoningEffort: "max"},
+	} {
+		if _, err := provider.Open(t.Context(), config); !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), "reasoning effort") {
+			t.Fatalf("%s effort %q: %v", config.URI, config.ReasoningEffort, err)
+		}
+	}
+}
+
 func TestRequestNotSentDistinguishesCancellationFromTransportFailure(t *testing.T) {
 	for _, api := range []string{"chat_completions", "responses", "anthropic_messages", "gemini"} {
 		t.Run(api, func(t *testing.T) {

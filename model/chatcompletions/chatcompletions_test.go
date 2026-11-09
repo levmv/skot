@@ -1087,25 +1087,6 @@ func TestCompleteRejectsEmptyFinishedResponse(t *testing.T) {
 	}
 }
 
-// A declaration that offers "off" must also pick an encoding able to express
-// it, otherwise the value would be sent as an effort the provider never defined.
-func TestNewRejectsOffWithoutTheThinkingEncoding(t *testing.T) {
-	_, err := New(Config{
-		Connection: newTestConnection(t, transport.Config{
-			API:        "chat_completions",
-			Provider:   "deepseek",
-			Endpoint:   "http://example.invalid/v1/chat/completions",
-			Authorizer: transport.BearerToken("unused"),
-			APIModel:   "deepseek-v4-flash",
-		}),
-		ReasoningEffort: "off",
-		Traits:          RouteTraits{ReasoningEffort: ReasoningEffortTopLevel},
-	})
-	if err == nil || !strings.Contains(err.Error(), "thinking") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func newTestConnection(t *testing.T, config transport.Config) *transport.Connection {
 	t.Helper()
 	connection, err := transport.New(config)

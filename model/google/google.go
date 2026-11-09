@@ -47,11 +47,6 @@ func New(config Config) (*Backend, error) {
 		return nil, model.MarkInvalidRequest(errors.New("a Gemini connection is required"))
 	}
 	effort := strings.ToLower(strings.TrimSpace(config.ReasoningEffort))
-	switch effort {
-	case "", "minimal", "low", "medium", "high":
-	default:
-		return nil, model.MarkInvalidRequest(fmt.Errorf("unsupported Gemini thinking level %q", effort))
-	}
 	return &Backend{connection: config.Connection, provider: config.Connection.Provider(), reasoningEffort: effort, imageInputUnsupported: config.ImageInputUnsupported}, nil
 }
 

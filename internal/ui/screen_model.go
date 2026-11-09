@@ -36,6 +36,9 @@ func (m *screenModel) openModelPicker() {
 		selected := ""
 		if strings.EqualFold(model, current) {
 			selected = currentEffort
+			if !slices.Contains(efforts, selected) {
+				efforts = append(efforts, selected)
+			}
 		}
 		effortIndex := slices.Index(efforts, selected)
 		if effortIndex < 0 {

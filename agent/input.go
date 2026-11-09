@@ -12,7 +12,10 @@ import (
 
 // Input contains a user message and captured instructions retained through compaction.
 type Input struct {
-	Text         string        `json:"text"`
+	Text string `json:"text"`
+	// Instructions are appended to the user message under a shared heading and
+	// retained through compaction. For system instructions, use Config.Instructions
+	// or Config.LoadInstructions.
 	Instructions []Instruction `json:"instructions,omitempty"`
 	// ReadOnlyPaths requests resource directories after delivery. The host must
 	// authorize them through Config.AuthorizeReadOnlyPaths on each tool call.
@@ -65,7 +68,7 @@ func (input Input) instructionsText() string {
 			parts[index] = "The user selected " + label + " again. Its instructions are already in this conversation."
 		}
 	}
-	return "Apply these attached instructions when relevant. Resolve relative file paths from the attachment's directory, when given.\n\n" + strings.Join(parts, "\n\n")
+	return "Additional user instructions:\n\n" + strings.Join(parts, "\n\n")
 }
 
 func (input Input) modelText() string {

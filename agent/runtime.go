@@ -53,8 +53,9 @@ type Config struct {
 	Model   modelapi.Info
 	Backend modelapi.Backend
 
-	Journal      Journal
-	Tools        []Tool
+	Journal Journal
+	Tools   []Tool
+	// Instructions is the base system prompt.
 	Instructions string
 	// LoadInstructions receives the normalized Instructions as its base and
 	// returns the complete system prompt. It runs before this Runtime first

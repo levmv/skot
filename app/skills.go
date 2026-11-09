@@ -129,6 +129,7 @@ func (application *Application) PrepareInput(text string, references ...string) 
 		var context strings.Builder
 		fmt.Fprintf(&context, "<skill name=\"%s\" path=\"%s\" directory=\"%s\">\n",
 			html.EscapeString(document.Metadata.Name), html.EscapeString(entry.Path), html.EscapeString(filepath.Dir(entry.Path)))
+		context.WriteString("Resolve relative paths from this skill's directory.\n\n")
 		context.WriteString(document.Body)
 		context.WriteString("\n</skill>")
 		totalBytes += context.Len()

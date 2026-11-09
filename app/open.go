@@ -70,6 +70,13 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
+	if strings.TrimSpace(config.ProxyURL) == "" {
+		config.ProxyURL = settings.Proxy
+	}
+	network, err := newNetworkClients(config.ProxyURL)
+	if err != nil {
+		return nil, model.MarkInvalidRequest(err)
+	}
 	root, err := workspacetools.ResolveWorkspaceRoot(config.Root)
 	if err != nil {
 		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize workspace: %w", err))
@@ -148,7 +155,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
-	resources := &openResources{processes: processes}
+	resources := &openResources{processes: processes, network: network}
 	processes.HideModelEnvironment(modelconfig.CredentialEnvironmentNames()...)
 	children, err := newChildSupervisor(home, settings.AgentModels, config.AgentModels)
 	if err != nil {
@@ -161,7 +168,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	builtInOptions := toolpolicy.BuiltInOptions{
 		DefaultIncludesLS: landlockProtectedPathsNeedBuiltInLS(workspacetools.BoundaryBackend(), layers.protection.Paths()),
 	}
-	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, catalog, processes, builtInOptions)
+	builtCatalog, err := buildToolCatalog(config, settings, settingsStore, catalog, processes, builtInOptions, network.service)
 	if err != nil {
 		return resources.fail(model.MarkInvalidRequest(err))
 	}
@@ -269,7 +276,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 			baseURL:                  config.BaseURL,
 			modelAPI:                 modelAPIOverride,
 			contextWindow:            config.ContextWindow,
-			metadataLookup:           modelconfig.OpenRouterContextWindow,
+			metadataLookup:           network.contextWindow,
+			network:                  network,
 			retryBudget:              config.RetryBudget,
 			streamIdleTimeout:        config.StreamIdleTimeout,
 			maxToolIterations:        config.MaxToolIterations,
@@ -297,7 +305,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		contextWindow:     config.ContextWindow,
 		credentials:       settingsStore,
 		masker:            masker,
-		metadataLookup:    modelconfig.OpenRouterContextWindow,
+		metadataLookup:    network.contextWindow,
+		httpClient:        network.model,
 		tools:             catalog,
 		programTools:      programSnapshots,
 		applicationBuild:  build,

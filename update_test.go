@@ -15,6 +15,40 @@ import (
 	"testing"
 )
 
+func TestUpdateUsesConfiguredProxyAcrossDownloadRedirects(t *testing.T) {
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	var hosts []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hosts = append(hosts, request.Host)
+		if request.Host == "releases.invalid" {
+			http.Redirect(writer, request, "http://downloads.invalid/asset", http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(writer, "downloaded through proxy")
+	}))
+	defer proxy.Close()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(fmt.Sprintf(`{"proxy":%q}`, proxy.URL)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := updateHTTPClient(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	request, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://releases.invalid/asset", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || string(body) != "downloaded through proxy" || strings.Join(hosts, ",") != "releases.invalid,downloads.invalid" {
+		t.Fatalf("download = %q, %v; proxy hosts = %v", body, err, hosts)
+	}
+}
+
 func TestUpdaterReplacesExecutableWithVerifiedRelease(t *testing.T) {
 	asset := "sk-linux-amd64"
 	binary := []byte("new sk binary")

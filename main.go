@@ -145,7 +145,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if len(invocation.args) != 0 {
 			return model.MarkInvalidRequest(errors.New("update does not accept arguments; put -- before the text to send it as a prompt"))
 		}
-		return runUpdateCommand(ctx, stdout)
+		return runUpdateCommand(ctx, stdout, config.home)
 	}
 	if invocation.resume && !session.LooksLikeIDPrefix(invocation.sessionPrefix) {
 		return model.MarkInvalidRequest(fmt.Errorf("%q is not a session ID; put -- before the text to send it as a prompt", invocation.sessionPrefix))

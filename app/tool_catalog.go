@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 
@@ -19,10 +20,10 @@ type builtToolCatalog struct {
 	toolSets            toolpolicy.ToolSets
 }
 
-func buildToolCatalog(config Config, settings state.Settings, credentials *state.Store, base []agent.Tool, processes *workspacetools.ProcessManager, builtInOptions toolpolicy.BuiltInOptions) (builtToolCatalog, error) {
+func buildToolCatalog(config Config, settings state.Settings, credentials *state.Store, base []agent.Tool, processes *workspacetools.ProcessManager, builtInOptions toolpolicy.BuiltInOptions, client *http.Client) (builtToolCatalog, error) {
 	catalog := append([]agent.Tool(nil), base...)
 	catalog = append(catalog, processes.Tools()...)
-	catalog = append(catalog, workspacetools.NewWebTools(webCredentialLookup(credentials))...)
+	catalog = append(catalog, workspacetools.NewWebToolsWithHTTPClient(webCredentialLookup(credentials), client)...)
 	var err error
 	if config.ConfigureTools != nil {
 		catalog, err = config.ConfigureTools(catalog)

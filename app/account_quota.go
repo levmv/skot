@@ -48,7 +48,7 @@ func (application *Application) AccountQuota() AccountQuota {
 // the background; attempts are rate-limited and concurrent refreshes coalesce.
 // A failed refresh leaves the last observation usable until it expires.
 func (application *Application) RefreshAccountQuota(ctx context.Context) error {
-	return application.refreshAccountQuota(ctx, nil)
+	return application.refreshAccountQuota(ctx, application.config.network.service)
 }
 
 func (application *Application) refreshAccountQuota(ctx context.Context, client *http.Client) error {

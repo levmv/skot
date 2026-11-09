@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,41 @@ import (
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/web"
 )
+
+type webToolRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn webToolRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestWebToolsUseSuppliedClientForSearchAndServiceFetch(t *testing.T) {
+	client := &http.Client{Transport: webToolRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := `{"content":"fetched page"}`
+		if request.Method == http.MethodPost {
+			body = `{"results":[{"url":"https://example.test/page","title":"search result"}]}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	catalog := NewWebToolsWithHTTPClient(nil, client)
+	for _, test := range []struct{ name, args, content string }{
+		{"web_fetch", `{"url":"https://example.test/page"}`, "fetched page"},
+		{"web_search", `{"query":"hello"}`, "search result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, tool := range catalog {
+				if tool.Spec.Name != test.name {
+					continue
+				}
+				result, err := tool.Run(t.Context(), test.args)
+				if err != nil || !strings.Contains(result.Content.Text(), test.content) {
+					t.Fatalf("%s = %+v, %v", test.name, result, err)
+				}
+				return
+			}
+			t.Fatalf("tool %s is missing", test.name)
+		})
+	}
+}
 
 func TestWebToolCatalogIsNativeAndValid(t *testing.T) {
 	catalog := NewWebTools(nil)

@@ -63,6 +63,7 @@ type applicationConfig struct {
 	modelAPI                 modelconfig.API
 	contextWindow            int
 	metadataLookup           modelconfig.ContextWindowLookup
+	network                  networkClients
 	retryBudget              time.Duration
 	streamIdleTimeout        time.Duration
 	maxToolIterations        int
@@ -208,7 +209,10 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 	if err != nil {
 		return model.MarkInvalidRequest(err)
 	}
-	backend, _, err := modelconfig.BuildBackend(route, application.config.settings, modelconfig.BackendOptions{UseEnvironment: true, RequireCredential: true, Masker: application.config.masker})
+	backend, _, err := modelconfig.BuildBackend(route, application.config.settings, modelconfig.BackendOptions{
+		UseEnvironment: true, RequireCredential: true, Masker: application.config.masker,
+		HTTPClient: application.config.network.model,
+	})
 	if err != nil {
 		return err
 	}
@@ -695,6 +699,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		credentials:       settings,
 		masker:            masker,
 		metadataLookup:    application.config.metadataLookup,
+		httpClient:        application.config.network.model,
 		tools:             tools,
 		programTools:      programTools,
 		applicationBuild:  application.config.applicationBuild,
@@ -803,6 +808,7 @@ func (application *Application) Close() error {
 	// Keep the journal owned until child and process cleanup has completed.
 	// A new executor must not adopt work still being stopped by this owner.
 	sessionErr := currentSession.close()
+	application.config.network.close()
 	return errors.Join(childErr, sessionErr, processErr)
 }
 

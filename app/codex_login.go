@@ -42,7 +42,7 @@ func (application *Application) BeginBrowserLogin(ctx context.Context, provider 
 		return nil, errors.New("auth store is unavailable")
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	flow, err := codexauth.Start(ctx)
+	flow, err := codexauth.Start(ctx, application.config.network.service)
 	if err != nil {
 		cancel()
 		return nil, err

@@ -11,12 +11,14 @@ import (
 )
 
 type openResources struct {
+	network   networkClients
 	processes *workspacetools.ProcessManager
 	children  *childSupervisor
 	session   *liveSession
 }
 
 func (resources *openResources) fail(cause error) (*Application, error) {
+	defer resources.network.close()
 	var cleanupErr error
 	if resources.children != nil {
 		cleanupErr = errors.Join(cleanupErr, resources.children.Close())

@@ -50,6 +50,11 @@ type Config struct {
 	StreamIdleTimeout       time.Duration
 	MaxToolIterations       int
 	SystemPrompt            string
+	// ProxyURL overrides config.json's proxy for model requests, authentication,
+	// account metadata, and web services. Empty uses config.json, then proxy
+	// environment variables. NO_PROXY and loopback bypasses still apply.
+	// Direct page fetching always uses its own transport.
+	ProxyURL string
 	// LoadInstructions receives the current system and project instructions as
 	// its base and returns the complete system prompt. It runs before a new or
 	// resumed session first runs and after each compaction. Ordinary turns reuse

@@ -127,7 +127,7 @@ its size and time limits.
 Skot uses `~/.skot` by default. `SK_HOME` and `-home` select another data
 directory. It contains:
 
-- `config.json` — global configuration: custom tool sets, child-model
+- `config.json` — global configuration: proxy, custom tool sets, child-model
   allowlist, and protected paths;
 - `interactive.json` — UI state and interactive preferences managed by Skot;
 - `store.bin` — credentials managed by `/login` and `/logout`;
@@ -163,6 +163,7 @@ For example:
 
 | Field | Meaning |
 | --- | --- |
+| `proxy` | Proxy URL for Skot's HTTP requests, except direct page fetching. Empty uses environment settings; `NO_PROXY` applies. |
 | `tool_sets` | Named lists of tools. A custom definition replaces a built-in set with the same name. |
 | `agent_models` | Models the optional `agent` tool can choose instead of the parent's model. |
 | `protected_paths` | Paths hidden from the model's file tools and commands. Empty by default. |

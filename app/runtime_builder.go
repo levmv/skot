@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/levmv/skot/agent"
@@ -22,6 +23,7 @@ type runtimeBuilder struct {
 	credentials       modelconfig.CredentialStore
 	masker            *secretMasker
 	metadataLookup    modelconfig.ContextWindowLookup
+	httpClient        *http.Client
 	tools             []agent.Tool
 	programTools      []agent.ProgramToolSnapshot
 	applicationBuild  agent.BuildSnapshot
@@ -153,6 +155,7 @@ func (builder runtimeBuilder) modelForRoute(route modelconfig.Route, options mod
 		return model.Info{}, nil, model.MarkInvalidRequest(err)
 	}
 	options.Masker = builder.masker
+	options.HTTPClient = builder.httpClient
 	options.UseEnvironment = true
 	backend, _, err := modelconfig.BuildBackend(route, builder.credentials, options)
 	if err != nil {

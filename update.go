@@ -15,6 +15,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/levmv/skot/internal/network"
+	"github.com/levmv/skot/internal/state"
 )
 
 const (
@@ -54,16 +57,21 @@ type releaseVersion struct {
 	parts [3]int
 }
 
-func runUpdateCommand(ctx context.Context, output io.Writer) error {
+func runUpdateCommand(ctx context.Context, output io.Writer, home string) error {
 	if version == "dev" {
 		return errors.New("cannot update a development build; install a release build first")
 	}
+	client, err := updateHTTPClient(home)
+	if err != nil {
+		return err
+	}
+	defer client.CloseIdleConnections()
 	executablePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate the running executable: %w", err)
 	}
 	result, err := updater{
-		client:         &http.Client{Timeout: 5 * time.Minute},
+		client:         client,
 		releasesURL:    updateReleasesURL,
 		releaseBaseURL: updateReleaseBaseURL,
 		executablePath: executablePath,
@@ -80,6 +88,24 @@ func runUpdateCommand(ctx context.Context, output io.Writer) error {
 	}
 	_, err = fmt.Fprintf(output, "Updated Skot from %s to %s. Restart running Skot sessions to use the new version.\n", result.from, result.to)
 	return err
+}
+
+func updateHTTPClient(home string) (*http.Client, error) {
+	home, err := state.ResolveHome(home)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := state.ReadSettings(home)
+	if err != nil {
+		return nil, fmt.Errorf("load settings: %w", err)
+	}
+	proxy, err := network.Proxy(settings.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	client := network.NewHTTPClient(proxy)
+	client.Timeout = 5 * time.Minute
+	return client, nil
 }
 
 func (u updater) update(ctx context.Context) (updateResult, error) {

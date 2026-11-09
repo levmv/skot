@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -33,13 +34,20 @@ type WebCredentialLookup func(provider string) (string, error)
 
 type webTools struct {
 	credential WebCredentialLookup
+	httpClient *http.Client
 }
 
 // NewWebTools returns the stable known web catalog. Keenable keeps web_search
 // available without credentials; configured credentials are read at execution
 // time so login changes take effect without rebuilding the catalog.
 func NewWebTools(credential WebCredentialLookup) []agent.Tool {
-	web := &webTools{credential: credential}
+	return NewWebToolsWithHTTPClient(credential, nil)
+}
+
+// NewWebToolsWithHTTPClient borrows client for web service requests. Nil uses
+// the default client. Direct page fetching retains its built-in transport.
+func NewWebToolsWithHTTPClient(credential WebCredentialLookup, client *http.Client) []agent.Tool {
+	web := &webTools{credential: credential, httpClient: client}
 	return []agent.Tool{
 		{
 			Spec: model.ToolSpec{
@@ -123,7 +131,11 @@ func (handler *webTools) newFetchBackends() ([]webFetchBackend, error) {
 				continue
 			}
 		}
-		client, err := web.NewClient(web.Config{Provider: name, APIKey: token})
+		config := web.Config{Provider: name, APIKey: token}
+		if name != "http" {
+			config.HTTPClient = handler.httpClient
+		}
+		client, err := web.NewClient(config)
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +230,7 @@ func (handler *webTools) searchProviders() ([]webSearchProvider, error) {
 		if token == "" && name != "keenable" {
 			continue
 		}
-		client, err := web.NewClient(web.Config{Provider: name, APIKey: token})
+		client, err := web.NewClient(web.Config{Provider: name, APIKey: token, HTTPClient: handler.httpClient})
 		if err != nil {
 			return nil, err
 		}

@@ -65,8 +65,8 @@ type Login struct {
 	client    *http.Client
 }
 
-func Start(ctx context.Context) (*Login, error) {
-	return start(ctx, net.Listen, nil)
+func Start(ctx context.Context, client *http.Client) (*Login, error) {
+	return start(ctx, net.Listen, client)
 }
 
 func start(ctx context.Context, listen func(string, string) (net.Listener, error), client *http.Client) (*Login, error) {

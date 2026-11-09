@@ -17,6 +17,7 @@ import (
 )
 
 type Settings struct {
+	Proxy          string              `json:"proxy,omitempty"`
 	ToolSets       map[string][]string `json:"tool_sets,omitempty"`
 	AgentModels    []string            `json:"agent_models,omitempty"`
 	ProtectedPaths []string            `json:"protected_paths,omitempty"`
@@ -26,6 +27,7 @@ type Settings struct {
 // not turn a strict config decode into a startup failure. Their raw values are
 // deliberately never exposed through Settings or written back by this store.
 type configDocument struct {
+	Proxy          string              `json:"proxy,omitempty"`
 	ToolSets       map[string][]string `json:"tool_sets,omitempty"`
 	AgentModels    []string            `json:"agent_models,omitempty"`
 	ProtectedPaths []string            `json:"protected_paths,omitempty"`
@@ -40,6 +42,7 @@ type configDocument struct {
 
 func (document configDocument) settings() Settings {
 	return Settings{
+		Proxy:    document.Proxy,
 		ToolSets: document.ToolSets, AgentModels: document.AgentModels,
 		ProtectedPaths: document.ProtectedPaths,
 	}
@@ -110,14 +113,23 @@ func Open(home string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := privatefs.InspectTrustedRegularFile(store.path, "config file"); err != nil {
-		return nil, err
-	}
-	privatefs.TryRestrictPermissions(store.path)
-	if _, err := store.Settings(); err != nil {
+	if _, err := ReadSettings(home); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+// ReadSettings reads application configuration without opening credentials.
+func ReadSettings(home string) (Settings, error) {
+	if err := inspectHome(home); err != nil {
+		return Settings{}, err
+	}
+	path := filepath.Join(home, "config.json")
+	if err := privatefs.InspectTrustedRegularFile(path, "config file"); err != nil {
+		return Settings{}, err
+	}
+	privatefs.TryRestrictPermissions(path)
+	return (&Store{path: path}).Settings()
 }
 
 // OpenCredentials opens the credential store independently of application configuration.

@@ -41,8 +41,8 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | `-model-api api` | `SK_MODEL_API` | Override the protocol with `chat_completions`, `responses`, `anthropic_messages`, or `gemini`. |
 | `-base-url url` | `SK_BASE_URL` | Override the provider API base URL. |
 | `-context-window tokens` | — | Override model context metadata; `0` uses route metadata. |
-| `-retry-budget duration` | `SK_RETRY_BUDGET` | Time allowed for a model request, including retries and the delays between them. Default: `15m`. |
-| `-stream-idle-timeout duration` | `SK_STREAM_IDLE_TIMEOUT` | Maximum silence between stream events. Default: `5m`. |
+| `-retry-budget duration` | `SK_RETRY_BUDGET` | Total time allowed for one model request, including generation, retries, and delays. Default: `30m`. |
+| `-stream-idle-timeout duration` | `SK_STREAM_IDLE_TIMEOUT` | Maximum time without incoming bytes in a model stream. Default: `5m`. |
 | `-max-tool-iterations n` | `SK_MAX_TOOL_ITERATIONS` | Maximum rounds of tool calls in one run. Default: `128`; use `unlimited` to disable it. |
 | `-system-prompt text` | `SK_SYSTEM_PROMPT` | Replace the built-in system instructions. An empty value disables system and project instructions; `{{workspace_root}}` inserts the workspace root. |
 | `-system-prompt-file path` | `SK_SYSTEM_PROMPT_FILE` | Read system instructions from a file. It cannot be combined with `-system-prompt`. |

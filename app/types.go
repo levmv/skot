@@ -27,7 +27,7 @@ const (
 
 	// Defaults bound one logical model request, not a full agent run. A new
 	// budget starts after every successful model response.
-	DefaultRetryBudget       = 15 * time.Minute
+	DefaultRetryBudget       = 30 * time.Minute
 	DefaultStreamIdleTimeout = 5 * time.Minute
 )
 

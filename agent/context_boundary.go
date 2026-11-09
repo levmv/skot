@@ -16,9 +16,16 @@ type contextBoundary struct {
 // contextBoundaries cuts only after a complete model response and all its tool
 // results. User input and host events belong to the following exchange until a
 // model has seen them. Items from one response share a sequence and never split.
-// The last exchange always remains verbatim, even when it exceeds the soft tail
-// budget. Runs and conversation blocks remain execution/transcript structure.
+// The last exchange stays outside compaction, even above the soft tail budget.
+// Runs and conversation blocks remain execution/transcript structure.
 func (state State) contextBoundaries() []contextBoundary {
+	boundaries, _ := state.contextBoundariesWithLatest()
+	return boundaries
+}
+
+// The latest boundary is separate: emergency pruning may shorten its text
+// results, but compaction must keep the exchange. Zero means it is not complete.
+func (state State) contextBoundariesWithLatest() ([]contextBoundary, uint64) {
 	var boundaries []contextBoundary
 	pending := make(map[string]struct{})
 	var through uint64
@@ -59,7 +66,10 @@ func (state State) contextBoundaries() []contextBoundary {
 			ready = true
 		}
 	}
-	return boundaries
+	if ready {
+		return boundaries, through
+	}
+	return boundaries, 0
 }
 
 // Retain the authored inputs of the run owning the first remaining exchange.

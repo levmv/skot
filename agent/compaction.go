@@ -22,8 +22,9 @@ const (
 const compactionInstructions = `Act as a compaction engine for this coding session. Summarize the conversation above for reliable continuation. Preserve the objective and acceptance criteria, user constraints, decisions and reasons, modified files and current state, commands and tests with their results, errors and abandoned approaches, outstanding work and the next step, and explicit uncertainty. Be compact but concrete. Do not claim work was done unless the conversation says it was. Do not call tools. Output only the summary.`
 
 var (
-	errNoCompactionBoundary = errors.New("no completed older exchange is available to compact")
-	errCompactionNotNeeded  = errors.New("context is already within the compaction target")
+	errNoCompactionBoundary    = errors.New("no completed older exchange is available to compact")
+	errCompactionNotNeeded     = errors.New("context is already within the compaction target")
+	errCompactionInputTooLarge = errors.New("no complete exchange fits in the compaction model input")
 )
 
 // compactionPlan is tied to an exact journal state and a completed exchange.
@@ -181,7 +182,7 @@ func (runtime *Runtime) planCompactionForModelBoundary(state State, spec runRequ
 	}
 	targetEnd = runtime.compactionInputTargetEnd(state, spec, boundaries, targetEnd)
 	if targetEnd < 0 {
-		return compactionPlan{}, errors.New("no complete exchange fits in the compaction model input")
+		return compactionPlan{}, errCompactionInputTooLarge
 	}
 	boundary := boundaries[targetEnd]
 	return compactionPlan{

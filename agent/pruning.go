@@ -20,8 +20,19 @@ func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State
 	if targetEnd < 0 {
 		return Record{}, report, nil
 	}
+	return runtime.pruneToolResultsThroughOnce(ctx, state, spec, report, boundaries[targetEnd].through, false)
+}
+
+func (runtime *Runtime) pruneLatestToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, ContextReport, error) {
+	return runtime.pruneToolResultsThroughOnce(ctx, state, spec, report, state.latestTextToolPruningSequence(), true)
+}
+
+func (runtime *Runtime) pruneToolResultsThroughOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport, through uint64, emergency bool) (Record, ContextReport, error) {
+	if through == 0 {
+		return Record{}, report, nil
+	}
 	payload := ToolResultsPrunedRecord{
-		ThroughSequence: boundaries[targetEnd].through,
+		ThroughSequence: through,
 		HeadBytes:       defaultPrunedToolHeadBytes,
 		TailBytes:       defaultPrunedToolTailBytes,
 	}
@@ -35,7 +46,13 @@ func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State
 	projected := state
 	projected.ToolPruning = &payload
 	prunedReport := runtime.requestReport(projected, spec)
-	if !toolResultPruningIsDecisive(report, prunedReport) {
+	if emergency {
+		// Shortening unseen output is a last resort. Commit only a reduction
+		// that fits the known window, even if it exceeds the ordinary soft target.
+		if report.Window == 0 || prunedReport.TotalInputTokens >= report.TotalInputTokens || prunedReport.TotalInputTokens > prunedReport.InputLimit {
+			return Record{}, report, nil
+		}
+	} else if !toolResultPruningIsDecisive(report, prunedReport) {
 		return Record{}, report, nil
 	}
 	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1); err != nil {
@@ -46,6 +63,30 @@ func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State
 		return Record{}, report, err
 	}
 	return record, prunedReport, nil
+}
+
+func (state State) latestTextToolPruningSequence() uint64 {
+	_, through := state.contextBoundariesWithLatest()
+	if through == 0 {
+		return 0
+	}
+	first := state.firstVerbatimSequence()
+	if state.ToolPruning != nil {
+		if through <= state.ToolPruning.ThroughSequence {
+			return 0
+		}
+		first = max(first, state.ToolPruning.ThroughSequence+1)
+	}
+	// The existing projection also removes images. Do not extend it over any
+	// image still retained for the model, including images in mixed results.
+	for _, block := range state.Blocks {
+		for _, entry := range block.Entries {
+			if entry.Sequence >= first && entry.Sequence <= through && entry.Item.ToolResult != nil && entry.Item.ToolResult.Content.HasImage() {
+				return 0
+			}
+		}
+	}
+	return through
 }
 
 // Pruning changes the cached prefix just like compaction. Select it only when
@@ -75,8 +116,8 @@ func validateToolPruningBoundary(state State, payload ToolResultsPrunedRecord, r
 			break
 		}
 	}
-	if !found {
-		return fmt.Errorf("tool-result pruning at sequence %d does not follow a completed older exchange", recordSequence)
+	if !found && payload.ThroughSequence != state.latestTextToolPruningSequence() {
+		return fmt.Errorf("tool-result pruning at sequence %d does not follow an eligible completed exchange", recordSequence)
 	}
 	if state.ToolPruning != nil && payload.ThroughSequence <= state.ToolPruning.ThroughSequence {
 		return fmt.Errorf("tool-result pruning at sequence %d does not advance", recordSequence)
@@ -150,7 +191,7 @@ func toolResultTextPruning(content string, headBytes, tailBytes int) (headEnd, t
 	if omitted <= 0 {
 		return 0, 0, "", false
 	}
-	marker = fmt.Sprintf("\n[… %d bytes omitted from old tool result; full output remains in session journal …]\n", omitted)
+	marker = fmt.Sprintf("\n[… %d bytes omitted from tool result; some content may be unread. Re-read needed source portions; full output remains in session journal …]\n", omitted)
 	if headEnd+len(marker)+len(content)-tailStart >= len(content) {
 		return 0, 0, "", false
 	}

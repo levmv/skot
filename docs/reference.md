@@ -367,10 +367,9 @@ an outer container when whole-process-tree containment matters.
 instructions, tool definitions, rolling summary, history, and queued input.
 Reasoning data that will not be sent again is excluded.
 
-When a conversation gets too large for the model, Skot first tries to shorten
-older tool results. If that would not free enough space, it summarizes older
-work. Both can happen during a long task and keep recent exchanges in full;
-the task's user messages and selected instructions remain available.
+When a conversation gets too large for the model, Skot shortens tool results or
+summarizes older work as needed. This can happen during a long task; the task's
+user messages and selected instructions remain available.
 Use `/compact` between runs to request a summary yourself.
 
 `-context-window` overrides missing or incorrect route metadata.

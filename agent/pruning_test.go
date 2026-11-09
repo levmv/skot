@@ -27,7 +27,7 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 					break
 				}
 			}
-			if !strings.HasPrefix(result, "BEGIN\n") || !strings.HasSuffix(result, "\nEND") || !strings.Contains(result, "bytes omitted from old tool result") {
+			if !strings.HasPrefix(result, "BEGIN\n") || !strings.HasSuffix(result, "\nEND") || !strings.Contains(result, "bytes omitted") {
 				t.Fatalf("provider tool result = %q", result)
 			}
 			return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "final answer"}}, StopReason: "stop"}, nil
@@ -71,6 +71,176 @@ func TestAutomaticToolResultPruningPreservesJournalAndAvoidsCompaction(t *testin
 	}
 	if projectedResult == largeResult || !strings.Contains(projectedResult, "bytes omitted") {
 		t.Fatalf("projected result = %q", projectedResult)
+	}
+}
+
+func TestOversizedLatestToolResultsRecoverWithoutLosingJournal(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		olderHistory     bool
+		providerOverflow bool
+	}{
+		{name: "preflight"},
+		{name: "after compaction", olderHistory: true},
+		{name: "provider overflow", providerOverflow: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := &memoryJournal{}
+			if test.olderHistory {
+				seedCompletedAnswerHistory(t, journal)
+			}
+			const task = "Review both sections and preserve their constraints."
+			largeResult := "BEGIN\n" + strings.Repeat("x", 100*1024) + "\nEND"
+			assertShortenedResults := func(items []modelapi.Item) {
+				t.Helper()
+				assertCompleteExchanges(t, items)
+				results := 0
+				for _, item := range items {
+					if item.ToolResult != nil {
+						results++
+						if len(item.ToolResult.Content.Text()) >= len(largeResult) {
+							t.Fatal("latest tool result was not shortened")
+						}
+					}
+				}
+				if results != 2 {
+					t.Fatalf("recovery lost tool results: got %d, want 2", results)
+				}
+			}
+			calls := 0
+			backend := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				if isCompactionRequest(request) {
+					return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "Earlier work is complete."}}}, nil
+				}
+				calls++
+				if !itemsContainText(request.Items, task) {
+					t.Fatal("context reduction lost the task")
+				}
+				if calls == 1 {
+					return modelapi.Response{Items: []modelapi.Item{
+						{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}},
+						{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}},
+					}}, nil
+				}
+				if test.providerOverflow && calls == 2 {
+					return modelapi.Response{}, &modelapi.ProviderError{
+						Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge,
+					}
+				}
+				assertShortenedResults(request.Items)
+				return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}}}, nil
+			})
+			window := 32 * 1024
+			if test.providerOverflow {
+				window = 128 * 1024
+			}
+			runtime := newTestRuntime(t, Config{
+				Model:   modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: window},
+				Backend: backend, Journal: journal,
+				Tools: []Tool{{Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)}, Run: func(context.Context, string) (ToolOutput, error) {
+					return ToolOutput{Content: modelapi.TextContent(largeResult)}, nil
+				}}},
+			})
+			var events []Event
+			result, err := runtime.Run(t.Context(), task, func(event Event) { events = append(events, event) })
+			if err != nil || result.Answer != "done" {
+				t.Fatalf("run=%+v error=%v", result, err)
+			}
+			if !hasEvent(events, EventToolResultsPruned) || hasEvent(events, EventContextCompacted) != test.olderHistory {
+				t.Fatal("recovery skipped ordinary compaction or did not report shortened output")
+			}
+			state, err := Replay(journal.snapshot())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertShortenedResults(state.modelItems())
+			for _, item := range state.Items {
+				if item.ToolResult != nil && item.ToolResult.Content.Text() != largeResult {
+					t.Fatal("emergency pruning changed the original output")
+				}
+			}
+		})
+	}
+}
+
+func TestEmergencyToolPruningRequiresSafeUsefulReduction(t *testing.T) {
+	for _, test := range []struct {
+		name                                        string
+		window, responseBytes, wantCalls            int
+		image, failSummary, providerRejects, pruned bool
+	}{
+		{name: "mixed image result", window: 32 * 1024, image: true, wantCalls: 1},
+		{name: "response still too large", window: 32 * 1024, responseBytes: 100 * 1024, wantCalls: 1},
+		{name: "unknown window", providerRejects: true, wantCalls: 2},
+		{name: "compaction failed", window: 32 * 1024, failSummary: true, wantCalls: 1},
+		{name: "provider rejects the reduced retry", window: 128 * 1024, providerRejects: true, wantCalls: 3, pruned: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := &memoryJournal{}
+			if test.failSummary {
+				seedCompletedAnswerHistory(t, journal)
+			}
+			content := modelapi.TextContent(strings.Repeat("output ", 32*1024))
+			if test.image {
+				content = append(content, modelapi.ContentPart{Kind: modelapi.ContentPartImage, Image: &modelapi.ImageContent{MediaType: "image/png", Data: []byte{1, 2, 3}, Width: 10, Height: 5}})
+			}
+			calls := 0
+			summaryErr := errors.New("summary unavailable")
+			backend := modelFunc(func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
+				if isCompactionRequest(request) {
+					if !test.failSummary {
+						t.Fatal("unexpected summary call")
+					}
+					return modelapi.Response{}, modelapi.MarkInvalidRequest(summaryErr)
+				}
+				calls++
+				if calls > 1 {
+					if !test.providerRejects || calls > test.wantCalls {
+						t.Fatal("unrecoverable context reached the model")
+					}
+					return modelapi.Response{}, &modelapi.ProviderError{
+						Cause: modelapi.MarkProviderFailure(errors.New("payload too large")), Kind: modelapi.ProviderErrorRequestTooLarge,
+					}
+				}
+				items := []modelapi.Item{{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}}}
+				if test.responseBytes > 0 {
+					items = append([]modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: strings.Repeat("x", test.responseBytes)}}, items...)
+				}
+				return modelapi.Response{Items: items}, nil
+			})
+			runtime := newTestRuntime(t, Config{
+				Model:   modelapi.Info{BackendID: "test", Provider: "test", Model: "test", ContextWindow: test.window},
+				Backend: backend, Journal: journal,
+				Tools: []Tool{{Spec: modelapi.ToolSpec{Name: "inspect", InputSchema: jsontext.Value(`{"type":"object"}`)}, Run: func(context.Context, string) (ToolOutput, error) {
+					return ToolOutput{Content: content}, nil
+				}}},
+			})
+			_, runErr := runtime.Run(t.Context(), "Review the source.", nil)
+			if runErr == nil || (test.failSummary && !errors.Is(runErr, summaryErr)) || (test.providerRejects && !errors.Is(runErr, modelapi.ErrModelRequestTooLarge)) {
+				t.Fatalf("unrecoverable context error = %v", runErr)
+			}
+			state, err := Replay(journal.snapshot())
+			if err != nil || (state.ToolPruningCount > 0) != test.pruned || calls != test.wantCalls {
+				t.Fatalf("recovery: pruning=%d calls=%d error=%v", state.ToolPruningCount, calls, err)
+			}
+			items := state.Items
+			if !test.pruned {
+				items = state.VerbatimItems()
+			}
+			for _, item := range items {
+				if item.ToolResult != nil && (item.ToolResult.Content.Text() != content.Text() || item.ToolResult.Content.HasImage() != content.HasImage()) {
+					t.Fatal("failed recovery changed retained tool content")
+				}
+			}
+		})
+	}
+}
+
+func seedCompletedAnswerHistory(t *testing.T, journal *memoryJournal) {
+	t.Helper()
+	runtime := newTestRuntime(t, Config{Journal: journal, Backend: &scriptedModel{steps: []modelStep{directModelResponse(strings.Repeat("earlier analysis ", 1024))}}})
+	if _, err := runtime.Run(t.Context(), "Earlier task.", nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -195,7 +365,7 @@ func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
 			func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 				attempts++
 				for _, item := range request.Items {
-					if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "bytes omitted from old tool result") {
+					if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "bytes omitted") {
 						return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
 					}
 				}
@@ -241,7 +411,7 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 		Tools:   []Tool{tool},
 	})
 	result, err := runtime.Run(context.Background(), "new question", nil)
-	if result.Status != RunFailed || !errors.Is(err, modelapi.ErrModelRequestTooLarge) || !errors.Is(err, errCompactionNotNeeded) ||
+	if result.Status != RunFailed || !errors.Is(err, modelapi.ErrModelRequestTooLarge) ||
 		mainAttempts != 2 || summaryAttempts != 0 {
 		t.Fatalf("result/error/attempts = %#v / %v / %d/%d", result, err, mainAttempts, summaryAttempts)
 	}
@@ -370,7 +540,7 @@ func TestReplayRejectsToolPruningInsideUnansweredExchange(t *testing.T) {
 		HeadBytes:       10,
 		TailBytes:       10,
 	})
-	if _, err := Replay(journal.snapshot()); err == nil || !strings.Contains(err.Error(), "completed older exchange") {
+	if _, err := Replay(journal.snapshot()); err == nil || !strings.Contains(err.Error(), "completed exchange") {
 		t.Fatalf("invalid pruning replay error = %v", err)
 	}
 }
@@ -397,7 +567,7 @@ func TestToolPruningCannotAdvanceIntoUnansweredInput(t *testing.T) {
 		t.Fatalf("completed-prefix pruning: %v", err)
 	}
 	unsafe := ToolResultsPrunedRecord{ThroughSequence: state.Blocks[2].EndSequence, HeadBytes: 10, TailBytes: 10}
-	if err := validateToolPruningBoundary(state, unsafe, state.LastSequence+1); err == nil || !strings.Contains(err.Error(), "completed older exchange") {
+	if err := validateToolPruningBoundary(state, unsafe, state.LastSequence+1); err == nil || !strings.Contains(err.Error(), "completed exchange") {
 		t.Fatalf("unanswered input pruning error = %v", err)
 	}
 }

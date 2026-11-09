@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -130,28 +131,40 @@ func (runtime *Runtime) prepareRunRequestContext(ctx context.Context, live *stat
 // shrinkRunRequestOnce advances durable context maintenance by one step on a
 // successful return. Cheap pruning of old tool-result projections gets the
 // first chance; if it cannot advance its boundary, the oldest available
-// conversation prefix is summarized. The returned report describes the
+// conversation prefix is summarized. Only when compaction cannot advance may
+// the latest text results be shortened. The returned report describes the
 // request rebuilt from the committed state.
 func (runtime *Runtime) shrinkRunRequestOnce(ctx context.Context, live *stateReducer, spec runRequestSpec, report ContextReport, emit EmitFunc) (ContextReport, error) {
 	pruningRecord, nextReport, err := runtime.pruneOldToolResultsOnce(ctx, live.state, spec, report)
 	if err != nil {
 		return report, fmt.Errorf("prune old tool results: %w", err)
 	}
-	if pruningRecord.Sequence != 0 {
-		if err := live.apply(pruningRecord); err != nil {
-			return report, fmt.Errorf("apply committed tool-result pruning: %w", err)
+	message := "pruned old tool results"
+	if pruningRecord.Sequence == 0 {
+		_, compactErr := runtime.compactLocked(ctx, live, spec, emit)
+		report = runtime.requestReport(live.state, spec)
+		if compactErr == nil {
+			return report, nil
 		}
-		nextReport.ToolPruningCount = live.state.ToolPruningCount
-		runtime.publishSessionStatus(live.state)
-		emitEvent(emit, Event{Sequence: pruningRecord.Sequence, Kind: EventToolResultsPruned, Text: "pruned old tool results"})
-		return nextReport, nil
+		if !errors.Is(compactErr, errNoCompactionBoundary) && !errors.Is(compactErr, errCompactionNotNeeded) && !errors.Is(compactErr, errCompactionInputTooLarge) {
+			return report, fmt.Errorf("compact context: %w", compactErr)
+		}
+		pruningRecord, nextReport, err = runtime.pruneLatestToolResultsOnce(ctx, live.state, spec, report)
+		if err != nil {
+			return report, fmt.Errorf("prune latest tool results: %w", err)
+		}
+		if pruningRecord.Sequence == 0 {
+			return report, fmt.Errorf("compact context: %w", compactErr)
+		}
+		message = "shortened oversized tool results"
 	}
-
-	_, err = runtime.compactLocked(ctx, live, spec, emit)
-	if err != nil {
-		return runtime.requestReport(live.state, spec), fmt.Errorf("compact context: %w", err)
+	if err := live.apply(pruningRecord); err != nil {
+		return report, fmt.Errorf("apply committed tool-result pruning: %w", err)
 	}
-	return runtime.requestReport(live.state, spec), nil
+	nextReport.ToolPruningCount = live.state.ToolPruningCount
+	runtime.publishSessionStatus(live.state)
+	emitEvent(emit, Event{Sequence: pruningRecord.Sequence, Kind: EventToolResultsPruned, Text: message})
+	return nextReport, nil
 }
 
 func (runtime *Runtime) requestReport(state State, spec runRequestSpec) ContextReport {

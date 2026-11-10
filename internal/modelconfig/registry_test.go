@@ -64,3 +64,67 @@ func TestRegistryRequiresUsableProviderDefinitions(t *testing.T) {
 		})
 	}
 }
+
+func TestProtocolEndpointsRespectAPIAndBaseURLOverrides(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		provider  state.ProviderConfig
+		overrides Overrides
+		wantAPI   API
+		wantURL   string
+	}{
+		{
+			name: "declared protocol", wantAPI: AnthropicMessages,
+			wantURL: "https://opencode.ai/inference/go/anthropic/v1",
+		},
+		{
+			name: "invocation protocol", overrides: Overrides{API: Responses}, wantAPI: Responses,
+			wantURL: "https://opencode.ai/inference/go/openai/v1",
+		},
+		{
+			name: "configured provider protocol", provider: state.ProviderConfig{API: new("gemini")}, wantAPI: Gemini,
+			wantURL: "https://opencode.ai/inference/go/google/v1beta",
+		},
+		{
+			name: "configured model protocol",
+			provider: state.ProviderConfig{Models: map[string]state.ModelConfig{
+				"claude-haiku-5-5": {API: new("gemini")},
+			}},
+			wantAPI: Gemini, wantURL: "https://opencode.ai/inference/go/google/v1beta",
+		},
+		{
+			name: "configured endpoint", provider: state.ProviderConfig{BaseURL: new("https://gateway.example/v1/")},
+			wantAPI: AnthropicMessages, wantURL: "https://gateway.example/v1",
+		},
+		{
+			name:     "explicit default endpoint also wins",
+			provider: state.ProviderConfig{BaseURL: new("https://opencode.ai/inference/go/openai/v1")},
+			wantAPI:  AnthropicMessages, wantURL: "https://opencode.ai/inference/go/openai/v1",
+		},
+		{
+			name: "invocation endpoint", overrides: Overrides{BaseURL: "https://invocation.example/v1/"},
+			wantAPI: AnthropicMessages, wantURL: "https://invocation.example/v1",
+		},
+		{
+			name:      "invocation overrides configuration",
+			provider:  state.ProviderConfig{BaseURL: new("https://gateway.example/v1"), API: new("gemini")},
+			overrides: Overrides{BaseURL: "https://invocation.example/v1", API: Responses},
+			wantAPI:   Responses, wantURL: "https://invocation.example/v1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry, err := NewRegistry(map[string]state.ProviderConfig{"opencode-go": test.provider})
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.overrides.Registry = registry
+			route, err := Resolve("opencode-go/claude-haiku-5-5", "", test.overrides, Enrichment{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if route.API != test.wantAPI || route.BaseURL != test.wantURL {
+				t.Fatalf("route uses %s at %s, want %s at %s", route.API, route.BaseURL, test.wantAPI, test.wantURL)
+			}
+		})
+	}
+}

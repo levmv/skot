@@ -183,13 +183,14 @@ func (registry *Registry) Provider(name string) (ProviderSpec, error) {
 	}
 	if definition.BaseURL != nil {
 		baseURL := strings.TrimRight(strings.TrimSpace(*definition.BaseURL), "/")
-		if baseURL != strings.TrimRight(spec.BaseURL, "/") {
+		if baseURL != strings.TrimRight(spec.BaseURL, "/") || len(spec.APIBaseURLs) != 0 {
 			spec.CustomEndpoint = true
 			spec.Header = nil
 			spec.RequestEncoding = ""
 			spec.PromptCache = false
 		}
 		spec.BaseURL = baseURL
+		spec.APIBaseURLs = nil
 	}
 	if definition.API != nil {
 		spec.DefaultAPI = API(strings.ToLower(strings.TrimSpace(*definition.API)))

@@ -55,7 +55,7 @@ func TestGoogleRoutingUsesProviderCredentials(t *testing.T) {
 		provider, host, prefix, key string
 	}{
 		{"google", "generativelanguage.googleapis.com", "/v1beta", "google-fixture"},
-		{"opencode-go", "opencode.ai", "/inference/go/v1", "go-fixture"},
+		{"opencode-go", "opencode.ai", "/inference/go/google/v1beta", "go-fixture"},
 	} {
 		t.Run(test.provider, func(t *testing.T) {
 			captured := errors.New("request captured")

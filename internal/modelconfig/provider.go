@@ -2,6 +2,7 @@ package modelconfig
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -10,7 +11,10 @@ import (
 )
 
 type ProviderSpec struct {
-	BaseURL        string
+	BaseURL string
+	// APIBaseURLs selects a protocol-specific endpoint after API overrides.
+	// An explicit base URL replaces these defaults for every protocol.
+	APIBaseURLs    map[API]string
 	Header         http.Header
 	Credentialless bool
 	AuthNone       bool
@@ -56,7 +60,11 @@ var Providers = map[string]ProviderSpec{
 	"google":           {BaseURL: "https://generativelanguage.googleapis.com/v1beta", DefaultAPI: Gemini},
 	codexauth.Provider: {BaseURL: codexauth.BaseURL, DefaultAPI: Responses, RequestEncoding: transport.RequestEncodingZstd},
 	"opencode-go": {
-		BaseURL: "https://opencode.ai/inference/go/v1", DefaultAPI: ChatCompletions,
+		BaseURL: "https://opencode.ai/inference/go/openai/v1", DefaultAPI: ChatCompletions,
+		APIBaseURLs: map[API]string{
+			AnthropicMessages: "https://opencode.ai/inference/go/anthropic/v1",
+			Gemini:            "https://opencode.ai/inference/go/google/v1beta",
+		},
 		RequireDeclaredModel: true,
 	},
 	"ollama": {BaseURL: "http://localhost:11434/v1", Credentialless: true, DefaultAPI: ChatCompletions},
@@ -97,6 +105,7 @@ func Provider(provider string) (ProviderSpec, error) {
 		return ProviderSpec{}, fmt.Errorf("unsupported model provider %q", provider)
 	}
 	spec.Header = spec.Header.Clone()
+	spec.APIBaseURLs = maps.Clone(spec.APIBaseURLs)
 	return spec, nil
 }
 

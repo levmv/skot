@@ -127,6 +127,11 @@ var Catalog = []Spec{
 	// input limit (the full context window also includes output tokens).
 	// https://developers.openai.com/api/docs/guides/latest-model
 	{
+		URI: "openai/gpt-6.1-terra", Name: "GPT 6.1 Terra", API: Responses,
+		ContextWindow: 922_000, ReasoningEfforts: []string{"", "none", "low", "medium", "high", "xhigh", "max"},
+		ResponsesTraits: &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto, PromptCacheKey: true},
+	},
+	{
 		URI: "openai/gpt-6.1-sol", Name: "GPT 6.1 Sol", API: Responses,
 		ContextWindow: 922_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 		ResponsesTraits: &responsemodel.RouteTraits{ReasoningSummary: responsemodel.ReasoningSummaryAuto, PromptCacheKey: true},
@@ -149,6 +154,10 @@ var Catalog = []Spec{
 	// Subscription limits and efforts follow Codex model metadata, including
 	// max_context_window, rather than the public OpenAI API catalog.
 	// https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json
+	{
+		URI: "openai-codex/gpt-6.1-terra", Name: "ChatGPT · GPT 6.1 Terra", API: Responses,
+		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
 	{
 		URI: "openai-codex/gpt-6.1-sol", Name: "ChatGPT · GPT 6.1 Sol", API: Responses,
 		ContextWindow: 872_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max", "ultra"},
@@ -223,6 +232,11 @@ var Catalog = []Spec{
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{
+		URI: "anthropic/claude-fable-5-2", Name: "Claude Fable 5.2", API: AnthropicMessages,
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		DropMismatchedThinking: true, Compatibility: Unverified,
+	},
+	{
 		URI: "anthropic/claude-fable-5-1", Name: "Claude Fable 5.1", API: AnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
 		DropMismatchedThinking: true, Compatibility: Unverified,
@@ -241,9 +255,8 @@ var Catalog = []Spec{
 		ContextWindow:    1_048_576,
 		ReasoningEfforts: []string{"", "low", "medium", "high"},
 	},
-	// Availability: https://opencode.ai/inference/go/v1/models (2026-10-25).
-	// Protocols: https://opencode.ai/v2/docs/console/go/#endpoints
-	// Limits and effort vocabularies: https://models.dev/api.json (opencode-go).
+	// Availability, protocols, limits, and efforts:
+	// https://opencode.ai/inference/go/v1/models (2026-11-10).
 	{
 		URI: "opencode-go/gemini-4-argon", Name: "OpenCode Go · Gemini 4 Argon", API: Gemini,
 		ContextWindow:    1_048_576,
@@ -313,11 +326,6 @@ var Catalog = []Spec{
 		ResponsesTraits: &responsemodel.RouteTraits{},
 	},
 	{
-		URI: "opencode-go/grok-4.6", Name: "OpenCode Go · Grok 4.6", API: Responses,
-		ContextWindow: 500_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh"},
-		ResponsesTraits: &responsemodel.RouteTraits{},
-	},
-	{
 		URI: "opencode-go/muse-spark-1.3-contributor", Name: "OpenCode Go · Muse Spark 1.3 Contributor", API: Responses,
 		ContextWindow: 1_048_576, ReasoningEfforts: []string{"", "minimal", "low", "medium", "high", "xhigh"},
 		ResponsesTraits: &responsemodel.RouteTraits{},
@@ -347,16 +355,7 @@ var Catalog = []Spec{
 	// These routes reason, but do not publish an optional effort vocabulary or
 	// a reasoning replay contract for this endpoint.
 	{
-		URI: "opencode-go/glm-5.1", Name: "OpenCode Go · GLM-5.1", ContextWindow: 202_752,
-		ImageInputUnsupported: true,
-		ReasoningEfforts:      []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-	},
-	{
 		URI: "opencode-go/kimi-k2.7-code", Name: "OpenCode Go · Kimi K2.7 Code", ContextWindow: 262_144,
-		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
-	},
-	{
-		URI: "opencode-go/kimi-k2.6", Name: "OpenCode Go · Kimi K2.6", ContextWindow: 262_144,
 		ReasoningEfforts: []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
 	},
 	{
@@ -369,6 +368,13 @@ var Catalog = []Spec{
 		URI: "opencode-go/iceman-contributor-free", Name: "OpenCode Go · Iceman Contributor Free", ContextWindow: 262_144,
 		ImageInputUnsupported: true,
 		ReasoningEfforts:      []string{""}, ChatTraits: &chatcompletions.RouteTraits{},
+	},
+	// LongCat recommends retaining reasoning_content across turns in thinking mode.
+	// https://huggingface.co/meituan-longcat/LongCat-2.5#model-usage
+	{
+		URI: "opencode-go/longcat-2.5-free", Name: "OpenCode Go · LongCat 2.5 Free", ContextWindow: 1_000_000,
+		ReasoningEfforts: []string{""},
+		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
 	},
 	{
 		URI: "opencode-go/step-5-preview", Name: "OpenCode Go · Step 5 Preview", ContextWindow: 1_000_000,
@@ -390,17 +396,6 @@ var Catalog = []Spec{
 		ReasoningEfforts: []string{""},
 		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
 	},
-	{
-		URI: "opencode-go/mimo-v2.5", Name: "OpenCode Go · MiMo V2.5", ContextWindow: 1_000_000,
-		ReasoningEfforts: []string{""},
-		ChatTraits:       &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
-	},
-	{
-		URI: "opencode-go/mimo-v2.5-pro", Name: "OpenCode Go · MiMo V2.5 Pro", ContextWindow: 1_048_576,
-		ImageInputUnsupported: true,
-		ReasoningEfforts:      []string{""},
-		ChatTraits:            &chatcompletions.RouteTraits{ReasoningReplay: chatcompletions.ReasoningReplayAllTurns},
-	},
 	// Beam requires reasoning_content on every prior assistant message.
 	// https://developers.reflection.ai/reasoning#reasoning-in-multi-turn-conversations
 	{
@@ -410,6 +405,13 @@ var Catalog = []Spec{
 		ChatTraits: &chatcompletions.RouteTraits{
 			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
+		},
+	},
+	{
+		URI: "opencode-go/hy4", Name: "OpenCode Go · Hy4", ContextWindow: 983_010,
+		ReasoningEfforts: []string{"", "none", "high"},
+		ChatTraits: &chatcompletions.RouteTraits{
+			ReasoningEffort: chatcompletions.ReasoningEffortTopLevel,
 		},
 	},
 	{
@@ -444,10 +446,6 @@ var Catalog = []Spec{
 		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
 	},
 	{
-		URI: "opencode-go/minimax-m2.7", Name: "OpenCode Go · MiniMax M2.7", API: AnthropicMessages,
-		ContextWindow: 204_800, MaxOutputTokens: 131_072, ImageInputUnsupported: true, ReasoningEfforts: []string{""},
-	},
-	{
 		URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: AnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
 	},
@@ -456,15 +454,7 @@ var Catalog = []Spec{
 		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
 	},
 	{
-		URI: "opencode-go/qwen3.7-max", Name: "OpenCode Go · Qwen3.7 Max", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
-	},
-	{
 		URI: "opencode-go/qwen3.7-plus", Name: "OpenCode Go · Qwen3.7 Plus", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
-	},
-	{
-		URI: "opencode-go/qwen3.6-plus", Name: "OpenCode Go · Qwen3.6 Plus", API: AnthropicMessages,
 		ContextWindow: 1_000_000, MaxOutputTokens: 65_536, ReasoningEfforts: []string{""},
 	},
 }
@@ -566,7 +556,11 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	if usesReviewedProtocol && declaration.ResponsesTraits != nil {
 		responsesTraits = *declaration.ResponsesTraits
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(providerDescription.BaseURL), "/")
+	baseURL := providerDescription.APIBaseURLs[api]
+	if baseURL == "" {
+		baseURL = providerDescription.BaseURL
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	header := providerDescription.Header.Clone()
 	requestEncoding := providerDescription.RequestEncoding
 	if customEndpoint {

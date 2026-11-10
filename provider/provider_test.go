@@ -163,7 +163,7 @@ func TestUnverifiedRoutesPassReasoningEffortToProvider(t *testing.T) {
 		{name: "custom OpenRouter", uri: "openrouter/vendor/future-model", baseURL: "https://gateway.example/v1", effort: "off", nested: "off"},
 		{name: "custom known model", uri: "deepseek/deepseek-v4-flash", baseURL: "https://gateway.example/v1", effort: "provider-level", topLevel: "provider-level"},
 		{name: "custom literal off", uri: "deepseek/deepseek-v4-flash", baseURL: "https://gateway.example/v1", effort: "off", topLevel: "off"},
-		{name: "custom route without native effort", uri: "opencode-go/glm-5.1", baseURL: "https://gateway.example/v1", effort: "max", topLevel: "max"},
+		{name: "custom route without native effort", uri: "opencode-go/longcat-2.0", baseURL: "https://gateway.example/v1", effort: "max", topLevel: "max"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sent := false
@@ -209,7 +209,7 @@ func TestUnverifiedRoutesPassReasoningEffortToProvider(t *testing.T) {
 func TestReasoningEffortRejectsKnownUnsupportedValues(t *testing.T) {
 	for _, config := range []provider.Config{
 		{URI: "deepseek/deepseek-v4-flash", ReasoningEffort: "provider-level"},
-		{URI: "opencode-go/glm-5.1", ReasoningEffort: "high"},
+		{URI: "opencode-go/longcat-2.0", ReasoningEffort: "high"},
 		{URI: "anthropic/future-model", BaseURL: "https://gateway.example/v1", ReasoningEffort: "max"},
 	} {
 		if _, err := provider.Open(t.Context(), config); !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), "reasoning effort") {

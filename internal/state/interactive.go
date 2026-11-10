@@ -524,5 +524,9 @@ func pushModelHistory(history []modelHistoryDocument, selection modelHistoryDocu
 }
 
 func normalizeModelURI(model string) string {
-	return strings.ToLower(strings.TrimSpace(model))
+	provider, id, ok := strings.Cut(strings.TrimSpace(model), "/")
+	if !ok {
+		return strings.ToLower(strings.TrimSpace(model))
+	}
+	return strings.ToLower(strings.TrimSpace(provider)) + "/" + strings.TrimSpace(id)
 }

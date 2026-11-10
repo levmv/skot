@@ -17,6 +17,7 @@ import (
 // by initial, cleared, and resumed session runtimes. Session identity and model
 // selection remain per-build inputs.
 type runtimeBuilder struct {
+	modelRegistry     *modelconfig.Registry
 	baseURL           string
 	modelAPI          modelconfig.API
 	contextWindow     int
@@ -111,7 +112,7 @@ func (builder runtimeBuilder) activateRoute(ctx context.Context, params runtimeB
 }
 
 func (builder runtimeBuilder) modelOverrides(params runtimeBuildParams) modelconfig.Overrides {
-	overrides := modelconfig.Overrides{BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
+	overrides := modelconfig.Overrides{Registry: builder.modelRegistry, BaseURL: builder.baseURL, API: builder.modelAPI, ContextWindow: builder.contextWindow}
 	return overrides.WithSelection(params.modelURI, params.selectionAPI(), params.selectionContextWindow())
 }
 
@@ -127,7 +128,7 @@ func (params runtimeBuildParams) selectionAPI() string {
 	}
 	selection := params.resumedState.Selection
 	saved := strings.TrimSpace(selection.Provider) + "/" + strings.TrimSpace(selection.Model)
-	if !strings.EqualFold(strings.TrimSpace(params.modelURI), saved) {
+	if !modelconfig.SameModelURI(params.modelURI, saved) {
 		return ""
 	}
 	return string(modelconfig.APIFromBackendID(selection.Backend))
@@ -143,7 +144,7 @@ func (params runtimeBuildParams) selectionContextWindow() int {
 	}
 	selection := params.resumedState.Selection
 	saved := strings.TrimSpace(selection.Provider) + "/" + strings.TrimSpace(selection.Model)
-	if !strings.EqualFold(strings.TrimSpace(params.modelURI), saved) {
+	if !modelconfig.SameModelURI(params.modelURI, saved) {
 		return 0
 	}
 	return max(0, params.resumedState.Configured.RuntimePolicy.ContextWindow)
@@ -170,7 +171,7 @@ func restoredModelInfo(state agent.State, modelURI string) (model.Info, bool) {
 		return model.Info{}, false
 	}
 	savedURI := strings.TrimSpace(selection.Provider) + "/" + strings.TrimSpace(selection.Model)
-	if !strings.EqualFold(strings.TrimSpace(modelURI), savedURI) {
+	if !modelconfig.SameModelURI(modelURI, savedURI) {
 		return model.Info{}, false
 	}
 	info := model.Info{
@@ -193,7 +194,7 @@ func modelInfoMatchesURI(info model.Info, modelURI string) bool {
 		return false
 	}
 	want := strings.TrimSpace(info.Provider) + "/" + strings.TrimSpace(info.Model)
-	return strings.EqualFold(strings.TrimSpace(modelURI), want)
+	return modelconfig.SameModelURI(modelURI, want)
 }
 
 func (builder runtimeBuilder) newRuntime(params runtimeBuildParams, modelInfo model.Info, backend model.Backend) (*agent.Runtime, error) {

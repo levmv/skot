@@ -215,7 +215,7 @@ func TestLegacyRecentModelsKeyIsIgnoredAndDroppedOnTheNextWrite(t *testing.T) {
 }
 
 func TestModelHistoryLeadsWithTheSelectionAndStaysUniqueAndBounded(t *testing.T) {
-	history := []modelHistoryDocument{{Model: "OPENAI/Old", ReasoningEffort: "high"}, {Model: "deepseek/one"}}
+	history := []modelHistoryDocument{{Model: "OPENAI/old", ReasoningEffort: "high"}, {Model: "deepseek/one"}}
 	for index := range 30 {
 		history = append(history, modelHistoryDocument{Model: fmt.Sprintf("provider/model-%02d", index)})
 	}

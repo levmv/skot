@@ -23,18 +23,20 @@ type Config struct {
 	ImageInputUnsupported bool
 	Connection            *transport.Connection
 	ReasoningEffort       string
+	MaxOutputTokens       int
 	Traits                RouteTraits
 }
 
 type Backend struct {
-	imageInputUnsupported bool
-	connection            *transport.Connection
-	provider              string
-	apiModel              string
-	reasoningEffort       string
-	traits                RouteTraits
-	maxRequestBytes       int
-	maxCompletionBytes    int
+	imageInputUnsupported  bool
+	connection             *transport.Connection
+	provider               string
+	apiModel               string
+	reasoningEffort        string
+	defaultMaxOutputTokens int
+	traits                 RouteTraits
+	maxRequestBytes        int
+	maxCompletionBytes     int
 }
 
 // DefaultDrainOptions returns the backend's limits for trailing SSE events.
@@ -57,6 +59,9 @@ func (backend *Backend) backendID() string {
 func BackendID(provider string) string { return "chat_completions." + strings.TrimSpace(provider) }
 
 func New(config Config) (*Backend, error) {
+	if config.MaxOutputTokens < 0 {
+		return nil, modelapi.MarkInvalidRequest(errors.New("max output tokens cannot be negative"))
+	}
 	if config.Connection == nil || config.Connection.API() != "chat_completions" {
 		return nil, modelapi.MarkInvalidRequest(errors.New("a chat_completions connection is required"))
 	}
@@ -67,14 +72,15 @@ func New(config Config) (*Backend, error) {
 		return nil, modelapi.MarkInvalidRequest(err)
 	}
 	return &Backend{
-		imageInputUnsupported: config.ImageInputUnsupported,
-		connection:            config.Connection,
-		provider:              provider,
-		apiModel:              apiModel,
-		reasoningEffort:       reasoningEffort,
-		traits:                config.Traits,
-		maxRequestBytes:       productlimits.MaxModelRequestBytes,
-		maxCompletionBytes:    productlimits.MaxModelCompletionBytes,
+		imageInputUnsupported:  config.ImageInputUnsupported,
+		connection:             config.Connection,
+		provider:               provider,
+		apiModel:               apiModel,
+		reasoningEffort:        reasoningEffort,
+		defaultMaxOutputTokens: config.MaxOutputTokens,
+		traits:                 config.Traits,
+		maxRequestBytes:        productlimits.MaxModelRequestBytes,
+		maxCompletionBytes:     productlimits.MaxModelCompletionBytes,
 	}, nil
 }
 

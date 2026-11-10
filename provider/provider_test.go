@@ -32,6 +32,10 @@ func TestOutputTokenLimit(t *testing.T) {
 		{"openai/test", "responses", "max_output_tokens", 0},
 		{"anthropic/claude-opus-5", "", "max_tokens", 128_000},
 		{"google/test-model", "", "maxOutputTokens", 0},
+		{"router/test", "chat_completions", "max_tokens", 4096},
+		{"router/test", "responses", "max_output_tokens", 4096},
+		{"router/test", "anthropic_messages", "max_tokens", 4096},
+		{"router/test", "gemini", "maxOutputTokens", 4096},
 	} {
 		t.Run(test.uri+"/"+test.api, func(t *testing.T) {
 			var received map[string]jsontext.Value
@@ -42,9 +46,17 @@ func TestOutputTokenLimit(t *testing.T) {
 				// Only the outgoing request matters here; no generation is performed.
 				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"test rejection"}}`))}, nil
 			})}
-			selected, err := provider.Open(t.Context(), provider.Config{
+			config := provider.Config{
 				URI: test.uri, API: test.api, APIKey: "test-key", ContextWindow: 128_000, HTTPClient: client,
-			})
+			}
+			if strings.HasPrefix(test.uri, "router/") {
+				config.API = ""
+				config.Providers = map[string]provider.ProviderConfig{"router": {
+					BaseURL: new("https://router.example/v1"), API: new(test.api),
+					Models: map[string]provider.ModelConfig{"test": {MaxOutputTokens: new(test.defaultLimit)}},
+				}}
+			}
+			selected, err := provider.Open(t.Context(), config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -86,6 +98,56 @@ func TestOutputTokenLimit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNamedProviderConfigurationIsInstanceScoped(t *testing.T) {
+	t.Setenv("SKOT_TEST_NAMED_KEY", "ambient-secret")
+	open := func(endpoint string, window int) *provider.Model {
+		t.Helper()
+		sent := false
+		t.Cleanup(func() {
+			if !sent {
+				t.Errorf("no request reached %s", endpoint)
+			}
+		})
+		selected, err := provider.Open(t.Context(), provider.Config{
+			URI: "router/Vendor/Model:channel",
+			Providers: map[string]provider.ProviderConfig{"router": {
+				BaseURL: new(endpoint), API: new("chat_completions"),
+				APIKeyEnv: new("SKOT_TEST_NAMED_KEY"), Auth: new("none"),
+				Models: map[string]provider.ModelConfig{"Vendor/Model:channel": {API: new("responses"), ContextWindow: new(window)}},
+			}},
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				sent = true
+				if request.URL.String() != endpoint+"/responses" || request.Header.Get("Authorization") != "" {
+					t.Errorf("wrong instance route or unexpected authentication: %s", request.URL)
+				}
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"test rejection"}}`))}, nil
+			})},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if selected.Info.ContextWindow != window {
+			t.Fatalf("context = %d, want %d", selected.Info.ContextWindow, window)
+		}
+		return selected
+	}
+	first := open("https://first.example/v1", 200_000)
+	second := open("https://second.example/v1", 300_000)
+	for _, selected := range []*provider.Model{first, second} {
+		_, _ = selected.Backend.Complete(t.Context(), model.Request{Items: []model.Item{{Kind: model.ItemUserText, Text: "hello"}}}, nil)
+	}
+	if _, err := provider.Open(t.Context(), provider.Config{URI: "router/test", APIKey: "test-key"}); err == nil {
+		t.Fatal("configured provider leaked into the built-in catalog")
+	}
+	t.Setenv("SKOT_TEST_NAMED_KEY", "")
+	_, err := provider.Open(t.Context(), provider.Config{URI: "router/test", Providers: map[string]provider.ProviderConfig{"router": {
+		BaseURL: new("https://router.example/v1"), API: new("chat_completions"), APIKeyEnv: new("SKOT_TEST_NAMED_KEY"),
+	}}})
+	if !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), "SKOT_TEST_NAMED_KEY") {
+		t.Fatalf("missing configured credential: %v", err)
 	}
 }
 

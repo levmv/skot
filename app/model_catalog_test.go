@@ -30,7 +30,7 @@ func TestKnownModelURIsPreferCurrentWorkspaceAndRecentBeforeCatalog(t *testing.T
 	if err := store.SetModelSelection("deepseek/saved-model", "high", ""); err != nil {
 		t.Fatal(err)
 	}
-	models := knownModelURIList(knownModelSelections(store, "openai/current-model", ""))
+	models := knownModelURIList(knownModelSelections(store, "openai/current-model", "", nil))
 	wantPrefix := []string{"openai/current-model", "deepseek/saved-model", "openrouter/recent-model"}
 	if len(models) < len(wantPrefix) || !slices.Equal(models[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("models = %#v", models)
@@ -211,7 +211,7 @@ func knownModelURIList(selections []modelSelection) []string {
 }
 
 func TestKnownModelURIsDeduplicateCaseInsensitively(t *testing.T) {
-	models := knownModelURIList(knownModelSelections(nil, "DEEPSEEK/deepseek-flash", ""))
+	models := knownModelURIList(knownModelSelections(nil, "DEEPSEEK/deepseek-flash", "", nil))
 	count := 0
 	for _, model := range models {
 		if model == "DEEPSEEK/deepseek-flash" || model == "deepseek/deepseek-flash" {

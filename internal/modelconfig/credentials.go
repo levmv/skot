@@ -57,6 +57,7 @@ type BearerAuthorizer struct {
 	AllowMissing   bool
 	APIKey         string
 	UseEnvironment bool
+	Environment    *string
 }
 
 func (authorizer BearerAuthorizer) Authorize(_ context.Context, request *http.Request) error {
@@ -113,17 +114,25 @@ func (authorizer BearerAuthorizer) token() (string, error) {
 	if token := strings.TrimSpace(authorizer.APIKey); token != "" {
 		return token, nil
 	}
-	token, _, err := CredentialForProvider(authorizer.Store, authorizer.Provider, authorizer.UseEnvironment)
+	environment := ProviderEnvironment(authorizer.Provider)
+	if authorizer.Environment != nil {
+		environment = *authorizer.Environment
+	}
+	token, _, err := credentialForEnvironment(authorizer.Store, authorizer.Provider, authorizer.UseEnvironment, environment)
 	if err != nil {
 		return "", err
 	}
 	if token == "" && !authorizer.AllowMissing {
-		return "", missingProviderCredentialError(authorizer.Provider, authorizer.ModelURI)
+		return "", missingProviderCredentialErrorForEnvironment(authorizer.Provider, authorizer.ModelURI, environment)
 	}
 	return token, nil
 }
 
 func CredentialForProvider(store CredentialStore, provider string, useEnvironment bool) (token, source string, err error) {
+	return credentialForEnvironment(store, provider, useEnvironment, ProviderEnvironment(provider))
+}
+
+func credentialForEnvironment(store CredentialStore, provider string, useEnvironment bool, environment string) (token, source string, err error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == codexauth.Provider {
 		tokens, err := StoredCodexTokens(store)
@@ -140,7 +149,7 @@ func CredentialForProvider(store CredentialStore, provider string, useEnvironmen
 		return "", "none", nil
 	}
 	if useEnvironment {
-		if token := strings.TrimSpace(os.Getenv(ProviderEnvironment(provider))); token != "" {
+		if token := strings.TrimSpace(os.Getenv(environment)); token != "" {
 			return token, "environment override", nil
 		}
 	}
@@ -193,12 +202,19 @@ func CredentialEnvironmentNames() []string {
 }
 
 func missingProviderCredentialError(provider, modelURI string) error {
+	return missingProviderCredentialErrorForEnvironment(provider, modelURI, ProviderEnvironment(provider))
+}
+
+func missingProviderCredentialErrorForEnvironment(provider, modelURI, environment string) error {
 	if provider == codexauth.Provider {
 		return fmt.Errorf("ChatGPT login is unavailable for model %q; supply OAuth credentials (in Skot, use /login openai-codex)", modelURI)
 	}
+	if environment == "" {
+		return fmt.Errorf("%s API key is unavailable for model %q; supply an API key or credentials (in Skot, use /login %s)", provider, modelURI, provider)
+	}
 	return fmt.Errorf(
 		"%s API key is unavailable for model %q; supply an API key or credentials (in Skot, set %s or use /login %s)",
-		provider, modelURI, ProviderEnvironment(provider), provider,
+		provider, modelURI, environment, provider,
 	)
 }
 

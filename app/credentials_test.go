@@ -73,7 +73,7 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("OPENAI_API_KEY", "")
-	if err := storeProviderCredential(t.Context(), store, " OpenAI ", "stored-key"); err != nil {
+	if err := storeProviderCredential(t.Context(), store, " OpenAI ", "stored-key", nil); err != nil {
 		t.Fatal(err)
 	}
 	request, _ := http.NewRequest(http.MethodPost, "https://example.test", nil)
@@ -93,7 +93,7 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 	if got := request.Header.Get("Authorization"); got != "Bearer environment-key" {
 		t.Fatalf("environment authorization = %q", got)
 	}
-	if err := deleteProviderCredential(t.Context(), store, "openai"); err == nil || !strings.Contains(err.Error(), "environment override") {
+	if err := deleteProviderCredential(t.Context(), store, "openai", nil); err == nil || !strings.Contains(err.Error(), "environment override") {
 		t.Fatalf("environment logout error = %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestOpenCodeGoCredentialUsesSubscriptionEnvironmentAndLoginURL(t *testing.T
 	if err != nil || token != "subscription-key" || source != "environment override" {
 		t.Fatalf("credential = %q/%q, %v", token, source, err)
 	}
-	statuses, err := providerStatuses(nil)
+	statuses, err := providerStatuses(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestAnthropicCredentialUsesNativeEnvironmentAndLoginURL(t *testing.T) {
 	if err != nil || token != "native-key" || source != "environment override" {
 		t.Fatalf("credential = %q/%q, %v", token, source, err)
 	}
-	statuses, err := providerStatuses(nil)
+	statuses, err := providerStatuses(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestProviderStatusesReportCredentialSource(t *testing.T) {
 	if err := store.SetAPIKey(t.Context(), "deepseek", "stored"); err != nil {
 		t.Fatal(err)
 	}
-	statuses, err := providerStatuses(store)
+	statuses, err := providerStatuses(store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

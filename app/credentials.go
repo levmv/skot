@@ -12,10 +12,10 @@ import (
 	"github.com/levmv/skot/internal/state"
 )
 
-func providerStatuses(store modelconfig.CredentialStore) ([]ProviderStatus, error) {
+func providerStatuses(store modelconfig.CredentialStore, registry *modelconfig.Registry) ([]ProviderStatus, error) {
 	statuses := make([]ProviderStatus, 0, len(modelconfig.CredentialCatalog))
-	for _, spec := range modelconfig.CredentialCatalog {
-		_, source, err := modelconfig.CredentialForProvider(store, spec.Name, true)
+	for _, spec := range registry.CredentialSpecs() {
+		_, source, err := registry.CredentialForProvider(store, spec.Name, true)
 		if err != nil {
 			return nil, err
 		}
@@ -31,16 +31,19 @@ func providerStatuses(store modelconfig.CredentialStore) ([]ProviderStatus, erro
 	return statuses, nil
 }
 
-func storeProviderCredential(ctx context.Context, store *state.Store, provider, token string) error {
+func storeProviderCredential(ctx context.Context, store *state.Store, provider, token string, registry *modelconfig.Registry) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	if provider == codexauth.Provider {
 		return errors.New("openai-codex requires browser login; use /login openai-codex")
 	}
-	if !modelconfig.KnownCredentialProvider(provider) {
+	if !registry.KnownCredentialProvider(provider) {
 		return fmt.Errorf("unsupported login provider %q", provider)
 	}
-	if strings.TrimSpace(os.Getenv(modelconfig.ProviderEnvironment(provider))) != "" {
-		return fmt.Errorf("%s is supplied by an environment override; unset %s to replace it", provider, modelconfig.ProviderEnvironment(provider))
+	if spec, err := registry.Provider(provider); err == nil && spec.AuthNone {
+		return fmt.Errorf("provider %q does not use an API key", provider)
+	}
+	if strings.TrimSpace(os.Getenv(registry.ProviderEnvironment(provider))) != "" {
+		return fmt.Errorf("%s is supplied by an environment override; unset %s to replace it", provider, registry.ProviderEnvironment(provider))
 	}
 	if store == nil {
 		return errors.New("auth store is unavailable")
@@ -51,13 +54,13 @@ func storeProviderCredential(ctx context.Context, store *state.Store, provider, 
 	return store.SetAPIKey(ctx, provider, token)
 }
 
-func deleteProviderCredential(ctx context.Context, store *state.Store, provider string) error {
+func deleteProviderCredential(ctx context.Context, store *state.Store, provider string, registry *modelconfig.Registry) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if !modelconfig.KnownCredentialProvider(provider) {
+	if !registry.KnownCredentialProvider(provider) {
 		return fmt.Errorf("unsupported logout provider %q", provider)
 	}
-	if strings.TrimSpace(os.Getenv(modelconfig.ProviderEnvironment(provider))) != "" {
-		return fmt.Errorf("%s is supplied by an environment override; unset %s to log out", provider, modelconfig.ProviderEnvironment(provider))
+	if strings.TrimSpace(os.Getenv(registry.ProviderEnvironment(provider))) != "" {
+		return fmt.Errorf("%s is supplied by an environment override; unset %s to log out", provider, registry.ProviderEnvironment(provider))
 	}
 	if store == nil {
 		return errors.New("auth store is unavailable")

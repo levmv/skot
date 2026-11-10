@@ -62,7 +62,7 @@ func newCodexTestApp(t *testing.T) *Application {
 		t.Fatal(err)
 	}
 	return &Application{
-		config: applicationConfig{settings: store, masker: newSecretMasker(store)},
+		config: applicationConfig{settings: store, masker: newSecretMasker(store, nil)},
 		state:  applicationState{session: newLiveSession("", runtime, nil, false)},
 	}
 }
@@ -155,7 +155,7 @@ func TestCodexNeverFallsBackToAPIKeyOrCustomEndpoint(t *testing.T) {
 	if _, err := backend.Complete(t.Context(), model.Request{}, nil); err == nil || !strings.Contains(err.Error(), "/login openai-codex") {
 		t.Fatalf("missing request credential = %v", err)
 	}
-	if err := storeProviderCredential(t.Context(), store, codexauth.Provider, "key"); err == nil {
+	if err := storeProviderCredential(t.Context(), store, codexauth.Provider, "key", nil); err == nil {
 		t.Fatal("accepted an API key as a subscription")
 	}
 	for _, override := range []modelconfig.Overrides{{BaseURL: "https://gateway.example/v1"}, {API: modelconfig.ChatCompletions}, {API: modelconfig.AnthropicMessages}} {
@@ -168,7 +168,7 @@ func TestCodexNeverFallsBackToAPIKeyOrCustomEndpoint(t *testing.T) {
 	if err := (modelconfig.CodexAuthorizer{Store: store}).Authorize(t.Context(), request); err == nil || request.Header.Get("Authorization") != "" {
 		t.Fatal("sent ChatGPT credentials to an unrelated endpoint")
 	}
-	if err := deleteProviderCredential(t.Context(), store, codexauth.Provider); err != nil {
+	if err := deleteProviderCredential(t.Context(), store, codexauth.Provider, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, source, err := modelconfig.CredentialForProvider(store, codexauth.Provider, true); err != nil || source != "none" {
@@ -192,7 +192,7 @@ func TestCodexRefreshIsSharedAcrossStoresAndMasksRotatedTokens(t *testing.T) {
 	if err := store.SetAPIKey(t.Context(), "deepseek", "other-key"); err != nil {
 		t.Fatal(err)
 	}
-	masker := newSecretMasker(store)
+	masker := newSecretMasker(store, nil)
 	var calls atomic.Int32
 	refreshed := testCodexTokens()
 	refreshed.RefreshToken = "rotated-private-refresh"

@@ -57,18 +57,22 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 	if !KnownAPI(route.API) {
 		return nil, nil, model.MarkInvalidRequest(fmt.Errorf("unsupported model API %q", route.API))
 	}
-	if options.RequireCredential && options.APIKey == "" && !route.CustomEndpoint && !route.Credentialless {
-		token, _, err := CredentialForProvider(credentials, route.Provider, options.UseEnvironment)
+	environment := ProviderEnvironment(route.Provider)
+	if route.CredentialEnvironment != nil {
+		environment = *route.CredentialEnvironment
+	}
+	if options.RequireCredential && options.APIKey == "" && (!route.CustomEndpoint || route.CredentialRequired) && !route.Credentialless {
+		token, _, err := credentialForEnvironment(credentials, route.Provider, options.UseEnvironment, environment)
 		if err != nil {
 			return nil, nil, err
 		}
 		if token == "" {
-			return nil, nil, model.MarkInvalidRequest(missingProviderCredentialError(route.Provider, route.URI))
+			return nil, nil, model.MarkInvalidRequest(missingProviderCredentialErrorForEnvironment(route.Provider, route.URI, environment))
 		}
 	}
 	bearer := BearerAuthorizer{
-		Store: credentials, Provider: route.Provider, ModelURI: route.URI, AllowMissing: route.CustomEndpoint || route.Credentialless, APIKey: options.APIKey,
-		UseEnvironment: options.UseEnvironment,
+		Store: credentials, Provider: route.Provider, ModelURI: route.URI, AllowMissing: route.CustomEndpoint && !route.CredentialRequired || route.Credentialless, APIKey: options.APIKey,
+		UseEnvironment: options.UseEnvironment, Environment: route.CredentialEnvironment,
 	}
 	var authorizer transport.Authorizer = bearer
 	if route.Provider == "openai-codex" {
@@ -83,6 +87,9 @@ func BuildBackend(route Route, credentials CredentialStore, options BackendOptio
 		authorizer = APIKeyAuthorizer(bearer)
 	case Gemini:
 		authorizer = GoogleAuthorizer(bearer)
+	}
+	if route.AuthNone && options.APIKey == "" {
+		authorizer = nil
 	}
 	return BuildConfiguredBackend(route, options.HTTPClient, authorizer)
 }
@@ -117,12 +124,14 @@ func BuildConfiguredBackend(route Route, client *http.Client, authorizer transpo
 	switch route.API {
 	case ChatCompletions:
 		backend, err = chatcompletions.New(chatcompletions.Config{
+			MaxOutputTokens:       route.MaxOutputTokens,
 			ImageInputUnsupported: route.ImageInputUnsupported,
 			Connection:            connection,
 			ReasoningEffort:       route.ReasoningEffort, Traits: route.ChatTraits,
 		})
 	case Responses:
 		backend, err = responsemodel.New(responsemodel.Config{
+			MaxOutputTokens:       route.MaxOutputTokens,
 			ImageInputUnsupported: route.ImageInputUnsupported,
 			Connection:            connection,
 			ReasoningEffort:       route.ReasoningEffort, Traits: route.ResponsesTraits,
@@ -136,7 +145,8 @@ func BuildConfiguredBackend(route Route, client *http.Client, authorizer transpo
 		})
 	case Gemini:
 		backend, err = google.New(google.Config{
-			Connection: connection, ReasoningEffort: route.ReasoningEffort,
+			MaxOutputTokens: route.MaxOutputTokens,
+			Connection:      connection, ReasoningEffort: route.ReasoningEffort,
 			ImageInputUnsupported: route.ImageInputUnsupported,
 		})
 	default:

@@ -15,7 +15,7 @@ func TestSecretMaskerLoadsStoredAndEnvironmentCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("OPENAI_API_KEY", "environment-secret")
-	masker := newSecretMasker(store, "extra-secret")
+	masker := newSecretMasker(store, nil, "extra-secret")
 	got := masker.Redact("stored-secret environment-secret extra-secret public")
 	if got != "[REDACTED] [REDACTED] [REDACTED] public" {
 		t.Fatalf("redacted = %q", got)

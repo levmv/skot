@@ -129,6 +129,7 @@ directory. It contains:
 
 - `config.json` — global configuration: proxy, custom tool sets, child-model
   allowlist, and protected paths;
+- `models.json` — custom providers, models, and overrides of the built-in catalog;
 - `interactive.json` — UI state and interactive preferences managed by Skot;
 - `store.bin` — credentials managed by `/login` and `/logout`;
 - `tools.json` — the default custom program tool catalog;
@@ -174,6 +175,37 @@ Workspace-specific model, reasoning effort, tool set, and filesystem settings
 workspace path. Symlink aliases share preferences, while separate clones and
 worktrees do not. Skot manages these preferences in `interactive.json`;
 headless runs do not read them.
+
+### Custom providers and models
+
+Add compatible services to `models.json`; their models appear alongside the
+built-in models in `/model`:
+
+```json
+{
+  "providers": {
+    "my-router": {
+      "base_url": "https://router.example/v1",
+      "api": "chat_completions",
+      "api_key_env": "MY_ROUTER_API_KEY",
+      "models": {
+        "vendor/model-a": {"context_window": 262144}
+      }
+    }
+  }
+}
+```
+
+Select it with `sk -model my-router/vendor/model-a`. The service receives
+`vendor/model-a` as the model ID. Set the named environment variable or save a
+key with `/login my-router`; use `"auth": "none"` for a service without authentication.
+
+A new provider needs `base_url` and `api`; the protocols are listed under `-model-api`.
+Model fields are optional: `name`, `api`, `context_window`, `max_output_tokens`
+(requested output limit), `image_input`, and `reasoning_efforts` (menu choices).
+An existing provider or model is overridden only in the fields you specify;
+omitted fields keep the built-in defaults. Explicit command-line overrides take
+precedence for that run.
 
 ## Sessions and interactive use
 

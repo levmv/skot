@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -16,13 +17,16 @@ type secretMasker struct {
 	replacer *strings.Replacer
 }
 
-func newSecretMasker(store modelconfig.CredentialStore, extra ...string) *secretMasker {
+func newSecretMasker(store modelconfig.CredentialStore, registry *modelconfig.Registry, extra ...string) *secretMasker {
 	masker := &secretMasker{}
 	if tokens, err := modelconfig.StoredCodexTokens(store); err == nil {
 		modelconfig.MaskCodexTokens(masker, tokens)
 	}
-	for _, provider := range modelconfig.CredentialCatalog {
-		if token, _, err := modelconfig.CredentialForProvider(store, provider.Name, true); err == nil {
+	for _, environment := range registry.CredentialEnvironmentNames() {
+		masker.Add(os.Getenv(environment))
+	}
+	for _, provider := range registry.CredentialSpecs() {
+		if token, _, err := modelconfig.CredentialForProvider(store, provider.Name, false); err == nil {
 			masker.Add(token)
 		}
 	}

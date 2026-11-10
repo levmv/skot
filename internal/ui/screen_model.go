@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/internal/modelconfig"
 	modelapi "github.com/levmv/skot/model"
 )
 
@@ -34,7 +35,7 @@ func (m *screenModel) openModelPicker() {
 		// A route the session is not on starts at the provider default, which
 		// sits in the middle of the ladder rather than at its first rung.
 		selected := ""
-		if strings.EqualFold(model, current) {
+		if modelconfig.SameModelURI(model, current) {
 			selected = currentEffort
 			if !slices.Contains(efforts, selected) {
 				efforts = append(efforts, selected)
@@ -57,7 +58,7 @@ func (m *screenModel) openModelPicker() {
 			efforts:      efforts, effortIndex: effortIndex,
 		}
 		switch {
-		case strings.EqualFold(model, current):
+		case modelconfig.SameModelURI(model, current):
 			currentItems = append(currentItems, item)
 		case loginRequired:
 			loginItems = append(loginItems, item)
@@ -80,7 +81,14 @@ func (m *screenModel) openModelPicker() {
 		})
 	}
 	items = append(items, pickerItem{label: "Enter model URI…", description: "provider/model", custom: true})
-	m.openPicker(pickerModel, items, markCurrentPickerItem(items, current))
+	selectedIndex := 0
+	for index := range items {
+		items[index].current = modelconfig.SameModelURI(items[index].value, current)
+		if items[index].current {
+			selectedIndex = index
+		}
+	}
+	m.openPicker(pickerModel, items, selectedIndex)
 }
 
 // askModelAPI offers the protocols Skot implements for a route it does not
@@ -313,7 +321,7 @@ func (m *screenModel) selectModel(selection modelSelection, returnPicker pickerS
 	}
 	for _, status := range m.providers {
 		if status.Name == provider {
-			if strings.EqualFold(selection.uri, m.agent.CurrentModel()) && selection.effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
+			if modelconfig.SameModelURI(selection.uri, m.agent.CurrentModel()) && selection.effort == m.agent.CurrentReasoningEffort() && status.Source != "none" {
 				m.switchModel(selection)
 				return nil
 			}
@@ -360,7 +368,7 @@ func (m *screenModel) switchModel(selection modelSelection) {
 func (m screenModel) modelSelectionForURI(uri string) modelSelection {
 	selection := modelSelection{uri: strings.TrimSpace(uri)}
 	for _, choice := range m.modelChoices {
-		if !strings.EqualFold(strings.TrimSpace(choice.URI), selection.uri) {
+		if !modelconfig.SameModelURI(choice.URI, selection.uri) {
 			continue
 		}
 		if choice.ProtocolExplicit {

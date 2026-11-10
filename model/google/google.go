@@ -30,12 +30,14 @@ type Config struct {
 	// ReasoningEffort maps to thinkingLevel. Empty keeps the default level;
 	// available thought summaries are always requested.
 	ReasoningEffort string
+	MaxOutputTokens int
 }
 
 type Backend struct {
 	connection                *transport.Connection
 	provider, reasoningEffort string
 	imageInputUnsupported     bool
+	defaultMaxOutputTokens    int
 }
 
 func BackendID(provider string) string {
@@ -43,11 +45,14 @@ func BackendID(provider string) string {
 }
 
 func New(config Config) (*Backend, error) {
+	if config.MaxOutputTokens < 0 {
+		return nil, model.MarkInvalidRequest(errors.New("max output tokens cannot be negative"))
+	}
 	if config.Connection == nil || config.Connection.API() != "gemini" {
 		return nil, model.MarkInvalidRequest(errors.New("a Gemini connection is required"))
 	}
 	effort := strings.ToLower(strings.TrimSpace(config.ReasoningEffort))
-	return &Backend{connection: config.Connection, provider: config.Connection.Provider(), reasoningEffort: effort, imageInputUnsupported: config.ImageInputUnsupported}, nil
+	return &Backend{connection: config.Connection, provider: config.Connection.Provider(), reasoningEffort: effort, imageInputUnsupported: config.ImageInputUnsupported, defaultMaxOutputTokens: config.MaxOutputTokens}, nil
 }
 
 func (backend *Backend) ProjectModelItems(items []model.Item) []model.Item { return items }

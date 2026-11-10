@@ -40,6 +40,7 @@ type Application struct {
 // replacement must not make callers retain a stale runtime, but it does not
 // change the stores, catalog, workspace, or runtime policy used to build one.
 type applicationConfig struct {
+	modelRegistry        *modelconfig.Registry
 	settings             *state.Store
 	interactive          *state.InteractiveStore
 	tools                []agent.Tool
@@ -163,20 +164,21 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 	if _, err := modelconfig.ParseAPI(api); err != nil {
 		return model.MarkInvalidRequest(err)
 	}
-	selectionAPI := string(modelconfig.SelectionAPI(uri, api))
+	selectionAPI := string(application.config.modelRegistry.SelectionAPI(uri, api))
 	selectionContextWindow := 0
 	if application.config.contextWindow == 0 {
-		selectionContextWindow = modelconfig.SelectionContextWindow(uri, contextWindow)
+		selectionContextWindow = application.config.modelRegistry.SelectionContextWindow(uri, contextWindow)
 	}
 	overrides := modelconfig.Overrides{
-		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
+		Registry: application.config.modelRegistry,
+		BaseURL:  application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
 	}.WithSelection(uri, selectionAPI, selectionContextWindow)
 	route, err := modelconfig.Resolve(uri, effort, overrides, modelconfig.Enrichment{})
 	if err != nil {
 		return model.MarkInvalidRequest(err)
 	}
 	activated := false
-	_, declared := modelconfig.CatalogSpec(uri)
+	_, declared := application.config.modelRegistry.CatalogSpec(uri)
 	if requireContext && contextWindow == 0 && !declared && route.ContextWindowEstimated {
 		route, err = modelconfig.Activate(ctx, uri, effort, overrides,
 			savedContextWindowFromInfo(runtime.CurrentModelInfo()), application.config.metadataLookup)
@@ -193,7 +195,7 @@ func (application *Application) switchModel(ctx context.Context, uri, effort, ap
 	currentInfo := runtime.CurrentModelInfo()
 	sameProtocol := selectionAPI == "" || modelconfig.APIFromBackendID(currentInfo.BackendID) == route.API
 	sameContext := (selectionContextWindow == 0 && !activated) || currentInfo.ContextWindow == route.ContextWindow
-	if strings.EqualFold(route.URI, currentModel) && route.ReasoningEffort == currentEffort && sameProtocol && sameContext {
+	if modelconfig.SameModelURI(route.URI, currentModel) && route.ReasoningEffort == currentEffort && sameProtocol && sameContext {
 		return application.persistInteractivePreference("model", func(preferences *state.InteractiveStore) error {
 			return preferences.SetModelSelectionWithContext(currentModel, currentEffort, selectionAPI, selectionContextWindow)
 		})
@@ -299,7 +301,8 @@ func (application *Application) persistInteractivePreference(setting string, per
 
 func (application *Application) ModelChoices() []ModelChoice {
 	overrides := modelconfig.Overrides{
-		BaseURL: application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
+		Registry: application.config.modelRegistry,
+		BaseURL:  application.config.baseURL, API: application.config.modelAPI, ContextWindow: application.config.contextWindow,
 	}
 	runtime := application.runtimeOrNil()
 	if runtime == nil {
@@ -311,7 +314,7 @@ func (application *Application) ModelChoices() []ModelChoice {
 	// so it stays selectable even when no stored selection describes it.
 	choices := modelChoices(application.config.interactive, current, string(modelconfig.APIFromBackendID(info.BackendID)), overrides)
 	for index := range choices {
-		if strings.EqualFold(choices[index].URI, current) {
+		if modelconfig.SameModelURI(choices[index].URI, current) {
 			if protocol := modelconfig.APIFromBackendID(info.BackendID); protocol != "" {
 				choices[index].Protocol = string(protocol)
 			}
@@ -509,7 +512,7 @@ func (application *Application) CurrentScope() string {
 }
 
 func (application *Application) ProviderStatuses() ([]ProviderStatus, error) {
-	return providerStatuses(application.config.settings)
+	return providerStatuses(application.config.settings, application.config.modelRegistry)
 }
 
 func (application *Application) Login(ctx context.Context, provider, token string) error {
@@ -518,7 +521,7 @@ func (application *Application) Login(ctx context.Context, provider, token strin
 		return errors.New("application is closed")
 	}
 	if err := application.updateCredential(ctx, provider, func(settings *state.Store, normalizedProvider string) error {
-		return storeProviderCredential(ctx, settings, normalizedProvider, token)
+		return storeProviderCredential(ctx, settings, normalizedProvider, token, application.config.modelRegistry)
 	}); err != nil {
 		return err
 	}
@@ -528,7 +531,7 @@ func (application *Application) Login(ctx context.Context, provider, token strin
 
 func (application *Application) Logout(ctx context.Context, provider string) error {
 	return application.updateCredential(ctx, provider, func(settings *state.Store, normalizedProvider string) error {
-		return deleteProviderCredential(ctx, settings, normalizedProvider)
+		return deleteProviderCredential(ctx, settings, normalizedProvider, application.config.modelRegistry)
 	})
 }
 
@@ -693,6 +696,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		return fmt.Errorf("load project instructions: %w", err)
 	}
 	builder := runtimeBuilder{
+		modelRegistry:     application.config.modelRegistry,
 		baseURL:           baseURL,
 		modelAPI:          application.config.modelAPI,
 		contextWindow:     contextWindow,
@@ -728,7 +732,7 @@ func (application *Application) installSession(ctx context.Context, journal *ses
 		if modelInfoMatchesURI(info, modelURI) {
 			selectionAPI = string(modelconfig.APIFromBackendID(info.BackendID))
 			if !info.ContextWindowEstimated {
-				selectionContextWindow = modelconfig.SelectionContextWindow(modelURI, info.ContextWindow)
+				selectionContextWindow = application.config.modelRegistry.SelectionContextWindow(modelURI, info.ContextWindow)
 			}
 		}
 	}

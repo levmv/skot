@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/levmv/skot/app"
+	"github.com/levmv/skot/internal/modelconfig"
 )
 
 func (m *screenModel) refreshProviderStatuses() error {
@@ -25,7 +26,7 @@ func (m *screenModel) refreshProviderStatuses() error {
 func (m *screenModel) openStartupLoginPicker() {
 	currentModel := m.agent.CurrentModel()
 	for _, choice := range m.modelChoices {
-		if strings.EqualFold(choice.URI, currentModel) && choice.Unavailable {
+		if modelconfig.SameModelURI(choice.URI, currentModel) && choice.Unavailable {
 			m.addBlock(screenBlockError, fmt.Sprintf("model %q is unavailable; choose another with /model", currentModel))
 			return
 		}
@@ -133,7 +134,7 @@ func (m *screenModel) startProviderLogin(provider string, pending modelSelection
 			continue
 		}
 		pending.uri = strings.TrimSpace(pending.uri)
-		if strings.EqualFold(pending.uri, m.agent.CurrentModel()) && pending.effort == m.agent.CurrentReasoningEffort() {
+		if modelconfig.SameModelURI(pending.uri, m.agent.CurrentModel()) && pending.effort == m.agent.CurrentReasoningEffort() {
 			pending.uri = ""
 		}
 		if pending.uri != "" && status.Source != "none" {

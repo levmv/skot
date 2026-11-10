@@ -13,6 +13,8 @@ type ProviderSpec struct {
 	BaseURL        string
 	Header         http.Header
 	Credentialless bool
+	AuthNone       bool
+	CustomEndpoint bool
 	DefaultAPI     API
 	// PromptCache marks endpoints that expect the caller to place Anthropic
 	// cache_control breakpoints. Compatible endpoints that cache on their own
@@ -68,6 +70,24 @@ func ParseURI(value string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid model %q; expected provider/model", value)
 	}
 	return provider, model, nil
+}
+
+// ModelKey preserves opaque API IDs. Only reviewed native IDs retain Skot's
+// historical case-insensitive matching.
+func ModelKey(uri string) string {
+	provider, id, err := ParseURI(uri)
+	if err != nil {
+		return ""
+	}
+	if _, known := CatalogSpec(uri); known {
+		id = strings.ToLower(id)
+	}
+	return provider + "/" + id
+}
+
+func SameModelURI(first, second string) bool {
+	key := ModelKey(first)
+	return key != "" && key == ModelKey(second)
 }
 
 func Provider(provider string) (ProviderSpec, error) {

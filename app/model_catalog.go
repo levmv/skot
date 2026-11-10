@@ -16,7 +16,7 @@ type modelSelection struct {
 	ContextWindow int
 }
 
-func knownModelSelections(store *state.InteractiveStore, current, currentAPI string) []modelSelection {
+func knownModelSelections(store *state.InteractiveStore, current, currentAPI string, registry *modelconfig.Registry) []modelSelection {
 	var stored []modelSelection
 	if store != nil {
 		if settings, err := store.Settings(); err == nil {
@@ -35,7 +35,7 @@ func knownModelSelections(store *state.InteractiveStore, current, currentAPI str
 	seen := make(map[string]struct{}, cap(selections))
 	add := func(uri, api string, contextWindow int) {
 		uri = strings.TrimSpace(uri)
-		key := strings.ToLower(uri)
+		key := modelconfig.ModelKey(uri)
 		if key == "" {
 			return
 		}
@@ -49,7 +49,7 @@ func knownModelSelections(store *state.InteractiveStore, current, currentAPI str
 	for _, selection := range stored {
 		add(selection.URI, selection.API, selection.ContextWindow)
 	}
-	for _, spec := range modelconfig.Catalog {
+	for _, spec := range registry.Models() {
 		add(spec.URI, "", 0)
 	}
 	return selections
@@ -57,9 +57,9 @@ func knownModelSelections(store *state.InteractiveStore, current, currentAPI str
 
 func modelChoices(store *state.InteractiveStore, current, currentAPI string, overrides modelconfig.Overrides) []ModelChoice {
 	choices := make([]ModelChoice, 0, len(modelconfig.Catalog)+4)
-	for _, selection := range knownModelSelections(store, current, currentAPI) {
+	for _, selection := range knownModelSelections(store, current, currentAPI, overrides.Registry) {
 		uri := selection.URI
-		declaration, _ := modelconfig.CatalogSpec(uri)
+		declaration, _ := overrides.Registry.CatalogSpec(uri)
 		selected := overrides.WithSelection(uri, selection.API, selection.ContextWindow)
 		explicitProtocol := selected.API != "" && overrides.API == ""
 		route, err := modelconfig.Resolve(uri, "", selected, modelconfig.Enrichment{})
@@ -67,7 +67,7 @@ func modelChoices(store *state.InteractiveStore, current, currentAPI string, ove
 			api := declaration.API
 			if api == "" {
 				if provider, _, parseErr := modelconfig.ParseURI(uri); parseErr == nil {
-					if providerSpec, providerErr := modelconfig.Provider(provider); providerErr == nil {
+					if providerSpec, providerErr := overrides.Registry.Provider(provider); providerErr == nil {
 						api = providerSpec.DefaultAPI
 					}
 				}

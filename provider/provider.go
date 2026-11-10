@@ -19,6 +19,8 @@ import (
 // Config selects a provider/model using the same catalog and protocol defaults
 // as the Skot application. URI is required; no application preferences are read.
 type Config struct {
+	// Providers adds or partially overrides named providers and their models.
+	Providers       map[string]ProviderConfig
 	URI             string
 	ReasoningEffort string
 	// API overrides the route's protocol: chat_completions, responses,
@@ -54,6 +56,10 @@ func Open(ctx context.Context, config Config) (*Model, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	registry, err := modelconfig.NewRegistry(config.Providers)
+	if err != nil {
+		return nil, model.MarkInvalidRequest(err)
+	}
 	api, err := modelconfig.ParseAPI(config.API)
 	if err != nil {
 		return nil, model.MarkInvalidRequest(err)
@@ -67,7 +73,7 @@ func Open(ctx context.Context, config Config) (*Model, error) {
 		}
 	}
 	route, err := modelconfig.Activate(ctx, config.URI, config.ReasoningEffort, modelconfig.Overrides{
-		API: api, BaseURL: config.BaseURL, ContextWindow: config.ContextWindow,
+		Registry: registry, API: api, BaseURL: config.BaseURL, ContextWindow: config.ContextWindow,
 	}, nil, lookup)
 	if err != nil {
 		return nil, model.MarkInvalidRequest(err)

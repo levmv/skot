@@ -137,7 +137,7 @@ type childSupervisor struct {
 	cancel              context.CancelFunc
 }
 
-func newChildSupervisor(home string, configuredModels ...[]string) (*childSupervisor, error) {
+func newChildSupervisor(home string, registry *modelconfig.Registry, configuredModels ...[]string) (*childSupervisor, error) {
 	allowed := make(map[string]struct{})
 	for _, models := range configuredModels {
 		for _, value := range models {
@@ -147,6 +147,10 @@ func newChildSupervisor(home string, configuredModels ...[]string) (*childSuperv
 			}
 			if model == "" {
 				return nil, errors.New("agent model cannot be empty")
+			}
+			provider, _, _ := modelconfig.ParseURI(model)
+			if _, err := registry.Provider(provider); err != nil {
+				return nil, fmt.Errorf("agent model: %w", err)
 			}
 			allowed[model] = struct{}{}
 		}
@@ -162,9 +166,6 @@ func newChildSupervisor(home string, configuredModels ...[]string) (*childSuperv
 func normalizeChildModel(value string) (string, error) {
 	provider, model, err := modelconfig.ParseURI(value)
 	if err != nil {
-		return "", err
-	}
-	if _, err := modelconfig.Provider(provider); err != nil {
 		return "", err
 	}
 	return provider + "/" + model, nil
@@ -232,14 +233,14 @@ func (supervisor *childSupervisor) setModelSelection(model, effort, selectionAPI
 // own route. A child which selects a different model from the allowlist stands
 // on that route's own declaration.
 func (supervisor *childSupervisor) selectionAPILocked(model string) string {
-	if !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(supervisor.defaultModel)) {
+	if !modelconfig.SameModelURI(model, supervisor.defaultModel) {
 		return ""
 	}
 	return supervisor.defaultSelectionAPI
 }
 
 func (supervisor *childSupervisor) selectionContextWindowLocked(model string) int {
-	if !strings.EqualFold(strings.TrimSpace(model), strings.TrimSpace(supervisor.defaultModel)) {
+	if !modelconfig.SameModelURI(model, supervisor.defaultModel) {
 		return 0
 	}
 	return supervisor.defaultContext
@@ -899,6 +900,8 @@ func (supervisor *childSupervisor) openChildLocked(ctx context.Context, dir, par
 	if metadata.Version != childMetadataVersion || metadata.ParentSessionID != parentID || metadata.AgentID != agentID || !validChildSessionID(metadata.SessionID) || metadata.CreatedAt.IsZero() {
 		return nil, errors.New("child metadata identity is invalid")
 	}
+	// A historical provider may have been removed from the current config.
+	// The runtime can restore its journal with an unavailable backend.
 	model, err := normalizeChildModel(metadata.Model)
 	if err != nil || model != metadata.Model {
 		return nil, errors.New("child metadata model is invalid")

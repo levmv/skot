@@ -198,6 +198,9 @@ type streamEvent struct {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (responseRequest, error) {
+	if request.MaxOutputTokens == 0 {
+		request.MaxOutputTokens = backend.defaultMaxOutputTokens
+	}
 	if err := request.ToolChoice.Validate(); err != nil {
 		return responseRequest{}, err
 	}

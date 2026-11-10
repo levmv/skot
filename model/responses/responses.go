@@ -26,21 +26,26 @@ type Config struct {
 	ImageInputUnsupported bool
 	Connection            *transport.Connection
 	ReasoningEffort       string
+	MaxOutputTokens       int
 	Traits                RouteTraits
 }
 
 type Backend struct {
-	imageInputUnsupported bool
-	connection            *transport.Connection
-	provider              string
-	apiModel              string
-	reasoningEffort       string
-	traits                RouteTraits
-	maxRequestBytes       int
-	maxCompletionBytes    int
+	imageInputUnsupported  bool
+	connection             *transport.Connection
+	provider               string
+	apiModel               string
+	reasoningEffort        string
+	defaultMaxOutputTokens int
+	traits                 RouteTraits
+	maxRequestBytes        int
+	maxCompletionBytes     int
 }
 
 func New(config Config) (*Backend, error) {
+	if config.MaxOutputTokens < 0 {
+		return nil, modelapi.MarkInvalidRequest(errors.New("max output tokens cannot be negative"))
+	}
 	if config.Connection == nil || config.Connection.API() != "responses" {
 		return nil, modelapi.MarkInvalidRequest(errors.New("a responses connection is required"))
 	}
@@ -54,7 +59,7 @@ func New(config Config) (*Backend, error) {
 		imageInputUnsupported: config.ImageInputUnsupported,
 		connection:            config.Connection,
 		provider:              provider, apiModel: apiModel,
-		reasoningEffort: reasoningEffort, traits: config.Traits,
+		reasoningEffort: reasoningEffort, defaultMaxOutputTokens: config.MaxOutputTokens, traits: config.Traits,
 		maxRequestBytes: productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil
 }

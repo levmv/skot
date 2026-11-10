@@ -197,6 +197,9 @@ func (delta streamDelta) reasoningText() string {
 type apiError = modelhttp.ProviderErrorEnvelope
 
 func (backend *Backend) buildRequest(request model.Request) (chatRequest, error) {
+	if request.MaxOutputTokens == 0 {
+		request.MaxOutputTokens = backend.defaultMaxOutputTokens
+	}
 	if err := request.ToolChoice.Validate(); err != nil {
 		return chatRequest{}, err
 	}

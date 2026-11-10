@@ -8,6 +8,7 @@ import (
 
 	"github.com/levmv/skot/agent"
 	"github.com/levmv/skot/internal/toolpolicy"
+	"github.com/levmv/skot/provider"
 	"github.com/levmv/skot/skills"
 	workspacetools "github.com/levmv/skot/tools"
 )
@@ -31,9 +32,17 @@ const (
 	DefaultStreamIdleTimeout = 5 * time.Minute
 )
 
+// ProviderConfig adds or partially overrides a named provider and its models.
+type ProviderConfig = provider.ProviderConfig
+
+// ModelConfig contains optional per-model overrides.
+type ModelConfig = provider.ModelConfig
+
 // Config describes one concrete Skot application instance. Explicit flags
 // distinguish CLI/env choices from values that may be restored from settings.
 type Config struct {
+	// Providers adds to models.json's providers, overriding only specified fields.
+	Providers map[string]ProviderConfig
 	// Version identifies the host application build. VCS provenance is obtained
 	// from Go build information when available.
 	Version                 string

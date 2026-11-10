@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/levmv/skot/internal/modelconfig"
 )
 
 type tuiCommand struct {
@@ -377,7 +378,7 @@ func runModelCommand(m *screenModel, input string, args []string) tea.Cmd {
 	if len(args) > 1 {
 		selection.api = args[1]
 	}
-	if strings.EqualFold(selection.uri, m.agent.CurrentModel()) {
+	if modelconfig.SameModelURI(selection.uri, m.agent.CurrentModel()) {
 		selection.effort = m.agent.CurrentReasoningEffort()
 	}
 	return m.selectModel(selection, pickerState{})

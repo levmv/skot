@@ -70,6 +70,14 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
+	providers, err := state.ReadModelProviders(home)
+	if err != nil {
+		return nil, model.MarkInvalidRequest(err)
+	}
+	registry, err := modelconfig.NewRegistry(providers, config.Providers)
+	if err != nil {
+		return nil, model.MarkInvalidRequest(fmt.Errorf("configure providers: %w", err))
+	}
 	if strings.TrimSpace(config.ProxyURL) == "" {
 		config.ProxyURL = settings.Proxy
 	}
@@ -137,7 +145,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	notices = append(notices, pathNotices...)
 
-	masker := newSecretMasker(settingsStore)
+	masker := newSecretMasker(settingsStore, registry)
 	security := newSecurityState(scope, layers.additions.Paths(), layers.protection.Paths())
 	access, err := workspacetools.NewFilesystemAccess(root, security.Scope, layers.additions, layers.protection)
 	if err != nil {
@@ -156,8 +164,8 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		return nil, model.MarkInvalidRequest(fmt.Errorf("initialize process tools: %w", err))
 	}
 	resources := &openResources{processes: processes, network: network}
-	processes.HideModelEnvironment(modelconfig.CredentialEnvironmentNames()...)
-	children, err := newChildSupervisor(home, settings.AgentModels, config.AgentModels)
+	processes.HideModelEnvironment(registry.CredentialEnvironmentNames()...)
+	children, err := newChildSupervisor(home, registry, settings.AgentModels, config.AgentModels)
 	if err != nil {
 		return resources.fail(model.MarkInvalidRequest(err))
 	}
@@ -244,7 +252,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	modelSelectionAPI := ""
 	selectionContext := 0
 	if !sessionModelSelected {
-		rememberedAPI, rememberedContextWindow, rememberedNotices := applyRememberedModelPreference(&config, workspaceSettings, lastModel, root, modelAPIOverride)
+		rememberedAPI, rememberedContextWindow, rememberedNotices := applyRememberedModelPreference(&config, workspaceSettings, lastModel, root, modelAPIOverride, registry)
 		modelSelectionAPI = rememberedAPI
 		selectionContext = rememberedContextWindow
 		notices = append(notices, rememberedNotices...)
@@ -257,6 +265,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 	}
 	application := &Application{
 		config: applicationConfig{
+			modelRegistry:            registry,
 			settings:                 settingsStore,
 			interactive:              interactiveStore,
 			tools:                    append([]agent.Tool(nil), catalog...),
@@ -300,6 +309,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 		},
 	}
 	builder := runtimeBuilder{
+		modelRegistry:     registry,
 		baseURL:           config.BaseURL,
 		modelAPI:          modelAPIOverride,
 		contextWindow:     config.ContextWindow,
@@ -368,7 +378,7 @@ func Open(ctx context.Context, config Config) (*Application, error) {
 // applyRememberedModelPreference resolves the interactive model fallback. A
 // workspace record is a deliberate choice for that workspace and wins; the
 // shared last selection only fills in for a workspace which has never made one.
-func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelconfig.API) (string, int, []string) {
+func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSettings, last state.ModelPreference, root string, api modelconfig.API, registry *modelconfig.Registry) (string, int, []string) {
 	if config.ModelExplicit {
 		return "", 0, nil
 	}
@@ -377,14 +387,14 @@ func applyRememberedModelPreference(config *Config, workspace state.WorkspaceSet
 			Model: workspace.Model, ReasoningEffort: workspace.ReasoningEffort, ModelAPI: workspace.ModelAPI,
 			ContextWindow: workspace.ContextWindow,
 		}
-		return applyModelPreference(config, preference, "workspace", root, api)
+		return applyModelPreference(config, preference, "workspace", root, api, registry)
 	}
-	return applyModelPreference(config, last, "remembered", "", api)
+	return applyModelPreference(config, last, "remembered", "", api, registry)
 }
 
 // kind and root name the invalid value in a notice: a workspace preference is
 // reported with the path whose record must be corrected.
-func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelconfig.API) (string, int, []string) {
+func applyModelPreference(config *Config, preference state.ModelPreference, kind, root string, api modelconfig.API, registry *modelconfig.Registry) (string, int, []string) {
 	if strings.TrimSpace(preference.Model) == "" {
 		return "", 0, nil
 	}
@@ -396,14 +406,15 @@ func applyModelPreference(config *Config, preference state.ModelPreference, kind
 	if !config.ReasoningEffortExplicit && preference.ReasoningEffort != nil {
 		effort = *preference.ReasoningEffort
 	}
-	selectionAPI := string(modelconfig.SelectionAPI(preference.Model, preference.ModelAPI))
-	selectionContextWindow := modelconfig.SelectionContextWindow(preference.Model, preference.ContextWindow)
+	selectionAPI := string(registry.SelectionAPI(preference.Model, preference.ModelAPI))
+	selectionContextWindow := registry.SelectionContextWindow(preference.Model, preference.ContextWindow)
 	if config.ReasoningEffortExplicit {
 		config.ModelURI = preference.Model
 		return selectionAPI, selectionContextWindow, nil
 	}
 	overrides := modelconfig.Overrides{
-		BaseURL: config.BaseURL, API: api, ContextWindow: config.ContextWindow,
+		Registry: registry,
+		BaseURL:  config.BaseURL, API: api, ContextWindow: config.ContextWindow,
 	}.WithSelection(preference.Model, selectionAPI, selectionContextWindow)
 	_, err := modelconfig.Resolve(preference.Model, effort, overrides, modelconfig.Enrichment{})
 	if err == nil {

@@ -44,6 +44,7 @@ type Spec struct {
 }
 
 type Overrides struct {
+	Registry      *Registry
 	BaseURL       string
 	API           API
 	ContextWindow int
@@ -53,10 +54,10 @@ type Overrides struct {
 // overrides win because they are the more recent explicit instruction.
 func (overrides Overrides) WithSelection(uri, api string, contextWindow int) Overrides {
 	if overrides.API == "" {
-		overrides.API = SelectionAPI(uri, api)
+		overrides.API = overrides.Registry.SelectionAPI(uri, api)
 	}
 	if overrides.ContextWindow == 0 {
-		overrides.ContextWindow = SelectionContextWindow(uri, contextWindow)
+		overrides.ContextWindow = overrides.Registry.SelectionContextWindow(uri, contextWindow)
 	}
 	return overrides
 }
@@ -101,6 +102,9 @@ type Route struct {
 	BaseURL                string
 	Header                 http.Header
 	Credentialless         bool
+	AuthNone               bool
+	CredentialRequired     bool
+	CredentialEnvironment  *string
 	CustomEndpoint         bool
 	ImageInputUnsupported  bool
 	ContextWindow          int
@@ -470,7 +474,7 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	if err != nil {
 		return Route{}, err
 	}
-	providerDescription, err := Provider(provider)
+	providerDescription, err := overrides.Registry.Provider(provider)
 	if err != nil {
 		return Route{}, err
 	}
@@ -484,10 +488,13 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		return Route{}, fmt.Errorf("invalid model context enrichment")
 	}
 
-	declaration, declared := CatalogSpec(uri)
+	nativeDeclaration, nativeDeclared := CatalogSpec(uri)
+	declaration, _ := overrides.Registry.CatalogSpec(uri)
+	configuredModel, _ := overrides.Registry.modelConfig(uri)
 	defaults := defaultModelSpec(provider)
-	customEndpoint := strings.TrimSpace(overrides.BaseURL) != ""
-	if providerDescription.RequireDeclaredModel && !declared && overrides.API == "" {
+	customEndpoint := strings.TrimSpace(overrides.BaseURL) != "" || providerDescription.CustomEndpoint
+	configuredAPI := overrides.Registry.configuredAPI(uri)
+	if providerDescription.RequireDeclaredModel && !nativeDeclared && overrides.API == "" && configuredAPI == "" {
 		return Route{}, &modelapi.APIRequiredError{URI: uri}
 	}
 	api := providerDescription.DefaultAPI
@@ -495,8 +502,18 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		api = declaration.API
 	}
 	declaredAPI := api
+	if nativeDeclared {
+		originalProvider, _ := Provider(provider)
+		declaredAPI = originalProvider.DefaultAPI
+		if nativeDeclaration.API != "" {
+			declaredAPI = nativeDeclaration.API
+		}
+	}
+	if configuredAPI != "" {
+		api = configuredAPI
+	}
 	compatibility := Unverified
-	if declared {
+	if nativeDeclared && api == declaredAPI {
 		compatibility = Supported
 		if declaration.Compatibility != "" {
 			compatibility = declaration.Compatibility
@@ -511,6 +528,8 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		// adapter.
 		compatibility = Unverified
 		api = overrides.API
+	} else if configuredAPI != "" {
+		compatibility = Unverified
 	} else if compatibility == Unsupported {
 		return Route{}, unsupportedModelRouteError(uri, api)
 	}
@@ -518,9 +537,9 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		return Route{}, fmt.Errorf("unsupported model API %q", api)
 	}
 
-	usesReviewedProtocol := declared && api == declaredAPI
+	usesReviewedProtocol := nativeDeclared && api == declaredAPI
 	reasoningEfforts := defaults.ReasoningEfforts
-	if usesReviewedProtocol && !customEndpoint && declaration.ReasoningEfforts != nil {
+	if configuredModel.ReasoningEfforts != nil || (usesReviewedProtocol && !customEndpoint && declaration.ReasoningEfforts != nil) {
 		reasoningEfforts = declaration.ReasoningEfforts
 	}
 	var supportedEfforts []string
@@ -551,7 +570,9 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	header := providerDescription.Header.Clone()
 	requestEncoding := providerDescription.RequestEncoding
 	if customEndpoint {
-		baseURL = strings.TrimRight(strings.TrimSpace(overrides.BaseURL), "/")
+		if strings.TrimSpace(overrides.BaseURL) != "" {
+			baseURL = strings.TrimRight(strings.TrimSpace(overrides.BaseURL), "/")
+		}
 		header = nil
 		requestEncoding = ""
 		compatibility = Unverified
@@ -563,9 +584,15 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		responsesTraits = responsemodel.RouteTraits{}
 	}
 	imageInputUnsupported := declaration.ImageInputUnsupported && !customEndpoint
+	if configuredModel.ImageInput != nil {
+		imageInputUnsupported = !*configuredModel.ImageInput
+	}
 	maxOutputTokens := 0
 	if api == AnthropicMessages && !customEndpoint && declaration.API == AnthropicMessages {
 		maxOutputTokens = declaration.MaxOutputTokens
+	}
+	if configuredModel.MaxOutputTokens != nil {
+		maxOutputTokens = *configuredModel.MaxOutputTokens
 	}
 	// Placing cache breakpoints is a route claim like the traits above: a custom
 	// compatible endpoint starts from the conservative generic behavior.
@@ -577,6 +604,8 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	switch {
 	case overrides.ContextWindow > 0:
 		contextWindow = overrides.ContextWindow
+	case configuredModel.ContextWindow != nil:
+		contextWindow = *configuredModel.ContextWindow
 	case customEndpoint:
 		contextWindow, contextEstimated = FallbackContextWindow, true
 	case declaration.ContextWindow > 0:
@@ -606,6 +635,11 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		ChatTraits: traits, ResponsesTraits: responsesTraits,
 		Compatibility: compatibility, RequestEncoding: requestEncoding,
 	}
+	environment := overrides.Registry.ProviderEnvironment(provider)
+	route.CredentialEnvironment = &environment
+	_, route.CredentialRequired = overrides.Registry.definition(provider)
+	route.CredentialRequired = route.CredentialRequired && strings.TrimSpace(overrides.BaseURL) == ""
+	route.AuthNone = providerDescription.AuthNone
 	if provider == "openrouter" {
 		route.ResponseProfile = modelapi.ResponseProfileOpenRouter
 	}
@@ -672,17 +706,7 @@ func defaultModelSpec(provider string) Spec {
 }
 
 func CatalogSpec(uri string) (Spec, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(uri))
-	switch normalized {
-	case "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-flash-vision-exp":
-		// DeepSeek serves these retired model IDs with V4.1 Flash. Preserve saved
-		// selections while applying the current model's image and reasoning support.
-		// https://api-docs.deepseek.com/quick_start/pricing/
-		normalized = "deepseek/deepseek-flash"
-	case "opencode-go/deepseek-flash":
-		// Go still accepts the original ID used by saved selections.
-		normalized = "opencode-go/deepseek-v4.1-flash"
-	}
+	normalized := canonicalCatalogURI(uri)
 	for _, spec := range Catalog {
 		if normalized == strings.ToLower(spec.URI) {
 			spec.URI = strings.TrimSpace(uri)
@@ -699,6 +723,21 @@ func CatalogSpec(uri string) (Spec, bool) {
 		}
 	}
 	return Spec{}, false
+}
+
+func canonicalCatalogURI(uri string) string {
+	normalized := strings.ToLower(strings.TrimSpace(uri))
+	switch normalized {
+	case "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-flash-vision-exp":
+		// DeepSeek serves these retired model IDs with V4.1 Flash. Preserve saved
+		// selections while applying the current model's image and reasoning support.
+		// https://api-docs.deepseek.com/quick_start/pricing/
+		normalized = "deepseek/deepseek-flash"
+	case "opencode-go/deepseek-flash":
+		// Go still accepts the original ID used by saved selections.
+		normalized = "opencode-go/deepseek-v4.1-flash"
+	}
+	return normalized
 }
 
 func canonicalOpenRouterModelID(modelID string) string {

@@ -482,23 +482,20 @@ func TestRunUsesAnthropicAdapterWithoutAProactiveCompatibilityWarning(t *testing
 			t.Errorf("decode request: %v", err)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"message_stop\"}\n\n")
+		writeMessagesTestAnswer(writer, "done")
 	}))
 	defer server.Close()
 	var stdout, stderr bytes.Buffer
 	err := run(context.Background(), []string{
 		"-model", "deepseek/deepseek-v4-flash", "-model-api", "anthropic_messages",
+		"-reasoning-effort", "default",
 		"-base-url", server.URL,
 		"-scope", "machine", "-home", t.TempDir(), "-root", t.TempDir(), "task",
 	}, bytes.NewReader(nil), &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != "done\n" || string(received["max_tokens"]) != "65536" || string(received["stream"]) != "true" {
+	if stdout.String() != "done\n" || string(received["max_tokens"]) != "65536" || string(received["stream"]) != "true" || len(received["output_config"]) != 0 {
 		t.Fatalf("stdout/request = %q / %#v", stdout.String(), received)
 	}
 	if stderr.String() != "" {
@@ -639,6 +636,73 @@ func TestRunSavesAndResumesWorkspaceSession(t *testing.T) {
 	}
 	if got := conversationMessages(requests[1].Messages); len(got) != 3 || got[0].Content != "first task" || got[2].Content != "continue" {
 		t.Fatalf("resumed messages = %#v", got)
+	}
+}
+
+func TestRunResumesSavedEffortAfterModelProtocolChanges(t *testing.T) {
+	const modelID = "same-model"
+	t.Setenv("SK_BASE_URL", "")
+	t.Setenv("SK_MODEL", "")
+	t.Setenv("SK_MODEL_API", "")
+	t.Setenv("SK_REASONING_EFFORT", "")
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Model           string `json:"model"`
+			ReasoningEffort string `json:"reasoning_effort"`
+			OutputConfig    struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		}
+		if err := json.UnmarshalRead(request.Body, &body); err != nil || body.Model != modelID {
+			t.Errorf("request for %q: %+v, %v", request.URL.Path, body, err)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		switch request.URL.Path {
+		case "/v1/chat/completions":
+			if body.ReasoningEffort != "high" {
+				t.Errorf("Chat Completions effort = %q", body.ReasoningEffort)
+			}
+			_, _ = io.WriteString(writer, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"first answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		case "/v1/messages":
+			if body.OutputConfig.Effort != "high" || body.ReasoningEffort != "" {
+				t.Errorf("Messages effort = %q, top-level effort = %q", body.OutputConfig.Effort, body.ReasoningEffort)
+			}
+			writeMessagesTestAnswer(writer, "continued")
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	home, root := t.TempDir(), t.TempDir()
+	writeModels := func(api string) {
+		t.Helper()
+		config := fmt.Sprintf(`{"providers":{"router":{"base_url":%q,"api":%q,"auth":"none",
+			"models":{%q:{"reasoning_efforts":["high"]}}}}}`, server.URL+"/v1", api, modelID)
+		if err := os.WriteFile(filepath.Join(home, "models.json"), []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runOnce := func(args ...string) string {
+		t.Helper()
+		flags := []string{"-home", home, "-root", root, "-scope", "machine"}
+		var output bytes.Buffer
+		if err := run(t.Context(), append(flags, args...), bytes.NewReader(nil), &output, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+	writeModels("chat_completions")
+	if got := runOnce("-model", "router/"+modelID, "-reasoning-effort", "high", "-save-session", "first task"); got != "first answer\n" {
+		t.Fatalf("initial output = %q", got)
+	}
+	saved, err := session.Resolve(home, root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeModels("anthropic_messages")
+	if got := runOnce("resume", saved.ID, "continue"); got != "continued\n" {
+		t.Fatalf("resumed output = %q", got)
 	}
 }
 
@@ -1681,6 +1745,13 @@ func writeSSEChunk(t *testing.T, writer io.Writer, value any) {
 		t.Fatal(err)
 	}
 	fmt.Fprintf(writer, "data: %s\n\n", raw)
+}
+
+func writeMessagesTestAnswer(writer io.Writer, answer string) {
+	fmt.Fprintf(writer, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":%q}}\n\n", answer)
+	_, _ = io.WriteString(writer, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+	_, _ = io.WriteString(writer, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n")
+	_, _ = io.WriteString(writer, "data: {\"type\":\"message_stop\"}\n\n")
 }
 
 func clearMainWebCredentials(t *testing.T) {

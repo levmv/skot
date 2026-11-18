@@ -118,10 +118,6 @@ func TestMixedProtocolProviderDoesNotGuessUnknownModelAPI(t *testing.T) {
 	if route.API != modelconfig.Responses || route.Compatibility != modelconfig.Unverified {
 		t.Fatalf("explicit mixed-protocol route = %#v", route)
 	}
-	if _, err := modelconfig.Resolve("opencode-go/future-model", "high", modelconfig.Overrides{API: modelconfig.AnthropicMessages}, modelconfig.Enrichment{}); err == nil ||
-		!strings.Contains(err.Error(), "reasoning effort") {
-		t.Fatalf("explicit Anthropic reasoning error = %v", err)
-	}
 }
 
 func TestModelCatalogInvariants(t *testing.T) {
@@ -221,13 +217,13 @@ func TestOpenCodeGoKnownAnthropicRouteDoesNotFallBackToChatCompletions(t *testin
 }
 
 func TestAnthropicProviderRoutesThroughNativeMessages(t *testing.T) {
-	route, err := modelconfig.Resolve("anthropic/claude-opus-5", "", modelconfig.Overrides{}, modelconfig.Enrichment{})
+	route, err := modelconfig.Resolve("anthropic/claude-opus-5", "high", modelconfig.Overrides{}, modelconfig.Enrichment{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if route.API != modelconfig.AnthropicMessages || route.BaseURL != "https://api.anthropic.com/v1" ||
 		route.Compatibility != modelconfig.Supported || route.ContextWindow != 1_000_000 ||
-		route.ContextWindowEstimated || route.MaxOutputTokens != 128_000 || !route.PromptCache {
+		route.ContextWindowEstimated || route.MaxOutputTokens != 128_000 || !route.PromptCache || route.ReasoningEffort != "high" {
 		t.Fatalf("Anthropic route = %#v", route)
 	}
 	// Undeclared models stay usable on the provider default protocol; only the

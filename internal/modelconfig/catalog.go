@@ -210,35 +210,36 @@ var Catalog = []Spec{
 			ReasoningReplay: chatcompletions.ReasoningReplayAllTurns,
 		},
 	},
+	// https://platform.claude.com/docs/en/build-with-claude/effort
 	{
 		URI: "anthropic/claude-opus-5", Name: "Claude Opus 5", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 	},
 	// These models bind thinking signatures to the preceding conversation context.
 	// https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
 	{
 		URI: "anthropic/claude-opus-5-5", Name: "Claude Opus 5.5", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{
 		URI: "anthropic/claude-sonnet-5-5", Name: "Claude Sonnet 5.5", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{
 		URI: "anthropic/claude-haiku-5-5", Name: "Claude Haiku 5.5", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{
 		URI: "anthropic/claude-fable-5-2", Name: "Claude Fable 5.2", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{
 		URI: "anthropic/claude-fable-5-1", Name: "Claude Fable 5.1", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 		DropMismatchedThinking: true, Compatibility: Unverified,
 	},
 	{URI: "openrouter/free", Name: "OpenRouter Free"},
@@ -264,7 +265,7 @@ var Catalog = []Spec{
 	},
 	{
 		URI: "opencode-go/claude-haiku-5-5", Name: "OpenCode Go · Claude Haiku 5.5", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"", "low", "medium", "high", "xhigh", "max"},
 	},
 	{
 		URI: "opencode-go/gpt-6-luna", Name: "OpenCode Go · GPT 6 Luna", API: Responses,
@@ -447,11 +448,11 @@ var Catalog = []Spec{
 	},
 	{
 		URI: "opencode-go/qwen3.8-max", Name: "OpenCode Go · Qwen3.8 Max", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{"", "low", "medium", "xhigh"},
 	},
 	{
 		URI: "opencode-go/qwen3.8-flash", Name: "OpenCode Go · Qwen3.8 Flash", API: AnthropicMessages,
-		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{""},
+		ContextWindow: 1_000_000, MaxOutputTokens: 131_072, ReasoningEfforts: []string{"", "low", "medium", "xhigh"},
 	},
 	{
 		URI: "opencode-go/qwen3.7-plus", Name: "OpenCode Go · Qwen3.7 Plus", API: AnthropicMessages,
@@ -535,11 +536,6 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	var supportedEfforts []string
 	// Menu choices only restrict values on reviewed native routes.
 	if usesReviewedProtocol && !customEndpoint {
-		supportedEfforts = reasoningEfforts
-	}
-	if api == AnthropicMessages {
-		// This adapter leaves reasoning effort at the provider default.
-		reasoningEfforts = []string{DefaultReasoningEffort}
 		supportedEfforts = reasoningEfforts
 	}
 	reasoningEfforts = append([]string(nil), reasoningEfforts...)

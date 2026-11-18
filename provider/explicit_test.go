@@ -39,9 +39,7 @@ func TestExplicitModelUsesOnlyCallerConfiguration(t *testing.T) {
 			// select OpenAI credentials or OpenAI's Chat Completions dialect.
 			config.Provider, config.Model = "openai", "Unlisted/Exact-ID"
 			config.Header = http.Header{"X-Route": {"original"}}
-			if api != provider.AnthropicMessages {
-				config.ReasoningEffort = "medium"
-			}
+			config.ReasoningEffort = "medium"
 			switch auth {
 			case "key":
 				config.APIKey = "caller-key"
@@ -87,6 +85,9 @@ func TestExplicitModelUsesOnlyCallerConfiguration(t *testing.T) {
 						Reasoning       struct {
 							Effort string `json:"effort"`
 						} `json:"reasoning"`
+						OutputConfig struct {
+							Effort string `json:"effort"`
+						} `json:"output_config"`
 						GenerationConfig struct {
 							ThinkingConfig struct {
 								Level string `json:"thinkingLevel"`
@@ -103,7 +104,7 @@ func TestExplicitModelUsesOnlyCallerConfiguration(t *testing.T) {
 					case provider.Responses:
 						path, effort = "/v1/responses", wire.Reasoning.Effort
 					case provider.AnthropicMessages:
-						path = "/v1/messages"
+						path, effort = "/v1/messages", wire.OutputConfig.Effort
 						if wire.MaxTokens != config.Anthropic.MaxOutputTokens {
 							t.Fatalf("Messages output limit = %d", wire.MaxTokens)
 						}
@@ -171,10 +172,6 @@ func TestExplicitModelRejectsUnusableConfigurationLocally(t *testing.T) {
 			c.ReasoningEffort = "medium"
 		}},
 		{"missing Messages limit", func(c *provider.ExplicitConfig) { c.API = provider.AnthropicMessages }},
-		{"Messages effort", func(c *provider.ExplicitConfig) {
-			c.API, c.ReasoningEffort = provider.AnthropicMessages, "medium"
-			c.Anthropic = &provider.AnthropicOptions{MaxOutputTokens: 1024}
-		}},
 		{"unknown response profile", func(c *provider.ExplicitConfig) { c.ResponseProfile = "unknown" }},
 		{"conflicting credentials", func(c *provider.ExplicitConfig) {
 			c.APIKey, c.Authorizer = "key", transport.BearerToken("other")

@@ -37,7 +37,7 @@ Durations use Go syntax such as `30s`, `5m`, or `1h30m`.
 | Flag | Environment | Meaning |
 | --- | --- | --- |
 | `-model provider/model` | `SK_MODEL` | Select a model. Default: `deepseek/deepseek-flash`. |
-| `-reasoning-effort value` | `SK_REASONING_EFFORT` | Set reasoning effort; `default` leaves it to the provider. Only `default` is available with `anthropic_messages`. |
+| `-reasoning-effort value` | `SK_REASONING_EFFORT` | Set a reasoning effort supported by the model and provider. Use `default` to leave it to the provider. |
 | `-model-api api` | `SK_MODEL_API` | Override the protocol with `chat_completions`, `responses`, `anthropic_messages`, or `gemini`. |
 | `-base-url url` | `SK_BASE_URL` | Override the provider API base URL. |
 | `-context-window tokens` | — | Override model context metadata; `0` uses route metadata. |

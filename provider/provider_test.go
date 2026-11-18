@@ -153,11 +153,12 @@ func TestNamedProviderConfigurationIsInstanceScoped(t *testing.T) {
 
 func TestUnverifiedRoutesPassReasoningEffortToProvider(t *testing.T) {
 	for _, test := range []struct {
-		name, uri, api, baseURL, effort string
-		topLevel, nested, thinkingLevel string
+		name, uri, api, baseURL, effort               string
+		topLevel, nested, outputEffort, thinkingLevel string
 	}{
 		{name: "unknown model", uri: "openai/future-model", effort: " PROVIDER-LEVEL ", topLevel: "provider-level"},
 		{name: "unreviewed protocol", uri: "deepseek/deepseek-v4-flash", api: "responses", effort: "provider-level", nested: "provider-level"},
+		{name: "compatible Messages", uri: "anthropic/future-model", baseURL: "https://gateway.example/v1", effort: "provider-level", outputEffort: "provider-level"},
 		{name: "Gemini", uri: "google/future-model", effort: "provider-level", thinkingLevel: "provider-level"},
 		{name: "Ollama", uri: "ollama/future-model", effort: "max", topLevel: "max"},
 		{name: "custom OpenRouter", uri: "openrouter/vendor/future-model", baseURL: "https://gateway.example/v1", effort: "off", nested: "off"},
@@ -175,6 +176,9 @@ func TestUnverifiedRoutesPassReasoningEffortToProvider(t *testing.T) {
 					Reasoning struct {
 						Effort string `json:"effort"`
 					} `json:"reasoning"`
+					OutputConfig struct {
+						Effort string `json:"effort"`
+					} `json:"output_config"`
 					GenerationConfig struct {
 						ThinkingConfig struct {
 							Level string `json:"thinkingLevel"`
@@ -184,7 +188,7 @@ func TestUnverifiedRoutesPassReasoningEffortToProvider(t *testing.T) {
 				if err := json.UnmarshalRead(request.Body, &wire); err != nil {
 					t.Fatal(err)
 				}
-				if wire.Effort != test.topLevel || wire.Reasoning.Effort != test.nested ||
+				if wire.Effort != test.topLevel || wire.Reasoning.Effort != test.nested || wire.OutputConfig.Effort != test.outputEffort ||
 					wire.GenerationConfig.ThinkingConfig.Level != test.thinkingLevel || len(wire.Thinking) != 0 {
 					t.Fatalf("effort changed or used the wrong encoding: %+v", wire)
 				}
@@ -210,7 +214,7 @@ func TestReasoningEffortRejectsKnownUnsupportedValues(t *testing.T) {
 	for _, config := range []provider.Config{
 		{URI: "deepseek/deepseek-v4-flash", ReasoningEffort: "provider-level"},
 		{URI: "opencode-go/longcat-2.0", ReasoningEffort: "high"},
-		{URI: "anthropic/future-model", BaseURL: "https://gateway.example/v1", ReasoningEffort: "max"},
+		{URI: "opencode-go/qwen3.8-max", ReasoningEffort: "high"},
 	} {
 		if _, err := provider.Open(t.Context(), config); !errors.Is(err, model.ErrInvalidRequest) || !strings.Contains(err.Error(), "reasoning effort") {
 			t.Fatalf("%s effort %q: %v", config.URI, config.ReasoningEffort, err)

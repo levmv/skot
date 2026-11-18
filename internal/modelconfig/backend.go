@@ -140,6 +140,7 @@ func BuildConfiguredBackend(route Route, client *http.Client, authorizer transpo
 		backend, err = anthropic.New(anthropic.Config{
 			ImageInputUnsupported: route.ImageInputUnsupported,
 			Connection:            connection,
+			ReasoningEffort:       route.ReasoningEffort,
 			MaxTokens:             route.MaxOutputTokens, PromptCache: route.PromptCache,
 			DropMismatchedThinking: route.DropMismatchedThinking,
 		})

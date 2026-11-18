@@ -20,8 +20,13 @@ type messagesRequest struct {
 	ToolChoice struct {
 		Type model.ToolChoice `json:"type"`
 	} `json:"tool_choice,omitzero"`
-	Thinking *thinkingConfig `json:"thinking,omitzero"`
-	Stream   bool            `json:"stream"`
+	OutputConfig outputConfig    `json:"output_config,omitzero"`
+	Thinking     *thinkingConfig `json:"thinking,omitzero"`
+	Stream       bool            `json:"stream"`
+}
+
+type outputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type thinkingConfig struct {
@@ -170,6 +175,7 @@ func (backend *Backend) buildRequest(request model.Request) (messagesRequest, er
 	wireRequest := messagesRequest{
 		Model: backend.apiModel, MaxTokens: backend.maxTokens, System: system,
 		Messages: messages, Tools: tools, Stream: true,
+		OutputConfig: outputConfig{Effort: backend.reasoningEffort},
 	}
 	wireRequest.ToolChoice.Type = request.ToolChoice
 	if request.MaxOutputTokens > 0 {

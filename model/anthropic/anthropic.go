@@ -36,6 +36,8 @@ type Config struct {
 	Connection *transport.Connection
 	// ImageInputUnsupported rejects images locally on routes known not to accept them.
 	ImageInputUnsupported bool
+	// ReasoningEffort maps to output_config.effort. Empty uses the provider default.
+	ReasoningEffort string
 	// MaxTokens supplies the Messages output limit when Request.MaxOutputTokens
 	// is zero. Zero here selects a conservative compatibility default.
 	MaxTokens int
@@ -53,6 +55,7 @@ type Backend struct {
 	connection             *transport.Connection
 	provider               string
 	apiModel               string
+	reasoningEffort        string
 	maxTokens              int
 	promptCache            bool
 	dropMismatchedThinking bool
@@ -77,6 +80,7 @@ func New(config Config) (*Backend, error) {
 		imageInputUnsupported: config.ImageInputUnsupported,
 		connection:            config.Connection,
 		provider:              provider, apiModel: apiModel, maxTokens: maxTokens,
+		reasoningEffort:        strings.ToLower(strings.TrimSpace(config.ReasoningEffort)),
 		promptCache:            config.PromptCache,
 		dropMismatchedThinking: config.DropMismatchedThinking,
 		maxRequestBytes:        productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,

@@ -36,7 +36,7 @@ type ExplicitConfig struct {
 	// User information, query parameters, and fragments are not supported.
 	BaseURL       string
 	ContextWindow int
-	// ReasoningEffort is checked by the adapter, not the built-in model catalog.
+	// ReasoningEffort is sent using the selected protocol's effort field.
 	// Empty (or "default") leaves the effort unspecified.
 	ReasoningEffort string
 	// Nil ChatTraits selects reasoning_effort and max_tokens, with no reasoning
@@ -123,9 +123,6 @@ func New(config ExplicitConfig) (*Model, error) {
 		route.ResponsesTraits = *config.ResponsesTraits
 	}
 	if api == AnthropicMessages {
-		if effort != "" {
-			return nil, model.MarkInvalidRequest(errors.New("reasoning effort is not supported by the Anthropic Messages adapter"))
-		}
 		if config.Anthropic == nil || config.Anthropic.MaxOutputTokens <= 0 {
 			return nil, model.MarkInvalidRequest(errors.New("a positive default output token limit is required for Anthropic Messages"))
 		}

@@ -141,10 +141,6 @@ func (m *screenModel) startProviderLogin(provider string, pending modelSelection
 			m.switchModel(pending)
 			return nil
 		}
-		if status.Source == "environment override" {
-			m.addBlock(screenBlockSystem, provider+" is supplied by an environment override")
-			return nil
-		}
 		m.loginProvider = provider
 		m.loginSelection = pending
 		m.loginReturn = returnPicker
@@ -276,8 +272,21 @@ func (m *screenModel) finishCredentialUpdate(message credentialDoneMsg) {
 		m.addBlock(screenBlockError, action+": "+message.err.Error())
 		return
 	}
-	m.addBlock(screenBlockSystem, success+message.provider)
 	_ = m.refreshProviderStatuses()
+	notice := success + message.provider
+	if !message.logout {
+		for _, status := range m.providers {
+			if status.Name == message.provider && status.Source == "environment override" {
+				environment := "the environment"
+				if status.Environment != "" {
+					environment = status.Environment
+				}
+				notice = "API key saved for " + message.provider + "; still using the key from " + environment
+				break
+			}
+		}
+	}
+	m.addBlock(screenBlockSystem, notice)
 	if message.pending.uri != "" {
 		m.switchModel(message.pending)
 	}

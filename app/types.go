@@ -125,6 +125,7 @@ type Config struct {
 type ProviderStatus struct {
 	Name          string
 	Source        string
+	Environment   string // Name of the API key environment variable, if any.
 	Description   string
 	CredentialURL string
 	ToolService   bool

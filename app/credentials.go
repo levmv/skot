@@ -22,6 +22,7 @@ func providerStatuses(store modelconfig.CredentialStore, registry *modelconfig.R
 		statuses = append(statuses, ProviderStatus{
 			Name:          spec.Name,
 			Source:        source,
+			Environment:   spec.Environment,
 			Description:   spec.Description,
 			CredentialURL: spec.CredentialURL,
 			ToolService:   spec.Capabilities&modelconfig.CredentialModel == 0,
@@ -41,9 +42,6 @@ func storeProviderCredential(ctx context.Context, store *state.Store, provider, 
 	}
 	if spec, err := registry.Provider(provider); err == nil && spec.AuthNone {
 		return fmt.Errorf("provider %q does not use an API key", provider)
-	}
-	if strings.TrimSpace(os.Getenv(registry.ProviderEnvironment(provider))) != "" {
-		return fmt.Errorf("%s is supplied by an environment override; unset %s to replace it", provider, registry.ProviderEnvironment(provider))
 	}
 	if store == nil {
 		return errors.New("auth store is unavailable")

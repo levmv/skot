@@ -90,7 +90,7 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 		model: "deepseek/model",
 		providers: []ProviderStatus{
 			{Name: "deepseek", Source: "auth store", Description: "model provider"},
-			{Name: "openai", Source: "environment override", Description: "model provider"},
+			{Name: "openai", Source: "environment override", Environment: "OPENAI_API_KEY", Description: "model provider"},
 		},
 	}
 	model := testScreenModel(t, fake)
@@ -99,8 +99,20 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 	model.operation = activeOperation{kind: operationTurn, cancel: cancel}
 	model.composer.setValue("/login openai")
 	model, _ = model.submitInput()
-	if model.loginProvider != "" || !strings.Contains(model.transcript.blocks[len(model.transcript.blocks)-1].text, "environment override") {
+	if model.loginProvider != "openai" || model.secret.EchoMode != textinput.EchoPassword {
 		t.Fatalf("environment login state = %q / %#v", model.loginProvider, model.transcript.blocks[len(model.transcript.blocks)-1])
+	}
+	model.secret.SetValue("replacement-key")
+	model, command := model.submitInput()
+	if command == nil {
+		t.Fatal("environment override prevented credential storage")
+	}
+	model, _ = model.update(command())
+	if fake.loginProvider != "openai" || fake.loginToken != "replacement-key" || model.loginProvider != "" {
+		t.Fatalf("environment login = provider %q token %q active %q", fake.loginProvider, fake.loginToken, model.loginProvider)
+	}
+	if notice := model.transcript.blocks[len(model.transcript.blocks)-1].text; !strings.Contains(notice, "API key saved") || !strings.Contains(notice, "still using the key from OPENAI_API_KEY") {
+		t.Fatalf("environment login notice = %q", notice)
 	}
 	model.composer.setValue("/logout")
 	model, _ = model.submitInput()
@@ -111,7 +123,7 @@ func TestLoginAndLogoutRespectCredentialSources(t *testing.T) {
 	if fake.logoutProvider != "" || !model.picker.active() {
 		t.Fatalf("logout accepted a numeric shortcut: provider=%q picker=%#v", fake.logoutProvider, model.picker)
 	}
-	model, command := model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
+	model, command = model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter, BaseCode: tea.KeyEnter})
 	if command == nil {
 		t.Fatal("logout did not schedule credential removal")
 	}

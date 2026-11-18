@@ -104,7 +104,7 @@ the currently available route list and switch models. You can also enter any
 
 Interactive `/login [provider]` saves credentials in the private store;
 `/logout [provider]` removes them. An environment variable takes precedence over
-a stored API key and must be unset before the corresponding key can be changed.
+a stored API key.
 
 Web tools use separate credentials:
 

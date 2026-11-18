@@ -93,8 +93,26 @@ func TestStoredCredentialIsUsedAndEnvironmentOverridesIt(t *testing.T) {
 	if got := request.Header.Get("Authorization"); got != "Bearer environment-key" {
 		t.Fatalf("environment authorization = %q", got)
 	}
+	if err := storeProviderCredential(t.Context(), store, "openai", "replacement-key", nil); err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Del("Authorization")
+	if err := authorizer.Authorize(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer environment-key" {
+		t.Fatalf("login displaced environment authorization: %q", got)
+	}
 	if err := deleteProviderCredential(t.Context(), store, "openai", nil); err == nil || !strings.Contains(err.Error(), "environment override") {
 		t.Fatalf("environment logout error = %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "")
+	request.Header.Del("Authorization")
+	if err := authorizer.Authorize(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer replacement-key" {
+		t.Fatalf("stored replacement authorization = %q", got)
 	}
 }
 

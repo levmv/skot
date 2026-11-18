@@ -186,10 +186,20 @@ func TestConfiguredProviderCredentialsStayPrivate(t *testing.T) {
 		}
 	}
 	run()
-	t.Setenv(environment, "")
-	expected.Store("stored-secret")
 	if err := application.Login(t.Context(), "router", "stored-secret"); err != nil {
 		t.Fatal(err)
 	}
+	statuses, err := application.ProviderStatuses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(statuses, func(status ProviderStatus) bool {
+		return status.Name == "router" && status.Source == "environment override" && status.Environment == environment
+	}) {
+		t.Fatal("login lost the configured environment credential source")
+	}
+	run()
+	t.Setenv(environment, "")
+	expected.Store("stored-secret")
 	run()
 }

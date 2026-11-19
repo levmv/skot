@@ -138,10 +138,10 @@ func BuildConfiguredBackend(route Route, client *http.Client, authorizer transpo
 		})
 	case AnthropicMessages:
 		backend, err = anthropic.New(anthropic.Config{
-			ImageInputUnsupported: route.ImageInputUnsupported,
-			Connection:            connection,
-			ReasoningEffort:       route.ReasoningEffort,
-			MaxTokens:             route.MaxOutputTokens, PromptCache: route.PromptCache,
+			ImageInputUnsupported:  route.ImageInputUnsupported,
+			Connection:             connection,
+			ReasoningEffort:        route.ReasoningEffort,
+			MaxTokens:              route.MaxOutputTokens,
 			DropMismatchedThinking: route.DropMismatchedThinking,
 		})
 	case Gemini:

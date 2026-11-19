@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/levmv/skot/internal/modelinput"
@@ -169,9 +170,7 @@ func (backend *Backend) buildRequest(request model.Request) (messagesRequest, er
 		}
 		system += model.ConversationSummaryPrefix + request.Summary
 	}
-	if backend.promptCache {
-		markPromptCacheBreakpoint(messages)
-	}
+	markPromptCacheBreakpoint(messages)
 	wireRequest := messagesRequest{
 		Model: backend.apiModel, MaxTokens: backend.maxTokens, System: system,
 		Messages: messages, Tools: tools, Stream: true,
@@ -189,19 +188,19 @@ func (backend *Backend) buildRequest(request model.Request) (messagesRequest, er
 	return wireRequest, nil
 }
 
-// markPromptCacheBreakpoint caches everything the request sends before its final
-// block: tools, instructions, and the whole replayed history. A tool turn then
-// reads the previous turn's prefix and writes only what it appended, which is
-// what keeps a long agent loop affordable on metered Anthropic routes.
+// Mark the last eligible block so the next turn can reuse the prefix, including
+// tools and system instructions. Thinking blocks and empty text cannot carry a marker.
 func markPromptCacheBreakpoint(messages []message) {
-	if len(messages) == 0 {
-		return
+	for _, message := range slices.Backward(messages) {
+		for i := range slices.Backward(message.Content) {
+			block := &message.Content[i]
+			if block.Type == "thinking" || block.Type == "redacted_thinking" || (block.Type == "text" && block.Text == "") {
+				continue
+			}
+			block.CacheControl = &cacheControl{Type: "ephemeral"}
+			return
+		}
 	}
-	blocks := messages[len(messages)-1].Content
-	if len(blocks) == 0 {
-		return
-	}
-	blocks[len(blocks)-1].CacheControl = &cacheControl{Type: "ephemeral"}
 }
 
 func (backend *Backend) buildMessages(request model.Request) ([]message, error) {

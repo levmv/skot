@@ -78,15 +78,15 @@ func TestUserImagesSurviveCallsAndReplay(t *testing.T) {
 				textType = "input_text"
 			}
 			wantMixed := fmt.Sprintf(`[{"type":%q,"text":"Compare:"},%s,%s,{"type":%q,"text":"What changed?"}]`, textType, expectedImagePart(api, first), expectedImagePart(api, second), textType)
-			for _, body := range bodies {
+			for i, body := range bodies {
 				messages := contentTestMessages(t, api, body)
-				assertContentJSON(t, messages[0].Content, wantMixed)
+				assertContentJSON(t, messages[0].Content, wantMixed, api == "anthropic_messages" && i == 0)
 			}
 			messages := contentTestMessages(t, api, bodies[1])
 			if len(messages) != 3 || messages[0].Role != "user" || messages[1].Role != "assistant" || messages[2].Role != "user" {
 				t.Fatalf("replayed messages = %s", bodies[1])
 			}
-			assertContentJSON(t, messages[2].Content, "["+expectedImagePart(api, second)+"]")
+			assertContentJSON(t, messages[2].Content, "["+expectedImagePart(api, second)+"]", api == "anthropic_messages")
 		})
 	}
 }
@@ -117,7 +117,7 @@ func TestUserTextKeepsWireEncoding(t *testing.T) {
 			if api == "anthropic_messages" {
 				want = `[{"type":"text","text":"ordinary text"}]`
 			}
-			assertContentJSON(t, contentTestMessages(t, api, bodies[0])[0].Content, want)
+			assertContentJSON(t, contentTestMessages(t, api, bodies[0])[0].Content, want, api == "anthropic_messages")
 		})
 	}
 }
@@ -253,7 +253,7 @@ func expectedImagePart(api string, image model.ImageContent) string {
 	}
 }
 
-func assertContentJSON(t *testing.T, got jsontext.Value, want string) {
+func assertContentJSON(t *testing.T, got jsontext.Value, want string, wantCacheMarker bool) {
 	t.Helper()
 	var gotValue, wantValue any
 	if err := json.Unmarshal(got, &gotValue); err != nil {
@@ -262,7 +262,12 @@ func assertContentJSON(t *testing.T, got jsontext.Value, want string) {
 	if err := json.Unmarshal([]byte(want), &wantValue); err != nil {
 		t.Fatal(err)
 	}
+	if wantCacheMarker {
+		parts := wantValue.([]any)
+		last := parts[len(parts)-1].(map[string]any)
+		last["cache_control"] = map[string]any{"type": "ephemeral"}
+	}
 	if !reflect.DeepEqual(gotValue, wantValue) {
-		t.Fatalf("content = %s, want %s", got, want)
+		t.Fatalf("content = %s, want %v", got, wantValue)
 	}
 }

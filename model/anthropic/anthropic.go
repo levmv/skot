@@ -41,10 +41,6 @@ type Config struct {
 	// MaxTokens supplies the Messages output limit when Request.MaxOutputTokens
 	// is zero. Zero here selects a conservative compatibility default.
 	MaxTokens int
-	// PromptCache marks endpoints that honor cache_control breakpoints. It stays
-	// off for compatible endpoints that place their own breakpoints, because the
-	// protocol allows only a few per request.
-	PromptCache bool
 	// DropMismatchedThinking asks the API to drop thinking invalidated by context
 	// edits. It enables adaptive thinking and requires support for the binding beta.
 	DropMismatchedThinking bool
@@ -57,7 +53,6 @@ type Backend struct {
 	apiModel               string
 	reasoningEffort        string
 	maxTokens              int
-	promptCache            bool
 	dropMismatchedThinking bool
 	maxRequestBytes        int
 	maxCompletionBytes     int
@@ -81,7 +76,6 @@ func New(config Config) (*Backend, error) {
 		connection:            config.Connection,
 		provider:              provider, apiModel: apiModel, maxTokens: maxTokens,
 		reasoningEffort:        strings.ToLower(strings.TrimSpace(config.ReasoningEffort)),
-		promptCache:            config.PromptCache,
 		dropMismatchedThinking: config.DropMismatchedThinking,
 		maxRequestBytes:        productlimits.MaxModelRequestBytes, maxCompletionBytes: productlimits.MaxModelCompletionBytes,
 	}, nil

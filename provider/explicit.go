@@ -70,8 +70,6 @@ type ExplicitConfig struct {
 type AnthropicOptions struct {
 	// MaxOutputTokens must be positive. Request.MaxOutputTokens can override it.
 	MaxOutputTokens int
-	// PromptCache adds cache_control breakpoints to cache the request prefix.
-	PromptCache bool
 	// DropMismatchedThinking asks the API to drop thinking invalidated by context
 	// edits. It enables adaptive thinking and requires the thinking-binding beta.
 	DropMismatchedThinking bool
@@ -127,7 +125,6 @@ func New(config ExplicitConfig) (*Model, error) {
 			return nil, model.MarkInvalidRequest(errors.New("a positive default output token limit is required for Anthropic Messages"))
 		}
 		route.MaxOutputTokens = config.Anthropic.MaxOutputTokens
-		route.PromptCache = config.Anthropic.PromptCache
 		route.DropMismatchedThinking = config.Anthropic.DropMismatchedThinking
 	}
 	route.ProviderStateContract = route.StateContract()

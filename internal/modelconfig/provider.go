@@ -14,16 +14,12 @@ type ProviderSpec struct {
 	BaseURL string
 	// APIBaseURLs selects a protocol-specific endpoint after API overrides.
 	// An explicit base URL replaces these defaults for every protocol.
-	APIBaseURLs    map[API]string
-	Header         http.Header
-	Credentialless bool
-	AuthNone       bool
-	CustomEndpoint bool
-	DefaultAPI     API
-	// PromptCache marks endpoints that expect the caller to place Anthropic
-	// cache_control breakpoints. Compatible endpoints that cache on their own
-	// leave it off so Skot does not compete for the few breakpoints allowed.
-	PromptCache          bool
+	APIBaseURLs          map[API]string
+	Header               http.Header
+	Credentialless       bool
+	AuthNone             bool
+	CustomEndpoint       bool
+	DefaultAPI           API
 	RequireDeclaredModel bool
 	// RequestEncoding is set only for endpoints verified to decode it. Codex
 	// decodes gzip and zstd, and its official client sends zstd. DeepSeek,
@@ -46,7 +42,6 @@ var Providers = map[string]ProviderSpec{
 	"deepseek": {BaseURL: "https://api.deepseek.com/v1", DefaultAPI: ChatCompletions},
 	"anthropic": {
 		BaseURL: "https://api.anthropic.com/v1", DefaultAPI: AnthropicMessages,
-		PromptCache: true,
 	},
 	"openrouter": {
 		BaseURL:    "https://openrouter.ai/api/v1",

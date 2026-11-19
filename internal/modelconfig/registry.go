@@ -187,7 +187,6 @@ func (registry *Registry) Provider(name string) (ProviderSpec, error) {
 			spec.CustomEndpoint = true
 			spec.Header = nil
 			spec.RequestEncoding = ""
-			spec.PromptCache = false
 		}
 		spec.BaseURL = baseURL
 		spec.APIBaseURLs = nil

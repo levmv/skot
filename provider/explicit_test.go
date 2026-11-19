@@ -105,6 +105,8 @@ func TestExplicitModelUsesOnlyCallerConfiguration(t *testing.T) {
 						path, effort = "/v1/responses", wire.Reasoning.Effort
 					case provider.AnthropicMessages:
 						path, effort = "/v1/messages", wire.OutputConfig.Effort
+						content := contentTestMessages(t, string(api), body)[0].Content
+						assertContentJSON(t, content, `[{"type":"text","text":"hello"}]`, true)
 						if wire.MaxTokens != config.Anthropic.MaxOutputTokens {
 							t.Fatalf("Messages output limit = %d", wire.MaxTokens)
 						}

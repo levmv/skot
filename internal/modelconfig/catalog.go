@@ -110,7 +110,6 @@ type Route struct {
 	ContextWindow          int
 	ContextWindowEstimated bool
 	MaxOutputTokens        int
-	PromptCache            bool
 	DropMismatchedThinking bool
 	ReasoningEffort        string
 	ReasoningEfforts       []string // Menu choices; unverified routes may accept other values.
@@ -567,7 +566,7 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		requestEncoding = ""
 		compatibility = Unverified
 		// Reviewed model controls and replay are route claims. A custom endpoint
-		// uses the provider's default effort field without replay or caching.
+		// uses the generic Chat Completions and Responses extensions.
 		traits.PromptCacheKey = false
 		traits.ReasoningReplay = ""
 		traits.ReasoningEffort = defaults.ChatTraits.ReasoningEffort
@@ -584,9 +583,6 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 	if configuredModel.MaxOutputTokens != nil {
 		maxOutputTokens = *configuredModel.MaxOutputTokens
 	}
-	// Placing cache breakpoints is a route claim like the traits above: a custom
-	// compatible endpoint starts from the conservative generic behavior.
-	promptCache := api == AnthropicMessages && !customEndpoint && providerDescription.PromptCache
 	dropMismatchedThinking := api == AnthropicMessages && !customEndpoint &&
 		usesReviewedProtocol && declaration.DropMismatchedThinking
 
@@ -619,7 +615,7 @@ func Resolve(uri, reasoningEffort string, overrides Overrides, enrichment Enrich
 		BaseURL: baseURL, Header: header, Credentialless: providerDescription.Credentialless,
 		CustomEndpoint: customEndpoint, ImageInputUnsupported: imageInputUnsupported,
 		ContextWindow: contextWindow, ContextWindowEstimated: contextEstimated,
-		MaxOutputTokens: maxOutputTokens, PromptCache: promptCache,
+		MaxOutputTokens:        maxOutputTokens,
 		DropMismatchedThinking: dropMismatchedThinking,
 		ReasoningEffort:        reasoningEffort, ReasoningEfforts: reasoningEfforts,
 		ChatTraits: traits, ResponsesTraits: responsesTraits,

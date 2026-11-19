@@ -358,7 +358,8 @@ func TestRedactedThinkingRoundTripsAsProviderState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(request.Messages) != 1 || len(request.Messages[0].Content) != 1 ||
-		request.Messages[0].Content[0].Type != "redacted_thinking" || string(request.Messages[0].Content[0].Data) != `"opaque-state"` {
+		request.Messages[0].Content[0].Type != "redacted_thinking" || string(request.Messages[0].Content[0].Data) != `"opaque-state"` ||
+		request.Messages[0].Content[0].CacheControl != nil {
 		t.Fatalf("messages = %#v", request.Messages)
 	}
 }
@@ -747,7 +748,7 @@ func TestBuildRequestUsesDefaultMaxTokens(t *testing.T) {
 	}
 }
 
-func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
+func TestBuildRequestPlacesOnePromptCacheBreakpoint(t *testing.T) {
 	items := []model.Item{
 		{Kind: model.ItemUserText, Text: "read the file"},
 		{Kind: model.ItemAssistantText, ResponseID: "response_1", Text: "checking"},
@@ -757,34 +758,13 @@ func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
 		{Kind: model.ItemToolResult, ToolResult: &model.ToolResult{CallID: "call_1", Content: model.TextContent("contents")}},
 	}
 
-	plain, err := plainRequest(newTestBackend(t, "http://example.invalid/v1"), items)
+	backend := newTestBackend(t, "http://example.invalid/v1")
+	cached, err := backend.buildRequest(model.Request{Instructions: "instructions", Items: items})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if breakpoints(plain) != 0 {
-		t.Fatalf("unrequested cache breakpoints: %#v", plain.Messages)
-	}
-
-	backend, err := New(Config{
-		Connection: newTestConnection(t, transport.Config{
-			API:        "anthropic_messages",
-			Provider:   "test",
-			Endpoint:   "http://example.invalid/v1/messages",
-			Authorizer: transport.HeaderToken("x-api-key", "secret"),
-			APIModel:   "test-model",
-		}),
-		MaxTokens: 1024, PromptCache: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cached, err := plainRequest(backend, items)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The protocol caps breakpoints per request, so exactly one must land, and it
-	// must be last: it caches every earlier block including tools and system.
-	if breakpoints(cached) != 1 {
-		t.Fatalf("cache breakpoints = %d, want 1", breakpoints(cached))
+	if got := breakpoints(cached); got != 1 {
+		t.Fatalf("cache breakpoints = %d, want 1", got)
 	}
 	blocks := cached.Messages[len(cached.Messages)-1].Content
 	final := blocks[len(blocks)-1]
@@ -797,10 +777,6 @@ func TestBuildRequestPlacesOnePromptCacheBreakpointWhenEnabled(t *testing.T) {
 	if err != nil || breakpoints(empty) != 0 {
 		t.Fatalf("empty request/error = %#v/%v", empty, err)
 	}
-}
-
-func plainRequest(backend *Backend, items []model.Item) (messagesRequest, error) {
-	return backend.buildRequest(model.Request{Instructions: "instructions", Items: items})
 }
 
 func breakpoints(request messagesRequest) int {

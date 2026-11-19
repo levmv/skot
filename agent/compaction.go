@@ -52,7 +52,7 @@ func (runtime *Runtime) Compact(ctx context.Context) (ContextCompactedRecord, er
 	if err != nil {
 		return ContextCompactedRecord{}, fmt.Errorf("read journal for compaction: %w", err)
 	}
-	live, err := reduceRecords(records)
+	live, err := runtime.reduceContextRecords(records)
 	if err != nil {
 		return ContextCompactedRecord{}, err
 	}
@@ -80,7 +80,7 @@ func (runtime *Runtime) compactLocked(ctx context.Context, live *stateReducer, s
 		return ContextCompactedRecord{}, err
 	}
 	emitEvent(emit, Event{Kind: EventStatus, Text: "compacting context"})
-	response, err := runtime.completeRequest(ctx, "", request, withoutStreamedModelContent(emit))
+	response, err := runtime.completeRequest(ctx, live, "", request, 0, withoutStreamedModelContent(emit))
 	if err != nil {
 		return ContextCompactedRecord{}, fmt.Errorf("summarize context: %w", sanitizeError(err, runtime.sanitize))
 	}
@@ -197,7 +197,7 @@ func (runtime *Runtime) planCompactionForModelBoundary(state State, spec runRequ
 func (runtime *Runtime) compactionTargetEnd(state State, spec runRequestSpec, boundaries []contextBoundary) int {
 	report := runtime.requestReport(state, spec)
 	budget := compactionVerbatimTokenBudget(report)
-	if report.HistoryTokens <= budget {
+	if report.HistoryTokens <= budget && (report.Window == 0 || report.TotalInputTokens <= report.InputLimit) {
 		return -1
 	}
 	// Find the earliest boundary whose provider-projected tail fits. The lower
@@ -227,12 +227,13 @@ func (runtime *Runtime) compactionInputTargetEnd(state State, spec runRequestSpe
 	// Including a newer instruction can replace a larger retained version, so
 	// input size is not monotonic in the prefix length.
 	for candidateEnd := desiredTargetEnd; candidateEnd >= 0; candidateEnd-- {
-		candidate := state.historyBefore(boundaries[candidateEnd].first)
-		prompt := compactionPrompt(
-			state.Configured.ModelContext.CompactionInstructions,
-			compactionRuntimeFacts(candidate),
-		)
-		report := runtime.requestReport(candidate, runRequestSpec{omitTools: spec.omitTools, extraUserText: prompt})
+		first := boundaries[candidateEnd].first
+		plan := compactionPlan{FirstVerbatimSequence: first, RuntimeFacts: compactionRuntimeFacts(state.historyBefore(first))}
+		request, err := runtime.compactionRequest(state, spec, plan)
+		if err != nil {
+			return -1
+		}
+		report := estimateContextReport(state, runtime.modelInfo.ContextWindow, request, 0, runtime.itemProjection().OpaqueReasoningBytes)
 		if report.TotalInputTokens <= report.InputLimit {
 			return candidateEnd
 		}
@@ -265,9 +266,11 @@ func compactionPrompt(instructions, runtimeFacts string) string {
 }
 
 func (runtime *Runtime) projectedTailTokens(state State, spec runRequestSpec, first uint64) int {
+	state = state.withPreviewInputs(spec.pendingInputs)
 	items := state.modelItemsFromSequence(first, state.inputsBeforeBoundary(first))
-	items, boundary := runtime.projectedItemsForRequest(state, items, spec.extraUserText)
-	return estimateItemsTokens(items[:boundary])
+	projection := runtime.itemProjection()
+	request, pending := state.projectRequest(items, spec, projection)
+	return state.estimateProjectedTokens(request.Items[:len(request.Items)-pending], projection.OpaqueReasoningBytes)
 }
 
 // commitCompaction appends a rolling summary only if the journal still has the

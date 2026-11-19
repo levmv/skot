@@ -12,7 +12,7 @@ func (runtime *Runtime) State(ctx context.Context) (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("read journal: %w", err)
 	}
-	state, err := Replay(records)
+	live, err := foldRecords(records, true)
 	if err != nil {
 		return State{}, err
 	}
@@ -22,10 +22,16 @@ func (runtime *Runtime) State(ctx context.Context) (State, error) {
 	// replay if an operation completed between Records and TryLock.
 	if runtime.runMu.TryLock() {
 		runtime.configMu.RLock()
-		status := runtime.calculateSessionStatus(state)
+		projected := live.state
+		runtime.restoreContextSamples(&projected)
+		status := runtime.calculateSessionStatus(projected, nil)
 		runtime.configMu.RUnlock()
-		runtime.storeSessionStatus(state.LastSequence, status)
+		runtime.lastContextSamples = projected.contextSamples
+		runtime.storeSessionStatus(live.state.LastSequence, status)
 		runtime.runMu.Unlock()
 	}
+	state := live.state
+	state.contextSamples = [2]contextSample{}
+	state.responseTokens = nil
 	return state, nil
 }

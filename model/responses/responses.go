@@ -64,10 +64,17 @@ func New(config Config) (*Backend, error) {
 	}, nil
 }
 
-// ProjectModelItems keeps all runtime-owned items because Responses replays all
-// encrypted reasoning in the current provider epoch.
-func (backend *Backend) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
-	return items
+func (*Backend) ProjectModelItems(items []modelapi.Item) []modelapi.Item {
+	return ProjectModelItems(items)
+}
+
+// ProjectModelItems retains reasoning that has saved state for replay.
+func ProjectModelItems(items []modelapi.Item) []modelapi.Item {
+	return slices.DeleteFunc(items, func(item modelapi.Item) bool {
+		return item.Kind == modelapi.ItemReasoning && !slices.ContainsFunc(item.ProviderData, func(data modelapi.ProviderData) bool {
+			return data.Kind == reasoningItemDataKind
+		})
+	})
 }
 
 func (backend *Backend) backendID() string { return BackendID(backend.provider) }

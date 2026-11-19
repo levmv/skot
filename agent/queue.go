@@ -78,20 +78,6 @@ func (runtime *Runtime) QueuedInputs() []string {
 	return inputs
 }
 
-func (runtime *Runtime) queuedModelInputs(state State) []string {
-	runtime.queueMu.Lock()
-	defer runtime.queueMu.Unlock()
-	if len(runtime.pendingInputs) == 0 {
-		return nil
-	}
-	latest := state.latestInstructions()
-	inputs := make([]string, len(runtime.pendingInputs))
-	for index, input := range runtime.pendingInputs {
-		inputs[index] = input.withNewInstructions(latest).modelText()
-	}
-	return inputs
-}
-
 func (runtime *Runtime) deliverQueuedInput(ctx context.Context, reducer *stateReducer, runID string) ([]deliveredInput, error) {
 	runtime.queueMu.Lock()
 	defer runtime.queueMu.Unlock()

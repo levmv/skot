@@ -20,7 +20,7 @@ func (runtime *Runtime) ClearInputContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	live, err := reduceRecords(records)
+	live, err := runtime.reduceContextRecords(records)
 	if err != nil {
 		return err
 	}

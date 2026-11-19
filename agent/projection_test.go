@@ -95,7 +95,7 @@ func TestContextEstimateMatchesTheProjectedRequest(t *testing.T) {
 			if replayed != (replay != replayNone) {
 				t.Fatalf("request replayed reasoning = %v: %#v", replayed, request.Items)
 			}
-			report := runtime.contextReport(state)
+			report := runtime.requestReport(state, runRequestSpec{})
 			if report.HistoryTokens != estimateItemsTokens(request.Items) {
 				t.Fatalf("history estimate = %d, request items estimate = %d",
 					report.HistoryTokens, estimateItemsTokens(request.Items))
@@ -121,7 +121,7 @@ func TestContextEstimateProjectsPendingInputAsTheNextUserMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			estimate := runtime.contextReport(state, "next question")
+			estimate := runtime.requestReport(state, runRequestSpec{pendingInputs: []Input{{Text: "next question"}}})
 
 			if _, err := runtime.Run(context.Background(), "next question", nil); err != nil {
 				t.Fatal(err)
@@ -163,7 +163,7 @@ func TestRunRequestProjectsExtraUserTextWithHistory(t *testing.T) {
 	if last := request.Items[len(request.Items)-1]; last.Kind != modelapi.ItemUserText || last.Text != toolLimitInstructions {
 		t.Fatalf("extra user text = %#v", last)
 	}
-	report := runtime.contextReportForRequest(state, false, toolLimitInstructions)
+	report := runtime.requestReport(state, spec)
 	if report.HistoryTokens+report.PendingTokens != estimateItemsTokens(request.Items) {
 		t.Fatalf("estimate = %d (history %d + pending %d), request = %d",
 			report.HistoryTokens+report.PendingTokens,

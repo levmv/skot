@@ -13,23 +13,23 @@ const (
 	defaultPrunedToolTailBytes = 2 * 1024
 )
 
-func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, ContextReport, error) {
+func (runtime *Runtime) pruneOldToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, error) {
 	boundaries := state.contextBoundaries()
 	// Preserve the same recent tail as compaction before considering savings.
 	targetEnd := runtime.compactionTargetEnd(state, spec, boundaries)
 	if targetEnd < 0 {
-		return Record{}, report, nil
+		return Record{}, nil
 	}
 	return runtime.pruneToolResultsThroughOnce(ctx, state, spec, report, boundaries[targetEnd].through, false)
 }
 
-func (runtime *Runtime) pruneLatestToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, ContextReport, error) {
+func (runtime *Runtime) pruneLatestToolResultsOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport) (Record, error) {
 	return runtime.pruneToolResultsThroughOnce(ctx, state, spec, report, state.latestTextToolPruningSequence(), true)
 }
 
-func (runtime *Runtime) pruneToolResultsThroughOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport, through uint64, emergency bool) (Record, ContextReport, error) {
+func (runtime *Runtime) pruneToolResultsThroughOnce(ctx context.Context, state State, spec runRequestSpec, report ContextReport, through uint64, emergency bool) (Record, error) {
 	if through == 0 {
-		return Record{}, report, nil
+		return Record{}, nil
 	}
 	payload := ToolResultsPrunedRecord{
 		ThroughSequence: through,
@@ -38,31 +38,35 @@ func (runtime *Runtime) pruneToolResultsThroughOnce(ctx context.Context, state S
 	}
 	if state.ToolPruning != nil {
 		if payload.ThroughSequence <= state.ToolPruning.ThroughSequence {
-			return Record{}, report, nil
+			return Record{}, nil
 		}
 		payload.HeadBytes = state.ToolPruning.HeadBytes
 		payload.TailBytes = state.ToolPruning.TailBytes
 	}
 	projected := state
 	projected.ToolPruning = &payload
+	projected.contextSamples = [2]contextSample{}
 	prunedReport := runtime.requestReport(projected, spec)
+	// The decision credits only projected savings. The committed pruning
+	// will discard the anchor, regardless of how much content was shortened.
+	prunedReport.TotalInputTokens = report.TotalInputTokens - (report.localInputTokens() - prunedReport.localInputTokens())
 	if emergency {
 		// Shortening unseen output is a last resort. Commit only a reduction
 		// that fits the known window, even if it exceeds the ordinary soft target.
 		if report.Window == 0 || prunedReport.TotalInputTokens >= report.TotalInputTokens || prunedReport.TotalInputTokens > prunedReport.InputLimit {
-			return Record{}, report, nil
+			return Record{}, nil
 		}
 	} else if !toolResultPruningIsDecisive(report, prunedReport) {
-		return Record{}, report, nil
+		return Record{}, nil
 	}
 	if err := validateToolPruningBoundary(state, payload, state.LastSequence+1); err != nil {
-		return Record{}, report, err
+		return Record{}, err
 	}
 	record, err := appendRecord(ctx, runtime.journal, RecordToolResultsPruned, payload)
 	if err != nil {
-		return Record{}, report, err
+		return Record{}, err
 	}
-	return record, prunedReport, nil
+	return record, nil
 }
 
 func (state State) latestTextToolPruningSequence() uint64 {

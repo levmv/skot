@@ -11,9 +11,12 @@ import (
 // live run. Keeping its indexes private prevents callers from constructing
 // state which could not have come from accepted records.
 type stateReducer struct {
-	state      State
-	active     map[string]struct{}
-	blockByRun map[string]int
+	state             State
+	active            map[string]struct{}
+	blockByRun        map[string]int
+	contextAttempts   map[string]contextAttempt
+	runsWithAttempts  map[string]bool
+	lastContextChange uint64
 }
 
 // Replay derives the complete journaled session state using the same transition
@@ -26,11 +29,30 @@ func Replay(records []Record) (State, error) {
 	return reducer.state, nil
 }
 
+// ReplayWithContext also collects optional evidence for State.ContextReport.
+// Auxiliary records do not affect the conversation state or its validation.
+func ReplayWithContext(records []Record) (State, error) {
+	reducer, err := foldRecords(records, true)
+	if err != nil {
+		return State{}, err
+	}
+	return reducer.state, nil
+}
+
 func reduceRecords(records []Record) (*stateReducer, error) {
+	return foldRecords(records, false)
+}
+
+func foldRecords(records []Record, trackContext bool) (*stateReducer, error) {
 	reducer := &stateReducer{
 		state:      State{DeliveredJobs: make(map[string]struct{})},
 		active:     make(map[string]struct{}),
 		blockByRun: make(map[string]int),
+	}
+	if trackContext {
+		reducer.contextAttempts = make(map[string]contextAttempt)
+		reducer.runsWithAttempts = make(map[string]bool)
+		reducer.state.responseTokens = make(map[string]responseTokenCount)
 	}
 	for _, record := range records {
 		if err := reducer.apply(record); err != nil {
@@ -50,11 +72,31 @@ func (reducer *stateReducer) apply(record Record) error {
 	if err := reducer.applyRecord(record); err != nil {
 		return err
 	}
+	if reducer.contextAttempts != nil {
+		reducer.updateContextBoundary(record)
+	}
 	reducer.state.LastSequence = record.Sequence
 	if !isAuxiliaryRecordKind(record.Kind) {
 		reducer.state.lastRequiredSequence = record.Sequence
 	}
 	return nil
+}
+
+func (reducer *stateReducer) updateContextBoundary(record Record) {
+	switch record.Kind {
+	case RecordModelAttemptStarted, RecordModelAttemptFinished, RecordModelAttemptFailed:
+		reducer.observeContextAttempt(record)
+	case RecordImageDeliveryObserved:
+		// Acceptance confirms that the existing image projection works.
+		if reducer.state.ImageDelivery.Status == ImageDeliveryRejected {
+			reducer.state.contextSamples = [2]contextSample{}
+		}
+	case RecordModelSelected, RecordSessionConfigured, RecordInputContextCleared, RecordContextCompacted, RecordToolResultsPruned:
+		reducer.state.contextSamples = [2]contextSample{}
+		reducer.lastContextChange = record.Sequence
+	case RecordRunInputAdded, RecordModelResponse, RecordToolResult, RecordBoundaryEvent:
+		reducer.lastContextChange = record.Sequence
+	}
 }
 
 func (reducer *stateReducer) applyRecord(record Record) error {
@@ -220,6 +262,9 @@ func (reducer *stateReducer) applyModelResponse(record Record) error {
 	if !exists {
 		return fmt.Errorf("model response has no user block at sequence %d", record.Sequence)
 	}
+	if reducer.contextAttempts != nil {
+		reducer.observeContextResponse(record, payload, state.Blocks[blockIndex])
+	}
 	for _, item := range payload.Items {
 		item, err = normalizeAcceptedItem(item)
 		if err != nil {
@@ -331,6 +376,12 @@ func (reducer *stateReducer) applyRunFinished(record Record) error {
 		state.DetachedJobs = append([]string(nil), payload.DetachedJobs...)
 	}
 	delete(reducer.active, payload.RunID)
+	delete(reducer.runsWithAttempts, payload.RunID)
+	for id, attempt := range reducer.contextAttempts {
+		if attempt.start.RunID == payload.RunID || attempt.finish.RunID == payload.RunID {
+			delete(reducer.contextAttempts, id)
+		}
+	}
 	for index, runID := range state.ActiveRuns {
 		if runID == payload.RunID {
 			state.ActiveRuns = append(state.ActiveRuns[:index], state.ActiveRuns[index+1:]...)

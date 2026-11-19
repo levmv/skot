@@ -55,7 +55,32 @@ func New(config Config) (*Backend, error) {
 	return &Backend{connection: config.Connection, provider: config.Connection.Provider(), reasoningEffort: effort, imageInputUnsupported: config.ImageInputUnsupported, defaultMaxOutputTokens: config.MaxOutputTokens}, nil
 }
 
-func (backend *Backend) ProjectModelItems(items []model.Item) []model.Item { return items }
+func (*Backend) ProjectModelItems(items []model.Item) []model.Item {
+	return ProjectModelItems(items)
+}
+
+// ProjectModelItems retains thoughts only when their signed response can be replayed.
+func ProjectModelItems(items []model.Item) []model.Item {
+	kept := items[:0]
+	for start := 0; start < len(items); {
+		end := start + 1
+		id := items[start].ResponseID
+		for id != "" && end < len(items) && items[end].ResponseID == id {
+			end++
+		}
+		response := items[start:end]
+		saved, err := savedReplayParts(response, nil, nil)
+		// Keep malformed state so request construction can report it.
+		hasSignedParts := saved != nil || err != nil
+		for _, item := range response {
+			if item.Kind != model.ItemReasoning || hasSignedParts {
+				kept = append(kept, item)
+			}
+		}
+		start = end
+	}
+	return kept
+}
 
 type generateResponse struct {
 	responseFields

@@ -61,6 +61,8 @@ type State struct {
 	// lastRequiredSequence advances only for records which participate in the
 	// semantic session projection. Auxiliary diagnostics leave it unchanged.
 	lastRequiredSequence uint64
+	contextSamples       [2]contextSample
+	responseTokens       map[string]responseTokenCount
 }
 
 func (state State) hasUnfinishedWork() bool {

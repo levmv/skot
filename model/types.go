@@ -199,9 +199,24 @@ type StreamEvent struct {
 type Backend interface {
 	Complete(context.Context, Request, func(StreamEvent)) (Response, error)
 	// ProjectModelItems applies adapter replay policy after ReplayContext ownership
-	// filtering. It may filter reasoning items in place, but must preserve order
-	// and every other item, and must not retain the slice.
+	// filtering. It may filter reasoning items in place, preserving order and
+	// every other item. Replay data and content are read-only. The backend must
+	// not retain the slice.
 	ProjectModelItems([]Item) []Item
+}
+
+// ItemProjection supplies the format-specific parts of a history estimate.
+// OpaqueReasoningBytes fills a zeroed slice parallel to the projected response
+// with lengths of replayed opaque fields, grouped with their reasoning item.
+// The response is borrowed read-only.
+type ItemProjection struct {
+	ProjectModelItems    func([]Item) []Item
+	OpaqueReasoningBytes func(response []Item, bytes []int)
+}
+
+// OpaqueReasoningSizer is optional for backends that replay opaque reasoning.
+type OpaqueReasoningSizer interface {
+	OpaqueReasoningBytes(response []Item, bytes []int)
 }
 
 // ResponseStateReconciler is an optional backend capability for replay state

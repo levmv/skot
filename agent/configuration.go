@@ -299,8 +299,12 @@ func (runtime *Runtime) SetScopeSnapshot(ctx context.Context, scope ScopeSnapsho
 		return err
 	}
 	snapshot := runtime.effectiveConfigSnapshotLocked(runtime.modelInfo, runtime.tools, runtime.toolSet, scope)
+	before := live.state.LastSequence
 	if err := runtime.recordEffectiveConfigurationAndApply(ctx, live, snapshot); err != nil {
 		return err
+	}
+	if live.state.LastSequence > before {
+		runtime.scopeContextReset.Store(live.state.LastSequence)
 	}
 	runtime.scope = scope
 	return nil

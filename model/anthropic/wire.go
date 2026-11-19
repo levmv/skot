@@ -349,6 +349,34 @@ func (backend *Backend) replayThinkingBlock(item model.Item, epoch string) (cont
 	if item.ProviderContext == nil || item.ProviderContext.Backend != backend.backendID() || item.ProviderContext.Epoch != epoch {
 		return contentBlock{}, false, nil
 	}
+	return savedThinkingBlock(item)
+}
+
+func (*Backend) OpaqueReasoningBytes(response []model.Item, bytes []int) {
+	OpaqueReasoningBytes(response, bytes)
+}
+
+// OpaqueReasoningBytes measures replayed opaque reasoning fields in response.
+func OpaqueReasoningBytes(response []model.Item, bytes []int) {
+	for index, item := range response {
+		if item.Kind != model.ItemReasoning {
+			continue
+		}
+		block, ok, err := savedThinkingBlock(item)
+		if err != nil || !ok {
+			continue
+		}
+		if block.Type == "thinking" {
+			bytes[index] = len(block.Signature)
+		} else {
+			var opaque string
+			_ = json.Unmarshal(block.Data, &opaque)
+			bytes[index] = len(opaque)
+		}
+	}
+}
+
+func savedThinkingBlock(item model.Item) (contentBlock, bool, error) {
 	for _, data := range item.ProviderData {
 		if data.Kind != thinkingDataKind {
 			continue

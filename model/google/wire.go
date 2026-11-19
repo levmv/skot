@@ -260,7 +260,7 @@ func (backend *Backend) ReconcileResponseState(items []model.Item) []model.Item 
 				changed = true
 				continue
 			}
-			if !partsMatchItems(parts, items) {
+			if !partsMatchItems(parts, items, nil) {
 				changed = true
 			}
 		}
@@ -288,27 +288,10 @@ func (backend *Backend) ReconcileResponseState(items []model.Item) []model.Item 
 // sequence once as opaque reasoning state, alongside the ordinary semantic items.
 // It is scoped by ReplayContext and must still match those items before replay.
 func (backend *Backend) replayParts(items []model.Item, epoch string, calls map[string]functionCall) ([]part, error) {
-	var saved []part
-	for _, item := range items {
-		if item.Kind == model.ItemReasoning && item.ProviderContext != nil &&
-			item.ProviderContext.Backend == BackendID(backend.provider) && item.ProviderContext.Epoch == epoch {
-			for _, data := range item.ProviderData {
-				if data.Kind != partsDataKind {
-					continue
-				}
-				if saved != nil {
-					return nil, errors.New("duplicate Gemini replay state")
-				}
-				if err := json.Unmarshal(data.Data, &saved); err != nil || saved == nil {
-					return nil, errors.New("invalid Gemini replay state")
-				}
-			}
-		}
-	}
-	if saved != nil && !partsMatchItems(saved, items) {
-		// The visible history is authoritative even when a host edits it
-		// without reconciling provider state. Import it without stale signatures.
-		saved = nil
+	owner := model.ProviderContext{Backend: BackendID(backend.provider), Epoch: epoch}
+	saved, err := savedReplayParts(items, &owner, nil)
+	if err != nil {
+		return nil, err
 	}
 	var parts []part
 	for _, item := range items {
@@ -351,45 +334,107 @@ func (backend *Backend) replayParts(items []model.Item, epoch string, calls map[
 	return parts, nil
 }
 
-func partsMatchItems(parts []part, items []model.Item) bool {
-	left, err := semanticItems(parts, false)
+func (*Backend) OpaqueReasoningBytes(response []model.Item, bytes []int) {
+	OpaqueReasoningBytes(response, bytes)
+}
+
+// OpaqueReasoningBytes measures only the signatures that will be replayed.
+func OpaqueReasoningBytes(response []model.Item, bytes []int) {
+	_, _ = savedReplayParts(response, nil, bytes)
+}
+
+func savedReplayParts(items []model.Item, owner *model.ProviderContext, bytes []int) ([]part, error) {
+	var saved []part
+	var stateIndex int
+	for index, item := range items {
+		if item.Kind != model.ItemReasoning || (owner != nil && (item.ProviderContext == nil || *item.ProviderContext != *owner)) {
+			continue
+		}
+		for _, data := range item.ProviderData {
+			if data.Kind != partsDataKind {
+				continue
+			}
+			if saved != nil {
+				return nil, errors.New("duplicate Gemini replay state")
+			}
+			if err := json.Unmarshal(data.Data, &saved); err != nil || saved == nil {
+				return nil, errors.New("invalid Gemini replay state")
+			}
+			stateIndex = index
+		}
+	}
+	if saved == nil || !partsMatchItems(saved, items, bytes) {
+		// Import the semantic history when a host has edited the signed parts.
+		clear(bytes)
+		return nil, nil
+	}
+	if bytes != nil {
+		// Signatures attached to readable thoughts share those thought items'
+		// budgets. The opaque placeholder accounts for all other signatures.
+		size := 0
+		for _, part := range saved {
+			size += len(part.ThoughtSignature)
+		}
+		for _, assigned := range bytes {
+			size -= assigned
+		}
+		bytes[stateIndex] += size
+	}
+	return saved, nil
+}
+
+func partsMatchItems(parts []part, items []model.Item, bytes []int) bool {
+	var thoughtSignatures []int
+	var measure *[]int
+	if bytes != nil {
+		measure = &thoughtSignatures
+	}
+	semantic, err := decodeSemanticItems(parts, false, measure)
 	if err != nil {
 		return false
 	}
-	var right []model.Item
-	for _, item := range items {
-		if item.Kind != model.ItemReasoning || item.Text != "" {
-			right = append(right, item)
+	j := 0
+	for i, item := range items {
+		if item.Kind == model.ItemReasoning && item.Text == "" {
+			continue
 		}
-	}
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i].Kind != right[i].Kind || left[i].Text != right[i].Text {
+		if j == len(semantic) || semantic[j].Kind != item.Kind || semantic[j].Text != item.Text {
 			return false
 		}
-		if left[i].ToolCall != nil {
-			if right[i].ToolCall == nil || left[i].ToolCall.Name != right[i].ToolCall.Name {
+		if call := semantic[j].ToolCall; call != nil {
+			if item.ToolCall == nil || call.Name != item.ToolCall.Name {
 				return false
 			}
-			arguments, err := model.NormalizeToolArguments(right[i].ToolCall.RawArguments)
-			if err != nil || left[i].ToolCall.RawArguments != arguments {
+			arguments, err := model.NormalizeToolArguments(item.ToolCall.RawArguments)
+			if err != nil || call.RawArguments != arguments {
 				return false
 			}
 		}
+		if bytes != nil {
+			bytes[i] = thoughtSignatures[j]
+		}
+		j++
 	}
-	return true
+	return j == len(semantic)
 }
 
 func semanticItems(parts []part, incomplete bool) ([]model.Item, error) {
+	return decodeSemanticItems(parts, incomplete, nil)
+}
+
+func decodeSemanticItems(parts []part, incomplete bool, thoughtSignatures *[]int) ([]model.Item, error) {
 	var items []model.Item
 	var text strings.Builder
 	var textKind model.ItemKind
+	signatureBytes := 0
 	flush := func() {
 		if text.Len() != 0 {
 			items = append(items, model.Item{Kind: textKind, Text: text.String()})
+			if thoughtSignatures != nil {
+				*thoughtSignatures = append(*thoughtSignatures, signatureBytes)
+			}
 			text.Reset()
+			signatureBytes = 0
 		}
 	}
 	for _, value := range parts {
@@ -423,6 +468,9 @@ func semanticItems(parts []part, incomplete bool) ([]model.Item, error) {
 			}
 			flush()
 			items = append(items, item)
+			if thoughtSignatures != nil {
+				*thoughtSignatures = append(*thoughtSignatures, 0)
+			}
 		} else if value.Text != nil && *value.Text != "" {
 			kind := model.ItemAssistantText
 			if value.Thought {
@@ -433,6 +481,9 @@ func semanticItems(parts []part, incomplete bool) ([]model.Item, error) {
 				textKind = kind
 			}
 			text.WriteString(*value.Text)
+			if value.Thought {
+				signatureBytes += len(value.ThoughtSignature)
+			}
 		} else if value.ThoughtSignature == "" && value.Text == nil {
 			return nil, errors.New("empty Gemini output part")
 		}

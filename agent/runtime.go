@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -44,6 +45,7 @@ const (
 type runRequestSpec struct {
 	omitTools     bool
 	extraUserText string
+	pendingInputs []Input
 }
 
 type Config struct {
@@ -93,6 +95,9 @@ type Runtime struct {
 	// runMu excludes concurrent turns and shell/maintenance operations. While
 	// a turn owns it, model/tool changes are queued until a request boundary.
 	runMu sync.Mutex
+	// These scalars belong to the journal currently owned by runMu. Replay
+	// verifies the attempt before reusing its local estimate across turns.
+	lastContextSamples [2]contextSample
 	// statusMu protects only the last fully calculated session status. Status
 	// calculation happens before taking this lock so readers never wait on a
 	// journal replay or model projection.
@@ -108,6 +113,10 @@ type Runtime struct {
 	configMu      sync.RWMutex
 	turnActive    bool
 	pendingConfig *runtimeConfiguration
+	// Scope can journal a configuration change independently of the live
+	// reducer. Samples from before that record no longer describe this epoch
+	// of context accounting, even while a request is in flight.
+	scopeContextReset atomic.Uint64
 	runtimeConfiguration
 
 	journal           Journal
@@ -217,7 +226,7 @@ func New(config Config) (*Runtime, error) {
 
 		authorizeReadOnlyPaths: config.AuthorizeReadOnlyPaths,
 	}
-	runtime.sessionStatus = runtime.calculateSessionStatus(State{})
+	runtime.sessionStatus = runtime.calculateSessionStatus(State{}, nil)
 	return runtime, nil
 }
 
@@ -418,7 +427,7 @@ func (runtime *Runtime) RunInput(ctx context.Context, input Input, emit EmitFunc
 	if err != nil {
 		return RunResult{}, fmt.Errorf("read journal: %w", err)
 	}
-	live, err = reduceRecords(records)
+	live, err = runtime.reduceContextRecords(records)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -429,8 +438,7 @@ func (runtime *Runtime) RunInput(ctx context.Context, input Input, emit EmitFunc
 	if err := runtime.prepareSession(ctx, live); err != nil {
 		return RunResult{}, err
 	}
-	input = input.withNewInstructions(live.state.latestInstructions())
-	_, err = runtime.prepareRunRequestContext(ctx, live, runRequestSpec{extraUserText: input.modelText()}, emit)
+	_, err = runtime.prepareRunRequestContext(ctx, live, runRequestSpec{pendingInputs: []Input{input}}, emit)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -443,6 +451,7 @@ func (runtime *Runtime) RunInput(ctx context.Context, input Input, emit EmitFunc
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunStarted, RunStartedRecord{RunID: runID}); err != nil {
 		return RunResult{}, err
 	}
+	input = input.withNewInstructions(live.state.latestInstructions())
 	inputRecord, err := appendRecordAndApply(ctx, runtime.journal, live, RecordRunInputAdded, RunInputAddedRecord{RunID: runID, Text: input.Text, Instructions: input.Instructions, ReadOnlyPaths: input.ReadOnlyPaths})
 	if err != nil {
 		return RunResult{}, err
@@ -473,12 +482,12 @@ func (runtime *Runtime) RunInput(ctx context.Context, input Input, emit EmitFunc
 			return runtime.finishError(ctx, live, emit, runID, boundaryErr)
 		}
 		requestSpec := runRequestSpec{}
-		report, contextErr := runtime.prepareRunRequestContext(ctx, live, requestSpec, emit)
+		prepared, contextErr := runtime.prepareRunRequestContext(ctx, live, requestSpec, emit)
 		if contextErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, contextErr)
 		}
-		runtime.publishSessionStatus(live.state)
-		response, callErr := runtime.completeRunRequest(ctx, runID, live, requestSpec, report, emit)
+		runtime.publishStatus(live.state, &prepared.report)
+		response, callErr := runtime.completeRunRequest(ctx, runID, live, requestSpec, prepared, emit)
 		if callErr != nil {
 			return runtime.finishError(ctx, live, emit, runID, callErr)
 		}
@@ -561,7 +570,7 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 	for _, call := range calls {
 		result := modelapi.ToolResult{
 			CallID:  call.ID,
-			Content: modelapi.TextContent(runtime.sanitize(fmt.Sprintf("tool %s error: tool iteration limit reached after %d iterations", call.Name, iterations))),
+			Content: modelapi.TextContent(runtime.sanitize(fmt.Sprintf("tool %s error: %s%d iterations", call.Name, toolLimitResultPrefix, iterations))),
 			Error:   true,
 		}
 		if err := runtime.commitRejectedToolResult(context.WithoutCancel(ctx), live, emit, runID, call, result); err != nil {
@@ -580,13 +589,13 @@ func (runtime *Runtime) finalizeToolLimit(ctx context.Context, live *stateReduce
 		omitTools:     true,
 		extraUserText: live.state.Configured.ModelContext.ToolLimitInstructions,
 	}
-	report, contextErr := runtime.prepareRunRequestContext(ctx, live, requestSpec, emit)
+	prepared, contextErr := runtime.prepareRunRequestContext(ctx, live, requestSpec, emit)
 	if contextErr != nil {
 		status, contextErr := runFailure(ctx, contextErr)
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, contextErr)
 	}
 	runtime.publishSessionStatus(live.state)
-	response, callErr := runtime.completeRunRequest(ctx, runID, live, requestSpec, report, emit)
+	response, callErr := runtime.completeRunRequest(ctx, runID, live, requestSpec, prepared, emit)
 	if callErr != nil {
 		status, callErr := runFailure(ctx, callErr)
 		return runtime.finishToolLimited(ctx, live, emit, runID, "", status, callErr)
@@ -621,7 +630,8 @@ type responseCommitOptions struct {
 
 type attemptResponse struct {
 	modelapi.Response
-	attemptID string
+	attemptID       string
+	replayStateLost bool
 }
 
 type committedModelResponse struct {
@@ -639,6 +649,7 @@ func (err *responseAcceptanceError) Unwrap() error { return err.err }
 
 func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *stateReducer, runID string, response attemptResponse, options responseCommitOptions) (committedModelResponse, error) {
 	incomplete := modelapi.IsIncompleteStopReason(response.StopReason)
+	originalCount := len(response.Items)
 	if incomplete || options.stripToolCalls {
 		response.Items = partialResponseItems(response.Items)
 	}
@@ -650,14 +661,16 @@ func (runtime *Runtime) acceptAndCommitResponse(ctx context.Context, live *state
 		return committedModelResponse{}, &responseAcceptanceError{err: err}
 	}
 	if _, err := appendRecordAndApply(ctx, runtime.journal, live, RecordModelResponse, ModelResponseRecord{
-		AttemptID:  response.attemptID,
-		RunID:      runID,
-		Backend:    live.state.Selection.Backend,
-		Model:      live.state.Selection.Model,
-		Epoch:      live.state.Selection.Epoch,
-		Items:      accepted.Items,
-		Usage:      accepted.Usage.Tokens.Known(),
-		StopReason: accepted.StopReason,
+		AttemptID:        response.attemptID,
+		RunID:            runID,
+		Backend:          live.state.Selection.Backend,
+		Model:            live.state.Selection.Model,
+		Epoch:            live.state.Selection.Epoch,
+		Items:            accepted.Items,
+		Usage:            accepted.Usage.Tokens.Known(),
+		StopReason:       accepted.StopReason,
+		ToolLimitFinal:   &options.stripToolCalls,
+		ReplayIncomplete: response.replayStateLost || len(response.Items) != originalCount,
 	}); err != nil {
 		return committedModelResponse{}, err
 	}
@@ -745,16 +758,16 @@ func (runtime *Runtime) completeRunRequest(
 	runID string,
 	live *stateReducer,
 	spec runRequestSpec,
-	report ContextReport,
+	prepared preparedRunRequest,
 	emit EmitFunc,
 ) (attemptResponse, error) {
+	if live.state.Configured == nil {
+		return attemptResponse{}, errors.New("session has no effective configuration")
+	}
 	for {
-		request, err := runtime.modelRequestForRun(live.state, spec)
-		if err != nil {
-			return attemptResponse{}, err
-		}
+		request := prepared.request
 		probeImages := live.state.ImageDelivery.Status == ImageDeliveryUnknown && modelRequestHasImages(request)
-		response, err := runtime.completeRequest(ctx, runID, request, emit)
+		response, err := runtime.completeRequest(ctx, live, runID, request, prepared.report.localInputTokens(), emit)
 		if err == nil {
 			if probeImages {
 				if observeErr := runtime.observeImageDelivery(ctx, live, ImageDeliveryAccepted); observeErr != nil {
@@ -765,7 +778,7 @@ func (runtime *Runtime) completeRunRequest(
 		}
 		if ctx.Err() == nil && errors.Is(err, modelapi.ErrModelRequestTooLarge) {
 			var shrinkErr error
-			report, shrinkErr = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
+			prepared, shrinkErr = runtime.shrinkRunRequestOnce(ctx, live, spec, prepared, emit)
 			if shrinkErr != nil {
 				return attemptResponse{}, errors.Join(
 					err,
@@ -774,10 +787,11 @@ func (runtime *Runtime) completeRunRequest(
 			}
 			continue
 		}
-		if probeImages && runtime.imageFreeControlAllowed(err, report) && ctx.Err() == nil {
+		if probeImages && runtime.imageFreeControlAllowed(err, prepared.report) && ctx.Err() == nil {
 			emitEvent(emit, Event{Kind: EventStatus, RunID: runID, Text: "retrying without image content"})
 			fallback := requestWithoutImages(request)
-			fallbackResponse, fallbackErr := runtime.completeRequest(ctx, runID, fallback, emit)
+			localInput := estimateContextReport(live.state, 0, fallback, 0, runtime.itemProjection().OpaqueReasoningBytes).TotalInputTokens
+			fallbackResponse, fallbackErr := runtime.completeRequest(ctx, live, runID, fallback, localInput, emit)
 			if fallbackErr == nil {
 				if observeErr := runtime.observeImageDelivery(ctx, live, ImageDeliveryRejected); observeErr != nil {
 					return attemptResponse{}, observeErr
@@ -834,7 +848,7 @@ func (runtime *Runtime) observeImageDelivery(ctx context.Context, live *stateRed
 	return nil
 }
 
-func (runtime *Runtime) completeRequest(ctx context.Context, runID string, request modelapi.Request, emit EmitFunc) (attemptResponse, error) {
+func (runtime *Runtime) completeRequest(ctx context.Context, live *stateReducer, runID string, request modelapi.Request, localInput int, emit EmitFunc) (attemptResponse, error) {
 	startedAt := time.Now()
 	requestCtx := ctx
 	cancel := func() {}
@@ -843,6 +857,16 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 	}
 	defer cancel()
 	request.StreamIdleTimeout = runtime.requestPolicy.StreamIdleTimeout
+	if request.Tools != nil {
+		request.Tools = cloneToolSpecs(request.Tools)
+	}
+	// Own the replay bytes crossing the backend boundary. Local projections can
+	// borrow them from the immutable journal items, just like image payloads.
+	for _, item := range request.Items {
+		for index := range item.ProviderData {
+			item.ProviderData[index].Data = item.ProviderData[index].Data.Clone()
+		}
+	}
 	var lastErr error
 	requestID, err := newID("request")
 	if err != nil {
@@ -860,7 +884,7 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 			return attemptResponse{}, err
 		}
 		payload := runtime.modelAttemptRecord(requestID, attemptID, runID, request.ProviderEpoch, attempt)
-		if _, err := appendRecord(requestCtx, runtime.journal, RecordModelAttemptStarted, payload); err != nil {
+		if _, err := appendRecordAndApply(requestCtx, runtime.journal, live, RecordModelAttemptStarted, payload); err != nil {
 			return attemptResponse{}, err
 		}
 		emitEvent(emit, Event{Kind: EventModelAttemptStarted, RunID: runID, AttemptID: attemptID})
@@ -892,11 +916,20 @@ func (runtime *Runtime) completeRequest(ctx context.Context, runID string, reque
 		if response.Usage.Status == "" {
 			response.Usage.Status = modelapi.UsageUnavailable
 		}
-		if journalErr := runtime.finishModelAttempt(context.WithoutCancel(ctx), payload, response.Usage, err); journalErr != nil {
+		if journalErr := runtime.finishModelAttempt(context.WithoutCancel(ctx), live, payload, response.Usage, err); journalErr != nil {
 			return attemptResponse{}, errors.Join(err, journalErr)
 		}
 		if err == nil {
-			return attemptResponse{Response: runtime.sanitizeModelResponse(response), attemptID: attemptID}, nil
+			if runID != "" {
+				measured := live.contextAttempts[attemptID]
+				measured.sample.local, measured.sample.localKnown = localInput, true
+				live.contextAttempts[attemptID] = measured
+			}
+			sanitized := runtime.sanitizeModelResponse(response)
+			return attemptResponse{
+				Response: sanitized, attemptID: attemptID,
+				replayStateLost: providerDataCount(sanitized.Items) < providerDataCount(response.Items),
+			}, nil
 		}
 		lastErr = sanitizeError(err, runtime.sanitize)
 		emitEvent(emit, Event{Kind: EventModelAttemptDiscarded, RunID: runID, AttemptID: attemptID, Text: lastErr.Error()})
@@ -936,7 +969,7 @@ func (runtime *Runtime) modelAttemptRecord(requestID, attemptID, runID, provider
 	}
 }
 
-func (runtime *Runtime) finishModelAttempt(ctx context.Context, payload ModelAttemptRecord, usage modelapi.Usage, cause error) error {
+func (runtime *Runtime) finishModelAttempt(ctx context.Context, live *stateReducer, payload ModelAttemptRecord, usage modelapi.Usage, cause error) error {
 	payload.Usage = usage
 	payload.Outcome = ModelAttemptCompleted
 	kind := RecordModelAttemptFinished
@@ -957,7 +990,7 @@ func (runtime *Runtime) finishModelAttempt(ctx context.Context, payload ModelAtt
 			RetryAfter: durationSnapshot(providerErr.RetryAfter),
 		}
 	}
-	_, err := appendRecord(ctx, runtime.journal, kind, payload)
+	_, err := appendRecordAndApply(ctx, runtime.journal, live, kind, payload)
 	return err
 }
 
@@ -1034,36 +1067,8 @@ func (runtime *Runtime) modelRequestForRun(state State, spec runRequestSpec) (mo
 	if state.Configured == nil {
 		return modelapi.Request{}, errors.New("session has no effective configuration")
 	}
-	summary := ""
-	if state.Compaction != nil {
-		summary = state.Compaction.Summary
-	}
-	items := state.modelItems()
-	if spec.extraUserText != "" {
-		items = append(items, modelapi.Item{Kind: modelapi.ItemUserText, Text: spec.extraUserText})
-	}
-	request := modelapi.Request{
-		SessionID:     state.SessionID,
-		ProviderEpoch: state.Selection.Epoch,
-		Instructions:  state.Configured.ModelContext.Instructions,
-		Summary:       summary,
-		Items: runtime.projectModelItems(items, modelapi.ProviderContext{
-			Backend: state.Selection.Backend,
-			Epoch:   state.Selection.Epoch,
-		}, state.ImageDelivery.Status),
-	}
-	if !spec.omitTools {
-		request.Tools = cloneToolSpecs(state.Configured.ModelContext.Tools)
-	}
+	request, _ := state.projectRunRequest(spec, runtime.itemProjection())
 	return request, nil
-}
-
-// projectModelItems applies runtime ownership filtering, the adapter's replay
-// policy, and route-level image delivery. Requests and context estimates share
-// this complete projection.
-func (runtime *Runtime) projectModelItems(items []modelapi.Item, providerContext modelapi.ProviderContext, imageStatus ImageDeliveryStatus) []modelapi.Item {
-	items = providerContext.ProjectItems(items, runtime.backend)
-	return projectImagesForDelivery(items, runtime.effectiveImageDelivery(imageStatus))
 }
 
 // effectiveImageDelivery combines current-build route policy with durable
@@ -1246,6 +1251,14 @@ func canonicalDetachedJobIDs(ids []string, sanitize func(string) string) []strin
 	}
 	sort.Strings(result)
 	return result
+}
+
+func providerDataCount(items []modelapi.Item) int {
+	count := 0
+	for _, item := range items {
+		count += len(item.ProviderData)
+	}
+	return count
 }
 
 func (runtime *Runtime) sanitizeModelResponse(response modelapi.Response) modelapi.Response {
@@ -1440,9 +1453,6 @@ func cloneItemForProjection(item modelapi.Item, includeDetails bool) modelapi.It
 		item.ProviderContext = &context
 	}
 	item.ProviderData = append([]modelapi.ProviderData(nil), item.ProviderData...)
-	for i := range item.ProviderData {
-		item.ProviderData[i].Data = item.ProviderData[i].Data.Clone()
-	}
 	item.ToolCall = cloneToolCallPointer(item.ToolCall)
 	item.Details = nil
 	if item.ToolResult != nil {

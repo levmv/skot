@@ -343,6 +343,9 @@ type ModelResponseRecord struct {
 	Items      []model.Item      `json:"items"`
 	Usage      model.TokenCounts `json:"usage"`
 	StopReason string            `json:"stop_reason,omitempty"`
+	// Nil means the request shape predates this field.
+	ToolLimitFinal   *bool `json:"tool_limit_final,omitzero"`
+	ReplayIncomplete bool  `json:"replay_incomplete,omitzero"`
 }
 
 type ToolResultRecord struct {

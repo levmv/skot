@@ -37,7 +37,7 @@ func ReadSessionStatistics(ctx context.Context, home, id string) (SessionStatist
 	if err != nil {
 		return SessionStatistics{}, err
 	}
-	snapshot, err := session.Inspect(ctx, home, id)
+	snapshot, err := session.InspectWithContext(ctx, home, id)
 	if err != nil {
 		return SessionStatistics{}, err
 	}
@@ -61,7 +61,7 @@ func ReadSessionStatistics(ctx context.Context, home, id string) (SessionStatist
 	if err != nil {
 		result.ContextError = err.Error()
 	} else {
-		report, _ := agent.ContextReportForState(saved, project)
+		report, _ := saved.ContextReport(project)
 		result.ContextReport = &report
 	}
 	return result, ctx.Err()

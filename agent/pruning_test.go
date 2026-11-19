@@ -366,7 +366,10 @@ func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
 				attempts++
 				for _, item := range request.Items {
 					if item.Kind == modelapi.ItemToolResult && item.ToolResult != nil && strings.Contains(item.ToolResult.Content.Text(), "bytes omitted") {
-						return modelapi.Response{Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "recovered"}}, StopReason: "stop"}, nil
+						return modelapi.Response{
+							Items: []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "recovered"}}, StopReason: "stop",
+							Usage: modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(24000)}},
+						}, nil
 					}
 				}
 				t.Fatalf("retry did not contain the pruned tool result: %#v", request.Items)
@@ -375,11 +378,17 @@ func TestRequestTooLargePrunesOldToolResultsBeforeCompaction(t *testing.T) {
 		},
 	}
 	var events []Event
-	result, err := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}}).Run(context.Background(), "new question", func(event Event) {
+	runtime := newTestRuntime(t, Config{Backend: model, Journal: journal, Tools: []Tool{tool}})
+	result, err := runtime.Run(context.Background(), "new question", func(event Event) {
 		events = append(events, event)
 	})
 	if err != nil || result.Answer != "recovered" || attempts != 2 {
 		t.Fatalf("result/error/attempts = %#v / %v / %d", result, err, attempts)
+	}
+	live := runtime.SessionStatus().ContextReport
+	offline, ok, err := contextReportForJournal(journal.snapshot(), modelapi.ItemProjection{})
+	if err != nil || !ok || live.TotalInputTokens != 24000+estimateTextTokens("recovered")+perMessageTokens || offline != live {
+		t.Fatalf("retry measurement: live = %+v, offline = %+v, %v, %v", live, offline, ok, err)
 	}
 	state, err := Replay(journal.snapshot())
 	if err != nil {
@@ -422,7 +431,7 @@ func TestFailedShrinkKeepsLiveStatusAlignedWithCommittedMaintenance(t *testing.T
 	if state.ToolPruningCount != 1 || state.CompactionCount != 0 {
 		t.Fatalf("replayed maintenance = pruning %d, compactions %d", state.ToolPruningCount, state.CompactionCount)
 	}
-	if got, want := runtime.SessionStatus(), runtime.calculateSessionStatus(state); got != want {
+	if got, want := runtime.SessionStatus(), runtime.calculateSessionStatus(state, nil); got != want {
 		t.Fatalf("live status diverged from replay\ngot:  %#v\nwant: %#v", got, want)
 	}
 }

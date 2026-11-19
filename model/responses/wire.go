@@ -372,31 +372,51 @@ func (backend *Backend) reasoningInput(item model.Item, epoch string) (jsontext.
 	if !backend.matchesProviderContext(item.ProviderContext, epoch) {
 		return nil, false, nil
 	}
+	state, ok, err := savedReasoningState(item)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	summary := make([]responseSummaryPart, 0, 1)
+	if item.Text != "" {
+		summary = append(summary, responseSummaryPart{Type: "summary_text", Text: item.Text})
+	}
+	raw, err := marshalInputItem(responseReasoningInput{
+		Type: "reasoning", ID: state.ID, Summary: summary,
+		EncryptedContent: state.EncryptedContent,
+	})
+	return raw, err == nil, err
+}
+
+func (*Backend) OpaqueReasoningBytes(response []model.Item, bytes []int) {
+	OpaqueReasoningBytes(response, bytes)
+}
+
+// OpaqueReasoningBytes measures replayed opaque reasoning fields in response.
+func OpaqueReasoningBytes(response []model.Item, bytes []int) {
+	for index, item := range response {
+		if item.Kind != model.ItemReasoning {
+			continue
+		}
+		state, _, _ := savedReasoningState(item)
+		bytes[index] = len(state.EncryptedContent)
+	}
+}
+
+func savedReasoningState(item model.Item) (responseReasoningState, bool, error) {
 	for _, data := range item.ProviderData {
 		if data.Kind != reasoningItemDataKind {
 			continue
 		}
 		var state responseReasoningState
 		if err := json.Unmarshal(data.Data, &state); err != nil {
-			return nil, false, fmt.Errorf("decode saved reasoning item: %w", err)
+			return responseReasoningState{}, false, fmt.Errorf("decode saved reasoning item: %w", err)
 		}
 		if strings.TrimSpace(state.ID) == "" || state.EncryptedContent == "" {
-			return nil, false, errors.New("saved reasoning item is incomplete")
+			return responseReasoningState{}, false, errors.New("saved reasoning item is incomplete")
 		}
-		summary := make([]responseSummaryPart, 0, 1)
-		if item.Text != "" {
-			summary = append(summary, responseSummaryPart{Type: "summary_text", Text: item.Text})
-		}
-		raw, err := marshalInputItem(responseReasoningInput{
-			Type: "reasoning", ID: state.ID, Summary: summary,
-			EncryptedContent: state.EncryptedContent,
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		return raw, true, nil
+		return state, true, nil
 	}
-	return nil, false, nil
+	return responseReasoningState{}, false, nil
 }
 
 func (backend *Backend) functionCallIdentity(call model.ToolCall, epoch string) (functionCallIdentity, error) {

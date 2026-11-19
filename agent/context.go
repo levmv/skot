@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/levmv/skot/model"
@@ -28,6 +29,7 @@ type ContextReport struct {
 	SummaryTokens        int
 	HistoryTokens        int
 	PendingTokens        int
+	MeasuredAdjustment   int
 	TotalInputTokens     int
 	AvailableInputTokens int
 	CompactionCount      int
@@ -70,12 +72,27 @@ func (runtime *Runtime) SessionStatus() SessionStatus {
 // publishSessionStatus always uses the canonical next-request projection:
 // tools are included and only still-queued input is treated as pending.
 func (runtime *Runtime) publishSessionStatus(state State) {
-	runtime.storeSessionStatus(state.LastSequence, runtime.calculateSessionStatus(state))
+	runtime.publishStatus(state, nil)
 }
 
-func (runtime *Runtime) calculateSessionStatus(state State) SessionStatus {
+func (runtime *Runtime) publishStatus(state State, preflight *ContextReport) {
+	runtime.lastContextSamples = state.contextSamples
+	runtime.storeSessionStatus(state.LastSequence, runtime.calculateSessionStatus(state, preflight))
+}
+
+func (runtime *Runtime) calculateSessionStatus(state State, preflight *ContextReport) SessionStatus {
+	runtime.queueMu.Lock()
+	inputs := slices.Clone(runtime.pendingInputs)
+	runtime.queueMu.Unlock()
+	var report ContextReport
+	if preflight != nil && len(inputs) == 0 {
+		report = *preflight
+		runtime.applyRequestMeasurement(state, &report)
+	} else {
+		report = runtime.requestReport(state, runRequestSpec{pendingInputs: inputs})
+	}
 	return SessionStatus{
-		ContextReport: runtime.contextReport(state, runtime.queuedModelInputs(state)...),
+		ContextReport: report,
 		Usage:         state.Usage,
 		ImageDelivery: runtime.visibleImageDelivery(state),
 	}
@@ -112,174 +129,293 @@ func (runtime *Runtime) storeSessionStatus(sequence uint64, status SessionStatus
 	runtime.sessionStatus = status
 }
 
-func (runtime *Runtime) prepareRunRequestContext(ctx context.Context, live *stateReducer, spec runRequestSpec, emit EmitFunc) (ContextReport, error) {
-	report := runtime.requestReport(live.state, spec)
-	for report.Window > 0 && report.TotalInputTokens > report.InputLimit {
+type preparedRunRequest struct {
+	request model.Request
+	report  ContextReport
+}
+
+func (runtime *Runtime) prepareRunRequestContext(ctx context.Context, live *stateReducer, spec runRequestSpec, emit EmitFunc) (preparedRunRequest, error) {
+	prepared := runtime.projectRunRequest(live.state, spec)
+	for prepared.report.Window > 0 && prepared.report.TotalInputTokens > prepared.report.InputLimit {
 		var err error
-		report, err = runtime.shrinkRunRequestOnce(ctx, live, spec, report, emit)
+		prepared, err = runtime.shrinkRunRequestOnce(ctx, live, spec, prepared, emit)
 		if err != nil {
 			attached := 0
 			if live.state.hasInputContext() {
 				attached = estimateItemsTokens(live.state.modelItemsFromSequence(live.state.LastSequence+1, nil))
 			}
-			return report, &ContextLimitError{Report: report, AttachedTokens: attached, Cause: err}
+			return prepared, &ContextLimitError{Report: prepared.report, AttachedTokens: attached, Cause: err}
 		}
 	}
-	return report, nil
+	return prepared, nil
 }
 
 // shrinkRunRequestOnce advances durable context maintenance by one step on a
 // successful return. Cheap pruning of old tool-result projections gets the
 // first chance; if it cannot advance its boundary, the oldest available
 // conversation prefix is summarized. Only when compaction cannot advance may
-// the latest text results be shortened. The returned report describes the
-// request rebuilt from the committed state.
-func (runtime *Runtime) shrinkRunRequestOnce(ctx context.Context, live *stateReducer, spec runRequestSpec, report ContextReport, emit EmitFunc) (ContextReport, error) {
-	pruningRecord, nextReport, err := runtime.pruneOldToolResultsOnce(ctx, live.state, spec, report)
+// the latest text results be shortened. The returned request and report use
+// the committed state.
+func (runtime *Runtime) shrinkRunRequestOnce(ctx context.Context, live *stateReducer, spec runRequestSpec, prepared preparedRunRequest, emit EmitFunc) (preparedRunRequest, error) {
+	pruningRecord, err := runtime.pruneOldToolResultsOnce(ctx, live.state, spec, prepared.report)
 	if err != nil {
-		return report, fmt.Errorf("prune old tool results: %w", err)
+		return prepared, fmt.Errorf("prune old tool results: %w", err)
 	}
 	message := "pruned old tool results"
 	if pruningRecord.Sequence == 0 {
 		_, compactErr := runtime.compactLocked(ctx, live, spec, emit)
-		report = runtime.requestReport(live.state, spec)
+		prepared = runtime.projectRunRequest(live.state, spec)
 		if compactErr == nil {
-			return report, nil
+			return prepared, nil
 		}
 		if !errors.Is(compactErr, errNoCompactionBoundary) && !errors.Is(compactErr, errCompactionNotNeeded) && !errors.Is(compactErr, errCompactionInputTooLarge) {
-			return report, fmt.Errorf("compact context: %w", compactErr)
+			return prepared, fmt.Errorf("compact context: %w", compactErr)
 		}
-		pruningRecord, nextReport, err = runtime.pruneLatestToolResultsOnce(ctx, live.state, spec, report)
+		pruningRecord, err = runtime.pruneLatestToolResultsOnce(ctx, live.state, spec, prepared.report)
 		if err != nil {
-			return report, fmt.Errorf("prune latest tool results: %w", err)
+			return prepared, fmt.Errorf("prune latest tool results: %w", err)
 		}
 		if pruningRecord.Sequence == 0 {
-			return report, fmt.Errorf("compact context: %w", compactErr)
+			return prepared, fmt.Errorf("compact context: %w", compactErr)
 		}
 		message = "shortened oversized tool results"
 	}
 	if err := live.apply(pruningRecord); err != nil {
-		return report, fmt.Errorf("apply committed tool-result pruning: %w", err)
+		return prepared, fmt.Errorf("apply committed tool-result pruning: %w", err)
 	}
-	nextReport.ToolPruningCount = live.state.ToolPruningCount
 	runtime.publishSessionStatus(live.state)
 	emitEvent(emit, Event{Sequence: pruningRecord.Sequence, Kind: EventToolResultsPruned, Text: message})
-	return nextReport, nil
+	return runtime.projectRunRequest(live.state, spec), nil
 }
 
 func (runtime *Runtime) requestReport(state State, spec runRequestSpec) ContextReport {
-	return runtime.contextReportForRequest(state, !spec.omitTools, spec.extraUserText)
+	return runtime.projectRunRequest(state, spec).report
 }
 
-func (runtime *Runtime) contextReport(state State, pendingInputs ...string) ContextReport {
-	return runtime.contextReportForRequest(state, true, pendingInputs...)
-}
-
-func (runtime *Runtime) contextReportForRequest(state State, includeTools bool, pendingInputs ...string) ContextReport {
-	var tools []model.ToolSpec
-	if includeTools {
-		for _, tool := range runtime.tools {
-			tools = append(tools, tool.Spec)
+func (runtime *Runtime) projectRunRequest(state State, spec runRequestSpec) preparedRunRequest {
+	projection := runtime.itemProjection()
+	request, pending := state.projectRunRequest(spec, projection)
+	includeTools := !spec.omitTools
+	window := runtime.modelInfo.ContextWindow
+	if state.Configured == nil {
+		request.Instructions = runtime.instructions
+		if includeTools {
+			for _, tool := range runtime.tools {
+				request.Tools = append(request.Tools, tool.Spec)
+			}
 		}
 	}
-	items, boundary := runtime.projectedItemsForRequest(state, state.modelItems(), pendingInputs...)
-	return estimateContextReport(state, runtime.modelInfo.ContextWindow, runtime.instructions, tools, items[:boundary], items[boundary:])
+	report := estimateContextReport(state, window, request, pending, projection.OpaqueReasoningBytes)
+	if includeTools {
+		runtime.applyRequestMeasurement(state, &report)
+	}
+	return preparedRunRequest{request: request, report: report}
+}
+
+func (runtime *Runtime) applyRequestMeasurement(state State, report *ContextReport) {
+	samples := state.contextSamples
+	reset := runtime.scopeContextReset.Load()
+	for index, sample := range samples {
+		if sample.requestStart <= reset {
+			samples[index] = contextSample{}
+		}
+	}
+	report.applyMeasurement(samples)
+}
+
+func (state State) withPreviewInputs(inputs []Input) State {
+	if len(inputs) == 0 {
+		return state
+	}
+	state.Blocks = slices.Clone(state.Blocks)
+	latest := state.latestInstructions()
+	for index, input := range inputs {
+		input = input.withNewInstructions(latest)
+		sequence := state.LastSequence + uint64(index) + 1
+		state.Blocks = append(state.Blocks, ConversationBlock{
+			StartSequence: sequence, EndSequence: sequence, InputInstructions: input.Instructions,
+			Entries: []ConversationEntry{{Sequence: sequence, Item: model.Item{Kind: model.ItemUserText, Text: input.modelText()}}},
+		})
+	}
+	return state
+}
+
+func (state State) projectRunRequest(spec runRequestSpec, projection model.ItemProjection) (model.Request, int) {
+	state = state.withPreviewInputs(spec.pendingInputs)
+	return state.projectRequest(state.modelItems(), spec, projection)
+}
+
+func (state State) projectRequest(items []model.Item, spec runRequestSpec, projection model.ItemProjection) (model.Request, int) {
+	pending := len(spec.pendingInputs)
+	if spec.extraUserText != "" {
+		items = append(items, model.Item{Kind: model.ItemUserText, Text: spec.extraUserText})
+		pending++
+	}
+	return state.contextRequest(items, !spec.omitTools, projection), pending
 }
 
 // ContextReportForState estimates the next input using the last persisted
 // configuration. It excludes transient queued input and does not reload host
 // instructions. False means the journal has no effective configuration.
-// project supplies the selected route's Backend.ProjectModelItems policy;
-// nil retains all runtime-owned items and may overestimate routes that discard
-// reasoning. No model call is made.
 func ContextReportForState(state State, project func([]model.Item) []model.Item) (ContextReport, bool) {
+	return state.ContextReport(model.ItemProjection{ProjectModelItems: project})
+}
+
+// ContextReport estimates the next request with the saved configuration and
+// the selected route's item projection. ReplayWithContext also supplies usage
+// measurements when a comparable request is available.
+func (state State) ContextReport(projection model.ItemProjection) (ContextReport, bool) {
 	if state.Configured == nil {
 		return ContextReport{}, false
 	}
-	config := state.Configured
-	imageStatus := state.ImageDelivery.Status
-	if config.RuntimePolicy.ImageInputUnsupported {
-		imageStatus = ImageDeliveryRejected
-	}
-	items := (model.ProviderContext{
-		Backend: state.Selection.Backend,
-		Epoch:   state.Selection.Epoch,
-	}).ProjectItems(state.modelItems(), nil)
-	if project != nil {
-		items = project(items)
-	}
-	items = projectImagesForDelivery(items, imageStatus)
-	return estimateContextReport(state, config.RuntimePolicy.ContextWindow, config.ModelContext.Instructions, config.ModelContext.Tools, items, nil), true
+	state.restoreContextSamples(projection)
+	request := state.contextRequest(state.modelItems(), true, projection)
+	report := estimateContextReport(state, state.Configured.RuntimePolicy.ContextWindow, request, 0, projection.OpaqueReasoningBytes)
+	report.applyMeasurement(state.contextSamples)
+	return report, true
 }
 
-func estimateContextReport(state State, window int, instructions string, tools []model.ToolSpec, history, pending []model.Item) ContextReport {
+func (runtime *Runtime) itemProjection() model.ItemProjection {
+	var projection model.ItemProjection
+	if runtime.backend != nil {
+		projection.ProjectModelItems = runtime.backend.ProjectModelItems
+	}
+	if sizer, ok := runtime.backend.(model.OpaqueReasoningSizer); ok {
+		projection.OpaqueReasoningBytes = sizer.OpaqueReasoningBytes
+	}
+	return projection
+}
+
+func (state State) contextRequest(items []model.Item, includeTools bool, projection model.ItemProjection) model.Request {
+	request := model.Request{SessionID: state.SessionID, ProviderEpoch: state.Selection.Epoch}
+	imageStatus := state.ImageDelivery.Status
+	if config := state.Configured; config != nil {
+		request.Instructions = config.ModelContext.Instructions
+		if includeTools {
+			request.Tools = config.ModelContext.Tools
+		}
+		if config.RuntimePolicy.ImageInputUnsupported {
+			imageStatus = ImageDeliveryRejected
+		}
+	}
+	if state.Compaction != nil {
+		request.Summary = state.Compaction.Summary
+	}
+	items = (model.ProviderContext{Backend: state.Selection.Backend, Epoch: state.Selection.Epoch}).ProjectItems(items, nil)
+	if projection.ProjectModelItems != nil {
+		items = projection.ProjectModelItems(items)
+	}
+	request.Items = projectImagesForDelivery(items, imageStatus)
+	return request
+}
+
+func estimateContextReport(state State, window int, request model.Request, pending int, opaqueBytes func([]model.Item, []int)) ContextReport {
 	report := ContextReport{
 		Window:           window,
 		CompactionCount:  state.CompactionCount,
 		ToolPruningCount: state.ToolPruningCount,
 	}
-	if report.Window > 0 {
-		reserve := min(max(report.Window/5, minContextReserve), maxContextReserve)
-		report.InputLimit = max(1, report.Window-reserve)
+	if window > 0 {
+		reserve := min(max(window/5, minContextReserve), maxContextReserve)
+		report.InputLimit = max(1, window-reserve)
 	}
-	report.InstructionTokens = estimateTextTokens(instructions)
-	if instructions != "" {
+	report.InstructionTokens = estimateTextTokens(request.Instructions)
+	if request.Instructions != "" {
 		report.InstructionTokens += perMessageTokens
 	}
-	for _, tool := range tools {
+	for _, tool := range request.Tools {
 		report.ToolTokens += estimateTextTokens(tool.Name) + estimateTextTokens(tool.Description) + estimateTextTokens(string(tool.InputSchema)) + perToolDefinitionTokens
 	}
-	if state.Compaction != nil {
-		report.SummaryTokens = estimateTextTokens(model.ConversationSummaryPrefix+state.Compaction.Summary) + perMessageTokens
+	if request.Summary != "" {
+		report.SummaryTokens = estimateTextTokens(model.ConversationSummaryPrefix+request.Summary) + perMessageTokens
 	}
-	report.HistoryTokens = estimateItemsTokens(history)
-	report.PendingTokens = estimateItemsTokens(pending)
-	report.TotalInputTokens = report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens
-	if report.Window > 0 {
-		report.AvailableInputTokens = max(0, report.InputLimit-report.TotalInputTokens)
-	}
+	// Adapter projections may drop reasoning only, so pending users remain the suffix.
+	boundary := len(request.Items) - pending
+	report.HistoryTokens = state.estimateProjectedTokens(request.Items[:boundary], opaqueBytes)
+	report.PendingTokens = estimateItemsTokens(request.Items[boundary:])
+	report.TotalInputTokens = report.localInputTokens()
+	report.updateAvailableInput()
 	return report
 }
 
-// projectedItemsForRequest projects pending input together with its history:
-// current-turn routes drop the previous turn's reasoning only after the next
-// user message has been appended.
-func (runtime *Runtime) projectedItemsForRequest(state State, items []model.Item, pendingInputs ...string) ([]model.Item, int) {
-	pending := 0
-	for _, pendingInput := range pendingInputs {
-		if pendingInput != "" {
-			items = append(items, model.Item{Kind: model.ItemUserText, Text: pendingInput})
-			pending++
+func (report ContextReport) localInputTokens() int {
+	return report.InstructionTokens + report.ToolTokens + report.SummaryTokens + report.HistoryTokens + report.PendingTokens
+}
+
+func (report *ContextReport) updateAvailableInput() {
+	if report.Window > 0 {
+		report.AvailableInputTokens = max(0, report.InputLimit-report.TotalInputTokens)
+	}
+}
+
+type responseTokenCount struct {
+	items  int
+	tokens int
+}
+
+func (state State) estimateProjectedTokens(items []model.Item, opaqueBytes func([]model.Item, []int)) int {
+	if opaqueBytes == nil {
+		return estimateItemsTokens(items)
+	}
+	tokens := 0
+	for len(items) != 0 {
+		end := 1
+		id := items[0].ResponseID
+		for id != "" && end < len(items) && items[end].ResponseID == id {
+			end++
+		}
+		group := items[:end]
+		items = items[end:]
+		if !slices.ContainsFunc(group, func(item model.Item) bool { return len(item.ProviderData) != 0 }) {
+			tokens += estimateItemsTokens(group)
+			continue
+		}
+		sizes := make([]int, len(group))
+		opaqueBytes(group, sizes)
+		measured := state.responseTokens[id]
+		if measured.items == len(group) && slices.ContainsFunc(sizes, func(size int) bool { return size > 0 }) {
+			tokens += measured.tokens
+			continue
+		}
+		for index, item := range group {
+			if size := sizes[index]; item.Kind == model.ItemReasoning && size > 0 {
+				tokens += max(estimateTextTokens(item.Text), size/4) + perMessageTokens
+			} else {
+				tokens += estimateItemTokens(item)
+			}
 		}
 	}
-	projected := runtime.projectModelItems(items, model.ProviderContext{
-		Backend: runtime.modelInfo.BackendID,
-		Epoch:   state.Selection.Epoch,
-	}, state.ImageDelivery.Status)
-	// Projection may remove reasoning only, so pending users remain the suffix.
-	boundary := max(0, len(projected)-pending)
-	return projected, boundary
+	return tokens
 }
 
 func estimateItemsTokens(items []model.Item) int {
 	tokens := 0
 	for _, item := range items {
-		switch item.Kind {
-		case model.ItemUserText, model.ItemBoundaryText, model.ItemAssistantText, model.ItemReasoning:
-			// Opaque provider bytes count against the adapter's encoded request
-			// limit, but ciphertext size is not a defensible token estimate.
-			tokens += estimateTextTokens(item.Text) + perMessageTokens
-		case model.ItemToolCall:
-			if item.ToolCall != nil {
-				tokens += estimateTextTokens(item.ToolCall.Name) + estimateTextTokens(item.ToolCall.RawArguments) + perToolCallTokens
-			}
-		case model.ItemToolResult:
-			if item.ToolResult != nil {
-				tokens += estimateContentTokens(item.ToolResult.Content) + estimateTextTokens(item.ToolResult.CallID) + perToolResultTokens
-			}
-		}
+		tokens += estimateItemTokens(item)
 	}
 	return tokens
+}
+
+func estimateItemTokens(item model.Item) int {
+	switch item.Kind {
+	case model.ItemUserText:
+		return estimateContentTokens(item.UserContent()) + perMessageTokens
+	case model.ItemBoundaryText, model.ItemAssistantText:
+		return estimateTextTokens(item.Text) + perMessageTokens
+	case model.ItemReasoning:
+		if item.Text != "" {
+			return estimateTextTokens(item.Text) + perMessageTokens
+		}
+	case model.ItemToolCall:
+		if item.ToolCall != nil {
+			return estimateTextTokens(item.ToolCall.Name) + estimateTextTokens(item.ToolCall.RawArguments) + perToolCallTokens
+		}
+	case model.ItemToolResult:
+		if item.ToolResult != nil {
+			return estimateContentTokens(item.ToolResult.Content) + estimateTextTokens(item.ToolResult.CallID) + perToolResultTokens
+		}
+	}
+	return 0
 }
 
 func estimateContentTokens(content model.Content) int {

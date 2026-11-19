@@ -56,7 +56,7 @@ func (runtime *Runtime) reconfigure(ctx context.Context, change func(*runtimeCon
 	if err != nil {
 		return fmt.Errorf("read journal before reconfiguration: %w", err)
 	}
-	live, err := reduceRecords(records)
+	live, err := runtime.reduceContextRecords(records)
 	if err != nil {
 		return err
 	}

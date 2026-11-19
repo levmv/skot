@@ -28,6 +28,14 @@ func InspectAll(ctx context.Context, home string) ([]Summary, error) {
 }
 
 func Inspect(ctx context.Context, home, id string) (Snapshot, error) {
+	return inspect(ctx, home, id, agent.Replay)
+}
+
+func InspectWithContext(ctx context.Context, home, id string) (Snapshot, error) {
+	return inspect(ctx, home, id, agent.ReplayWithContext)
+}
+
+func inspect(ctx context.Context, home, id string, replay func([]agent.Record) (agent.State, error)) (Snapshot, error) {
 	snapshot := Snapshot{Summary: Summary{ID: id}}
 	if err := ctx.Err(); err != nil {
 		return snapshot, err
@@ -58,7 +66,7 @@ func Inspect(ctx context.Context, home, id string) (Snapshot, error) {
 		return snapshot, err
 	}
 	snapshot.Records = records
-	snapshot.State, err = agent.Replay(records)
+	snapshot.State, err = replay(records)
 	if err != nil {
 		return snapshot, err
 	}

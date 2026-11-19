@@ -53,5 +53,13 @@ func formatContextReport(report agent.ContextReport) string {
 		"history " + formatTokenCount(report.HistoryTokens),
 		"queued " + formatTokenCount(report.PendingTokens),
 	}
-	return headline + "\n" + strings.Join(parts, " · ") + fmt.Sprintf("\ncompactions %d · tool prunings %d", report.CompactionCount, report.ToolPruningCount)
+	breakdown := strings.Join(parts, " · ")
+	if report.MeasuredAdjustment != 0 {
+		sign, amount := "+", report.MeasuredAdjustment
+		if amount < 0 {
+			sign, amount = "−", -amount
+		}
+		breakdown += "\nmodel measurement adjustment " + sign + formatTokenCount(amount)
+	}
+	return headline + "\n" + breakdown + fmt.Sprintf("\ncompactions %d · tool prunings %d", report.CompactionCount, report.ToolPruningCount)
 }

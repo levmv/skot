@@ -39,7 +39,7 @@ func (runtime *Runtime) runUserShell(ctx context.Context, command string, journa
 	if err != nil {
 		return model.ToolResult{}, fmt.Errorf("read journal: %w", err)
 	}
-	live, err := reduceRecords(records)
+	live, err := runtime.reduceContextRecords(records)
 	if err != nil {
 		return model.ToolResult{}, err
 	}

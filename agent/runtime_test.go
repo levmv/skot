@@ -179,7 +179,7 @@ func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
 		func(context.Context, modelapi.Request, func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			return modelapi.Response{
 				Items:      []modelapi.Item{{Kind: modelapi.ItemAssistantText, Text: "done"}},
-				Usage:      modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(3), OutputTokens: new(1), TotalTokens: new(4)}},
+				Usage:      modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(30), OutputTokens: new(1), TotalTokens: new(31)}},
 				StopReason: "stop",
 			}, nil
 		},
@@ -210,7 +210,7 @@ func TestSessionStatusPublishesDuringActiveRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := runtime.SessionStatus()
-	if after.Usage.TotalTokens != 16 || after.ContextReport.TotalInputTokens <= during.ContextReport.TotalInputTokens {
+	if after.Usage.TotalTokens != 43 || after.ContextReport.TotalInputTokens <= during.ContextReport.TotalInputTokens {
 		t.Fatalf("final status = %#v, during = %#v", after, during)
 	}
 }
@@ -238,7 +238,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 			return modelapi.Response{Items: []modelapi.Item{
 				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{"step":3}`}},
 				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{"step":4}`}},
-			}}, nil
+			}, Usage: modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(10000)}}}, nil
 		},
 		func(_ context.Context, request modelapi.Request, _ func(modelapi.StreamEvent)) (modelapi.Response, error) {
 			if len(request.Tools) != 0 {
@@ -257,7 +257,7 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 			return modelapi.Response{Items: []modelapi.Item{
 				{Kind: modelapi.ItemAssistantText, Text: "best effort answer"},
 				{Kind: modelapi.ItemToolCall, ToolCall: &modelapi.ToolCall{Name: "inspect", RawArguments: `{}`}},
-			}}, nil
+			}, Usage: modelapi.Usage{Status: modelapi.UsageFinal, Tokens: modelapi.ReportedTokens{InputTokens: new(12000)}}}, nil
 		},
 	}}
 	runtime := newTestRuntime(t, Config{
@@ -288,6 +288,11 @@ func TestRuntimeToolIterationFuseFinalizesWithoutTools(t *testing.T) {
 		t.Fatalf("model requests = %d, want 4", model.next)
 	}
 	records := journal.snapshot()
+	live := runtime.SessionStatus().ContextReport
+	offline, ok, err := contextReportForJournal(records, modelapi.ItemProjection{})
+	if err != nil || !ok || live.TotalInputTokens <= 10000 || live.TotalInputTokens >= 12000 || offline != live {
+		t.Fatalf("ordinary estimate after tool-limit finalization: live = %+v, offline = %+v, %v, %v", live, offline, ok, err)
+	}
 	state, err := Replay(records)
 	if err != nil {
 		t.Fatal(err)

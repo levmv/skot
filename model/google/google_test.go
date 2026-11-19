@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -247,4 +248,33 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 
 func googleResponse(body string) *http.Response {
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func TestOpaqueReasoningEstimateFollowsSignedParts(t *testing.T) {
+	const id = "response"
+	items := []model.Item{
+		{Kind: model.ItemReasoning, ResponseID: id, ProviderData: []model.ProviderData{{
+			Kind: "gemini.parts.v1",
+			Data: jsontext.Value(`[
+				{"thought":true,"text":"checking ","thoughtSignature":"abc"},
+				{"thought":true,"text":"options","thoughtSignature":"de"},
+				{"text":"done","thoughtSignature":"vwxyz"}
+			]`),
+		}}},
+		{Kind: model.ItemReasoning, ResponseID: id, Text: "checking options"},
+		{Kind: model.ItemAssistantText, ResponseID: id, Text: "done"},
+	}
+
+	projected := google.ProjectModelItems(slices.Clone(items))
+	sizes := make([]int, len(projected))
+	google.OpaqueReasoningBytes(projected, sizes)
+	if want := []int{5, 5, 0}; !slices.Equal(sizes, want) {
+		t.Fatalf("signature bytes = %v, want %v", sizes, want)
+	}
+
+	items[2].Text = "edited"
+	projected = google.ProjectModelItems(items)
+	if len(projected) != 1 || projected[0].Kind != model.ItemAssistantText || projected[0].Text != "edited" {
+		t.Fatalf("projection after edit = %+v", projected)
+	}
 }

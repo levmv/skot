@@ -201,7 +201,7 @@ func TestRuntimeCompactUsesTokenTailBeforeWindowPressure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := runtime.contextReport(before)
+	report := runtime.requestReport(before, runRequestSpec{})
 	if report.TotalInputTokens > report.InputLimit || report.HistoryTokens <= maxCompactionVerbatimTokens {
 		t.Fatalf("pre-compaction report = %#v", report)
 	}
